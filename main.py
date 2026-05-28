@@ -1696,8 +1696,6 @@ def collect_required_comfy_media(params: Dict[str, Any]) -> List[str]:
 def get_best_backend(required_images: List[str] = None):
     best_backend = COMFYUI_INSTANCES[0]
     min_queue_size = float('inf')
-    candidates_with_images = []
-    candidates_others = []
     backend_stats = {}
 
     for addr in COMFYUI_INSTANCES:
@@ -1710,28 +1708,44 @@ def get_best_backend(required_images: List[str] = None):
                 effective_load = max(remote_load, local_load)
                 has_images = check_images_exist(addr, required_images)
                 backend_stats[addr] = {"load": effective_load, "has_images": has_images}
-                if has_images:
-                    candidates_with_images.append(addr)
-                else:
-                    candidates_others.append(addr)
         except Exception as e:
             print(f"Backend {addr} unreachable: {e}")
             continue
 
-    target_candidates = candidates_with_images if candidates_with_images else candidates_others
-    if not target_candidates:
-        if candidates_others:
-            target_candidates = candidates_others
-        else:
-            return COMFYUI_INSTANCES[0]
+    if not backend_stats:
+        return COMFYUI_INSTANCES[0]
 
-    for addr in target_candidates:
-        load = backend_stats[addr]["load"]
-        if load < min_queue_size:
+    for addr, stats in backend_stats.items():
+        load = stats["load"]
+        if load < min_queue_size or (load == min_queue_size and stats.get("has_images") and not backend_stats.get(best_backend, {}).get("has_images")):
             min_queue_size = load
             best_backend = addr
 
     return best_backend
+
+def reserve_best_backend(required_images: List[str] = None):
+    backend_stats = {}
+    for addr in COMFYUI_INSTANCES:
+        try:
+            with urllib.request.urlopen(f"http://{addr}/queue", timeout=1) as response:
+                data = json.loads(response.read())
+                remote_load = len(data.get('queue_running', [])) + len(data.get('queue_pending', []))
+                has_images = check_images_exist(addr, required_images)
+                backend_stats[addr] = {"remote_load": remote_load, "has_images": has_images}
+        except Exception as e:
+            print(f"Backend {addr} unreachable: {e}")
+            continue
+    with LOAD_LOCK:
+        best_backend = COMFYUI_INSTANCES[0]
+        min_load = float('inf')
+        if backend_stats:
+            for addr, stats in backend_stats.items():
+                load = max(stats["remote_load"], BACKEND_LOCAL_LOAD.get(addr, 0))
+                if load < min_load or (load == min_load and stats.get("has_images") and not backend_stats.get(best_backend, {}).get("has_images")):
+                    min_load = load
+                    best_backend = addr
+        BACKEND_LOCAL_LOAD[best_backend] = BACKEND_LOCAL_LOAD.get(best_backend, 0) + 1
+        return best_backend
 
 # --- 辅助工具 ---
 
@@ -6215,9 +6229,7 @@ def generate(req: GenerateRequest):
     try:
         required_images = collect_required_comfy_media(req.params)
 
-        target_backend = get_best_backend(required_images)
-        with LOAD_LOCK:
-            BACKEND_LOCAL_LOAD[target_backend] += 1
+        target_backend = reserve_best_backend(required_images)
 
         for image_name in required_images:
             need_sync = False
