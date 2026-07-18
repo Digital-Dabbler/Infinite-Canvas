@@ -1,18 +1,14 @@
 {
-  "version": "2026.07.13",
-  "updated_at": "2026-07-13T23:41:36+08:00",
+  "version": "2026.07.17",
+  "updated_at": "2026-07-17T21:50:36+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "修复EXELLOME的本地多图参考bug"
+      "text": "修复exellome和FHL的编辑功能报错bug"
     },
     {
       "type": "feature",
-      "text": "修复FHL的生图报错bug"
-    },
-    {
-      "type": "feature",
-      "text": "增加RunningHub拉取模型的翻译功能"
+      "text": "修复mac系统缩放bug"
     }
   ]
 }
