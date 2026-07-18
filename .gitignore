@@ -1,0 +1,14 @@
+# Local secrets (use API/.env.example as the template)
+API/.env
+
+# Runtime state. Keep the versioned asset-library seed available.
+data/*
+!data/asset_library.json
+
+# User-generated and downloaded media
+assets/
+output/
+
+# Packages installed into the bundled Python runtime on this machine
+python/Lib/
+python/Scripts/
