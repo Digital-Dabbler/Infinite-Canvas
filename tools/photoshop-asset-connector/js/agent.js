@@ -72,7 +72,7 @@
 
   // 带 X-User-Id 的 GET（对话历史按本插件用户隔离）
   async function apiGetU(path) {
-    const res = await fetch(`${net.httpBase()}${path}`, { cache: 'no-store', headers: { 'X-User-Id': userId() } });
+    const res = await fetch(`${net.httpBase()}${path}`, { cache: 'no-store', headers: net.authHeaders({ 'X-User-Id': userId() }) });
     const text = await res.text();
     if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0, 160)}`.trim());
     return JSON.parse(text || '{}');
@@ -81,7 +81,7 @@
     const res = await fetch(`${net.httpBase()}${path}`, {
       method,
       cache: 'no-store',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId() },
+      headers: net.authHeaders({ 'Content-Type': 'application/json', 'X-User-Id': userId() }),
       body: body == null ? undefined : JSON.stringify(body),
     });
     const text = await res.text();
@@ -265,7 +265,7 @@
   async function chatAgent(body) {
     const res = await fetch(`${net.httpBase()}/api/chat/agent`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-User-Id': userId() },
+      headers: net.authHeaders({ 'Content-Type': 'application/json', 'X-User-Id': userId() }),
       body: JSON.stringify(body),
     });
     const text = await res.text();

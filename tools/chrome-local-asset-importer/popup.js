@@ -1,6 +1,8 @@
 const els = {
   server: document.getElementById('serverInput'),
   folder: document.getElementById('folderInput'),
+  username: document.getElementById('usernameInput'),
+  password: document.getElementById('passwordInput'),
   classify: document.getElementById('classifyInput'),
   autoScroll: document.getElementById('autoScrollInput'),
   filterLowRes: document.getElementById('filterLowResInput'),
@@ -49,6 +51,8 @@ function apiBase(){
     return 'http://127.0.0.1:8767';
   }
 }
+function authHeaders(extra={}){ return Object.assign({}, extra, authToken ? {'Authorization': `Bearer ${authToken}`, 'X-Client-Source':'chrome-extension'} : {'X-Client-Source':'chrome-extension'}); }
+let authToken = '';
 
 function setStatus(text){
   els.status.textContent = text || '';
@@ -539,12 +543,14 @@ function getSettingsPayload(){
     provider: savedSettings.provider,
     model: savedSettings.model,
     prompt: els.prompt.value || '',
+    authToken,
+    username: els.username?.value || '',
     settingsCollapsed,
   };
 }
 
 async function loadSettings(){
-  const data = await chrome.storage.local.get(['server', 'port', 'folder', 'classify', 'autoScroll', 'filterLowRes', 'provider', 'model', 'prompt', 'settingsCollapsed']);
+  const data = await chrome.storage.local.get(['server', 'port', 'folder', 'classify', 'autoScroll', 'filterLowRes', 'provider', 'model', 'prompt', 'settingsCollapsed', 'authToken', 'username']);
   els.server.value = data.server || (data.port ? `127.0.0.1:${data.port}` : '127.0.0.1:8767');
   els.folder.value = data.folder || '网页采集';
   els.classify.checked = data.classify !== false;
@@ -553,12 +559,14 @@ async function loadSettings(){
   savedSettings.provider = data.provider || '';
   savedSettings.model = data.model || '';
   els.prompt.value = data.prompt || '';
+  authToken = data.authToken || '';
+  if(els.username) els.username.value = data.username || '';
   settingsCollapsed = data.settingsCollapsed === undefined ? true : Boolean(data.settingsCollapsed);
   updateSettingsUi();
 }
 
 async function loadProviders(){
-  const res = await fetch(`${apiBase()}/api/providers`);
+  const res = await fetch(`${apiBase()}/api/providers`, {headers: authHeaders()});
   if(!res.ok) throw new Error(await res.text());
   const data = await res.json();
   providers = Array.isArray(data.providers) ? data.providers : [];
@@ -567,6 +575,14 @@ async function loadProviders(){
 
 async function testConnection(){
   await saveSettings();
+  if(!authToken){
+    const username = String(els.username?.value || '').trim(), password = String(els.password?.value || '');
+    if(!username || !password) throw new Error('请输入账号和密码。');
+    const login = await fetch(`${apiBase()}/api/auth/login`, {method:'POST',headers:{'Content-Type':'application/json','X-Client-Source':'chrome-extension'},body:JSON.stringify({username,password})});
+    const data = await login.json().catch(()=>({}));
+    if(!login.ok || !data.access_token) throw new Error(data.detail || '登录失败');
+    authToken = data.access_token; await chrome.storage.local.set({authToken});
+  }
   setStatus('正在连接本地服务...');
   await loadProviders();
   setStatus('连接成功，可以扫描当前页面图片。');
@@ -1090,7 +1106,7 @@ async function importSelected(){
   };
   const res = await fetch(`${apiBase()}/api/local-assets/import-urls`, {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: authHeaders({'Content-Type': 'application/json'}),
     body: JSON.stringify(body),
   });
   if(!res.ok) throw new Error(await res.text());

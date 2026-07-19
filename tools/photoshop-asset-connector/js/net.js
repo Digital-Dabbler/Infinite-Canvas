@@ -11,17 +11,22 @@
 
   function httpBase() { return state.host ? `http://${state.host}` : ''; }
   function wsBase() { return state.host ? `ws://${state.host}` : ''; }
+  function authHeaders(extra) { return Object.assign({}, extra || {}, state.token ? { 'Authorization': `Bearer ${state.token}`, 'X-Client-Source': 'photoshop' } : { 'X-Client-Source': 'photoshop' }); }
+  function authUrl(url) {
+    if (!state.token || !/^\/(?:assets|output|api\/(?:media-preview|image-jpeg))\b/.test(String(url || ''))) return url;
+    return `${url}${url.includes('?') ? '&' : '?'}access_token=${encodeURIComponent(state.token)}`;
+  }
 
   function absUrl(url) {
     if (!url) return '';
     if (/^https?:\/\//i.test(url)) return url;
     const base = httpBase();
     if (!base) return url;
-    return `${base}${url.startsWith('/') ? '' : '/'}${url}`;
+    return `${base}${url.startsWith('/') ? '' : '/'}${authUrl(url)}`;
   }
 
   async function apiGet(path) {
-    const res = await fetch(`${httpBase()}${path}`, { cache: 'no-store' });
+    const res = await fetch(`${httpBase()}${path}`, { cache: 'no-store', headers: authHeaders() });
     const text = await res.text();
     if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0, 160)}`.trim());
     try { return JSON.parse(text || '{}'); }
@@ -31,7 +36,7 @@
   async function apiSend(method, path, body) {
     const res = await fetch(`${httpBase()}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body || {}),
     });
     const text = await res.text();
@@ -44,7 +49,8 @@
   function needsJpeg(url) { return UXP_UNSUPPORTED.test(String(url || '').split(/[?#]/)[0]); }
   function displayUrl(url, w) {
     if (needsJpeg(url)) {
-      return `${httpBase()}/api/image-jpeg?url=${encodeURIComponent(url)}${w ? `&w=${w}` : ''}`;
+      const endpoint = authUrl(`/api/image-jpeg?url=${encodeURIComponent(url)}${w ? `&w=${w}` : ''}`);
+      return `${httpBase()}${endpoint}`;
     }
     return absUrl(url);
   }
@@ -52,13 +58,13 @@
   // 缩略图地址：本地 /assets|/output 走后端预览接口（小图、带缓存，避免一次性加载几十张超大原图导致空白/卡死）
   function thumbUrl(url, w) {
     if (/^\/(assets|output)\//.test(String(url || ''))) {
-      return `${httpBase()}/api/media-preview?url=${encodeURIComponent(url)}&w=${w || 256}`;
+      return `${httpBase()}${authUrl(`/api/media-preview?url=${encodeURIComponent(url)}&w=${w || 256}`)}`;
     }
     return absUrl(url);
   }
 
   async function fetchBytes(url) {
-    const res = await fetch(absUrl(url));
+    const res = await fetch(absUrl(url), { headers: authHeaders() });
     if (!res.ok) throw new Error(`下载失败 HTTP ${res.status}`);
     return res.arrayBuffer();
   }
@@ -110,5 +116,5 @@
     return uploadBase64Raw(toBase64(buffer), name, 'image/png');
   }
 
-  DX.net = { parseHost, httpBase, wsBase, absUrl, thumbUrl, displayUrl, needsJpeg, apiGet, apiSend, fetchBytes, toBase64, uploadInputBase64, uploadBase64Raw };
+  DX.net = { parseHost, httpBase, wsBase, authHeaders, absUrl, thumbUrl, displayUrl, needsJpeg, apiGet, apiSend, fetchBytes, toBase64, uploadInputBase64, uploadBase64Raw };
 })();

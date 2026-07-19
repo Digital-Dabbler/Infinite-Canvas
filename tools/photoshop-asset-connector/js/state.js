@@ -5,10 +5,12 @@ DX.LS = {
   host: 'daxiong.assets.host',
   source: 'daxiong.assets.source',
   exportLayer: 'daxiong.assets.exportLayer',
+  token: 'daxiong.assets.authToken',
 };
 
 DX.state = {
   host: '',
+  token: '',
   connected: false,
   tab: 'assets',                 // assets | generate | settings
   source: 'assets',              // assets | canvas | local

@@ -27,6 +27,7 @@
     live: $('liveToggle'),
     exportLayer: $('exportLayerToggle'),
     github: $('githubBtn'),
+    authUsername: $('authUsername'), authPassword: $('authPassword'), login: $('loginBtn'),
   };
 
   /* ---------- 小工具 ---------- */
@@ -316,6 +317,22 @@
     }
   }
 
+  async function login() {
+    const host = net.parseHost(els.server.value);
+    if (!host) { setConnMsg('请先填写服务地址。', 'err'); return; }
+    const username = String(els.authUsername.value || '').trim();
+    const password = String(els.authPassword.value || '');
+    if (!username || !password) { setConnMsg('请输入账号和密码。', 'err'); return; }
+    state.host = host;
+    try {
+      const res = await fetch(`${net.httpBase()}/api/auth/login`, {method:'POST', headers:{'Content-Type':'application/json','X-Client-Source':'photoshop'}, body:JSON.stringify({username,password})});
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.access_token) throw new Error(data.detail || '登录失败');
+      state.token = data.access_token; localStorage.setItem(DX.LS.token, state.token);
+      setConnMsg(`已登录：${data.user?.name || username}`, 'ok');
+    } catch (err) { setConnMsg(`登录失败：${err.message || err}`, 'err'); }
+  }
+
   /* ---------- 下载（置入图层）/ 上传（当前图层） ---------- */
   async function doPlace() {
     const item = selectedItem();
@@ -386,6 +403,7 @@
   });
 
   els.connect.addEventListener('click', connect);
+  els.login.addEventListener('click', login);
   els.server.addEventListener('keydown', (e) => { if (e.key === 'Enter') connect(); });
   els.live.addEventListener('change', () => {
     if (els.live.checked && state.connected) { socket.openSocket(socketHandlers); scheduleReload(); }
@@ -407,6 +425,7 @@
   /* ---------- 初始化 ---------- */
   (function init() {
     els.server.value = localStorage.getItem(DX.LS.host) || '127.0.0.1:8767';
+    state.token = localStorage.getItem(DX.LS.token) || '';
     state.exportLayer = localStorage.getItem(DX.LS.exportLayer) === '1';
     els.exportLayer.checked = state.exportLayer;
     const savedSource = localStorage.getItem(DX.LS.source);

@@ -25,6 +25,7 @@ import tempfile
 import math
 import shlex
 import functools
+import secrets
 import html
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional, Tuple
@@ -35,7 +36,7 @@ from io import BytesIO
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, UploadFile, File, Form, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -181,6 +182,11 @@ MODELSCOPE_TREE_URL = "https://www.modelscope.ai/api/v1/studio/daniel8152/Infini
 async def startup_event():
     global GLOBAL_LOOP
     GLOBAL_LOOP = asyncio.get_running_loop()
+    try:
+        if ensure_admin_bootstrap():
+            print("已从 ADMIN_USERNAME / ADMIN_PASSWORD 创建首个管理员账号。")
+    except Exception as exc:
+        print(f"初始化管理员账号失败: {exc}")
     sync_static_html_versions()
     # 启动时整理资产库：给所有图片分组（含默认角色/场景）建好文件夹，并把根目录里的旧素材归整进去。
     try:
@@ -200,17 +206,23 @@ async def startup_event():
 
 @app.websocket("/ws/stats")
 async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
-    await manager.connect(websocket, client_id)
+    # WebSocket 不经过 HTTP middleware；显式校验 Cookie/Bearer（扩展可在 query 传 access_token）。
+    user = authenticated_user(websocket)
+    if not user:
+        await websocket.close(code=1008, reason="请先登录")
+        return
+    scoped_client_id = f"{user.get('id')}:{client_id or 'ws'}"
+    await manager.connect(websocket, scoped_client_id)
     try:
         while True:
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
     except WebSocketDisconnect:
-        await manager.disconnect(websocket, client_id)
+        await manager.disconnect(websocket, scoped_client_id)
     except Exception as e:
         print(f"WS Error: {e}")
-        await manager.disconnect(websocket, client_id)
+        await manager.disconnect(websocket, scoped_client_id)
 
 # --- 配置区域 ---
 
@@ -240,6 +252,11 @@ PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
+AUTH_USERS_FILE = os.path.join(DATA_DIR, "auth_users.json")
+AUTH_SESSIONS_FILE = os.path.join(DATA_DIR, "auth_sessions.json")
+USAGE_AUDIT_DIR = os.path.join(DATA_DIR, "usage_audit")
+USAGE_ALERTS_FILE = os.path.join(DATA_DIR, "usage_alerts.json")
+USAGE_POLICY_FILE = os.path.join(DATA_DIR, "usage_policy.json")
 GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
@@ -1471,6 +1488,310 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
+# --- 局域网账号、权限与用量审计 ---
+# 这些文件刻意不和 history.json 混用：history 是共享展示数据，审计账本是管理员追溯数据。
+AUTH_LOCK = Lock()
+USAGE_AUDIT_LOCK = Lock()
+USAGE_DEFAULT_POLICY = {
+    "alert_thresholds": {"image": 50, "video": 10, "llm": 300},
+    "alert_window_seconds": 3600,
+    "retention_days": 180,
+}
+AUTH_PUBLIC_PATHS = {
+    "/api/auth/register", "/api/auth/login",
+    "/static/login.html", "/favicon.ico",
+}
+AUTH_PUBLIC_PREFIXES = ("/static/images/",)
+ADMIN_WRITE_PREFIXES = (
+    "/api/providers", "/api/comfyui", "/api/workflows", "/api/update", "/api/rollback",
+    "/api/storage", "/api/runninghub/workflows", "/api/jimeng/login", "/api/codex/", "/api/gemini-cli/",
+)
+
+def _read_json_file(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            value = json.load(f)
+            return value
+    except Exception:
+        return default
+
+def _write_json_file(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(value, f, ensure_ascii=False, indent=2)
+
+def _password_hash(password, salt=None):
+    salt_bytes = base64.b64decode(salt) if salt else secrets.token_bytes(16)
+    digest = hashlib.scrypt(str(password).encode("utf-8"), salt=salt_bytes, n=2**14, r=8, p=1, dklen=32)
+    return base64.b64encode(salt_bytes).decode("ascii"), base64.b64encode(digest).decode("ascii")
+
+def _verify_password(password, user):
+    try:
+        _, digest = _password_hash(password, user.get("password_salt") or "")
+        return hmac.compare_digest(digest, str(user.get("password_hash") or ""))
+    except Exception:
+        return False
+
+def load_auth_users():
+    data = _read_json_file(AUTH_USERS_FILE, {"users": []})
+    users = data.get("users") if isinstance(data, dict) else []
+    return {"users": users if isinstance(users, list) else []}
+
+def save_auth_users(data):
+    _write_json_file(AUTH_USERS_FILE, data)
+
+def load_auth_sessions():
+    data = _read_json_file(AUTH_SESSIONS_FILE, {"sessions": []})
+    sessions = data.get("sessions") if isinstance(data, dict) else []
+    now = time.time()
+    sessions = [item for item in sessions if isinstance(item, dict) and float(item.get("expires_at") or 0) > now]
+    return {"sessions": sessions}
+
+def save_auth_sessions(data):
+    _write_json_file(AUTH_SESSIONS_FILE, data)
+
+def public_user(user):
+    return {
+        "id": user.get("id"), "username": user.get("username"), "name": user.get("name"),
+        "department": user.get("department"), "role": user.get("role", "user"),
+        "enabled": bool(user.get("enabled", True)), "must_change_password": bool(user.get("must_change_password")),
+        "quota": user.get("quota") or {}, "created_at": user.get("created_at", 0),
+    }
+
+def ensure_admin_bootstrap():
+    """从环境变量创建首个管理员；不把初始密码写回数据或日志。"""
+    username = str(os.getenv("ADMIN_USERNAME", "")).strip().lower()
+    password = str(os.getenv("ADMIN_PASSWORD", ""))
+    if not username or not password:
+        return False
+    with AUTH_LOCK:
+        data = load_auth_users()
+        if any(str(item.get("role")) == "admin" for item in data["users"]):
+            return False
+        salt, digest = _password_hash(password)
+        data["users"].append({
+            "id": uuid.uuid4().hex, "username": username, "name": "系统管理员", "department": "管理",
+            "role": "admin", "enabled": True, "password_salt": salt, "password_hash": digest,
+            "must_change_password": True, "quota": {}, "created_at": now_ms(),
+        })
+        save_auth_users(data)
+    return True
+
+def issue_session(user_id, source="web"):
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = time.time()
+    with AUTH_LOCK:
+        data = load_auth_sessions()
+        data["sessions"].append({
+            "id": uuid.uuid4().hex, "token_hash": token_hash, "user_id": user_id, "source": source,
+            "issued_at": now, "expires_at": now + 14 * 24 * 3600,
+        })
+        save_auth_sessions(data)
+    return token
+
+def revoke_user_sessions(user_id, token_hash=""):
+    with AUTH_LOCK:
+        data = load_auth_sessions()
+        data["sessions"] = [item for item in data["sessions"] if not (
+            item.get("user_id") == user_id and (not token_hash or item.get("token_hash") == token_hash)
+        )]
+        save_auth_sessions(data)
+
+def request_token(request):
+    header = str(request.headers.get("authorization") or "")
+    if header.lower().startswith("bearer "):
+        return header[7:].strip()
+    cookie = str(request.cookies.get("studio_session") or "").strip()
+    if cookie:
+        return cookie
+    # WebSocket API 无法由 UXP 设置 Authorization header；仅用于连接握手。
+    return str(getattr(request, "query_params", {}).get("access_token") or "").strip()
+
+def authenticated_user(request):
+    token = request_token(request)
+    if not token:
+        return None
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with AUTH_LOCK:
+        sessions = load_auth_sessions().get("sessions", [])
+        session = next((item for item in sessions if hmac.compare_digest(str(item.get("token_hash") or ""), token_hash)), None)
+        if not session:
+            return None
+        users = load_auth_users().get("users", [])
+        user = next((item for item in users if item.get("id") == session.get("user_id")), None)
+    if not user or not user.get("enabled", True):
+        return None
+    result = dict(user)
+    result["session_token_hash"] = token_hash
+    result["client_source"] = str(request.headers.get("x-client-source") or session.get("source") or "web")[:32]
+    return result
+
+def require_authenticated(request):
+    user = getattr(request.state, "user", None) or authenticated_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="请先登录后再使用本系统。")
+    return user
+
+def require_admin(request):
+    user = require_authenticated(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="此操作仅管理员可用。")
+    return user
+
+def load_usage_policy():
+    saved = _read_json_file(USAGE_POLICY_FILE, {})
+    result = dict(USAGE_DEFAULT_POLICY)
+    if isinstance(saved, dict):
+        result.update(saved)
+    thresholds = result.get("alert_thresholds") if isinstance(result.get("alert_thresholds"), dict) else {}
+    result["alert_thresholds"] = {key: max(0, int(thresholds.get(key, USAGE_DEFAULT_POLICY["alert_thresholds"][key]) or 0)) for key in ("image", "video", "llm")}
+    result["alert_window_seconds"] = max(60, int(result.get("alert_window_seconds") or 3600))
+    result["retention_days"] = max(30, int(result.get("retention_days") or 180))
+    return result
+
+def save_usage_policy(policy):
+    merged = load_usage_policy()
+    merged.update(policy if isinstance(policy, dict) else {})
+    _write_json_file(USAGE_POLICY_FILE, merged)
+    return load_usage_policy()
+
+def usage_audit_paths(retention_days=None):
+    retention = retention_days or load_usage_policy()["retention_days"]
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=retention)
+    if not os.path.isdir(USAGE_AUDIT_DIR):
+        return []
+    paths = []
+    for name in os.listdir(USAGE_AUDIT_DIR):
+        if not re.fullmatch(r"\d{4}-\d{2}\.jsonl", name):
+            continue
+        try:
+            if datetime.datetime.strptime(name[:7], "%Y-%m") >= cutoff.replace(day=1, hour=0, minute=0, second=0, microsecond=0):
+                paths.append(os.path.join(USAGE_AUDIT_DIR, name))
+        except ValueError:
+            continue
+    return sorted(paths)
+
+def usage_events():
+    latest = {}
+    for path in usage_audit_paths():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        item = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(item, dict) and item.get("id"):
+                        latest[item["id"]] = item
+        except Exception:
+            continue
+    return list(latest.values())
+
+def append_usage_event(event):
+    os.makedirs(USAGE_AUDIT_DIR, exist_ok=True)
+    path = os.path.join(USAGE_AUDIT_DIR, time.strftime("%Y-%m") + ".jsonl")
+    with USAGE_AUDIT_LOCK:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+def usage_category(function):
+    return "video" if function == "video" else ("llm" if function == "llm" else "image")
+
+def user_quota_allows(user, category):
+    quota = user.get("quota") or {}
+    limit = int(quota.get(f"daily_{category}") or 0)
+    concurrent = int(quota.get(f"concurrent_{category}") or 0)
+    if not limit and not concurrent:
+        return
+    today = datetime.date.today().isoformat()
+    relevant = [item for item in usage_events() if item.get("user_id") == user.get("id") and item.get("category") == category]
+    today_count = sum(1 for item in relevant if str(item.get("created_at_iso") or "").startswith(today) and item.get("status") != "failed")
+    running = sum(1 for item in relevant if item.get("status") in {"queued", "running"})
+    if limit and today_count >= limit:
+        raise HTTPException(status_code=429, detail=f"已达到今日{category}使用配额（{limit} 次）。")
+    if concurrent and running >= concurrent:
+        raise HTTPException(status_code=429, detail=f"已达到{category}并发配额（{concurrent} 个）。")
+
+def maybe_create_usage_alert(event):
+    policy = load_usage_policy()
+    threshold = policy["alert_thresholds"].get(event.get("category"), 0)
+    if not threshold:
+        return
+    cutoff = time.time() - policy["alert_window_seconds"]
+    count = sum(1 for item in usage_events() if item.get("user_id") == event.get("user_id") and item.get("category") == event.get("category") and float(item.get("created_at") or 0) >= cutoff)
+    if count < threshold:
+        return
+    alerts = _read_json_file(USAGE_ALERTS_FILE, {"alerts": []})
+    rows = alerts.get("alerts") if isinstance(alerts, dict) else []
+    key = f"{event.get('user_id')}:{event.get('category')}:{int(time.time() // policy['alert_window_seconds'])}"
+    if any(item.get("key") == key for item in rows if isinstance(item, dict)):
+        return
+    rows.append({"id": uuid.uuid4().hex, "key": key, "created_at": now_ms(), "acknowledged": False, "user_id": event.get("user_id"), "username": event.get("username"), "category": event.get("category"), "count": count, "threshold": threshold})
+    _write_json_file(USAGE_ALERTS_FILE, {"alerts": rows[-1000:]})
+
+def begin_usage_event(request, function, provider="", model="", params=None):
+    user = require_authenticated(request)
+    category = usage_category(function)
+    user_quota_allows(user, category)
+    event = {
+        "id": uuid.uuid4().hex, "created_at": time.time(), "created_at_iso": datetime.datetime.now().isoformat(timespec="seconds"),
+        "completed_at": 0, "user_id": user["id"], "username": user.get("username", ""), "name": user.get("name", ""), "department": user.get("department", ""),
+        "client_source": user.get("client_source", "web"), "client_ip": (request.client.host if request.client else ""),
+        "user_agent": str(request.headers.get("user-agent") or "")[:300], "function": function, "category": category,
+        "provider": str(provider or ""), "model": str(model or ""), "params": params or {}, "status": "queued", "error": "", "duration_ms": 0, "raw_usage": None,
+    }
+    append_usage_event(event)
+    maybe_create_usage_alert(event)
+    return event
+
+def finish_usage_event(event, status="succeeded", error="", raw_usage=None):
+    if not event:
+        return
+    done = dict(event)
+    done.update({"status": status, "error": str(error or "")[:500], "raw_usage": raw_usage, "completed_at": time.time()})
+    done["duration_ms"] = max(0, int((done["completed_at"] - float(done.get("created_at") or done["completed_at"])) * 1000))
+    append_usage_event(done)
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if path in AUTH_PUBLIC_PATHS or any(path.startswith(prefix) for prefix in AUTH_PUBLIC_PREFIXES):
+        return await call_next(request)
+    user = authenticated_user(request)
+    if not user:
+        if path == "/" or (path.startswith("/static/") and path.endswith(".html")):
+            return RedirectResponse("/static/login.html", status_code=307)
+        return JSONResponse(status_code=401, content={"detail": "请先登录后再使用本系统。"})
+    request.state.user = user
+    if path.startswith("/api/admin/") or (
+        request.method in {"POST", "PUT", "PATCH", "DELETE"} and any(path.startswith(prefix) for prefix in ADMIN_WRITE_PREFIXES)
+    ):
+        if user.get("role") != "admin":
+            return JSONResponse(status_code=403, content={"detail": "此操作仅管理员可用。"})
+    # 旧独立工具页仍有少量直连生成接口；在这里兜底审计，避免漏记。
+    auto_audit = {
+        "/api/runninghub/submit": ("image", "runninghub"),
+        "/api/runninghub/workflow-submit": ("image", "runninghub"),
+        "/api/angle/generate": ("image", "modelscope"),
+        "/api/ms/generate": ("image", "modelscope"),
+    }
+    if request.method == "POST" and path in auto_audit:
+        function, provider = auto_audit[path]
+        request.state.usage_event = begin_usage_event(request, function, provider, "", {"entry": path})
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        event = getattr(request.state, "usage_event", None)
+        if event and not getattr(request.state, "usage_async", False):
+            finish_usage_event(event, "failed", getattr(exc, "detail", None) or str(exc))
+        raise
+    event = getattr(request.state, "usage_event", None)
+    if event and not getattr(request.state, "usage_async", False):
+        finish_usage_event(event, "succeeded" if response.status_code < 400 else "failed", "" if response.status_code < 400 else f"HTTP {response.status_code}")
+        response.headers["X-Usage-Event-Id"] = event["id"]
+    return response
+
 # --- Pydantic 模型 ---
 
 def current_app_version():
@@ -2469,6 +2790,185 @@ class DeleteHistoryRequest(BaseModel):
 class TokenRequest(BaseModel):
     token: str
 
+class AuthRegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    password: str = Field(min_length=10, max_length=200)
+    name: str = Field(min_length=1, max_length=80)
+    department: str = Field(min_length=1, max_length=80)
+
+class AuthLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=40)
+    password: str = Field(min_length=1, max_length=200)
+
+class AuthPasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=10, max_length=200)
+
+class AdminUserUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+    role: Optional[str] = None
+    quota: Optional[Dict[str, int]] = None
+
+class UsagePolicyRequest(BaseModel):
+    alert_thresholds: Dict[str, int] = Field(default_factory=dict)
+    alert_window_seconds: Optional[int] = None
+
+class UsageAlertUpdateRequest(BaseModel):
+    acknowledged: bool = True
+
+@app.post("/api/auth/register")
+async def auth_register(payload: AuthRegisterRequest):
+    username = re.sub(r"[^a-zA-Z0-9_.-]", "", payload.username.strip().lower())
+    if len(username) < 3:
+        raise HTTPException(status_code=400, detail="账号只能使用 3-40 位字母、数字、点、下划线或连字符。")
+    with AUTH_LOCK:
+        data = load_auth_users()
+        if any(str(item.get("username") or "").lower() == username for item in data["users"]):
+            raise HTTPException(status_code=409, detail="该账号已被注册。")
+        salt, digest = _password_hash(payload.password)
+        user = {"id": uuid.uuid4().hex, "username": username, "name": payload.name.strip(), "department": payload.department.strip(), "role": "user", "enabled": True, "password_salt": salt, "password_hash": digest, "must_change_password": False, "quota": {}, "created_at": now_ms()}
+        data["users"].append(user)
+        save_auth_users(data)
+    return {"user": public_user(user), "message": "注册成功，请登录。"}
+
+@app.post("/api/auth/login")
+async def auth_login(payload: AuthLoginRequest, request: Request):
+    username = payload.username.strip().lower()
+    with AUTH_LOCK:
+        users = load_auth_users().get("users", [])
+        user = next((item for item in users if str(item.get("username") or "").lower() == username), None)
+    if not user or not _verify_password(payload.password, user):
+        raise HTTPException(status_code=401, detail="账号或密码不正确。")
+    if not user.get("enabled", True):
+        raise HTTPException(status_code=403, detail="该账号已被管理员停用。")
+    source = str(request.headers.get("x-client-source") or "web").lower()
+    token = issue_session(user["id"], source)
+    response = JSONResponse({"user": public_user(user), "access_token": token if source in {"chrome-extension", "photoshop"} else ""})
+    response.set_cookie("studio_session", token, max_age=14 * 24 * 3600, httponly=True, samesite="lax", secure=False)
+    return response
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request):
+    user = require_authenticated(request)
+    revoke_user_sessions(user["id"], user.get("session_token_hash") or "")
+    response = JSONResponse({"ok": True})
+    response.delete_cookie("studio_session")
+    return response
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    return {"user": public_user(require_authenticated(request))}
+
+@app.post("/api/auth/password")
+async def auth_change_password(payload: AuthPasswordRequest, request: Request):
+    user = require_authenticated(request)
+    with AUTH_LOCK:
+        data = load_auth_users()
+        record = next((item for item in data["users"] if item.get("id") == user["id"]), None)
+        if not record or not _verify_password(payload.current_password, record):
+            raise HTTPException(status_code=400, detail="当前密码不正确。")
+        salt, digest = _password_hash(payload.new_password)
+        record.update({"password_salt": salt, "password_hash": digest, "must_change_password": False})
+        save_auth_users(data)
+    revoke_user_sessions(user["id"])
+    token = issue_session(user["id"], user.get("client_source") or "web")
+    response = JSONResponse({"ok": True, "access_token": token if user.get("client_source") in {"chrome-extension", "photoshop"} else ""})
+    response.set_cookie("studio_session", token, max_age=14 * 24 * 3600, httponly=True, samesite="lax", secure=False)
+    return response
+
+@app.post("/api/auth/extension-token")
+async def auth_extension_token(request: Request):
+    user = require_authenticated(request)
+    return {"access_token": issue_session(user["id"], "extension"), "expires_in": 14 * 24 * 3600}
+
+@app.get("/api/admin/users")
+async def admin_users(request: Request):
+    require_admin(request)
+    return {"users": [public_user(item) for item in load_auth_users().get("users", [])]}
+
+@app.patch("/api/admin/users/{user_id}")
+async def admin_update_user(user_id: str, payload: AdminUserUpdateRequest, request: Request):
+    admin = require_admin(request)
+    with AUTH_LOCK:
+        data = load_auth_users()
+        user = next((item for item in data["users"] if item.get("id") == user_id), None)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+        if payload.role is not None:
+            if payload.role not in {"user", "admin"}:
+                raise HTTPException(status_code=400, detail="无效角色。")
+            if user["id"] == admin["id"] and payload.role != "admin":
+                raise HTTPException(status_code=400, detail="不能移除当前管理员自己的管理员角色。")
+            user["role"] = payload.role
+        if payload.enabled is not None:
+            user["enabled"] = bool(payload.enabled)
+        if payload.quota is not None:
+            allowed = {"daily_image", "daily_video", "daily_llm", "concurrent_image", "concurrent_video", "concurrent_llm"}
+            user["quota"] = {key: max(0, int(value or 0)) for key, value in payload.quota.items() if key in allowed}
+        save_auth_users(data)
+    if payload.enabled is False:
+        revoke_user_sessions(user_id)
+    return {"user": public_user(user)}
+
+@app.get("/api/admin/usage")
+async def admin_usage(request: Request):
+    require_admin(request)
+    events = usage_events()
+    filters = {key: str(request.query_params.get(key) or "").strip() for key in ("user_id", "department", "function", "provider", "model", "status")}
+    for key, value in filters.items():
+        if value:
+            events = [item for item in events if str(item.get(key) or "") == value]
+    events.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
+    total = len(events)
+    offset = max(0, int(request.query_params.get("offset") or 0))
+    limit = min(500, max(1, int(request.query_params.get("limit") or 100)))
+    return {"events": events[offset:offset + limit], "total": total, "offset": offset, "limit": limit}
+
+@app.get("/api/admin/usage/summary")
+async def admin_usage_summary(request: Request):
+    require_admin(request)
+    events = usage_events()
+    summary = {"total": len(events), "succeeded": 0, "failed": 0, "by_category": {"image": 0, "video": 0, "llm": 0}, "by_model": {}}
+    for item in events:
+        status = item.get("status")
+        if status == "succeeded": summary["succeeded"] += 1
+        if status == "failed": summary["failed"] += 1
+        category = item.get("category")
+        if category in summary["by_category"]: summary["by_category"][category] += 1
+        model = item.get("model") or "未标明模型"
+        summary["by_model"][model] = summary["by_model"].get(model, 0) + 1
+    return summary
+
+@app.get("/api/admin/alerts")
+async def admin_alerts(request: Request):
+    require_admin(request)
+    data = _read_json_file(USAGE_ALERTS_FILE, {"alerts": []})
+    return {"alerts": list(reversed(data.get("alerts") or []))}
+
+@app.patch("/api/admin/alerts/{alert_id}")
+async def admin_update_alert(alert_id: str, payload: UsageAlertUpdateRequest, request: Request):
+    require_admin(request)
+    data = _read_json_file(USAGE_ALERTS_FILE, {"alerts": []})
+    alert = next((item for item in data.get("alerts", []) if item.get("id") == alert_id), None)
+    if not alert:
+        raise HTTPException(status_code=404, detail="告警不存在。")
+    alert["acknowledged"] = payload.acknowledged
+    _write_json_file(USAGE_ALERTS_FILE, data)
+    return {"alert": alert}
+
+@app.get("/api/admin/usage-policy")
+async def admin_usage_policy(request: Request):
+    require_admin(request)
+    return load_usage_policy()
+
+@app.put("/api/admin/usage-policy")
+async def admin_save_usage_policy(payload: UsagePolicyRequest, request: Request):
+    require_admin(request)
+    update = {"alert_thresholds": {key: max(0, int(value or 0)) for key, value in payload.alert_thresholds.items() if key in {"image", "video", "llm"}}}
+    if payload.alert_window_seconds is not None:
+        update["alert_window_seconds"] = max(60, int(payload.alert_window_seconds))
+    return save_usage_policy(update)
+
 class CloudGenRequest(BaseModel):
     prompt: str
     api_key: str = ""
@@ -3115,7 +3615,11 @@ def get_comfy_history(comfy_address, prompt_id):
         return {}
 
 def safe_user_id(user_id, request: Request):
-    candidate = (user_id or "").strip()
+    # 对话历史必须绑定真实会话用户，不能再信任可由客户端伪造的 X-User-Id。
+    auth_user = getattr(getattr(request, "state", None), "user", None)
+    candidate = str((auth_user or {}).get("id") or "").strip() if isinstance(auth_user, dict) else ""
+    if not candidate:
+        candidate = (user_id or "").strip()
     if not candidate and request.client:
         candidate = f"ip-{request.client.host}"
     if not candidate:
@@ -12522,19 +13026,10 @@ async def save_providers(payload: List[ApiProviderPayload]):
 # --- ModelScope Token (从 env 读取，不再支持通过 UI 修改) ---
 
 @app.get("/api/config/token")
-async def get_global_token():
-    # 优先读 env，回退到 global_config.json（兼容旧数据）
-    saved_token = modelscope_api_key()
-    if saved_token:
-        return {"token": saved_token}
-    if os.path.exists(GLOBAL_CONFIG_FILE):
-        try:
-            with open(GLOBAL_CONFIG_FILE, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                return {"token": config.get("modelscope_token", "")}
-        except:
-            pass
-    return {"token": ""}
+async def get_global_token(request: Request):
+    # 历史接口曾把真实 ModelScope token 下发给浏览器；现在仅返回存在状态。
+    require_authenticated(request)
+    return {"configured": bool(modelscope_api_key())}
 
 # --- 在线生图 (COMFLY) ---
 
@@ -13237,8 +13732,12 @@ async def build_online_image_result(payload: OnlineImageRequest):
     return result
 
 @app.post("/api/online-image")
-async def online_image(payload: OnlineImageRequest):
-    return await build_online_image_result(payload)
+async def online_image(payload: OnlineImageRequest, request: Request):
+    event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n})
+    request.state.usage_event = event
+    result = await build_online_image_result(payload)
+    result["usage_event_id"] = event["id"]
+    return result
 
 @app.post("/api/image-task-query")
 async def query_image_task(payload: ImageTaskQueryRequest):
@@ -13368,13 +13867,16 @@ async def query_image_task(payload: ImageTaskQueryRequest):
         "raw": raw,
     }
 
-async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
+async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event=None):
     with CANVAS_TASK_LOCK:
         if task_id in CANVAS_TASKS:
             CANVAS_TASKS[task_id]["status"] = "running"
             CANVAS_TASKS[task_id]["updated_at"] = time.time()
     try:
         result = await build_online_image_result(payload)
+        if event:
+            result["usage_event_id"] = event["id"]
+            finish_usage_event(event, "succeeded", raw_usage=result.get("raw_usage"))
         with CANVAS_TASK_LOCK:
             CANVAS_TASKS[task_id].update({
                 "status": "succeeded",
@@ -13383,6 +13885,8 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
                 "updated_at": time.time(),
             })
     except JimengPendingError as exc:
+        if event:
+            finish_usage_event(event, "queued")
         # 即梦云端还在排队：标记为 jimeng_pending，前端据 submit_id 持久续查（任务未丢失）
         info = jimeng_pending_payload(exc)
         with CANVAS_TASK_LOCK:
@@ -13397,6 +13901,8 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
                 "updated_at": time.time(),
             })
     except Exception as exc:
+        if event:
+            finish_usage_event(event, "failed", getattr(exc, "detail", None) or str(exc))
         detail = getattr(exc, "detail", None) or str(exc)
         status_code = getattr(exc, "status_code", 500)
         upstream_task_id = getattr(exc, "upstream_task_id", "") or extract_task_id_from_text(detail)
@@ -13410,7 +13916,10 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest):
             })
 
 @app.post("/api/canvas-image-tasks")
-async def create_canvas_image_task(payload: OnlineImageRequest):
+async def create_canvas_image_task(payload: OnlineImageRequest, request: Request):
+    event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n, "entry": "canvas"})
+    request.state.usage_event = event
+    request.state.usage_async = True
     task_id = f"canvas_img_{uuid.uuid4().hex}"
     with CANVAS_TASK_LOCK:
         CANVAS_TASKS[task_id] = {
@@ -13423,19 +13932,24 @@ async def create_canvas_image_task(payload: OnlineImageRequest):
             "error": "",
             "provider_id": payload.provider_id,
             "model": payload.model,
+            "user_id": event["user_id"],
+            "usage_event_id": event["id"],
         }
-    asyncio.create_task(run_canvas_image_task(task_id, payload))
-    return {"task_id": task_id, "status": "queued"}
+    asyncio.create_task(run_canvas_image_task(task_id, payload, event))
+    return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
 
 @app.get("/api/canvas-image-tasks/{task_id}")
-async def get_canvas_image_task(task_id: str):
+async def get_canvas_image_task(task_id: str, request: Request):
     with CANVAS_TASK_LOCK:
         task = dict(CANVAS_TASKS.get(task_id) or {})
     if not task:
         raise HTTPException(status_code=404, detail="画布任务不存在，可能服务已重启或任务已过期")
+    user = require_authenticated(request)
+    if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
     return task
 
-async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
+async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest, event=None):
     with CANVAS_TASK_LOCK:
         if task_id in CANVAS_TASKS:
             CANVAS_TASKS[task_id]["status"] = "running"
@@ -13444,6 +13958,9 @@ async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
         result = await asyncio.to_thread(generate, payload)
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(str(result.get("error") or "ComfyUI 生成失败"))
+        if event:
+            result["usage_event_id"] = event["id"]
+            finish_usage_event(event, "succeeded")
         with CANVAS_TASK_LOCK:
             CANVAS_TASKS[task_id].update({
                 "status": "succeeded",
@@ -13452,6 +13969,8 @@ async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
                 "updated_at": time.time(),
             })
     except Exception as exc:
+        if event:
+            finish_usage_event(event, "failed", getattr(exc, "detail", None) or str(exc))
         detail = getattr(exc, "detail", None) or str(exc)
         status_code = getattr(exc, "status_code", 500)
         with CANVAS_TASK_LOCK:
@@ -13463,7 +13982,10 @@ async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest):
             })
 
 @app.post("/api/canvas-comfy-tasks")
-async def create_canvas_comfy_task(payload: GenerateRequest):
+async def create_canvas_comfy_task(payload: GenerateRequest, request: Request):
+    event = begin_usage_event(request, "image", "comfyui", payload.workflow_json, {"workflow": payload.workflow_json, "width": payload.width, "height": payload.height, "entry": "canvas"})
+    request.state.usage_event = event
+    request.state.usage_async = True
     task_id = f"canvas_comfy_{uuid.uuid4().hex}"
     with CANVAS_TASK_LOCK:
         CANVAS_TASKS[task_id] = {
@@ -13475,16 +13997,21 @@ async def create_canvas_comfy_task(payload: GenerateRequest):
             "result": None,
             "error": "",
             "workflow_json": payload.workflow_json,
+            "user_id": event["user_id"],
+            "usage_event_id": event["id"],
         }
-    asyncio.create_task(run_canvas_comfy_task(task_id, payload))
-    return {"task_id": task_id, "status": "queued"}
+    asyncio.create_task(run_canvas_comfy_task(task_id, payload, event))
+    return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
 
 @app.get("/api/canvas-comfy-tasks/{task_id}")
-async def get_canvas_comfy_task(task_id: str):
+async def get_canvas_comfy_task(task_id: str, request: Request):
     with CANVAS_TASK_LOCK:
         task = dict(CANVAS_TASKS.get(task_id) or {})
     if not task:
         raise HTTPException(status_code=404, detail="ComfyUI 任务不存在，可能服务已重启或任务已过期")
+    user = require_authenticated(request)
+    if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
     return task
 
 # --- 图像生成参数 schema（供客户端动态渲染参数表单，避免把参数写死在前端） ---
@@ -14073,8 +14600,7 @@ def volcengine_video_prompt_text(prompt, aspect_ratio="", duration=None):
     suffix_text = " ".join(suffixes)
     return f"{text} {suffix_text}".strip() if text else suffix_text
 
-@app.post("/api/canvas-video")
-async def canvas_video(payload: CanvasVideoRequest):
+async def _canvas_video_impl(payload: CanvasVideoRequest):
     provider = get_api_provider(payload.provider_id)
     if is_jimeng_provider(provider):
         return await generate_jimeng_video(payload, provider)
@@ -14538,19 +15064,39 @@ async def canvas_video(payload: CanvasVideoRequest):
 
 # --- Canvas LLM ---
 
+@app.post("/api/canvas-video")
+async def canvas_video(payload: CanvasVideoRequest, request: Request):
+    event = begin_usage_event(request, "video", payload.provider_id, payload.model, {"duration": payload.duration, "aspect_ratio": payload.aspect_ratio, "resolution": payload.resolution})
+    request.state.usage_event = event
+    result = await _canvas_video_impl(payload)
+    if isinstance(result, dict):
+        result["usage_event_id"] = event["id"]
+        raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+        finish_usage_event(event, "succeeded", raw_usage=raw.get("usage") if isinstance(raw, dict) else None)
+        request.state.usage_event = None
+    return result
+
 @app.post("/api/canvas-llm")
-async def canvas_llm(payload: CanvasLLMRequest):
+async def canvas_llm(payload: CanvasLLMRequest, request: Request):
+    event = begin_usage_event(request, "llm", payload.provider, payload.model or payload.ms_model, {"images": len(payload.images or []), "videos": len(payload.videos or [])})
+    request.state.usage_event = event
     _provider = get_api_provider(payload.provider)
     if is_codex_provider(_provider):
         model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
         text, raw = await codex_chat_text(payload, payload.messages)
-        return {"text": text, "model": model, "raw_usage": None, "raw": raw}
+        result = {"text": text, "model": model, "raw_usage": None, "raw": raw, "usage_event_id": event["id"]}
+        finish_usage_event(event, "succeeded")
+        request.state.usage_event = None
+        return result
     if is_gemini_cli_provider(_provider):
         model = selected_model(payload.model, (_provider.get("chat_models") or GEMINI_CLI_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
         text, raw = await gemini_cli_chat_text(payload, payload.messages)
-        return {"text": text, "model": model, "raw_usage": None, "raw": raw}
+        result = {"text": text, "model": model, "raw_usage": None, "raw": raw, "usage_event_id": event["id"]}
+        finish_usage_event(event, "succeeded")
+        request.state.usage_event = None
+        return result
     chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
     # 判断协议：APIMart 异步 vs 标准 OpenAI
     _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
@@ -14627,7 +15173,10 @@ async def canvas_llm(payload: CanvasLLMRequest):
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"解析回复内容失败：{exc}") from exc
     raw_data = unwrap_apimart_response(raw) if isinstance(raw, dict) else {}
-    return {"text": text, "model": model, "raw_usage": raw_data.get("usage")}
+    result = {"text": text, "model": model, "raw_usage": raw_data.get("usage"), "usage_event_id": event["id"]}
+    finish_usage_event(event, "succeeded", raw_usage=raw_data.get("usage"))
+    request.state.usage_event = None
+    return result
 
 # --- 对话管理 ---
 
@@ -15914,6 +16463,7 @@ async def purge_canvas(canvas_id: str):
 
 @app.post("/api/chat")
 async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
+    request.state.usage_event = begin_usage_event(request, "image" if payload.mode == "image" else "llm", payload.image_provider if payload.mode == "image" else payload.provider, payload.image_model if payload.mode == "image" else payload.model, {"entry": "chat", "mode": payload.mode, "size": payload.size})
     user_id = safe_user_id(x_user_id, request)
     conversation = (
         load_conversation(user_id, payload.conversation_id)
@@ -16044,6 +16594,7 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
 
 @app.post("/api/chat/agent")
 async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
+    request.state.usage_event = begin_usage_event(request, "llm", payload.provider, payload.model, {"entry": "chat-agent", "mode": "agent"})
     user_id = safe_user_id(x_user_id, request)
     conversation = (
         load_conversation(user_id, payload.conversation_id)
@@ -16132,6 +16683,8 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
 async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
     if payload.mode == "image":
         raise HTTPException(status_code=400, detail="图片模式请使用 /api/chat")
+
+    request.state.usage_event = begin_usage_event(request, "llm", payload.provider, payload.model, {"entry": "chat-stream", "mode": "stream"})
 
     user_id = safe_user_id(x_user_id, request)
     conversation = (
@@ -16713,7 +17266,9 @@ async def ms_generate(req: MsGenerateRequest):
 # --- 本地 ComfyUI 生图 ---
 
 @app.post("/api/generate")
-def generate(req: GenerateRequest):
+def generate(req: GenerateRequest, request: Request = None):
+    if request is not None:
+        request.state.usage_event = begin_usage_event(request, "image", "comfyui", req.workflow_json, {"workflow": req.workflow_json, "width": req.width, "height": req.height, "entry": "generate"})
     global NEXT_TASK_ID
     current_task = None
     target_backend = None

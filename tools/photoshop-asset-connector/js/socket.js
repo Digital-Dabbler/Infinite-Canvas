@@ -9,7 +9,7 @@
     closeSocket();
     if (!handlers.isLive()) return;
     let ws;
-    try { ws = new WebSocket(`${net.wsBase()}/ws/stats`); }
+    try { ws = new WebSocket(`${net.wsBase()}/ws/stats${state.token ? `?access_token=${encodeURIComponent(state.token)}` : ''}`); }
     catch (e) { return; }
     state.ws = ws;
 

@@ -23,11 +23,11 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.07.15.1782696751"></script>
-    <script src="/static/js/theme.js?v=2026.07.15.1783117645"></script>
-    <script src="/static/js/i18n.js?v=2026.07.15.1783116068"></script>
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.07.17.1783969806"></script>
+    <script src="/static/js/theme.js?v=2026.07.17.1783969806"></script>
+    <script src="/static/js/i18n.js?v=2026.07.17.1783969806"></script>
     <style>
-        @import url('/static/vendor/css/fonts.css?v=2026.07.15.1782696732');
+        @import url('/static/vendor/css/fonts.css?v=2026.07.17.1783969806');
 
         /* 本地 Tailwind 工具类兜底：CDN 慢/未就绪时也能立刻给图标尺寸，避免首屏左侧栏空白 */
         .w-1\.5 { width: 0.375rem; }
@@ -1608,6 +1608,14 @@
                         <span class="side-pill-text" data-i18n="common.comfyuiSettings">工作流设置</span>
                     </button>
                 </div>
+                <button id="admin-entry-btn" class="side-pill" onclick="location.href='/static/admin.html?v=2026.07.17.1784423169'" type="button" title="使用管理后台" style="display:none">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M19 8v6M22 11h-6"></path></svg>
+                    <span class="side-pill-text">使用管理</span>
+                </button>
+                <button id="account-entry-btn" class="side-pill" onclick="studioLogout()" type="button" title="退出登录">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                    <span class="side-pill-text" id="account-entry-text">退出登录</span>
+                </button>
                 <button id="github-entry-btn" class="side-pill" onclick="openProjectPage()" type="button" title="GitHub">
                     <svg fill="currentColor" stroke="none" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.05c-3.34.73-4.04-1.42-4.04-1.42-.55-1.39-1.34-1.76-1.34-1.76-1.09-.75.08-.74.08-.74 1.21.09 1.85 1.25 1.85 1.25 1.07 1.83 2.81 1.3 3.5.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.12-.3-.54-1.53.12-3.18 0 0 1.01-.32 3.3 1.23a11.45 11.45 0 0 1 6.01 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.77.84 1.24 1.91 1.24 3.22 0 4.61-2.81 5.63-5.49 5.93.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.57A12 12 0 0 0 12 .5Z"></path>
@@ -1672,16 +1680,16 @@
         </script>
 
         <main class="stage">
-            <iframe id="frame-zimage" data-src="/static/zimage.html?v=2026.07.15.1784269246" class="active" scrolling="yes"></iframe>
-            <iframe id="frame-enhance" data-src="/static/enhance.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-klein" data-src="/static/klein.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-angle" data-src="/static/angle.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-online" data-src="/static/online.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
-            <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2026.07.15.1784269246" scrolling="yes"></iframe>
+            <iframe id="frame-zimage" data-src="/static/zimage.html?v=2026.07.17.1784403899" class="active" scrolling="yes"></iframe>
+            <iframe id="frame-enhance" data-src="/static/enhance.html?v=2026.07.17.1784423169" scrolling="yes"></iframe>
+            <iframe id="frame-klein" data-src="/static/klein.html?v=2026.07.17.1784398340" scrolling="yes"></iframe>
+            <iframe id="frame-angle" data-src="/static/angle.html?v=2026.07.17.1784423169" scrolling="yes"></iframe>
+            <iframe id="frame-online" data-src="/static/online.html?v=2026.07.17.1784398340" scrolling="yes"></iframe>
+            <iframe id="frame-gpt-chat" data-src="/static/gpt-chat.html?v=2026.07.17.1784423169" scrolling="yes"></iframe>
+            <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2026.07.17.1784423169" scrolling="yes"></iframe>
+            <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2026.07.17.1784423169" scrolling="yes"></iframe>
+            <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2026.07.17.1784423169" scrolling="yes"></iframe>
+            <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2026.07.17.1784423169" scrolling="yes"></iframe>
 
         </main>
     </div>
@@ -2801,6 +2809,21 @@
                 if(badge) badge.classList.remove('checking');
             }
         }
+        async function studioLogout() {
+            try { await fetch('/api/auth/logout', {method:'POST'}); } catch(e) {}
+            location.href = '/static/login.html';
+        }
+        (async function initAuthenticatedUser(){
+            try {
+                const res = await fetch('/api/auth/me', {cache:'no-store'});
+                if(!res.ok) { location.href='/static/login.html?v=2026.07.17.1784403645'; return; }
+                const data = await res.json();
+                const user = data.user || {};
+                const label = document.getElementById('account-entry-text');
+                if(label) label.textContent = `${user.name || user.username || '账号'} · 退出`;
+                if(user.role === 'admin') document.getElementById('admin-entry-btn').style.display = '';
+            } catch(e) { location.href='/static/login.html?v=2026.07.17.1784403645'; }
+        })();
     </script>
 </body>
 
