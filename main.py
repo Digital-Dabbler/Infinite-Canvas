@@ -2948,10 +2948,14 @@ async def admin_delete_user(user_id: str, request: Request):
 async def admin_usage(request: Request):
     require_admin(request)
     events = usage_events()
-    filters = {key: str(request.query_params.get(key) or "").strip() for key in ("user_id", "department", "function", "provider", "model", "status")}
+    filters = {key: str(request.query_params.get(key) or "").strip() for key in ("user_id", "department", "function", "provider", "model", "status", "category", "client_source")}
     for key, value in filters.items():
         if value:
             events = [item for item in events if str(item.get(key) or "") == value]
+    keyword = str(request.query_params.get("q") or "").strip().lower()
+    if keyword:
+        searchable_fields = ("username", "name", "department", "function", "provider", "model", "client_source", "status")
+        events = [item for item in events if any(keyword in str(item.get(key) or "").lower() for key in searchable_fields)]
     events.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
     total = len(events)
     offset = max(0, int(request.query_params.get("offset") or 0))
