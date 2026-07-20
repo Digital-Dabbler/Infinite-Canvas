@@ -717,6 +717,8 @@
         .side-pill { gap:0; }
         .sidebar:hover .side-pill { gap:8px; }
 
+        #admin-entry-btn[hidden] { display: none !important; }
+
         .project-version-badge {
             width:44px;
             min-height:18px;
@@ -1560,6 +1562,13 @@
                     </svg>
                     <span class="side-pill-text" data-i18n="common.apiSettings">API 设置</span>
                 </button>
+                <button class="side-pill" id="admin-entry-btn" onclick="switchUI(this, 'admin')" type="button" title="管理台" hidden>
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 3 4 7v5c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10V7l-8-4z"></path>
+                        <path d="M9 12l2 2 4-4"></path>
+                    </svg>
+                    <span class="side-pill-text">管理台</span>
+                </button>
                 <button class="side-pill settings-fold-toggle" id="settings-fold-toggle" onclick="toggleSidebarSettings()" type="button" title="更多设置" aria-expanded="false">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
@@ -1681,6 +1690,7 @@
             <iframe id="frame-asset-manager" data-src="/static/asset-manager.html?v=2026.07.17.1784513274" scrolling="yes"></iframe>
             <iframe id="frame-api-settings" data-src="/static/api-settings.html?v=2026.07.17.1784513274" scrolling="yes"></iframe>
             <iframe id="frame-comfyui-settings" data-src="/static/comfyui-settings.html?v=2026.07.17.1784513274" scrolling="yes"></iframe>
+            <iframe id="frame-admin" data-src="/static/admin.html" scrolling="yes"></iframe>
             <iframe id="frame-canvas" data-src="/static/canvas-list.html?v=2026.07.17.1784513274" scrolling="yes"></iframe>
 
         </main>
@@ -1789,7 +1799,7 @@
         const SIDEBAR_SETTINGS_COLLAPSED_KEY = 'studio_sidebar_settings_collapsed';
         const SIDEBAR_PINNED_KEY = 'studio_sidebar_pinned';
         const DEFAULT_PAGE_ID = 'zimage';
-        const PAGE_IDS = ['zimage','enhance','klein','angle','online','gpt-chat','canvas','asset-manager','api-settings','comfyui-settings'];
+        const PAGE_IDS = ['zimage','enhance','klein','angle','online','gpt-chat','canvas','asset-manager','api-settings','comfyui-settings','admin'];
         const LOCAL_PAGE_IDS = ['zimage','enhance','klein','angle'];
         const PROJECT_URL = 'https://github.com/hero8152/Infinite-Canvas';
         let appInfo = { version:'', repo_url:PROJECT_URL, version_url:'https://raw.githubusercontent.com/hero8152/Infinite-Canvas/main/VERSION' };
@@ -1868,7 +1878,24 @@
 
         function restoreSidebarSettings(id) {
             const savedCollapsed = localStorage.getItem(SIDEBAR_SETTINGS_COLLAPSED_KEY) !== '0';
-            setSidebarSettingsCollapsed(savedCollapsed && id !== 'comfyui-settings', { skipRemember:true });
+            setSidebarSettingsCollapsed(savedCollapsed && !['comfyui-settings', 'admin'].includes(id), { skipRemember:true });
+        }
+
+        async function loadCurrentUserNavigation() {
+            const adminEntry = document.getElementById('admin-entry-btn');
+            try {
+                const response = await fetch('/api/auth/me');
+                if(!response.ok) return;
+                const data = await response.json();
+                const isAdmin = data?.user?.role === 'admin';
+                if(adminEntry) adminEntry.hidden = !isAdmin;
+                if(!isAdmin && localStorage.getItem(ACTIVE_PAGE_KEY) === 'admin') {
+                    const fallback = document.querySelector("[onclick*=\"'zimage'\"]");
+                    switchUI(fallback, DEFAULT_PAGE_ID);
+                }
+            } catch(e) {
+                if(adminEntry) adminEntry.hidden = true;
+            }
         }
 
         function resetStudioRootScroll() {
@@ -1936,7 +1963,10 @@
             switchUI(trigger, id, { skipRemember:true });
             document.documentElement.classList.remove('studio-route-booting');
         }
-        document.addEventListener('DOMContentLoaded', restoreActivePage, { once:true });
+        document.addEventListener('DOMContentLoaded', () => {
+            restoreActivePage();
+            loadCurrentUserNavigation();
+        }, { once:true });
 
         async function syncStatus() {
             try {
