@@ -139,6 +139,23 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["removed_files"], [path.name])
         self.assertEqual(result["removed_previews"], 1)
 
+    async def test_generation_history_does_not_pin_deleted_log_media(self):
+        path, url = self.generated_file("history-only.png")
+        self.history.write_text(
+            json.dumps([{"timestamp": 123, "url": url, "images": [url]}]),
+            encoding="utf-8",
+        )
+        self.write_canvas("history_only", [{"id": "log-1", "outputs": [url]}])
+
+        result = await main.delete_canvas_log(
+            "history_only",
+            main.DeleteCanvasLogRequest(log_id="log-1", delete_unreferenced_media=True),
+        )
+
+        self.assertFalse(path.exists())
+        self.assertEqual(result["removed_files"], [path.name])
+        self.assertEqual(json.loads(self.history.read_text(encoding="utf-8")), [])
+
     async def test_cleanup_preserves_media_when_json_is_unreadable(self):
         path, url = self.generated_file()
         (self.canvases / "being-written.json").write_text("{", encoding="utf-8")
