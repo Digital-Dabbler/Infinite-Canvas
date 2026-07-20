@@ -2809,6 +2809,9 @@ class AdminUserUpdateRequest(BaseModel):
     role: Optional[str] = None
     quota: Optional[Dict[str, int]] = None
 
+class AdminPasswordResetRequest(BaseModel):
+    new_password: str = Field(min_length=10, max_length=200)
+
 class UsagePolicyRequest(BaseModel):
     alert_thresholds: Dict[str, int] = Field(default_factory=dict)
     alert_window_seconds: Optional[int] = None
@@ -2909,6 +2912,37 @@ async def admin_update_user(user_id: str, payload: AdminUserUpdateRequest, reque
     if payload.enabled is False:
         revoke_user_sessions(user_id)
     return {"user": public_user(user)}
+
+@app.post("/api/admin/users/{user_id}/reset-password")
+async def admin_reset_user_password(user_id: str, payload: AdminPasswordResetRequest, request: Request):
+    require_admin(request)
+    with AUTH_LOCK:
+        data = load_auth_users()
+        user = next((item for item in data["users"] if item.get("id") == user_id), None)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+        salt, digest = _password_hash(payload.new_password)
+        user.update({"password_salt": salt, "password_hash": digest, "must_change_password": True})
+        save_auth_users(data)
+    revoke_user_sessions(user_id)
+    return {"ok": True, "message": "密码已重置，用户下次登录后应修改密码。"}
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, request: Request):
+    admin = require_admin(request)
+    if user_id == admin.get("id"):
+        raise HTTPException(status_code=400, detail="不能删除当前登录的管理员账号。")
+    with AUTH_LOCK:
+        data = load_auth_users()
+        user = next((item for item in data["users"] if item.get("id") == user_id), None)
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+        if user.get("role") == "admin" and sum(1 for item in data["users"] if item.get("role") == "admin") <= 1:
+            raise HTTPException(status_code=400, detail="不能删除系统中的最后一个管理员。")
+        data["users"] = [item for item in data["users"] if item.get("id") != user_id]
+        save_auth_users(data)
+    revoke_user_sessions(user_id)
+    return {"ok": True}
 
 @app.get("/api/admin/usage")
 async def admin_usage(request: Request):
