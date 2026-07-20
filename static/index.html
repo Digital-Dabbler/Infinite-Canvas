@@ -13,6 +13,10 @@
     </style>
     <script>
         (function(){
+            if(window.top !== window.self) {
+                try { window.top.location.replace(window.location.href); } catch(e) {}
+                return;
+            }
             try {
                 var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light';
                 if(theme === 'dark') {
