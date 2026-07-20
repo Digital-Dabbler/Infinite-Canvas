@@ -1498,9 +1498,12 @@ USAGE_DEFAULT_POLICY = {
     "retention_days": 180,
 }
 AUTH_PUBLIC_PATHS = {
-    "/api/auth/register", "/api/auth/login",
+    "/api/auth/register", "/api/auth/login", "/api/auth/reset-password",
     "/static/login.html", "/favicon.ico",
 }
+PASSWORD_RESET_ATTEMPTS = {}
+PASSWORD_RESET_WINDOW_SECONDS = 15 * 60
+PASSWORD_RESET_MAX_ATTEMPTS = 5
 AUTH_PUBLIC_PREFIXES = ("/static/images/",)
 ADMIN_WRITE_PREFIXES = (
     "/api/providers", "/api/comfyui", "/api/workflows", "/api/update", "/api/rollback",
@@ -1531,6 +1534,18 @@ def _verify_password(password, user):
         return hmac.compare_digest(digest, str(user.get("password_hash") or ""))
     except Exception:
         return False
+
+def _password_reset_allowed(request):
+    """限制未登录找回请求，避免对局域网账号资料进行暴力猜测。"""
+    address = (request.client.host if request.client else "unknown") or "unknown"
+    now = time.time()
+    with AUTH_LOCK:
+        attempts = [item for item in PASSWORD_RESET_ATTEMPTS.get(address, []) if now - item < PASSWORD_RESET_WINDOW_SECONDS]
+        if len(attempts) >= PASSWORD_RESET_MAX_ATTEMPTS:
+            PASSWORD_RESET_ATTEMPTS[address] = attempts
+            raise HTTPException(status_code=429, detail="尝试次数过多，请 15 分钟后再试。")
+        attempts.append(now)
+        PASSWORD_RESET_ATTEMPTS[address] = attempts
 
 def load_auth_users():
     data = _read_json_file(AUTH_USERS_FILE, {"users": []})
@@ -2804,6 +2819,12 @@ class AuthPasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=200)
     new_password: str = Field(min_length=10, max_length=200)
 
+class AuthPasswordResetRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=40)
+    name: str = Field(min_length=1, max_length=80)
+    department: str = Field(min_length=1, max_length=80)
+    new_password: str = Field(min_length=10, max_length=200)
+
 class AdminUserUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     role: Optional[str] = None
@@ -2849,6 +2870,27 @@ async def auth_login(payload: AuthLoginRequest, request: Request):
     response = JSONResponse({"user": public_user(user), "access_token": token if source in {"chrome-extension", "photoshop"} else ""})
     response.set_cookie("studio_session", token, max_age=14 * 24 * 3600, httponly=True, samesite="lax", secure=False)
     return response
+
+@app.post("/api/auth/reset-password")
+async def auth_reset_password(payload: AuthPasswordResetRequest, request: Request):
+    _password_reset_allowed(request)
+    username = re.sub(r"[^a-zA-Z0-9_.-]", "", payload.username.strip().lower())
+    name = payload.name.strip()
+    department = payload.department.strip()
+    with AUTH_LOCK:
+        data = load_auth_users()
+        user = next((item for item in data["users"] if str(item.get("username") or "").lower() == username), None)
+        # 管理员凭据只能由已登录管理员处理，不能通过公开入口重置。
+        verified = bool(user and user.get("enabled", True) and user.get("role") != "admin"
+                        and hmac.compare_digest(str(user.get("name") or "").encode("utf-8"), name.encode("utf-8"))
+                        and hmac.compare_digest(str(user.get("department") or "").encode("utf-8"), department.encode("utf-8")))
+        if not verified:
+            raise HTTPException(status_code=400, detail="账号、姓名或部门不匹配，无法重置密码。")
+        salt, digest = _password_hash(payload.new_password)
+        user.update({"password_salt": salt, "password_hash": digest, "must_change_password": False})
+        save_auth_users(data)
+    revoke_user_sessions(user["id"])
+    return {"ok": True, "message": "密码已重置，请使用新密码重新登录。"}
 
 @app.post("/api/auth/logout")
 async def auth_logout(request: Request):
