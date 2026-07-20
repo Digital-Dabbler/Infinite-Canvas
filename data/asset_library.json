@@ -111,6 +111,77 @@
           "name": "工作流",
           "type": "workflow",
           "items": []
+        },
+        {
+          "id": "cat_031eb11349c0",
+          "name": "角色",
+          "type": "image",
+          "items": [],
+          "dir": "角色_3"
+        },
+        {
+          "id": "cat_2a8b73fb14dd",
+          "name": "婚礼_Wedding",
+          "type": "image",
+          "items": [
+            {
+              "id": "asset_83338e094783",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_897013ac53e8_output.png",
+              "kind": "image",
+              "created_at": 1784570902383,
+              "registrations": {}
+            },
+            {
+              "id": "asset_c00b5ecd3c03",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_512fcb15b165_output.png",
+              "kind": "image",
+              "created_at": 1784570900047,
+              "registrations": {}
+            },
+            {
+              "id": "asset_d0020bcc04aa",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_0302f2af117d_output.png",
+              "kind": "image",
+              "created_at": 1784570897602,
+              "registrations": {}
+            },
+            {
+              "id": "asset_35e925789de9",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_5e729748afee_output.png",
+              "kind": "image",
+              "created_at": 1784570333804,
+              "registrations": {}
+            },
+            {
+              "id": "asset_077ddb3b1655",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_89b597b4ada0_output.png",
+              "kind": "image",
+              "created_at": 1784570331746,
+              "registrations": {}
+            },
+            {
+              "id": "asset_5a846c3827a4",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_6073ee46f10f_output.png",
+              "kind": "image",
+              "created_at": 1784570328862,
+              "registrations": {}
+            },
+            {
+              "id": "asset_0005dbe4bb15",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_31a80617aec8_output.png",
+              "kind": "image",
+              "created_at": 1784570326706,
+              "registrations": {}
+            }
+          ],
+          "dir": "婚礼_Wedding"
         }
       ]
     }
@@ -128,7 +199,78 @@
       "name": "工作流",
       "type": "workflow",
       "items": []
+    },
+    {
+      "id": "cat_031eb11349c0",
+      "name": "角色",
+      "type": "image",
+      "items": [],
+      "dir": "角色_3"
+    },
+    {
+      "id": "cat_2a8b73fb14dd",
+      "name": "婚礼_Wedding",
+      "type": "image",
+      "items": [
+        {
+          "id": "asset_83338e094783",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_897013ac53e8_output.png",
+          "kind": "image",
+          "created_at": 1784570902383,
+          "registrations": {}
+        },
+        {
+          "id": "asset_c00b5ecd3c03",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_512fcb15b165_output.png",
+          "kind": "image",
+          "created_at": 1784570900047,
+          "registrations": {}
+        },
+        {
+          "id": "asset_d0020bcc04aa",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_0302f2af117d_output.png",
+          "kind": "image",
+          "created_at": 1784570897602,
+          "registrations": {}
+        },
+        {
+          "id": "asset_35e925789de9",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_5e729748afee_output.png",
+          "kind": "image",
+          "created_at": 1784570333804,
+          "registrations": {}
+        },
+        {
+          "id": "asset_077ddb3b1655",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_89b597b4ada0_output.png",
+          "kind": "image",
+          "created_at": 1784570331746,
+          "registrations": {}
+        },
+        {
+          "id": "asset_5a846c3827a4",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_6073ee46f10f_output.png",
+          "kind": "image",
+          "created_at": 1784570328862,
+          "registrations": {}
+        },
+        {
+          "id": "asset_0005dbe4bb15",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_31a80617aec8_output.png",
+          "kind": "image",
+          "created_at": 1784570326706,
+          "registrations": {}
+        }
+      ],
+      "dir": "婚礼_Wedding"
     }
   ],
-  "updated_at": 1784567556950
+  "updated_at": 1784570902769
 }
