@@ -2990,6 +2990,12 @@ async def admin_delete_user(user_id: str, request: Request):
 async def admin_usage(request: Request):
     require_admin(request)
     events = usage_events()
+    start_at = str(request.query_params.get("start_at") or "").strip()
+    end_at = str(request.query_params.get("end_at") or "").strip()
+    if start_at:
+        events = [item for item in events if str(item.get("created_at_iso") or "") >= start_at]
+    if end_at:
+        events = [item for item in events if str(item.get("created_at_iso") or "") <= end_at]
     filters = {key: str(request.query_params.get(key) or "").strip() for key in ("user_id", "department", "function", "provider", "model", "status", "category", "client_source")}
     for key, value in filters.items():
         if value:

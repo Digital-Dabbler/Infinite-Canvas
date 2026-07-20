@@ -125,6 +125,22 @@
           "type": "image",
           "items": [
             {
+              "id": "asset_34a7d02957a8",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_e9739540de69_output.png",
+              "kind": "image",
+              "created_at": 1784573453966,
+              "registrations": {}
+            },
+            {
+              "id": "asset_65ed0c25a27e",
+              "name": "output",
+              "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_33de81e33644_output.png",
+              "kind": "image",
+              "created_at": 1784573451257,
+              "registrations": {}
+            },
+            {
               "id": "asset_83338e094783",
               "name": "output",
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_897013ac53e8_output.png",
@@ -213,6 +229,22 @@
       "type": "image",
       "items": [
         {
+          "id": "asset_34a7d02957a8",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_e9739540de69_output.png",
+          "kind": "image",
+          "created_at": 1784573453966,
+          "registrations": {}
+        },
+        {
+          "id": "asset_65ed0c25a27e",
+          "name": "output",
+          "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_33de81e33644_output.png",
+          "kind": "image",
+          "created_at": 1784573451257,
+          "registrations": {}
+        },
+        {
           "id": "asset_83338e094783",
           "name": "output",
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_897013ac53e8_output.png",
@@ -272,5 +304,5 @@
       "dir": "婚礼_Wedding"
     }
   ],
-  "updated_at": 1784570902769
+  "updated_at": 1784573454302
 }
