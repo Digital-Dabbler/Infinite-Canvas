@@ -1,0 +1,41 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260604102155
+Username: CP-4090D\admin
+RunAs User: CP-4090D\admin
+Configuration Name: 
+Machine: CP-4090D (Microsoft Windows NT 10.0.26200.0)
+Host Application: powershell -NoExit -ExecutionPolicy Bypass -File C:\AI\Infinite-Canvas\tools\jimeng_cli_install.ps1
+Process ID: 4824
+PSVersion: 5.1.26100.8457
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8457
+BuildVersion: 10.0.26100.8457
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Jimeng CLI install/update via WSL ===
+Workspace: C:\AI\Infinite-Canvas
+
+Detected WSL distros:
+  Ubuntu
+Using WSL distro: Ubuntu
+WSL sh OK
+bash=/usr/bin/bash
+curl=/usr/bin/curl
+apt_get=/usr/bin/apt-get
+Installing/updating dreamina...
+下载 https://lf3-static.bytednsdoc.com/obj/eden-cn/psj_hupthlyk/ljhwZthlaukjlkulzlp/dreamina_cli_beta/dreamina_cli_linux_amd64
+下载 https://lf3-static.bytednsdoc.com/obj/eden-cn/psj_hupthlyk/ljhwZthlaukjlkulzlp/dreamina_cli_beta/SKILL.md
+下载 https://lf3-static.bytednsdoc.com/obj/eden-cn/psj_hupthlyk/ljhwZthlaukjlkulzlp/version.json
+已将 /home/xuhaokang/.local/bin 写入 PATH 启动文件: /home/xuhaokang/.bashrc
+请重新打开终端，或执行: export PATH="/home/xuhaokang/.local/bin:$PATH"
+安装完成: /home/xuhaokang/.local/bin/dreamina
+可执行文件名: dreamina
+Dreamina skill 已下载到: /home/xuhaokang/.dreamina_cli/dreamina/SKILL.md
+如需给 agent 使用，可将该 SKILL 安装到对应 agent 的 skills 目录中。
+dreamina=/home/xuhaokang/.local/bin/dreamina
+Updated API\.env: JIMENG_USE_WSL=1
+

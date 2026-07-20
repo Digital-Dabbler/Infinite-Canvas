@@ -391,21 +391,15 @@ textarea:focus {
   width: 100%;
   height: 34px;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 0;
   border-color: var(--button);
   border-radius: 10px;
   background: var(--button);
   color: var(--button-text);
   box-shadow: var(--shadow);
-}
-
-.scan-main svg {
-  width: 16px;
-  height: 16px;
-  fill: currentColor;
 }
 
 .scan-main span {
@@ -420,61 +414,6 @@ textarea:focus {
 
 .scan-main:hover {
   filter: brightness(.96);
-}
-
-.scan-extra {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: stretch;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.scan-opt,
-.capture-btn {
-  flex: 1 1 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
-  color: color-mix(in srgb, var(--text) 82%, transparent);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.scan-opt span,
-.capture-btn span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scan-opt {
-  margin: 0;
-}
-
-.scan-extra .scan-opt span {
-  font-size: 11px;
-  font-weight: 600;
-  color: inherit;
-}
-
-.capture-btn svg {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
-}
-
-.scan-opt:hover,
-.capture-btn:hover {
-  filter: brightness(.96);
-  border-color: color-mix(in srgb, var(--line) 60%, var(--text));
 }
 
 .toolbar {
@@ -602,41 +541,23 @@ textarea:focus {
 }
 
 .card input {
-  flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
-  margin: 0;
+  position: absolute;
+  z-index: 3;
+  left: 7px;
+  top: 7px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   accent-color: var(--button);
-  pointer-events: none; /* 点击交给整个 .meta 处理，避免双重切换 */
 }
 
 .meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 8px;
+  padding: 5px 6px;
   color: var(--muted);
-  font-size: 11px;
-  cursor: pointer;
-  user-select: none;
-  border-top: 1px solid transparent;
-}
-
-.meta:hover {
-  background: var(--button-soft);
-}
-
-.meta-name {
-  flex: 1 1 auto;
-  min-width: 0;
+  font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.card.selected .meta {
-  color: var(--text);
 }
 
 .card.selected {
@@ -658,29 +579,7 @@ textarea:focus {
   color: var(--button-text);
 }
 
-.bottom .primary,
-.bottom .ghost {
-  flex: 1 1 0;
-  width: auto;
-}
-
-.ghost {
-  height: 34px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--panel);
-  color: var(--text);
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.ghost:hover {
-  border-color: var(--line-strong);
-  background: var(--button-soft);
-}
-
-.primary:disabled,
-.ghost:disabled {
+.primary:disabled {
   opacity: .42;
   cursor: default;
 }

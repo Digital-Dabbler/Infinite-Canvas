@@ -1,0 +1,36 @@
+{
+  "title": "custom/精准抠图",
+  "fields": [
+    {
+      "id": "f_wwd9f93",
+      "node": "52",
+      "input": "image",
+      "name": "图片",
+      "type": "image",
+      "default": "ComfyUI_00001_.png",
+      "min": null,
+      "max": null,
+      "step": null,
+      "options": [],
+      "random_enabled": false
+    }
+  ],
+  "mini_cards": {
+    "prompt": {
+      "x": 24,
+      "y": 30
+    },
+    "image": {
+      "x": 24,
+      "y": 210
+    },
+    "custom": {
+      "x": 280,
+      "y": 78
+    },
+    "output": {
+      "x": 540,
+      "y": 120
+    }
+  }
+}

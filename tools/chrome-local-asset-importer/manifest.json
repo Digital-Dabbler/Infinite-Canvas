@@ -22,16 +22,11 @@
   "side_panel": {
     "default_path": "sidepanel.html"
   },
-  "background": {
-    "service_worker": "background.js"
-  },
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
-    "sidePanel",
-    "webRequest",
-    "downloads"
+    "sidePanel"
   ],
   "host_permissions": [
     "http://*/*",

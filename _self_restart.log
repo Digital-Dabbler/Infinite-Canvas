@@ -1,0 +1,75 @@
+[周三 2026/06/03  3:07:08.82] restart scheduled 
+[周三 2026/06/03  3:07:11.16] stopping old process 
+[周三 2026/06/03  3:08:15.20] launcher missing, fallback to python main.py 
+[周四 2026/06/04  9:33:18.69] restart scheduled 
+[周四 2026/06/04  9:33:21.11] stopping old process 
+[周四 2026/06/04  9:33:27.16] launcher missing, fallback to python main.py 
+[周五 2026/06/05  0:07:45.21] restart scheduled 
+[周五 2026/06/05  0:07:48.21] stopping old process 
+[周五 2026/06/05  0:07:53.16] launcher missing, fallback to python main.py 
+[周一 2026/06/08 10:11:18.75] restart scheduled 
+[周一 2026/06/08 10:11:21.20] stopping old process 
+[周一 2026/06/08 10:12:25.16] launcher missing, fallback to python main.py 
+[周二 2026/06/09 15:55:17.74] restart scheduled 
+[周二 2026/06/09 15:55:21.17] stopping old process 
+[周二 2026/06/09 15:56:24.19] launcher missing, fallback to python main.py 
+[周三 2026/06/10 11:04:44.24] restart scheduled 
+[周三 2026/06/10 11:04:47.14] stopping old process 
+[周三 2026/06/10 11:05:51.17] launcher missing, fallback to python main.py 
+[周三 2026/06/10 16:07:03.90] restart scheduled 
+[周三 2026/06/10 16:07:07.15] stopping old process 
+[周三 2026/06/10 16:08:11.15] launcher missing, fallback to python main.py 
+[周三 2026/06/10 20:29:57.30] restart scheduled 
+[周三 2026/06/10 20:30:00.15] stopping old process 
+[周三 2026/06/10 20:31:04.21] launcher missing, fallback to python main.py 
+[周五 2026/06/12 10:05:35.57] restart scheduled 
+[周五 2026/06/12 10:05:38.20] stopping old process 
+[周五 2026/06/12 10:05:40.13] launcher missing, fallback to python main.py 
+[周日 2026/06/14  5:20:34.22] restart scheduled 
+[周日 2026/06/14  5:20:37.20] stopping old process 
+[周二 2026/06/16 10:16:18.20] restart scheduled 
+[周二 2026/06/16 10:16:21.18] stopping old process 
+[周三 2026/06/17 23:59:18.01] restart scheduled 
+[周三 2026/06/17 23:59:21.14] stopping old process 
+[周四 2026/06/18  0:00:25.20] launcher missing, fallback to python main.py 
+[周一 2026/06/22  0:21:55.46] restart scheduled 
+[周一 2026/06/22  0:21:58.15] stopping old process 
+[周一 2026/06/22  0:23:10.18] launcher missing, fallback to python main.py 
+[周二 2026/06/23  9:41:49.89] restart scheduled 
+[周二 2026/06/23  9:41:53.20] stopping old process 
+[周二 2026/06/23  9:42:57.11] launcher missing, fallback to python main.py 
+[周三 2026/06/24  0:19:53.23] restart scheduled 
+[周三 2026/06/24  0:20:05.15] stopping old process 
+[周三 2026/06/24  0:21:27.12] launcher missing, fallback to python main.py 
+[周五 2026/06/26  3:52:34.38] restart scheduled 
+[周五 2026/06/26  3:52:38.11] stopping old process 
+[周五 2026/06/26  3:52:43.14] launcher missing, fallback to python main.py 
+[周二 2026/06/30 12:02:35.06] restart scheduled 
+[周二 2026/06/30 12:02:46.14] stopping old process 
+[周二 2026/06/30 12:03:56.11] launcher missing, fallback to python main.py 
+[周三 2026/07/01 10:07:10.70] restart scheduled 
+[周三 2026/07/01 10:07:20.22] stopping old process 
+[周一 2026/07/06 10:29:33.71] restart scheduled 
+[周一 2026/07/06 10:29:36.13] stopping old process 
+[周一 2026/07/06 10:29:38.11] launcher missing, fallback to python main.py 
+[周二 2026/07/07  9:36:42.39] restart scheduled 
+[周二 2026/07/07  9:36:45.13] stopping old process 
+[周二 2026/07/07  9:36:50.21] launcher missing, fallback to python main.py 
+[周二 2026/07/07  9:56:49.43] restart scheduled 
+[周二 2026/07/07  9:56:52.20] stopping old process 
+[周二 2026/07/07  9:56:57.19] starting launcher: C:\AI\Infinite-Canvas\启动服务.bat 
+[周四 2026/07/09  1:02:04.55] restart scheduled 
+[周四 2026/07/09  1:02:07.20] stopping old process 
+[周四 2026/07/09  1:02:40.15] starting launcher: C:\AI\Infinite-Canvas\启动服务.bat 
+[周四 2026/07/09  1:29:12.07] restart scheduled 
+[周四 2026/07/09  1:29:15.15] stopping old process 
+[周四 2026/07/09  1:29:17.15] starting launcher: C:\AI\Infinite-Canvas\启动服务.bat 
+[周一 2026/07/13  9:38:47.58] restart scheduled 
+[周一 2026/07/13  9:38:50.13] stopping old process 
+[周二 2026/07/14  9:52:23.36] restart scheduled 
+[周二 2026/07/14  9:52:26.17] stopping old process 
+[周四 2026/07/16  9:51:50.16] restart scheduled 
+[周四 2026/07/16  9:51:53.18] stopping old process 
+[周六 2026/07/18  3:08:36.43] restart scheduled 
+[周六 2026/07/18  3:08:39.20] stopping old process 
+[周六 2026/07/18  3:09:43.22] starting launcher: C:\AI\Infinite-Canvas\启动服务.bat 

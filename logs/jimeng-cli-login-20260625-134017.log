@@ -1,0 +1,48 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260625134017
+Username: CP-4090D\admin
+RunAs User: CP-4090D\admin
+Configuration Name: 
+Machine: CP-4090D (Microsoft Windows NT 10.0.26200.0)
+Host Application: powershell -NoExit -ExecutionPolicy Bypass -File C:\AI\Infinite-Canvas\tools\jimeng_cli_login.ps1
+Process ID: 1344572
+PSVersion: 5.1.26100.8655
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8655
+BuildVersion: 10.0.26100.8655
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Jimeng CLI login/check via WSL ===
+Workspace: C:\AI\Infinite-Canvas
+
+Detected WSL distros:
+  Ubuntu
+Using WSL distro: Ubuntu
+WSL sh OK
+请使用浏览器完成 OAuth Device Flow 登录。
+verification_uri: https://jimeng.jianying.com/ai-tool/cli-auth?verification_uri=https%3A%2F%2Fjimeng.jianying.com%2Fpassport%2Fopen%2Fscan_user_code%2F%3Fuser_code%3Dccd930f54f99ff02242c412fe84d9da2
+user_code: ccd930f54f99ff02242c412fe84d9da2
+device_code: 4caa57becfa8007dbdb8aa8584d093c6
+poll_interval: 1s
+expires_at: 2026-06-25T13:50:18+08:00
+OAuth 登录成功。
+当前登录账户信息：
+user_id: 4024660710669352
+vip_level: maestro
+total_credit: 100
+
+Checking user_credit...
+{
+  "total_credit": 100,
+  "user_id": 4024660710669352,
+  "user_name": "",
+  "vip_level": "maestro"
+}
+Updated API\.env: JIMENG_USE_WSL=1
+Done.
+
+Log: C:\AI\Infinite-Canvas\logs\jimeng-cli-login-20260625-134017.log

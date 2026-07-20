@@ -1,0 +1,43 @@
+﻿**********************
+Windows PowerShell transcript start
+Start time: 20260604103639
+Username: CP-4090D\admin
+RunAs User: CP-4090D\admin
+Configuration Name: 
+Machine: CP-4090D (Microsoft Windows NT 10.0.26200.0)
+Host Application: C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoExit -ExecutionPolicy Bypass -File C:\AI\Infinite-Canvas\tools\jimeng_cli_login.ps1
+Process ID: 30268
+PSVersion: 5.1.26100.8457
+PSEdition: Desktop
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1.26100.8457
+BuildVersion: 10.0.26100.8457
+CLRVersion: 4.0.30319.42000
+WSManStackVersion: 3.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+**********************
+=== Jimeng CLI login/check via WSL ===
+Workspace: C:\AI\Infinite-Canvas
+
+Detected WSL distros:
+  Ubuntu
+Using WSL distro: Ubuntu
+WSL sh OK
+请使用浏览器完成 OAuth Device Flow 登录。
+verification_uri: https://jimeng.jianying.com/ai-tool/cli-auth?verification_uri=https%3A%2F%2Fjimeng.jianying.com%2Fpassport%2Fopen%2Fscan_user_code%2F%3Fuser_code%3De1ceb63d78f73eb3a1bedd63e3ad7459
+user_code: e1ceb63d78f73eb3a1bedd63e3ad7459
+device_code: 129065457239615e52e70b79c8036993
+poll_interval: 1s
+expires_at: 2026-06-04T10:46:43+08:00
+authsdk: protocol error: protocol server: code=502 desc=Bad Gateway
+
+Checking user_credit...
+未检测到有效登录态，请先执行 dreamina login
+Login/check failed with exit code 1
+
+Log: C:\AI\Infinite-Canvas\logs\jimeng-cli-login-20260604-103639.log
+
+**********************
+Windows PowerShell transcript end
+End time: 20260604104659
+**********************

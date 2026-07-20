@@ -112,32 +112,6 @@
       "title": "Shared Text Encoder Loader (Inspire)"
     }
   },
-  "89": {
-    "inputs": {
-      "rgthree_comparer": {
-        "images": [
-          {
-            "name": "A",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_gmjxy_00001_.png&type=temp&subfolder=&rand=0.7230996201608886"
-          },
-          {
-            "name": "B",
-            "selected": true,
-            "url": "/api/view?filename=rgthree.compare._temp_gmjxy_00002_.png&type=temp&subfolder=&rand=0.6218111120009978"
-          }
-        ]
-      },
-      "image_a": [
-        "20",
-        0
-      ]
-    },
-    "class_type": "Image Comparer (rgthree)",
-    "_meta": {
-      "title": "图像对比"
-    }
-  },
   "137": {
     "inputs": {
       "images": [
