@@ -5709,13 +5709,10 @@ def jimeng_ratio_from_size(size, fallback="1:1"):
 
 # 官方 dreamina 支持的图片模型（来自 text2image/image2image -h）。
 # image2image 不支持 3.0/3.1。
-JIMENG_TEXT2IMAGE_MODELS = {"3.0", "3.1", "4.0", "4.1", "4.5", "4.6", "5.0"}
-JIMENG_IMAGE2IMAGE_MODELS = {"4.0", "4.1", "4.5", "4.6", "5.0"}
 JIMENG_TEXT2IMAGE_MODELS = {"3.0", "3.1", "4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"}
 JIMENG_IMAGE2IMAGE_MODELS = {"4.0", "4.1", "4.5", "4.6", "4.7", "5.0", "5.0Pro"}
 
 def jimeng_normalize_image_model(model):
-    match = re.search(r"(\d+\.\d+)", str(model or ""))
     text = str(model or "").strip()
     if re.search(r"\b5(?:\.0)?\s*[-_ ]?pro\b", text, re.IGNORECASE):
         return "5.0Pro"
