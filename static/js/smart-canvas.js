@@ -14932,6 +14932,7 @@ async function runComfyEnhance(node, refs, pendingNode, meta){
     if(!refs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
     const inputName = await comfyNameForRef(refs[0]);
     const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(settings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
+    //修复超分勾选
     let out = data.outputs || data.images || [];
     if(settings.enhanceUpscale && out[0]){
         const upscale = await runSmartComfyUpscale(out[0], settings.enhanceUpscaleRes || 2048);
@@ -14952,6 +14953,7 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta){
     const names = [];
     for(const ref of refs.slice(0, 3)) names.push(await comfyNameForRef(ref));
     const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
+    //修复超分勾选
     let out = data.outputs || data.images || [];
     if(settings.editUpscale && out[0]){
         const upscale = await runSmartComfyUpscale(out[0], settings.editUpscaleRes || 2048);
