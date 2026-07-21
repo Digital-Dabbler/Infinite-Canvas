@@ -2397,12 +2397,12 @@ function syncJimengModelPillForRefs(){
     try { scheduleDynamicParamsRefresh(80); } finally { _jimengModelRefreshing = false; }
 }
 // 即梦各视频指令支持的模型集合不同，按当前参考素材推断指令并过滤模型下拉。
-const JIMENG_SEEDANCE_VIDEO_MODELS = ['seedance2.0_vip', 'seedance2.0fast_vip', 'seedance2.0', 'seedance2.0fast'];
+const JIMENG_SEEDANCE_VIDEO_MODELS = ['seedance2.0_vip', 'seedance2.0fast_vip', 'seedance2.0', 'seedance2.0fast', 'seedance2.0mini'];
 const JIMENG_VIDEO_MODELS_BY_COMMAND = {
     text2video: JIMENG_SEEDANCE_VIDEO_MODELS,
     multimodal2video: JIMENG_SEEDANCE_VIDEO_MODELS,
-    image2video: ['3.0', '3.0fast', '3.0pro', '3.5pro', ...JIMENG_SEEDANCE_VIDEO_MODELS],
-    frames2video: ['3.0', '3.5pro', ...JIMENG_SEEDANCE_VIDEO_MODELS],
+    image2video: ['seedance1.5pro', ...JIMENG_SEEDANCE_VIDEO_MODELS],
+    frames2video: ['seedance1.5pro', ...JIMENG_SEEDANCE_VIDEO_MODELS],
 };
 function jimengVideoCommand(){
     const node = activeComposerNode() || selectedNode();
@@ -2482,7 +2482,11 @@ function videoProviderById(providerId){
 function providerVideoModels(providerId){
     if(providerId === 'volcengine') return volcengineVideoModels();
     const provider = videoApiProviders().find(p => p.id === providerId);
-    const models = provider?.video_models || DEFAULT_VIDEO_MODELS;
+    // API 设置页与画布页各自维护一份前端状态；即梦 CLI 的模型集合是本地固定能力，
+    // 因此节点侧要把已拉取列表与当前 CLI 支持列表合并，避免旧缓存漏掉新模型。
+    const models = providerId === 'jimeng'
+        ? [...(provider?.video_models || []), ...JIMENG_SEEDANCE_VIDEO_MODELS]
+        : (provider?.video_models || DEFAULT_VIDEO_MODELS);
     return [...new Set(models)];
 }
 function volcengineVideoModels(){
@@ -2547,7 +2551,7 @@ function renderVideoAspectControl(){
     </div>`;
 }
 function renderVideoResolutionControl(){
-    const options = [['', tr('smart.videoResAuto')], ['480p','480P'], ['720p','720P'], ['1080p','1080P']];
+    const options = [['', tr('smart.videoResAuto')], ['720p','720P'], ['1080p','1080P'], ['4k','4K']];
     const value = settings.videoResolution || '';
     const labelMap = Object.fromEntries(options);
     return `<div class="smart-control resolution-control">
@@ -13914,7 +13918,11 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
         if(!imageRefs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
         const inputName = await comfyNameForRef(imageRefs[0]);
         const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(runSettings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
-        const urls = resultMediaUrls(data);
+        let urls = resultMediaUrls(data);
+        if(runSettings.enhanceUpscale && urls[0]){
+            const upscale = await runSmartComfyUpscale(urls[0], runSettings.enhanceUpscaleRes || 2048);
+            urls = resultMediaUrls(upscale);
+        }
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
     if(mode === 'edit'){
@@ -13922,7 +13930,11 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
         const names = [];
         for(const ref of imageRefs.slice(0, 3)) names.push(await comfyNameForRef(ref));
         const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
-        const urls = resultMediaUrls(data);
+        let urls = resultMediaUrls(data);
+        if(runSettings.editUpscale && urls[0]){
+            const upscale = await runSmartComfyUpscale(urls[0], runSettings.editUpscaleRes || 2048);
+            urls = resultMediaUrls(upscale);
+        }
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
     const workflowName = runSettings.comfyWorkflow || comfyWorkflows[0]?.name || '';
@@ -14838,6 +14850,19 @@ async function urlToBase64(url){
     });
 }
 function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+async function runSmartComfyUpscale(imageUrl, resolution){
+    if(!imageUrl) throw new Error(tr('smart.errRunFailed'));
+    const inputName = await comfyNameForRef({url:imageUrl, name:'smart-upscale-input.png'});
+    return runQueuedSmartComfyGenerate({
+        workflow_json:'upscale.json',
+        params:{
+            "15":{image:inputName},
+            "172":{seed:Math.floor(Math.random() * 4294967295), resolution:Number(resolution || 2048)}
+        },
+        type:'enhance',
+        client_id:smartClientId
+    });
+}
 async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     const allRefs = refs || [];
     refs = imageRefsOnly(allRefs);
@@ -14907,7 +14932,11 @@ async function runComfyEnhance(node, refs, pendingNode, meta){
     if(!refs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
     const inputName = await comfyNameForRef(refs[0]);
     const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(settings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
-    const out = data.outputs || data.images || [];
+    let out = data.outputs || data.images || [];
+    if(settings.enhanceUpscale && out[0]){
+        const upscale = await runSmartComfyUpscale(out[0], settings.enhanceUpscaleRes || 2048);
+        out = upscale.outputs || upscale.images || [];
+    }
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
         finalizePendingNode(pendingNode, out, meta);
@@ -14923,7 +14952,11 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta){
     const names = [];
     for(const ref of refs.slice(0, 3)) names.push(await comfyNameForRef(ref));
     const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
-    const out = data.outputs || data.images || [];
+    let out = data.outputs || data.images || [];
+    if(settings.editUpscale && out[0]){
+        const upscale = await runSmartComfyUpscale(out[0], settings.editUpscaleRes || 2048);
+        out = upscale.outputs || upscale.images || [];
+    }
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
         finalizePendingNode(pendingNode, out, meta);
