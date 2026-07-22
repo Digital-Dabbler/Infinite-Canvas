@@ -9928,16 +9928,23 @@ def runninghub_api_key(provider=None, use_wallet=False, prefer_wallet=False):
         raise HTTPException(status_code=400, detail="未配置 RunningHub API Key，请在 RH 设置中填写。")
     return api_key
 
-def runninghub_app_headers(json_body=True, use_wallet=False, provider=None):
+def runninghub_app_headers(json_body=True, use_wallet=False, provider=None, include_authorization=True):
     headers = {"Host": "www.runninghub.cn"}
     provider = provider or runninghub_provider()
-    if provider:
+    if provider and include_authorization:
         api_key = runninghub_api_key(provider, use_wallet=use_wallet)
         if api_key:
             headers["Authorization"] = bearer_auth_value(api_key)
     if json_body:
         headers["Content-Type"] = "application/json"
     return headers
+
+def runninghub_should_retry_body_key_only(raw):
+    """企业共享 Key 在部分旧 task/openapi 端点会被 Authorization 预校验误拒绝。"""
+    if not isinstance(raw, dict) or raw.get("code") not in (-1, "-1"):
+        return False
+    message = str(raw.get("msg") or "").strip().lower()
+    return "apikey verification failed" in message or "api key verification failed" in message
 
 def runninghub_local_asset_path(url):
     text = str(url or "").strip()
@@ -10805,6 +10812,9 @@ async def runninghub_upload_local_to_filename(client, provider, url, use_wallet=
     data = {"apiKey": api_key, "fileType": "input"}
     response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet), data=data, files=files)
     raw = response.json()
+    if runninghub_should_retry_body_key_only(raw):
+        response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, include_authorization=False), data=data, files=files)
+        raw = response.json()
     if isinstance(raw, dict) and raw.get("code") in (0, "0") and isinstance(raw.get("data"), dict) and raw["data"].get("fileName"):
         return raw["data"]["fileName"]
     raise HTTPException(status_code=502, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 上传素材失败：{raw}")
@@ -10890,6 +10900,9 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
 
         response = await client.post(submit_url, headers=runninghub_app_headers(True, use_wallet), json=body)
         raw = response.json()
+        if runninghub_should_retry_body_key_only(raw):
+            response = await client.post(submit_url, headers=runninghub_app_headers(True, use_wallet, include_authorization=False), json=body)
+            raw = response.json()
         if not (isinstance(raw, dict) and raw.get("code") in (0, "0")):
             raise HTTPException(status_code=502, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 提交失败：{raw}")
         task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
@@ -10903,6 +10916,9 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             await asyncio.sleep(2.5)
             query_response = await client.post(query_url, headers=runninghub_app_headers(True), json={"apiKey": api_key, "taskId": task_id})
             query_raw = query_response.json()
+            if runninghub_should_retry_body_key_only(query_raw):
+                query_response = await client.post(query_url, headers=runninghub_app_headers(True, include_authorization=False), json={"apiKey": api_key, "taskId": task_id})
+                query_raw = query_response.json()
             last_payload = query_raw
             code = query_raw.get("code") if isinstance(query_raw, dict) else None
             if code in (0, "0"):
@@ -12457,6 +12473,9 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
         try:
             response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet), json=body)
             raw = response.json()
+            if runninghub_should_retry_body_key_only(raw):
+                response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, include_authorization=False), json=body)
+                raw = response.json()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"提交 RunningHub 任务失败：{exc}") from exc
     if response.status_code >= 400:
@@ -12493,6 +12512,9 @@ async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
         try:
             response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet), json=body)
             raw = response.json()
+            if runninghub_should_retry_body_key_only(raw):
+                response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, include_authorization=False), json=body)
+                raw = response.json()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"提交 RunningHub 工作流失败：{exc}") from exc
     if response.status_code >= 400:
@@ -12676,6 +12698,9 @@ async def runninghub_query(taskId: str = "", useWallet: bool = False):
         try:
             response = await client.post(url, headers=runninghub_app_headers(True, useWallet), json={"apiKey": api_key, "taskId": task_id})
             raw = response.json()
+            if runninghub_should_retry_body_key_only(raw):
+                response = await client.post(url, headers=runninghub_app_headers(True, useWallet, include_authorization=False), json={"apiKey": api_key, "taskId": task_id})
+                raw = response.json()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"查询 RunningHub 任务失败：{exc}") from exc
         if response.status_code >= 400:
@@ -12737,6 +12762,9 @@ async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest):
         try:
             response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet), data=data, files=files)
             raw = response.json()
+            if runninghub_should_retry_body_key_only(raw):
+                response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet, include_authorization=False), data=data, files=files)
+                raw = response.json()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"上传素材到 RunningHub 失败：{exc}") from exc
     if response.status_code >= 400:
