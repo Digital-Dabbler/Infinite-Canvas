@@ -70,7 +70,7 @@
         "smart.compareUseTip": { zh: "点击与该图对比", en: "Click to compare with this image" },
         "smart.compareDrag": { zh: "拖动对比", en: "Drag to compare" },
         "smart.uploadHint": { zh: "点击上传 / 拖入素材", en: "Click to upload / drop media" },
-        "smart.createImportNode": { zh: "上传节点", en: "Upload Node" },
+        "smart.createImportNode": { zh: "上传", en: "Upload" },
         "smart.createImportNodeSub": { zh: "支持图片/音频/视频/批量上传", en: "Images, audio, video, batch upload" },
         "smart.createExportNode": { zh: "导出节点", en: "Export Node" },
         "smart.createExportNodeSub": { zh: "接收多种格式并一键导出", en: "Collect any format and export" },
@@ -87,7 +87,7 @@
         "smart.exportFailed": { zh: "导出失败", en: "Export failed" },
         "smart.exportDone": { zh: "已导出 {n} 个文件", en: "Exported {n} files" },
         "smart.exportPickerUnsupported": { zh: "当前浏览器不支持选择文件夹，已使用默认导出路径", en: "Folder picker is unavailable. Used the default export path instead." },
-        "smart.hintEmpty": { zh: "支持图片 / 视频 / 音频，也可直接文生图", en: "Images, video, audio, or run text-to-image directly" },
+        "smart.hintEmpty": { zh: "支持图片 / 视频 / 音频", en: "Images, video, and audio" },
         "smart.hintMulti": { zh: "多图会作为同一组参考图发送", en: "All images will be sent as one reference set" },
         "smart.hintSingle": { zh: "点击后在下方输入编辑需求", en: "Click and type editing instructions below" },
         "smart.hintPending": { zh: "正在生成…", en: "Generating…" },
@@ -272,8 +272,8 @@
         "smart.mediaDrawerSave": { zh: "存资产", en: "Save asset" },
         "smart.shortcuts": { zh: "快捷键", en: "Shortcuts" },
         "smart.shortcutBoxSelect": { zh: "按住并拖拽框选节点", en: "Hold and drag to box-select nodes" },
-        "smart.shortcutGroup": { zh: "创建参与生成的智能分组", en: "Create a generation-aware smart group" },
-        "smart.shortcutUngroup": { zh: "释放选中的分组", en: "Ungroup selected group nodes" },
+        "smart.shortcutGroup": { zh: "创建工作流分组", en: "Create a workflow group" },
+        "smart.shortcutUngroup": { zh: "解除选中工作流成员关系", en: "Remove selected workflow members" },
         "smart.shortcutUndo": { zh: "撤销上一步操作", en: "Undo the last action" },
         "smart.shortcutUndoAlt": { zh: "恢复上一步操作", en: "Redo the last action" },
         "smart.shortcutCopy": { zh: "复制选中的节点", en: "Copy selected nodes" },
@@ -294,5 +294,10 @@
         ,"smart.outlineSub": { zh: "工作流分组与标注", en: "Workflow groups and annotations" }
         ,"smart.outlineSearch": { zh: "搜索名称、说明或便签", en: "Search names, descriptions, or notes" }
         ,"smart.shortcutWorkflowGroup": { zh: "创建工作流管理分组", en: "Create a workflow management group" }
+        ,"smart.imageUpload": { zh: "上传", en: "Upload" }
+        ,"smart.imageUploadSub": { zh: "支持图片、视频和音频", en: "Images, video, and audio" }
+        ,"smart.imageGeneration": { zh: "图片生成", en: "Image generation" }
+        ,"smart.imageGenerationSub": { zh: "在同一节点管理多次生成结果", en: "Manage generation results in one node" }
+        ,"smart.imageEdit": { zh: "图片编辑", en: "Edit image" }
     });
 })();
