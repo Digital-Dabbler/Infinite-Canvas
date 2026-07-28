@@ -310,6 +310,8 @@ const outputCompareSlider = document.getElementById('outputCompareSlider');
 const outputResolution = document.getElementById('outputResolution');
 const outputDownloadBtn = document.getElementById('outputDownloadBtn');
 const outputDownloadAllBtn = document.getElementById('outputDownloadAllBtn');
+const outputPreviewPrevBtn = document.getElementById('outputPreviewPrevBtn');
+const outputPreviewNextBtn = document.getElementById('outputPreviewNextBtn');
 const outputLightboxVideo = document.getElementById('outputLightboxVideo');
 const outputPromptPanel = document.getElementById('outputPromptPanel');
 const outputPromptText = document.getElementById('outputPromptText');
@@ -12722,6 +12724,23 @@ function navigateOutputLightbox(direction){
     openOutputLightbox(next.url, nextOut);
     return true;
 }
+function updateOutputLightboxNavigation(out=null){
+    const items = outputLightboxItems(out);
+    const show = items.length > 1 && items.some(item => item.url === currentOutputLightboxUrl);
+    [outputPreviewPrevBtn, outputPreviewNextBtn].forEach(btn => {
+        if(btn) btn.style.display = show ? 'flex' : 'none';
+    });
+}
+outputPreviewPrevBtn?.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigateOutputLightbox(-1);
+});
+outputPreviewNextBtn?.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    navigateOutputLightbox(1);
+});
 function createImageCardFromOutput(url, point){
     if(!ensureCanvas() || !url) return;
     if(mediaKindForRef(url) !== 'image') return;
@@ -13344,6 +13363,7 @@ function openOutputLightbox(url, out){
     resetOutputPreviewZoom();
     currentOutputLightboxOutId = out?.id || '';
     currentOutputLightboxUrl = url;
+    updateOutputLightboxNavigation(out);
     const meta = outputMetaFor(url, out);
     markOutputViewed(out, url);
     setupOutputPromptPanel(meta);
@@ -13427,6 +13447,7 @@ function closeOutputLightbox(){
     currentOutputMeta = null;
     currentOutputLightboxOutId = '';
     currentOutputLightboxUrl = '';
+    updateOutputLightboxNavigation(null);
     setupOutputPromptPanel(null);
 }
 function groupSelectedImages(){
