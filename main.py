@@ -236,6 +236,7 @@ CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
 MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
+ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
@@ -315,7 +316,7 @@ JIMENG_LOGIN_SESSION = {
 
 PROVIDER_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,40}$")
 SUPPORTED_PROVIDER_PROTOCOLS = {"openai", "apimart", "gemini", "grok", "gemini-cli", "volcengine", "runninghub", "jimeng", "codex"}
-SUPPORTED_IMAGE_REQUEST_MODES = {"openai", "openai-json", "openai-video-proxy", "openai-responses", "openai-async-image"}
+SUPPORTED_IMAGE_REQUEST_MODES = {"openai", "openai-json", "openai-video-proxy", "openai-responses"}
 RUNNINGHUB_DEFAULT_BASE_URL = "https://www.runninghub.cn"
 RUNNINGHUB_OPENAPI_BASE_URL = "https://www.runninghub.cn/openapi/v2"
 RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
@@ -365,7 +366,6 @@ try:
 except Exception:
     GEMINI_CLI_DEFAULT_TIMEOUT = 900
 AGNES_DEFAULT_VIDEO_MODELS = ["agnes-video-v2.0"]
-OPENAI_ASYNC_IMAGE_DEFAULT_MODELS = ["gpt-image-2-all"]
 JIMENG_LEGACY_IMAGE_MODELS = {
     "jimeng-image-2k",
     "jimeng-image-4k",
@@ -601,9 +601,6 @@ COMFYUI_DOWNLOAD_TIMEOUT = float(os.getenv("COMFYUI_DOWNLOAD_TIMEOUT", "120"))
 APIMART_IMAGE_TASK_TIMEOUT = float(os.getenv("APIMART_IMAGE_TASK_TIMEOUT", "1800"))
 APIMART_IMAGE_POLL_INTERVAL = float(os.getenv("APIMART_IMAGE_POLL_INTERVAL", "5"))
 APIMART_IMAGE_INITIAL_POLL_DELAY = float(os.getenv("APIMART_IMAGE_INITIAL_POLL_DELAY", "10"))
-OPENAI_ASYNC_IMAGE_TASK_TIMEOUT = float(os.getenv("OPENAI_ASYNC_IMAGE_TASK_TIMEOUT", "1800"))
-OPENAI_ASYNC_IMAGE_POLL_INTERVAL = float(os.getenv("OPENAI_ASYNC_IMAGE_POLL_INTERVAL", "5"))
-OPENAI_ASYNC_IMAGE_INITIAL_POLL_DELAY = float(os.getenv("OPENAI_ASYNC_IMAGE_INITIAL_POLL_DELAY", "10"))
 VIDEO_POLL_TIMEOUT = float(os.getenv("VIDEO_POLL_TIMEOUT", "1800"))
 ONLINE_IMAGE_PROMPT_MAX_LENGTH = int(os.getenv("ONLINE_IMAGE_PROMPT_MAX_LENGTH", "20000"))
 VIDEO_PROMPT_MAX_LENGTH = int(os.getenv("VIDEO_PROMPT_MAX_LENGTH", "4000"))
@@ -1164,9 +1161,22 @@ def preserve_runninghub_hidden_overrides(provider):
         provider[list_key] = current
     return provider
 
+def is_deprecated_openai_image_async_endpoint(value):
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        path = urllib.parse.urlsplit(text).path if re.match(r"^https?://", text, re.I) else text
+    except Exception:
+        path = text
+    path = path.rstrip("/").lower()
+    return path.endswith("/v1/images/generations/async") or path.endswith("/images/generations/async")
+
 def normalize_endpoint_override(value, label):
     endpoint = str(value or "").strip()
     if not endpoint:
+        return ""
+    if "文生图" in str(label or "") and is_deprecated_openai_image_async_endpoint(endpoint):
         return ""
     if len(endpoint) > 300 or re.search(r"\s", endpoint):
         raise HTTPException(status_code=400, detail=f"{label} 不合法，请填写类似 /v1/images/edits 的路径")
@@ -1194,6 +1204,8 @@ def apply_locked_recommended_model_rules(base_url="", grouped=None):
 def provider_endpoint_url(provider, key, default_path):
     base_url = str((provider or {}).get("base_url") or AI_BASE_URL).strip().rstrip("/")
     override = str((provider or {}).get(key) or "").strip()
+    if key == "image_generation_endpoint" and is_deprecated_openai_image_async_endpoint(override):
+        override = ""
     if override:
         if re.match(r"^https?://", override, re.I):
             return override.rstrip("/")
@@ -2682,6 +2694,13 @@ class CanvasSaveRequest(BaseModel):
     settings: Dict[str, Any] = {}
     client_id: str = ""
     base_updated_at: int = 0
+    deleted_node_ids: List[str] = []
+
+class AssetUrlLibraryItemRequest(BaseModel):
+    url: str = ""
+    name: str = ""
+    kind: str = "image"
+    note: str = ""
 
 class CanvasAssetCheckRequest(BaseModel):
     urls: List[str] = []
@@ -3576,7 +3595,7 @@ def api_headers(json_body=True, provider=None, model=""):
         api_key = AI_API_KEY
         if not api_key:
             raise HTTPException(status_code=400, detail="未配置 COMFLY_API_KEY，请在 API/.env 中填写。")
-    if provider and effective_protocol(provider, model) == "gemini":
+    if provider and effective_protocol(provider, model) == "gemini" and not is_apimart_provider(provider):
         headers = {"Accept": "application/json", "x-goog-api-key": api_key}
     else:
         headers = {"Accept": "application/json", "Authorization": bearer_auth_value(api_key)}
@@ -3950,48 +3969,6 @@ def extract_task_id_from_text(text):
 def images_api_unsupported(response):
     text = str(getattr(response, "text", "") or "").lower()
     return "images api is not supported" in text or "not supported for this platform" in text
-
-def openai_async_image_size_params(size="", aspect_ratio="", resolution=""):
-    size_text = str(size or "").strip().lower().replace("*", "x")
-    aspect = str(aspect_ratio or "").strip().lower().replace(" ", "")
-    res = str(resolution or "").strip().lower()
-    if aspect in {"square", "auto"}:
-        aspect = "1:1"
-    if res not in {"1k", "2k", "4k"}:
-        res = ""
-    if not aspect:
-        match_ratio = re.match(r"^\s*(\d+)\s*:\s*(\d+)\s*$", size_text)
-        if match_ratio:
-            left, right = int(match_ratio.group(1)), int(match_ratio.group(2))
-            divisor = math.gcd(left, right) if left > 0 and right > 0 else 1
-            aspect = f"{left // divisor}:{right // divisor}" if divisor else "1:1"
-    if not aspect:
-        match_size = re.match(r"^\s*(\d{2,5})\s*x\s*(\d{2,5})\s*$", size_text)
-        if match_size:
-            width, height = int(match_size.group(1)), int(match_size.group(2))
-            divisor = math.gcd(width, height) if width > 0 and height > 0 else 1
-            aspect = f"{width // divisor}:{height // divisor}" if divisor else "1:1"
-            long_side = max(width, height)
-            if not res:
-                res = "4k" if long_side > 2688 else "2k" if long_side > 1536 else "1k"
-    if not aspect:
-        aspect = "1:1"
-    if not res:
-        res = "1k"
-    return aspect, res
-
-def openai_async_image_reference_value(ref):
-    if not isinstance(ref, dict):
-        return ""
-    value = str(ref.get("url") or "").strip()
-    if not value:
-        return ""
-    if value.startswith(("http://", "https://", "data:image/")):
-        return value
-    public_url = local_asset_public_url(value)
-    if public_url:
-        return public_url
-    return reference_to_data_url(ref, max_size=1536)
 
 def responses_image_size_instruction(size: str) -> str:
     """RS 中转多为网页版逆向：结构化 size 参数（tool.size / 顶层 size / --size 尾注）全被无视，
@@ -4372,17 +4349,7 @@ def detect_image_request_mode(base_url="", models=None):
         model_id = str(model or "").strip().lower()
         if model_id.startswith("agnes-image-"):
             return "openai-json"
-        if model_id == "gpt-image-2-all" and not is_tudou_base_url(base_url):
-            return "openai-async-image"
     return ""
-
-def is_openai_async_image_context(base_url="", models=None, image_request_mode=""):
-    if is_tudou_base_url(base_url):
-        return False
-    return (
-        normalize_image_request_mode(image_request_mode) == "openai-async-image"
-        or detect_image_request_mode(base_url, models or []) == "openai-async-image"
-    )
 
 def effective_image_request_mode(provider, model=""):
     if is_tudou_base_url((provider or {}).get("base_url")):
@@ -6297,8 +6264,6 @@ def image_task_url_for_provider(provider, task_id):
     # 提交走 /v1/videos，轮询必须走 /v1/videos/{id}；否则 protocol=apimart 的平台会错走 /v1/tasks/{id}
     if image_mode == "openai-video-proxy":
         return f"{base_url}/videos/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/videos/{task_id}"
-    if image_mode == "openai-async-image":
-        return f"{base_url}/tasks/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/tasks/{task_id}"
     if is_apimart_provider(provider):
         return f"{base_url}/tasks/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/tasks/{task_id}"
     return f"{base_url}/images/tasks/{task_id}" if base_url.endswith("/v1") else f"{base_url}/v1/images/tasks/{task_id}"
@@ -6352,10 +6317,9 @@ async def fetch_image_task_payload(client, task_id, provider=None):
 
 async def wait_for_image_task(client, task_id, provider=None):
     is_apimart = is_apimart_provider(provider)
-    is_openai_async = normalize_image_request_mode((provider or {}).get("image_request_mode")) == "openai-async-image"
-    timeout = APIMART_IMAGE_TASK_TIMEOUT if is_apimart else OPENAI_ASYNC_IMAGE_TASK_TIMEOUT if is_openai_async else IMAGE_TASK_TIMEOUT
-    interval = APIMART_IMAGE_POLL_INTERVAL if is_apimart else OPENAI_ASYNC_IMAGE_POLL_INTERVAL if is_openai_async else IMAGE_POLL_INTERVAL
-    initial_delay = APIMART_IMAGE_INITIAL_POLL_DELAY if is_apimart else OPENAI_ASYNC_IMAGE_INITIAL_POLL_DELAY if is_openai_async else 0
+    timeout = APIMART_IMAGE_TASK_TIMEOUT if is_apimart else IMAGE_TASK_TIMEOUT
+    interval = APIMART_IMAGE_POLL_INTERVAL if is_apimart else IMAGE_POLL_INTERVAL
+    initial_delay = APIMART_IMAGE_INITIAL_POLL_DELAY if is_apimart else 0
     deadline = time.monotonic() + timeout
     last_payload = {}
     while time.monotonic() < deadline:
@@ -6888,6 +6852,8 @@ async def media_preview(url: str, w: int = 512):
         out_path, media_type = await asyncio.to_thread(_build_preview)
         return FileResponse(out_path, media_type=media_type)
     except Exception as exc:
+        if is_video_preview_file(path):
+            return FileResponse(path, media_type=content_type_for_path(path))
         raise HTTPException(status_code=415, detail=f"无法生成预览图：{exc}") from exc
 
 @app.get("/api/image-jpeg")
@@ -7489,6 +7455,71 @@ def make_workflow_library_item_from_bytes(raw: bytes, filename: str, name: str =
         "size": len(raw),
         "created_at": now_ms(),
     }
+
+def infer_asset_url_kind(url, fallback="image"):
+    text = str(url or "").strip().lower()
+    default = str(fallback or "image").strip().lower()
+    if default not in {"image", "video", "audio"}:
+        default = "image"
+    clean = text.split("?", 1)[0].split("#", 1)[0]
+    if "/image/" in text or re.search(r"\.(png|jpe?g|webp|gif|bmp|avif|tiff?|heic|heif)$", clean):
+        return "image"
+    if "/video/" in text or re.search(r"\.(mp4|webm|mov|m4v|avi|mkv)$", clean):
+        return "video"
+    if "/audio/" in text or re.search(r"\.(mp3|wav|m4a|aac|ogg|flac)$", clean):
+        return "audio"
+    return default
+
+def normalize_asset_url_library(data):
+    raw_items = data.get("items") if isinstance(data, dict) else []
+    items = []
+    if not isinstance(raw_items, list):
+        raw_items = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        url = str(raw.get("url") or "").strip()
+        if not url or not (url.startswith(("http://", "https://", "asset://"))):
+            continue
+        kind = infer_asset_url_kind(url, raw.get("kind") or "image")
+        name = re.sub(r"\s+", " ", str(raw.get("name") or filename_from_media_url(url, "") or url).strip())[:160]
+        note = str(raw.get("note") or "").strip()[:1000]
+        created_at = int(raw.get("created_at") or now_ms())
+        updated_at = int(raw.get("updated_at") or created_at)
+        items.append({
+            "id": str(raw.get("id") or f"url_{uuid.uuid4().hex[:12]}"),
+            "url": url,
+            "name": name or ("视频 URL" if kind == "video" else "音频 URL" if kind == "audio" else "图片 URL"),
+            "kind": kind,
+            "note": note,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        })
+    items.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
+    return {
+        "items": items,
+        "updated_at": int((data or {}).get("updated_at") or now_ms()) if isinstance(data, dict) else now_ms(),
+    }
+
+def load_asset_url_library():
+    if os.path.exists(ASSET_URL_LIBRARY_PATH):
+        try:
+            with open(ASSET_URL_LIBRARY_PATH, "r", encoding="utf-8") as f:
+                return normalize_asset_url_library(json.load(f))
+        except Exception as exc:
+            print(f"读取 URL 资产库失败: {exc}")
+    return normalize_asset_url_library({"items": [], "updated_at": now_ms()})
+
+def save_asset_url_library(data, broadcast=True):
+    with CANVAS_LOCK:
+        lib = normalize_asset_url_library(data)
+        lib["updated_at"] = now_ms()
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(ASSET_URL_LIBRARY_PATH, "w", encoding="utf-8") as f:
+            json.dump(lib, f, ensure_ascii=False, indent=2)
+    if broadcast and GLOBAL_LOOP:
+        asyncio.run_coroutine_threadsafe(manager.broadcast_asset_library_updated(int(lib["updated_at"])), GLOBAL_LOOP)
+    return lib
 
 def save_asset_library(lib):
     with CANVAS_LOCK:
@@ -9464,6 +9495,35 @@ def apimart_size_resolution(size):
     best = min(common, key=lambda item: abs(ratio - item[0] / item[1]))
     return best[2], resolution
 
+def apimart_image_model_lc(model=""):
+    return str(model or "").strip().lower()
+
+def apimart_model_supports_official_fallback(model=""):
+    value = apimart_image_model_lc(model)
+    if not value or "official" in value or "lite" in value:
+        return False
+    return value in {
+        "gemini-2.5-flash-image-preview",
+        "gemini-3.1-flash-image-preview",
+        "gemini-3-pro-image-preview",
+        "nano-banana-ext",
+        "nano-banana-2-ext",
+        "nano-banana-pro-ext",
+    }
+
+def apimart_image_resolution_for_model(model="", resolution="1K"):
+    value = apimart_image_model_lc(model)
+    # APIMART 文档：Lite 与 Gemini 2.5 Nano Banana 系列仅支持 1K。
+    if "lite" in value or value in {
+        "gemini-2.5-flash-image-preview",
+        "gemini-2.5-flash-image-preview-official",
+        "nano-banana",
+        "nano-banana-ext",
+    }:
+        return "1K"
+    text = str(resolution or "1K").strip().upper()
+    return text if text in {"0.5K", "1K", "2K", "4K"} else "1K"
+
 VOLCENGINE_MIN_PIXELS = 3_686_400
 VOLCENGINE_MIN_EDGE = 1536
 VOLCENGINE_MAX_EDGE = 4096
@@ -9568,6 +9628,19 @@ def parse_error_payload_text(text):
     except Exception:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+def apimart_image_modalities_pricing_error(text):
+    raw = str(text or "")
+    lower = raw.lower()
+    if "image_modalities" not in lower:
+        return False
+    if "model_price_error" in lower:
+        return True
+    payload = parse_error_payload_text(raw)
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    code = str(error.get("code") or payload.get("code") or "").strip().lower()
+    message = str(error.get("message") or payload.get("message") or "").strip().lower()
+    return code == "model_price_error" or ("precharge" in message and "pricing_mode" in message)
 
 def friendly_chat_error_detail(text, model="", provider=None):
     raw_text = str(text or "")
@@ -10941,7 +11014,8 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
         return await generate_jimeng_provider_image(prompt, size, model, reference_images, provider)
     if is_runninghub_provider(provider):
         return await generate_runninghub_provider_image(prompt, size, model, reference_images, provider)
-    if effective_protocol(provider, model) == "gemini":
+    is_apimart = is_apimart_provider(provider)
+    if effective_protocol(provider, model) == "gemini" and not is_apimart:
         return await generate_gemini_provider_image(prompt, size, model, reference_images, provider)
     if is_volcengine_provider(provider):
         return await generate_volcengine_provider_image(prompt, size, model, reference_images, provider)
@@ -10953,8 +11027,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
     ):
         return await generate_grok_image(prompt, size, model, reference_images, provider, aspect_ratio)
     is_gpt2 = is_gpt_image_2_model(model)
-    is_apimart = is_apimart_provider(provider)
-    # 不对 GPT 尺寸做任何缩小/拦截：用户选什么尺寸就原样发给上游；
+    # 不对 GPT 尺寸做任何缩小/拦截：用户选什么尺寸就原样发给上游； 
     # 若超过 GPT 的最大像素限制被上游拒绝，再由 friendly_image_error_detail 给出友好的像素上限提示。
     quality = str(quality or "").strip().lower()
     if quality not in {"low", "medium", "high"}:
@@ -10963,12 +11036,12 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
     if not base_url:
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider['id']} 未配置 Base URL")
     image_request_mode = effective_image_request_mode(provider, model)
-    gen_url = provider_endpoint_url(provider, "image_generation_endpoint", "/v1/images/generations/async" if image_request_mode == "openai-async-image" else "/v1/images/generations")
-    edit_url = provider_endpoint_url(provider, "image_edit_endpoint", "/v1/images/edits/async" if image_request_mode == "openai-async-image" else "/v1/images/edits")
+    gen_url = provider_endpoint_url(provider, "image_generation_endpoint", "/v1/images/generations")
+    edit_url = provider_endpoint_url(provider, "image_edit_endpoint", "/v1/images/edits")
     refs = [ref for ref in (reference_images or []) if ref.get("url")]
     mask_refs = [ref for ref in refs if str(ref.get("role") or "").strip().lower() == "mask" or str(ref.get("name") or "").lower().endswith("_mask.png")]
     image_refs = [ref for ref in refs if ref not in mask_refs]
-    request_timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0) if (is_gpt2 or is_apimart or image_request_mode in {"openai-json", "openai-video-proxy", "openai-responses", "openai-async-image"}) else AI_REQUEST_TIMEOUT
+    request_timeout = httpx.Timeout(connect=20.0, read=1800.0, write=120.0, pool=20.0) if (is_gpt2 or is_apimart or image_request_mode in {"openai-json", "openai-video-proxy", "openai-responses"}) else AI_REQUEST_TIMEOUT
     async with httpx.AsyncClient(timeout=request_timeout) as client:
         response = None
         async def post_openai_edits(edit_files=None):
@@ -11061,21 +11134,6 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 extra_body["image"] = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]]
             body = {"model": model, "prompt": prompt, "size": size, "extra_body": extra_body}
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
-        elif image_request_mode == "openai-async-image":
-            async_size, async_resolution = openai_async_image_size_params(size, aspect_ratio, resolution)
-            body = {
-                "model": model,
-                "prompt": prompt,
-                "size": async_size,
-                "resolution": async_resolution,
-            }
-            if quality:
-                body["quality"] = quality
-            async_images = [openai_async_image_reference_value(ref) for ref in refs[:ONLINE_IMAGE_REFERENCE_MAX]]
-            async_images = [item for item in async_images if item]
-            if async_images:
-                body["images"] = async_images
-            response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
         elif is_apimart:
             apimart_size, resolution = apimart_size_resolution(size)
             # APIMart 的 GPT-Image-2 图生图仍走 /images/generations，
@@ -11085,12 +11143,18 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 "prompt": prompt,
                 "n": 1,
                 "size": apimart_size,
-                "resolution": resolution,
-                "official_fallback": False,
+                "resolution": apimart_image_resolution_for_model(model, resolution),
             }
             if image_refs:
                 body["image_urls"] = [reference_to_data_url(ref, max_size=1536) for ref in image_refs[:ONLINE_IMAGE_REFERENCE_MAX]]
             response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=body)
+            if (
+                response.status_code >= 400
+                and apimart_image_modalities_pricing_error(response.text)
+                and apimart_model_supports_official_fallback(model)
+            ):
+                retry_body = {**body, "official_fallback": True}
+                response = await client.post(gen_url, headers=api_headers(provider=provider, model=model), json=retry_body)
         elif is_gpt2 and not image_refs and not mask_refs:
             body = {"model": model, "prompt": prompt, "size": size}
             if quality:
@@ -11165,20 +11229,6 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
             )
             if response.status_code >= 400 and images_api_unsupported(response):
                 response = await post_openai_edits()
-        raw_preparsed = None
-        if image_request_mode == "openai-async-image" and response.status_code >= 400:
-            try:
-                raw_preparsed = response.json()
-            except Exception:
-                raw_preparsed = None
-            if raw_preparsed is not None:
-                try:
-                    return extract_image(raw_preparsed), raw_preparsed
-                except HTTPException:
-                    task_id = extract_task_id(raw_preparsed)
-                    if task_id:
-                        task_result = await wait_for_image_task(client, task_id, provider)
-                        return extract_image(task_result), task_result
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -11189,7 +11239,7 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 detail=f"{provider_name} 图片接口错误（HTTP {exc.response.status_code}）：{resp_text or exc.response.reason_phrase}"
             ) from exc
         try:
-            raw = raw_preparsed if raw_preparsed is not None else response.json()
+            raw = response.json()
         except Exception as exc:
             resp_text = (response.text or "")[:800]
             provider_name = provider.get("name") or provider["id"]
@@ -13168,7 +13218,6 @@ async def probe_openai_models_endpoint(client, base_url: str, api_key: str):
     if response.status_code < 300:
         grouped, ids = parse_upstream_models(raw, "openai") if isinstance(raw, dict) else ({"image": [], "chat": [], "video": []}, [])
         grouped, ids = apply_agnes_model_defaults(base_url, grouped, ids)
-        grouped, ids = apply_openai_async_image_model_defaults(base_url, grouped, ids)
         grouped = apply_locked_recommended_model_rules(base_url, grouped)
         return True, {
             "status": response.status_code,
@@ -13254,39 +13303,6 @@ def apply_agnes_model_defaults(base_url, grouped, ids):
     grouped["video"] = sorted(set(grouped.get("video") or []))
     return grouped, ids
 
-def apply_openai_async_image_model_defaults(base_url, grouped, ids, image_request_mode=""):
-    if not is_openai_async_image_context(base_url, ids, image_request_mode):
-        return grouped, ids
-    grouped = {key: list(value or []) for key, value in (grouped or {}).items()}
-    ids = list(ids or [])
-    for model in OPENAI_ASYNC_IMAGE_DEFAULT_MODELS:
-        if model not in ids:
-            ids.append(model)
-        if model not in grouped.setdefault("image", []):
-            grouped["image"].append(model)
-    ids = sorted(set(ids))
-    grouped["image"] = sorted(set(grouped.get("image") or []))
-    grouped.setdefault("chat", [])
-    grouped.setdefault("video", [])
-    return grouped, ids
-
-def openai_async_image_default_model_payload(status=200, message="", raw=None):
-    return {
-        "ok": True,
-        "protocol": "openai",
-        "status": status,
-        "status_code": status,
-        "message": message or "OpenAI 异步图片接口可用，模型列表接口未返回模型，已使用默认图像模型。",
-        "model_count": len(OPENAI_ASYNC_IMAGE_DEFAULT_MODELS),
-        "total": len(OPENAI_ASYNC_IMAGE_DEFAULT_MODELS),
-        "image_models": OPENAI_ASYNC_IMAGE_DEFAULT_MODELS,
-        "chat_models": [],
-        "video_models": [],
-        "all": OPENAI_ASYNC_IMAGE_DEFAULT_MODELS,
-        "image_request_mode": "openai-async-image",
-        "raw": raw,
-    }
-
 @app.post("/api/providers/test-connection")
 async def test_provider_connection(payload: TestConnectionPayload):
     """测试请求地址是否可用：调上游 /v1/models。验证通过时同时把模型清单按类别返回，避免再调一次拉取接口。"""
@@ -13359,14 +13375,6 @@ async def test_provider_connection(payload: TestConnectionPayload):
                 endpoint_label = "/v1beta/models" if protocol == "gemini" else "/api/v3/models" if protocol == "volcengine" else "/openapi/v2/models" if protocol == "runninghub" else "/v1/models"
                 return {"ok": False, "status": resp.status_code, "message": f"上游 {endpoint_label} 返回网页 HTML，请检查请求地址是否为 API Base URL"}
             if resp.status_code >= 400:
-                if protocol == "openai" and is_openai_async_image_context(base_url, [], getattr(payload, "image_request_mode", "")):
-                    if resp.status_code in (401, 403):
-                        return {"ok": False, "status": resp.status_code, "message": "OpenAI 异步图片 API Key 无效或无权限", "raw": resp.text[:300]}
-                    return openai_async_image_default_model_payload(
-                        status=resp.status_code,
-                        message="OpenAI 异步图片接口已识别，/v1/models 未提供模型列表，已使用默认图像模型。",
-                        raw={"models_error": resp.text[:300]},
-                    )
                 if protocol == "volcengine":
                     detected, probe = await probe_volcengine_auto_detect(client, base_url, api_key)
                     if detected:
@@ -13381,7 +13389,6 @@ async def test_provider_connection(payload: TestConnectionPayload):
             data = resp.json() if resp.text else {}
             grouped, ids = parse_upstream_models(data, protocol)
             grouped, ids = apply_agnes_model_defaults(base_url, grouped, ids)
-            grouped, ids = apply_openai_async_image_model_defaults(base_url, grouped, ids, getattr(payload, "image_request_mode", ""))
             grouped = apply_locked_recommended_model_rules(base_url, grouped)
             if protocol == "volcengine" and not ids:
                 detected, probe = await probe_volcengine_auto_detect(client, base_url, api_key)
@@ -13438,7 +13445,6 @@ async def probe_async_endpoint(payload: TestConnectionPayload):
     api_key = api_key_from_payload(payload, protocol)
     if not api_key:
         raise HTTPException(status_code=400, detail="请先填写或保存 API Key")
-    openai_async_probe = is_openai_async_image_context(base_url, [], getattr(payload, "image_request_mode", ""))
     if protocol == "volcengine":
         try:
             async with httpx.AsyncClient(timeout=15) as client:
@@ -13489,12 +13495,6 @@ async def probe_async_endpoint(payload: TestConnectionPayload):
                     err_msg = str(err).lower()
             # 400 + "invalid task id" → 端点存在，Key 有效
             if sc == 400 and "invalid task id" in err_msg:
-                if openai_async_probe:
-                    return openai_async_image_default_model_payload(
-                        status=sc,
-                        message="OpenAI 异步图片任务端点可用，API Key 已通过认证。",
-                        raw=body,
-                    )
                 return {"ok": True, "protocol": "apimart", "status_code": sc, "message": "APIMart 异步任务端点可用，API Key 已通过认证", "raw": body}
 
             async_probe = {"status": sc, "message": "", "raw": body}
@@ -13513,19 +13513,6 @@ async def probe_async_endpoint(payload: TestConnectionPayload):
                 async_probe["message"] = f"/v1/tasks/ 返回 {sc}（意外成功）"
             else:
                 async_probe["message"] = f"/v1/tasks/ 服务端错误 {sc}"
-
-            if openai_async_probe:
-                if sc in (401, 403):
-                    return {"ok": False, "protocol": "openai", "status_code": sc, "message": "/v1/tasks/ 返回鉴权失败", "raw": body, "image_request_mode": "openai-async-image"}
-                if sc == 404 or looks_like_html_response(resp.text):
-                    return {"ok": False, "protocol": "openai", "status_code": sc, "message": async_probe["message"], "raw": body, "image_request_mode": "openai-async-image"}
-                if sc < 500:
-                    return openai_async_image_default_model_payload(
-                        status=sc,
-                        message=f"OpenAI 异步图片任务端点可用（{async_probe['message']}）。",
-                        raw=body,
-                    )
-                return {"ok": False, "protocol": "openai", "status_code": sc, "message": async_probe["message"], "raw": body, "image_request_mode": "openai-async-image"}
 
             if protocol == "apimart":
                 return {"ok": False, "protocol": "apimart", "status_code": sc, "message": async_probe["message"], "raw": body}
@@ -13620,14 +13607,6 @@ async def fetch_models_from_upstream(base_url: str, api_key: str, protocol: str 
             if looks_like_html_response(resp.text):
                 raise HTTPException(status_code=400, detail=f"上游 {endpoint_label} 返回网页 HTML，请检查请求地址是否为 API Base URL")
             if resp.status_code >= 400:
-                if protocol == "openai" and is_openai_async_image_context(base_url, [], image_request_mode):
-                    if resp.status_code in (401, 403):
-                        raise HTTPException(status_code=resp.status_code, detail="OpenAI 异步图片 API Key 无效或无权限")
-                    return openai_async_image_default_model_payload(
-                        status=resp.status_code,
-                        message="OpenAI 异步图片接口已识别，/v1/models 未提供模型列表，已使用默认图像模型。",
-                        raw={"models_error": resp.text[:300]},
-                    )
                 if protocol == "volcengine":
                     detected, probe = await probe_volcengine_auto_detect(client, base_url, api_key)
                     if detected:
@@ -13692,7 +13671,6 @@ async def fetch_models_from_upstream(base_url: str, api_key: str, protocol: str 
         raise HTTPException(status_code=502, detail=f"请求上游模型列表失败：{e}")
     grouped, ids = parse_upstream_models(raw, protocol)
     grouped, ids = apply_agnes_model_defaults(base_url, grouped, ids)
-    grouped, ids = apply_openai_async_image_model_defaults(base_url, grouped, ids, image_request_mode)
     grouped = apply_locked_recommended_model_rules(base_url, grouped)
     if protocol == "volcengine" and not ids:
         payload = volcengine_default_model_payload(raw=raw)
@@ -16141,6 +16119,57 @@ async def export_smart_canvas_group(payload: SmartCanvasGroupExportRequest):
 async def get_asset_library():
     return {"library": load_asset_library()}
 
+@app.get("/api/asset-url-library")
+async def get_asset_url_library():
+    return {"library": load_asset_url_library()}
+
+@app.post("/api/asset-url-library/items")
+async def add_asset_url_library_item(payload: AssetUrlLibraryItemRequest):
+    url = str(payload.url or "").strip()
+    if not url or not url.startswith(("http://", "https://", "asset://")):
+        raise HTTPException(status_code=400, detail="URL 只支持 http(s) 或 asset://")
+    lib = load_asset_url_library()
+    kind = infer_asset_url_kind(url, payload.kind or "image")
+    item = {
+        "id": f"url_{uuid.uuid4().hex[:12]}",
+        "url": url,
+        "name": re.sub(r"\s+", " ", str(payload.name or filename_from_media_url(url, "") or url).strip())[:160],
+        "kind": kind,
+        "note": str(payload.note or "").strip()[:1000],
+        "created_at": now_ms(),
+        "updated_at": now_ms(),
+    }
+    lib.setdefault("items", []).insert(0, item)
+    lib = save_asset_url_library(lib)
+    return {"library": lib, "item": item}
+
+@app.patch("/api/asset-url-library/items/{item_id}")
+async def update_asset_url_library_item(item_id: str, payload: AssetUrlLibraryItemRequest):
+    lib = load_asset_url_library()
+    item = next((entry for entry in lib.get("items", []) if entry.get("id") == item_id), None)
+    if not item:
+        raise HTTPException(status_code=404, detail="URL 素材不存在")
+    url = str(payload.url or item.get("url") or "").strip()
+    if not url or not url.startswith(("http://", "https://", "asset://")):
+        raise HTTPException(status_code=400, detail="URL 只支持 http(s) 或 asset://")
+    item["url"] = url
+    item["kind"] = infer_asset_url_kind(url, payload.kind or item.get("kind") or "image")
+    item["name"] = re.sub(r"\s+", " ", str(payload.name or item.get("name") or filename_from_media_url(url, "") or url).strip())[:160]
+    item["note"] = str(payload.note or "").strip()[:1000]
+    item["updated_at"] = now_ms()
+    lib = save_asset_url_library(lib)
+    return {"library": lib, "item": item}
+
+@app.delete("/api/asset-url-library/items/{item_id}")
+async def delete_asset_url_library_item(item_id: str):
+    lib = load_asset_url_library()
+    before = len(lib.get("items", []) or [])
+    lib["items"] = [item for item in (lib.get("items", []) or []) if item.get("id") != item_id]
+    if len(lib["items"]) == before:
+        raise HTTPException(status_code=404, detail="URL 素材不存在")
+    lib = save_asset_url_library(lib)
+    return {"library": lib, "deleted": item_id}
+
 @app.get("/api/prompt-libraries")
 async def get_prompt_libraries():
     return {"library": public_prompt_libraries()}
@@ -16908,8 +16937,20 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
             canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
             canvas["icon"] = (payload.icon or canvas.get("icon") or "layers")[:32]
             canvas["kind"] = normalize_canvas_kind(canvas.get("kind"))
-            canvas["nodes"] = payload.nodes
-            canvas["connections"] = payload.connections
+            old_deleted = {str(item or "").strip() for item in (canvas.get("deleted_node_ids") or []) if str(item or "").strip()}
+            new_deleted = {str(item or "").strip() for item in (payload.deleted_node_ids or []) if str(item or "").strip()}
+            deleted_node_ids = list(old_deleted | new_deleted)[-2000:]
+            deleted_set = set(deleted_node_ids)
+            canvas["deleted_node_ids"] = deleted_node_ids
+            canvas["nodes"] = [
+                node for node in (payload.nodes or [])
+                if not str((node or {}).get("id") or "").strip() or str((node or {}).get("id") or "").strip() not in deleted_set
+            ]
+            canvas["connections"] = [
+                conn for conn in (payload.connections or [])
+                if str((conn or {}).get("from") or "").strip() not in deleted_set
+                and str((conn or {}).get("to") or "").strip() not in deleted_set
+            ]
             if canvas["kind"] == "smart":
                 canvas["viewport"] = payload.viewport
             else:

@@ -1,14 +1,22 @@
 {
-  "version": "2026.07.23",
-  "updated_at": "2026-07-23T21:50:36+08:00",
+  "version": "2026.07.28.1",
+  "updated_at": "2026-07-28.1T09:11:36+08:00",
   "items": [
     {
       "type": "feature",
-      "text": "修复即梦CLI报错，新增5.0pro和SD2.0 mini协议，新增图片2k/4k/8k放大选项"
+      "text": "修复验证地址的异步图片bug"
     },
     {
       "type": "feature",
-      "text": "新增土豆API协议"
+      "text": "修复APIMART的Gemini协议报错bug"
+    },
+    {
+      "type": "feature",
+      "text": "资产库新增URL公网库"
+    },
+    {
+      "type": "feature",
+      "text": "修改放大后变高清的懒加载逻辑"
     }
   ]
 }
