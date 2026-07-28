@@ -272,7 +272,7 @@
         "smart.mediaDrawerSave": { zh: "存资产", en: "Save asset" },
         "smart.shortcuts": { zh: "快捷键", en: "Shortcuts" },
         "smart.shortcutBoxSelect": { zh: "按住并拖拽框选节点", en: "Hold and drag to box-select nodes" },
-        "smart.shortcutGroup": { zh: "合并选中的图片为组", en: "Group selected image nodes" },
+        "smart.shortcutGroup": { zh: "创建参与生成的智能分组", en: "Create a generation-aware smart group" },
         "smart.shortcutUngroup": { zh: "释放选中的分组", en: "Ungroup selected group nodes" },
         "smart.shortcutUndo": { zh: "撤销上一步操作", en: "Undo the last action" },
         "smart.shortcutUndoAlt": { zh: "恢复上一步操作", en: "Redo the last action" },
@@ -286,5 +286,13 @@
         "smart.shortcutPan": { zh: "拖动画布", en: "Drag to pan the canvas" },
         "smart.shortcutZoom": { zh: "缩放画布或预览图片", en: "Zoom canvas or preview image" },
         "smart.shortcutDelete": { zh: "删除选中节点", en: "Delete selected nodes" }
+        ,"smart.workflowGroup": { zh: "工作流分组", en: "Workflow group" }
+        ,"smart.workflowGroupSub": { zh: "仅整理节点，不参与生成", en: "Organize nodes without affecting generation" }
+        ,"smart.addNote": { zh: "添加便签", en: "Add note" }
+        ,"smart.addNoteSub": { zh: "记录说明、状态和待办", en: "Record notes, status, and tasks" }
+        ,"smart.outline": { zh: "画布目录", en: "Canvas outline" }
+        ,"smart.outlineSub": { zh: "工作流分组与标注", en: "Workflow groups and annotations" }
+        ,"smart.outlineSearch": { zh: "搜索名称、说明或便签", en: "Search names, descriptions, or notes" }
+        ,"smart.shortcutWorkflowGroup": { zh: "创建工作流管理分组", en: "Create a workflow management group" }
     });
 })();

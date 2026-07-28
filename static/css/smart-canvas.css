@@ -19,6 +19,7 @@ html[data-studio-scale="off"].studio-scale-managed .smart-title,
 html[data-studio-scale="off"].studio-scale-managed .smart-log-toggle,
 html[data-studio-scale="off"].studio-scale-managed .smart-shortcut-toggle,
 html[data-studio-scale="off"].studio-scale-managed .smart-workflow-toggle,
+html[data-studio-scale="off"].studio-scale-managed .smart-outline-toggle,
 html[data-studio-scale="off"].studio-scale-managed .asset-toggle,
 /* 注意：.composer 不能加进这份 zoom 列表——它在 .world 内用世界坐标定位，
    单独 zoom 会让坐标按 scale 重算，离原点越远偏移越大（小屏下直接飞出屏幕外） */
@@ -27,6 +28,7 @@ html[data-studio-scale="off"].studio-scale-managed .smart-log-panel,
 html[data-studio-scale="off"].studio-scale-managed .shortcut-panel,
 html[data-studio-scale="off"].studio-scale-managed .workflow-panel,
 html[data-studio-scale="off"].studio-scale-managed .asset-panel,
+html[data-studio-scale="off"].studio-scale-managed .smart-outline-panel,
 html[data-studio-scale="off"].studio-scale-managed .asset-dock,
 html[data-studio-scale="off"].studio-scale-managed .asset-dialog,
 html[data-studio-scale="off"].studio-scale-managed .asset-hover-preview,
@@ -47,13 +49,14 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
 .smart-back:hover { transform:translateY(-1px); }
 .smart-back i { width:16px; height:16px; }
 .smart-title { position:absolute; left:22px; top:72px; z-index:10; max-width:min(420px, calc(100vw - 44px)); color:var(--muted); font-size:12px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; pointer-events:none; }
-.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle { position:absolute; top:22px; z-index:56; width:96px; height:40px; padding:0 15px; border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; font-weight:750; white-space:nowrap; transition:transform .14s ease, border-color .14s ease; }
+.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-outline-toggle { position:absolute; top:22px; z-index:56; width:96px; height:40px; padding:0 15px; border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; font-weight:750; white-space:nowrap; transition:transform .14s ease, border-color .14s ease; }
 .smart-log-toggle { right:130px; }
+.smart-outline-toggle { right:454px; }
 .smart-shortcut-toggle { right:238px; }
 .smart-workflow-toggle { right:346px; }
-.smart-log-toggle:hover,.smart-shortcut-toggle:hover,.smart-workflow-toggle:hover { transform:translateY(-1px); border-color:var(--text); }
-.smart-log-toggle.active,.smart-shortcut-toggle.active,.smart-workflow-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
-.smart-log-toggle i,.smart-log-toggle svg,.smart-shortcut-toggle i,.smart-shortcut-toggle svg,.smart-workflow-toggle i,.smart-workflow-toggle svg { width:16px; height:16px; }
+.smart-log-toggle:hover,.smart-shortcut-toggle:hover,.smart-workflow-toggle:hover,.smart-outline-toggle:hover { transform:translateY(-1px); border-color:var(--text); }
+.smart-log-toggle.active,.smart-shortcut-toggle.active,.smart-workflow-toggle.active,.smart-outline-toggle.active { background:var(--strong); color:var(--strong-text); border-color:var(--strong); box-shadow:0 16px 38px var(--shadow); }
+.smart-log-toggle i,.smart-log-toggle svg,.smart-shortcut-toggle i,.smart-shortcut-toggle svg,.smart-workflow-toggle i,.smart-workflow-toggle svg,.smart-outline-toggle i,.smart-outline-toggle svg { width:16px; height:16px; }
 .image-node { position:absolute; width:260px; min-height:178px; border-radius:16px; background:transparent; border:0; box-shadow:none; overflow:visible; user-select:none; cursor:move; }
 body.smart-node-drag * { user-select:none !important; }
 body.smart-node-drag .image-node textarea,
@@ -1364,6 +1367,65 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .theme-dark .smart-group-node { background:rgba(15,23,42,.28); border-color:rgba(148,163,184,.28); }
 .smart-group-node:hover { border-color:var(--strong); box-shadow:0 10px 30px rgba(15,23,42,.08); }
 .smart-group-node.selected { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
+
+/* 纯管理分组与便签：不参与生成节点的视觉和端口体系。 */
+.workflow-organizer-node { z-index:-2; box-sizing:border-box; border:2px solid color-mix(in srgb, var(--organizer-color) 72%, transparent); border-radius:18px; background:color-mix(in srgb, var(--organizer-color) 7%, transparent); box-shadow:none; overflow:visible; }
+.workflow-organizer-node.selected { border-color:var(--organizer-color); box-shadow:0 0 0 3px color-mix(in srgb, var(--organizer-color) 18%, transparent); }
+.workflow-organizer-head { position:absolute; left:0; right:0; bottom:calc(100% + 4px); min-height:34px; display:flex; align-items:center; gap:8px; color:var(--text); }
+.organizer-title-control { min-width:0; display:flex; align-items:center; gap:5px; flex:0 1 auto; }
+.workflow-organizer-title { width:clamp(120px, 32%, 360px); min-width:90px; min-height:30px; border:0; border-radius:8px; background:color-mix(in srgb, var(--organizer-color) 16%, var(--panel)); color:var(--text); padding:6px 9px; font-family:inherit; font-size:var(--organizer-title-size, 12px); font-weight:750; line-height:1.2; outline:none; }
+.organizer-description-control { min-width:0; display:flex; align-items:center; gap:4px; flex:1 1 140px; }
+.workflow-organizer-desc { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:10px; }
+.organizer-color-row { display:flex; gap:4px; margin-left:4px; }
+.organizer-font-controls { display:flex; align-items:center; gap:3px; flex:0 0 auto; }
+.organizer-font-controls button { height:24px; min-width:25px; padding:0 5px; border-radius:7px; background:var(--soft); color:var(--text); font-size:10px; font-weight:800; }
+.organizer-font-controls button:hover { background:var(--strong); color:var(--strong-text); }
+.organizer-font-controls span { min-width:18px; color:var(--muted); font-size:9px; text-align:center; }
+.organizer-color { width:16px; height:16px; padding:0; border:2px solid var(--panel); border-radius:50%; background:var(--swatch); box-shadow:0 0 0 1px var(--line); }
+.organizer-edit { width:28px; height:28px; border:0; border-radius:8px; background:var(--panel); color:var(--text); display:grid; place-items:center; }
+.organizer-edit svg { width:14px; height:14px; }
+.workflow-organizer-node .node-resize-handle,.smart-note-node .node-resize-handle {
+    display:block;
+    width:24px;
+    height:24px;
+    right:0;
+    bottom:0;
+    opacity:0 !important;
+    border-color:transparent;
+    background:transparent;
+    color:transparent;
+}
+.workflow-organizer-node .node-resize-handle::before,.smart-note-node .node-resize-handle::before { opacity:0; }
+.workflow-organizer-node .node-port,.smart-note-node .node-port,.workflow-organizer-node .node-head,.smart-note-node .node-head { display:none; }
+.smart-note-node { z-index:1; box-sizing:border-box; border:1px solid color-mix(in srgb, var(--organizer-color) 55%, transparent); border-radius:14px; background:color-mix(in srgb, var(--organizer-color) 22%, var(--panel)); box-shadow:0 12px 28px var(--shadow); padding:12px; }
+.smart-note-node.selected { box-shadow:0 0 0 2px var(--organizer-color),0 12px 28px var(--shadow); }
+.smart-note-toolbar { display:flex; align-items:center; gap:4px; margin-bottom:7px; }
+.smart-note-text { width:100%; height:calc(100% - 27px); resize:none; overflow:hidden; border:0; outline:0; background:transparent; color:var(--text); font-family:inherit; font-size:var(--note-font-size, 13px); font-weight:650; line-height:1.55; }
+
+.smart-outline-panel { position:absolute; right:18px; top:72px; bottom:168px; z-index:58; width:300px; display:flex; flex-direction:column; gap:12px; padding:15px; border:1px solid var(--line); border-radius:18px; background:var(--panel); box-shadow:0 20px 50px var(--shadow); backdrop-filter:blur(18px); transform:translateX(calc(100% + 34px)); opacity:0; pointer-events:none; transition:.18s ease; }
+.smart-outline-panel.open { transform:none; opacity:1; pointer-events:auto; }
+.smart-outline-head { display:flex; align-items:center; justify-content:space-between; }
+.smart-outline-head strong,.smart-outline-head span { display:block; }
+.smart-outline-head span { margin-top:2px; color:var(--muted); font-size:10px; }
+.smart-outline-head button { width:30px; height:30px; border:0; border-radius:9px; background:var(--soft); color:var(--text); }
+.smart-outline-search { height:36px; display:flex; align-items:center; gap:7px; padding:0 10px; border:1px solid var(--line); border-radius:11px; background:var(--soft); }
+.smart-outline-search svg { width:14px; color:var(--muted); }
+.smart-outline-search input { min-width:0; flex:1; border:0; outline:0; background:transparent; color:var(--text); }
+.smart-outline-list { min-height:0; overflow:auto; display:flex; flex-direction:column; gap:7px; }
+.smart-outline-item { display:grid; grid-template-columns:10px 1fr auto; gap:9px; align-items:center; padding:9px; border:1px solid var(--line); border-radius:11px; background:var(--soft); color:var(--text); text-align:left; }
+.smart-outline-item:hover { border-color:var(--text); }
+.smart-outline-dot { width:10px; height:10px; border-radius:50%; background:var(--item-color); }
+.smart-outline-copy { min-width:0; }
+.smart-outline-copy strong,.smart-outline-copy small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.smart-outline-copy small { margin-top:2px; color:var(--muted); font-size:9px; }
+.smart-outline-count { color:var(--muted); font-size:10px; }
+.smart-outline-empty { padding:28px 10px; color:var(--muted); text-align:center; font-size:11px; }
+
+@media (max-width:760px) {
+    .smart-outline-toggle { right:206px; left:auto; width:40px; padding:0; }
+    .smart-outline-toggle span { display:none; }
+    .smart-outline-panel { left:14px; right:14px; top:72px; bottom:118px; width:auto; }
+}
 .smart-group-node .node-body { width:100%; height:100%; min-height:0; padding:0; align-items:stretch; justify-content:stretch; }
 /* 图片网格/单图不要被 node-body 的 stretch 纵向拉满——否则高度恰好等于内容时也会触发滚动条。
    让它们按内容自适应（由 thumb-grid 的 max-height 决定是否滚动），只有超过 4 排才出现下拉条。 */
