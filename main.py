@@ -2997,6 +2997,33 @@ async def admin_usage(request: Request):
     limit = min(500, max(1, int(request.query_params.get("limit") or 100)))
     return {"events": events[offset:offset + limit], "total": total, "offset": offset, "limit": limit}
 
+@app.get("/api/admin/usage/models")
+async def admin_usage_models(request: Request):
+    require_admin(request)
+    events = usage_events()
+    user_id = str(request.query_params.get("user_id") or "").strip()
+    start_at = str(request.query_params.get("start_at") or "").strip()
+    end_at = str(request.query_params.get("end_at") or "").strip()
+    if user_id:
+        events = [item for item in events if str(item.get("user_id") or "") == user_id]
+    if start_at:
+        events = [item for item in events if str(item.get("created_at_iso") or "") >= start_at]
+    if end_at:
+        events = [item for item in events if str(item.get("created_at_iso") or "") <= end_at]
+    by_model = {}
+    for item in events:
+        provider = str(item.get("provider") or "").strip()
+        model = str(item.get("model") or "").strip()
+        label = " / ".join(value for value in (provider, model) if value)
+        if not label:
+            label = str(item.get("function") or "").strip() or "未标明模型"
+        by_model[label] = by_model.get(label, 0) + 1
+    models = [
+        {"model": label, "count": count}
+        for label, count in sorted(by_model.items(), key=lambda pair: (-pair[1], pair[0]))
+    ]
+    return {"user_id": user_id, "total": len(events), "models": models}
+
 @app.get("/api/admin/usage/summary")
 async def admin_usage_summary(request: Request):
     require_admin(request)
