@@ -276,7 +276,7 @@
         "smart.shortcutUngroup": { zh: "解除选中工作流成员关系", en: "Remove selected workflow members" },
         "smart.shortcutUndo": { zh: "撤销上一步操作", en: "Undo the last action" },
         "smart.shortcutUndoAlt": { zh: "恢复上一步操作", en: "Redo the last action" },
-        "smart.shortcutCopy": { zh: "复制选中的节点", en: "Copy selected nodes" },
+        "smart.shortcutCopy": { zh: "复制选中节点，可跨智能画布粘贴", en: "Copy selected nodes across smart canvases" },
         "smart.shortcutPaste": { zh: "粘贴节点或剪贴板图片", en: "Paste nodes or clipboard images" },
         "smart.shortcutAltCopy": { zh: "按住并拖动复制节点", en: "Hold and drag to duplicate nodes" },
         "smart.shortcutAltShiftCopy": { zh: "复制节点并保留输入连线", en: "Duplicate nodes and keep input connections" },

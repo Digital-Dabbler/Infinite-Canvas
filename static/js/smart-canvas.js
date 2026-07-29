@@ -138,6 +138,9 @@ let promptTemplateGroupEditMode = false;
 let promptPresetDeleteArmed = false;
 let createMenuPoint = {x:0, y:0};
 let createMenuGroupId = '';
+const SMART_NODE_CLIPBOARD_KEY = 'smart_canvas_node_clipboard_v1';
+const SMART_NODE_CLIPBOARD_MAX_BYTES = 2 * 1024 * 1024;
+const SMART_NODE_CLIPBOARD_TTL_MS = 24 * 60 * 60 * 1000;
 let nodeClipboard = null;
 let imageClickTimer = null;
 let suppressImageClickUntil = 0;
@@ -1035,8 +1038,9 @@ function isSmartGenerationResultKind(node, kind='image'){
 function isSmartImageNode(node){
     return Boolean(isSmartImageUploadNode(node) || isSmartGenerationNode(node));
 }
-function isSmartGroupNode(node){
-    return Boolean(node && node.type === 'smart-group');
+// 智能分组已退出运行时；旧数据会在 normalizeLegacySmartNode() 中转换成生成节点。
+function isSmartGroupNode(){
+    return false;
 }
 function isWorkflowOrganizerNode(node){
     return Boolean(node && node.type === 'smart-workflow-group');
@@ -1048,8 +1052,8 @@ function isCanvasOrganizerNode(node){
     return isWorkflowOrganizerNode(node) || isSmartNoteNode(node);
 }
 function isSmartRunnableNode(node){
-    // 上传节点只是素材入口；只有图片生成节点（及旧分组兼容态）承接提示词和运行。
-    return Boolean(isSmartGenerationNode(node) || isSmartGroupNode(node));
+    // 上传节点只是素材入口；只有图片/视频生成节点承接提示词和运行。
+    return Boolean(isSmartGenerationNode(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -1076,6 +1080,12 @@ function legacyGenerationNodeType(node){
 }
 function normalizeLegacySmartNode(node){
     if(!node || typeof node !== 'object') return node;
+    if(node.type === 'smart-group'){
+        node.type = legacyGenerationNodeType(node);
+        node.title = isSmartVideoGenerationNode(node) ? '视频生成' : '图片生成';
+        node.activeImageIndex = Math.max(0, Math.min((node.images || []).length - 1, Number(node.activeImageIndex) || 0));
+        delete node.items;
+    }
     if(node.type === 'smart-container'){
         const fallbackImage = node.inputImage?.url ? stripImageGenerationMeta({
             url:node.inputImage.url,
@@ -1119,16 +1129,6 @@ function migrateLegacySmartCanvasNodes(rawNodes=[], rawConnections=[]){
         const node = normalizeLegacySmartNode(source);
         if(!node) return;
         if(node.type !== originalType) changed = true;
-        if(isSmartGroupNode(node)){
-            node.type = legacyGenerationNodeType(node);
-            node.title = isSmartVideoGenerationNode(node) ? '视频生成' : '图片生成';
-            node.activeImageIndex = Math.max(0, Math.min((node.images || []).length - 1, Number(node.activeImageIndex) || 0));
-            delete node.items;
-            idMap.set(node.id, [node.id]);
-            migrated.push(node);
-            changed = true;
-            return;
-        }
         const imagesAreAllRaster = (node.images || []).length > 1 && (node.images || []).every(image => mediaKindForItem(imageForDisplay(image)) === 'image');
         if(isSmartImageUploadNode(node) && imagesAreAllRaster){
             const count = node.images.length;
@@ -6798,6 +6798,100 @@ function cloneSmartNode(node, dx=0, dy=0){
     if(copy.type === 'smart-group') copy.title = copy.title || '智能分组';
     return copy;
 }
+function normalizeSmartNodeClipboard(data){
+    if(!data || typeof data !== 'object') return null;
+    const nodes = Array.isArray(data.nodes) ? data.nodes.filter(node => node && typeof node === 'object' && node.id).slice(0, 500) : [];
+    if(!nodes.length) return null;
+    const ids = new Set(nodes.map(node => node.id));
+    const connections = Array.isArray(data.connections)
+        ? data.connections.filter(conn => conn && ids.has(conn.from) && ids.has(conn.to)).slice(0, 2000)
+        : [];
+    return {
+        format:'infinite-smart-canvas-node-clipboard',
+        version:1,
+        sourceCanvasId:String(data.sourceCanvasId || ''),
+        copiedAt:Number(data.copiedAt || Date.now()),
+        nodes,
+        connections
+    };
+}
+function smartNodeClipboardByteLength(value){
+    const text = String(value || '');
+    try {
+        return new TextEncoder().encode(text).byteLength;
+    } catch(e) {
+        return text.length * 2;
+    }
+}
+function clearSmartNodeClipboard(){
+    nodeClipboard = null;
+    try { localStorage.removeItem(SMART_NODE_CLIPBOARD_KEY); } catch(e) {}
+}
+function readSmartNodeClipboard(){
+    if(nodeClipboard?.nodes?.length){
+        if(Date.now() - nodeClipboard.copiedAt <= SMART_NODE_CLIPBOARD_TTL_MS) return nodeClipboard;
+        clearSmartNodeClipboard();
+        toast('跨画布剪贴板已过期，请重新复制节点');
+        return null;
+    }
+    try {
+        const raw = localStorage.getItem(SMART_NODE_CLIPBOARD_KEY) || '';
+        if(!raw) return null;
+        if(raw.length > SMART_NODE_CLIPBOARD_MAX_BYTES || smartNodeClipboardByteLength(raw) > SMART_NODE_CLIPBOARD_MAX_BYTES){
+            clearSmartNodeClipboard();
+            toast('跨画布剪贴板超过 2MB，已自动清理');
+            return null;
+        }
+        nodeClipboard = normalizeSmartNodeClipboard(JSON.parse(raw));
+        if(!nodeClipboard || Date.now() - nodeClipboard.copiedAt > SMART_NODE_CLIPBOARD_TTL_MS){
+            clearSmartNodeClipboard();
+            toast('跨画布剪贴板已过期，请重新复制节点');
+            return null;
+        }
+    } catch(e) {
+        clearSmartNodeClipboard();
+    }
+    return nodeClipboard;
+}
+function persistSmartNodeClipboard(payload){
+    nodeClipboard = normalizeSmartNodeClipboard(payload);
+    if(!nodeClipboard) return false;
+    try {
+        const serialized = JSON.stringify(nodeClipboard);
+        if(smartNodeClipboardByteLength(serialized) > SMART_NODE_CLIPBOARD_MAX_BYTES){
+            nodeClipboard = null;
+            toast('复制失败：节点数据超过跨画布剪贴板 2MB 限制');
+            return false;
+        }
+        localStorage.setItem(SMART_NODE_CLIPBOARD_KEY, serialized);
+        return true;
+    } catch(e) {
+        nodeClipboard = null;
+        toast('复制失败：节点数据过大，无法写入跨画布剪贴板');
+        return false;
+    }
+}
+function remapCopiedNodeReferences(copy, idMap){
+    const remapId = id => idMap.get(id) || '';
+    if(Array.isArray(copy.inputNodeIds)) copy.inputNodeIds = copy.inputNodeIds.map(remapId).filter(Boolean);
+    if(Array.isArray(copy.items)) copy.items = copy.items.map(remapId).filter(Boolean);
+    ['sourceNodeId','workflowGroupId','historyFor'].forEach(key => {
+        if(!copy[key]) return;
+        const next = remapId(copy[key]);
+        if(next) copy[key] = next;
+        else delete copy[key];
+    });
+    if(copy.isHistoryGroup && !copy.historyFor) delete copy.isHistoryGroup;
+    ['manualInputRefs','runInputRefs','runPromptRefs'].forEach(key => {
+        if(!Array.isArray(copy[key])) return;
+        copy[key] = copy[key].map(ref => {
+            if(!ref || typeof ref !== 'object') return ref;
+            return {...ref, nodeId:remapId(ref.nodeId)};
+        });
+    });
+    delete copy.blockedInputRefs;
+    return copy;
+}
 function copySelectedNodes(){
     if(!canvas || isEditableTarget(document.activeElement)) return;
     const ids = selectedNodeIds();
@@ -6805,17 +6899,22 @@ function copySelectedNodes(){
     if(!copiedNodes.length) return;
     const idSet = new Set(copiedNodes.map(n => n.id));
     const copiedConnections = (canvas.connections || []).filter(c => idSet.has(c.from) && idSet.has(c.to));
-    nodeClipboard = {
-        nodes:JSON.parse(JSON.stringify(copiedNodes)),
+    const saved = persistSmartNodeClipboard({
+        format:'infinite-smart-canvas-node-clipboard',
+        version:1,
+        sourceCanvasId:canvasId || '',
+        copiedAt:Date.now(),
+        nodes:copiedNodes.map(serializableSmartNode),
         connections:JSON.parse(JSON.stringify(copiedConnections))
-    };
-    toast(`已复制 ${copiedNodes.length} 个节点`);
+    });
+    if(saved) toast(`已复制 ${copiedNodes.length} 个节点，可在其他智能画布粘贴`);
 }
 function pasteNodes(){
-    if(!canvas || !nodeClipboard?.nodes?.length || isEditableTarget(document.activeElement)) return;
+    const clipboard = readSmartNodeClipboard();
+    if(!canvas || !clipboard?.nodes?.length || isEditableTarget(document.activeElement)) return false;
     lastNodePasteAt = Date.now();
     pushUndo();
-    const sourceNodes = nodeClipboard.nodes;
+    const sourceNodes = clipboard.nodes;
     const xs = sourceNodes.map(n => Number(n.x) || 0);
     const ys = sourceNodes.map(n => Number(n.y) || 0);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
@@ -6829,13 +6928,8 @@ function pasteNodes(){
         idMap.set(n.id, copy.id);
         return copy;
     });
-    copies.forEach(copy => {
-        if(Array.isArray(copy.inputNodeIds)){
-            copy.inputNodeIds = copy.inputNodeIds.map(id => idMap.get(id)).filter(Boolean);
-        }
-        if(copy.sourceNodeId) copy.sourceNodeId = idMap.get(copy.sourceNodeId) || '';
-    });
-    const newConnections = (nodeClipboard.connections || []).map(conn => ({
+    copies.forEach(copy => remapCopiedNodeReferences(copy, idMap));
+    const newConnections = (clipboard.connections || []).map(conn => ({
         ...conn,
         from:idMap.get(conn.from),
         to:idMap.get(conn.to)
@@ -6847,6 +6941,8 @@ function pasteNodes(){
     selectedImage = {nodeId:'', index:-1};
     render();
     scheduleSave();
+    toast(`已从${clipboard.sourceCanvasId && clipboard.sourceCanvasId !== canvasId ? '其他智能画布' : '剪贴板'}粘贴 ${copies.length} 个节点`);
+    return true;
 }
 // 跨页"素材库 → 画布"剪贴板：素材库管理页把所选素材写进这个 localStorage key，
 // 画布里按 Ctrl+V 读取并批量生成图片节点（网格平铺），用完即清空（一次性）。
@@ -17642,7 +17738,7 @@ window.addEventListener('paste', e => {
         e.preventDefault();
         return;
     }
-    if(nodeClipboard?.nodes?.length && !isEditableTarget(e.target)){
+    if(readSmartNodeClipboard()?.nodes?.length && !isEditableTarget(e.target)){
         e.preventDefault();
         pasteNodes();
     }
@@ -17680,7 +17776,7 @@ window.addEventListener('keydown', e => {
         copySelectedNodes();
         return;
     }
-    if((e.ctrlKey || e.metaKey) && key === 'v' && !isEditableTarget(e.target) && nodeClipboard?.nodes?.length){
+    if((e.ctrlKey || e.metaKey) && key === 'v' && !isEditableTarget(e.target) && readSmartNodeClipboard()?.nodes?.length){
         const requestedAt = Date.now();
         setTimeout(() => {
             if(lastImagePasteAt >= requestedAt) return;
@@ -17715,6 +17811,9 @@ window.addEventListener('keydown', e => {
         e.preventDefault();
         createWorkflowOrganizerGroup(viewportCenter());
     }
+});
+window.addEventListener('storage', event => {
+    if(event.key === SMART_NODE_CLIPBOARD_KEY) nodeClipboard = null;
 });
 window.addEventListener('keyup', e => {
     if(String(e.key || '').toLowerCase() === 'r') isRKeyDown = false;

@@ -182,7 +182,7 @@ Infinite Canvas 是一个本地优先的 AI 创作工作台：单个 FastAPI 服
 - `smart-image-upload` 是单个上传素材入口。旧的无 `type`、`smart-image` 和 `smart-container` 只作为载入兼容态，由 `normalizeLegacySmartNode()` / `migrateLegacySmartCanvasNodes()` 迁移；不要继续产生这些旧类型。
 - `smart-image-generation` 和 `smart-video-generation` 是可运行的生成节点。它们可以保存多次或多张结果，以 `images[]` 存媒体，以 `activeImageIndex` 表示当前主预览；生成结果 UI 是“主图/视频 + 计数与翻页 + 缩略图条”，不是把结果重新渲染成普通网格。
 - `smart-prompt` 保存提示词、分段、模板和可选 LLM 设置；`smart-loop` 保存轮数、串行/并行模式、起始序号、批量大小、变量提示词及图片输入设置。
-- `smart-group` 是智能内容分组，可引用或收纳成员节点；它不是生成结果多图容器。旧 `smart-group` 画布会在迁移时转换为生成节点。
+- 智能内容分组 `smart-group` 已彻底退出产品能力；旧画布中的同类型节点只在载入兼容迁移时转换为普通图片/视频生成节点，不再提供创建、编组、拖入或运行入口。工作流组织框 `smart-workflow-group` 是独立能力，不受影响。
 - `smart-workflow-group` 是纯组织框，成员关系存在成员节点的 `workflowGroupId`；`smart-note` 是画布便签。两者属于 organizer，不参与生成拓扑、工作流运行输入或媒体选择。
 - 历史结果节点仍属于媒体节点，通过 `historyFor` / `isHistoryGroup` 关联源生成节点。删除源节点时必须同步清理历史节点及相关连线。
 
@@ -192,8 +192,9 @@ Infinite Canvas 是一个本地优先的 AI 创作工作台：单个 FastAPI 服
 - `render()` 会重建大部分节点 DOM，同时尽量移植媒体元素以保留视频播放状态。交互中的局部移动/缩放优先沿用 `moveNodeElementsDuringDrag()`、`updateNodeElementDuringResize()` 和连接层刷新机制，避免在每个 pointermove 上全量渲染。
 - 媒体自然尺寸与布局尺寸分开处理；复用 `mediaLayoutSize()`、`singleImageLayout()`、`imageLayout()` 和 `imageForDisplay()`。不要把媒体绝对路径或临时代理 URL当成持久化源地址。
 - 生成节点的删除按钮删除当前 `activeImageIndex` 对应结果；删到最后一项时删除整个节点。不要同时提供“删除当前结果”和“删除节点”两个重叠垃圾桶。
-- 删除节点必须经过 `deleteNode()` 的统一清理：维护 `localDeletedNodeIds`、组织框成员、智能分组成员、选择态、历史节点和所有入/出连线。不要只从 `nodes` 数组 `splice()`。
+- 删除节点必须经过 `deleteNode()` 的统一清理：维护 `localDeletedNodeIds`、组织框成员、选择态、历史节点和所有入/出连线。不要只从 `nodes` 数组 `splice()`。
 - 所有用户可撤销的结构或内容修改先 `pushUndo()`，批量内部操作用现有 `undoSuppressed` 模式避免产生多条无意义历史；完成后 `render()` 并 `scheduleSave()`。
+- 智能画布节点复制使用 `smart_canvas_node_clipboard_v1` 写入同源 `localStorage`，支持画布 A 复制、画布 B 粘贴。剪贴板只保存可序列化节点和选中节点之间的连线，有效期 24 小时且序列化体积上限为 2MB；读取时应先检查原始字符串体积再解析，过期、超限或损坏的数据自动清理。粘贴时必须重建 ID，并同步重映射组织框成员、历史来源和节点引用，不能保留指向源画布节点的悬空 ID。
 
 #### 生成与级联执行
 
