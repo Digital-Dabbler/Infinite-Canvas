@@ -5424,9 +5424,17 @@ function completeSmartNodeWithImages(node, images){
 }
 function syncRunButtonState(node=selectedNode()){
     if(!runBtn) return;
-    // 只在“当前选中节点自己”忙时禁用运行：节点正在生成/排队，或它本身是正在跑的循环。
+    // API 图片任务提交后由服务端队列独立运行，同一节点可继续追加任务。
+    // 视频、ComfyUI 和其他同步型运行仍保持单次执行，避免共享节点状态互相覆盖。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
-    runBtn.disabled = !isSmartRunnableNode(node) || smartNodeInFlight(node) || smartCascadeIsLoopRunning(node?.id);
+    runBtn.disabled = !isSmartRunnableNode(node) || (smartNodeInFlight(node) && !smartNodeAllowsConcurrentSubmit(node)) || smartCascadeIsLoopRunning(node?.id);
+}
+function smartNodeAllowsConcurrentSubmit(node){
+    if(!node || !isSmartImageGenerationNode(node)) return false;
+    const runSettings = smartSettingsForNode(node);
+    const engine = runSettings?.engine || settings.engine;
+    const apiKind = runSettings?.apiKind || settings.apiKind;
+    return apiKind !== 'video' && (isApiLikeEngine(engine) || (engine === 'runninghub' && Boolean(runningHubSelectedModel(runSettings))));
 }
 function mergeSmartNode(local, remote){
     const images = mergeSmartImageLists(local.images, remote.images);
@@ -15978,13 +15986,17 @@ async function runGeneration(){
     const request = buildPromptRequest(node, null, true, smartLoopContext);
     const prompt = request.prompt.trim();
     if(!node) return;
-    if(smartNodeInFlight(node)) return;
     const refs = request.refs;
     const previousSettings = cloneSmartSettings(settings);
     const runSettings = smartSettingsForNode(node);
     settings = {...settings, ...cloneSmartSettings(runSettings || {})};
     if(isSmartImageGenerationNode(node)) settings.apiKind = 'image';
     if(isSmartVideoGenerationNode(node)) settings.apiKind = 'video';
+    const appendingToPendingNode = smartNodeInFlight(node);
+    if(appendingToPendingNode && !smartNodeAllowsConcurrentSubmit(node)){
+        settings = previousSettings;
+        return;
+    }
     if(!prompt && smartRunNeedsPrompt(settings)){
         settings = previousSettings;
         toast(tr('smart.toastNeedPrompt'));
@@ -16034,10 +16046,11 @@ async function runGeneration(){
     if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, selectOutput:true, refs});
     undoSuppressed = false;
     const pendingNode = branchNode || node;
+    const previousPendingCount = appendingToPendingNode ? smartPendingTasks(pendingNode).length : 0;
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){
-        pendingNode.pending = Math.max(1, Number(expectedCount) || 1);
-        pendingNode.runStartedAt = nowMs();
+        pendingNode.pending = previousPendingCount + Math.max(1, Number(expectedCount) || 1);
+        if(!appendingToPendingNode || !pendingNode.runStartedAt) pendingNode.runStartedAt = nowMs();
         delete pendingNode.runFinishedAt;
         delete pendingNode.runElapsedMs;
         pendingNode.runTimerHidden = false;
@@ -16054,6 +16067,7 @@ async function runGeneration(){
         syncRunButtonState();
     }
     render();
+    let serverTasksSubmitted = false;
     try {
         if(settings.engine === 'comfy'){
             await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta);
@@ -16084,19 +16098,23 @@ async function runGeneration(){
         if(isApiLikeEngine(settings.engine) || rhModelMode){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
-            pendingNode.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
-            pendingNode.pending = Math.max(taskIds.length, Number(pendingNode.pending || 0) || taskIds.length);
-            pendingNode.runStartedAt = nowMs();
+            const submittedTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
+            const existingTaskIds = new Set(smartPendingTasks(pendingNode).map(task => task.taskId));
+            pendingNode.pendingTasks = [...smartPendingTasks(pendingNode), ...submittedTasks.filter(task => !existingTaskIds.has(task.taskId))];
+            pendingNode.pending = pendingNode.pendingTasks.length;
+            if(!pendingNode.runStartedAt) pendingNode.runStartedAt = nowMs();
             pendingNode.runTimerHidden = false;
             pendingNode.running = false;
             render();
             scheduleSave();
             await saveCanvas();
-            await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart});
+            serverTasksSubmitted = true;
+            // 服务端已接管任务后立即释放 composer，用户可继续填写并提交下一项。
+            clearPromptInput({preserveDraft:true});
+            settings = previousSettings;
+            await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
             if(pendingNode.jimengPending || smartRecoverableImageTask(pendingNode)){
                 if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
-                clearPromptInput({preserveDraft:true});
-                settings = previousSettings;
                 scheduleSave();
                 return;
             }
@@ -16104,8 +16122,6 @@ async function runGeneration(){
             if(outpaintSize) delete node.outpaintSize;
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
-            clearPromptInput({preserveDraft:true});
-            settings = previousSettings;
             scheduleSave();
             return;
         }
@@ -16118,21 +16134,21 @@ async function runGeneration(){
         settings = previousSettings;
         scheduleSave();
     } catch(e) {
-        settings = previousSettings;
+        if(!serverTasksSubmitted) settings = previousSettings;
         if(handleJimengPendingSignal(pendingNode, e)){
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             delete pendingNode._runMetaTargetId;
             clearPromptInput({preserveDraft:true});
             return;
         }
-        pendingNode.pending = 0;
+        const remainingPendingTasks = smartPendingTasks(pendingNode);
+        pendingNode.pending = remainingPendingTasks.length;
         if(branchNode){
             nodes = nodes.filter(n => n.id !== branchNode.id);
             canvas.connections = (canvas.connections || []).filter(c => c.from !== branchNode.id && c.to !== branchNode.id);
             selectedId = node.id;
         } else {
-            pendingNode.pending = 0;
-            pendingNode.running = false;
+            pendingNode.running = remainingPendingTasks.length ? pendingNode.running : false;
             if(!(pendingNode.images || []).length){
                 delete pendingNode.w;
                 delete pendingNode.h;
@@ -16805,7 +16821,8 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     }
 }
 async function resumeSmartPendingNode(node, logContext={}){
-    const tasks = smartPendingTasks(node);
+    const requestedTaskIds = Array.isArray(logContext.taskIds) ? new Set(logContext.taskIds) : null;
+    const tasks = smartPendingTasks(node).filter(task => !requestedTaskIds || requestedTaskIds.has(task.taskId));
     if(!node || !tasks.length) return;
     const logTaskFailure = (message, task) => {
         if(!logContext?.run || !message) return;
