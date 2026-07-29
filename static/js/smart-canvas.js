@@ -6871,6 +6871,24 @@ function persistSmartNodeClipboard(payload){
         return false;
     }
 }
+function readSmartNodeClipboardText(value){
+    const raw = String(value || '');
+    if(!raw || raw.length > SMART_NODE_CLIPBOARD_MAX_BYTES || smartNodeClipboardByteLength(raw) > SMART_NODE_CLIPBOARD_MAX_BYTES) return null;
+    try {
+        const parsed = JSON.parse(raw);
+        if(parsed?.format !== 'infinite-smart-canvas-node-clipboard' || Number(parsed.version) !== 1) return null;
+        const normalized = normalizeSmartNodeClipboard(parsed);
+        if(!normalized || Date.now() - normalized.copiedAt > SMART_NODE_CLIPBOARD_TTL_MS) return null;
+        return normalized;
+    } catch(e) {
+        return null;
+    }
+}
+function acceptSmartNodeClipboardText(value){
+    const parsed = readSmartNodeClipboardText(value);
+    if(!parsed) return false;
+    return persistSmartNodeClipboard(parsed);
+}
 function remapCopiedNodeReferences(copy, idMap){
     const remapId = id => idMap.get(id) || '';
     if(Array.isArray(copy.inputNodeIds)) copy.inputNodeIds = copy.inputNodeIds.map(remapId).filter(Boolean);
@@ -6892,7 +6910,7 @@ function remapCopiedNodeReferences(copy, idMap){
     delete copy.blockedInputRefs;
     return copy;
 }
-function copySelectedNodes(){
+async function copySelectedNodes(){
     if(!canvas || isEditableTarget(document.activeElement)) return;
     const ids = selectedNodeIds();
     const copiedNodes = ids.map(id => nodes.find(n => n.id === id)).filter(Boolean);
@@ -6907,7 +6925,12 @@ function copySelectedNodes(){
         nodes:copiedNodes.map(serializableSmartNode),
         connections:JSON.parse(JSON.stringify(copiedConnections))
     });
-    if(saved) toast(`已复制 ${copiedNodes.length} 个节点，可在其他智能画布粘贴`);
+    if(saved){
+        const systemSaved = await copyTextToClipboard(JSON.stringify(nodeClipboard));
+        toast(systemSaved
+            ? `已复制 ${copiedNodes.length} 个节点，可在其他智能画布或不同局域网地址粘贴`
+            : `已复制 ${copiedNodes.length} 个节点，可在同一访问地址的其他智能画布粘贴`);
+    }
 }
 function pasteNodes(){
     const clipboard = readSmartNodeClipboard();
@@ -17731,6 +17754,12 @@ window.addEventListener('paste', e => {
     if(files.length){
         lastImagePasteAt = Date.now();
         handleFiles(files, selectedId);
+        return;
+    }
+    const nodeClipboardText = e.clipboardData?.getData('text/plain') || '';
+    if(!isEditableTarget(e.target) && acceptSmartNodeClipboardText(nodeClipboardText)){
+        e.preventDefault();
+        pasteNodes();
         return;
     }
     // 素材库管理页「复制到画布」过来的素材：Ctrl+V 批量粘贴成图片节点
