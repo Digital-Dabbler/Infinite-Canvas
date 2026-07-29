@@ -65,8 +65,6 @@
         <button class="smart-back" type="button" onclick="backToCanvasList()"><i data-lucide="arrow-left"></i><span data-i18n="canvas.backToList">返回画布列表</span></button>
         <div id="smartTitle" class="smart-title" data-i18n="smart.title">智能画布</div>
         <div id="imageActionToolbar" class="image-action-toolbar" aria-label="图片工具">
-            <button type="button" data-image-toolbar-action="preview" title="预览"><i data-lucide="eye"></i><span>预览</span></button>
-            <span class="image-action-divider"></span>
             <button type="button" data-image-toolbar-action="edit" title="图片编辑"><i data-lucide="sparkles"></i><span>图片编辑</span></button>
             <button type="button" data-image-toolbar-action="crop" title="裁剪"><i data-lucide="crop"></i><span>裁剪</span></button>
             <button type="button" data-image-toolbar-action="outpaint" title="扩图"><i data-lucide="expand"></i><span>扩图</span></button>
@@ -75,7 +73,9 @@
             <button type="button" data-image-toolbar-action="upscale" title="放大"><i data-lucide="maximize-2"></i><span>放大</span></button>
             <button type="button" data-image-toolbar-action="grid" title="宫格切分"><i data-lucide="grid-3x3"></i><span>宫格切分</span></button>
             <span class="image-action-divider"></span>
+            <button type="button" data-image-toolbar-action="preview" title="预览"><i data-lucide="eye"></i><span>预览</span></button>
             <button type="button" data-image-toolbar-action="download" title="下载"><i data-lucide="download"></i><span>下载</span></button>
+            <button type="button" class="image-toolbar-delete" data-image-toolbar-action="delete" title="删除当前图片"><i data-lucide="trash-2"></i><span>删除</span></button>
         </div>
         <div id="portConnectMenu" class="port-connect-menu" hidden aria-label="节点连接选择"></div>
         <div id="createMenu" class="create-menu">

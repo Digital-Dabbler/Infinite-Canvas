@@ -8074,6 +8074,7 @@ function nodeBodyHtml(node, layout){
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
     const imgs = (node.images || []).map(imageForDisplay);
+    const imageToolbarOwnsDelete = isSmartImageUploadNode(node) && imgs.length && imgs.every(img => mediaKindForItem(img) === 'image');
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
         return jimengPendingBodyHtml(node, layout);
     }
@@ -8101,7 +8102,7 @@ function nodeBodyHtml(node, layout){
         return `<div class="generation-result-card" data-generation-results="1">
             <div class="generation-result-stack" style="--result-stack:${stack}">
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer layer-${index + 1}"></span>`).join('')}
-                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${mediaHeight}px">${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}<button class="mini-x image-delete" type="button" data-image-index="${activeIndex}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>
+                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${mediaHeight}px">${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}</div>
                 ${imgs.length > 1 ? `<div class="generation-result-count">${imgs.length} 张</div><button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
             </div>
             ${imgs.length > 1 ? `<div class="generation-result-strip">${thumbHtml}</div>` : ''}
@@ -8110,9 +8111,9 @@ function nodeBodyHtml(node, layout){
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`).join('')}</div>`;
+        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}${imageToolbarOwnsDelete ? `<button class="resource-replace" type="button" data-replace-image="${i}" title="替换资源">替换</button>` : `<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`}</div>`).join('')}</div>`;
     }
-    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button></div>`;
+    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}${imageToolbarOwnsDelete ? '<button class="resource-replace" type="button" data-replace-image="0" title="替换资源">替换</button>' : `<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`}</div>`;
     if(isSmartGenerationNode(node)) return `<div class="generation-empty-state"><i data-lucide="${isSmartVideoGenerationNode(node) ? 'video' : 'image-plus'}"></i><span>${isSmartVideoGenerationNode(node) ? '连接素材后在下方输入描述并生成视频' : '连接图片后在下方输入描述并生成'}</span></div>`;
     return `<div class="node-drop" data-upload-action="files">
         <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
@@ -8173,8 +8174,8 @@ function positionImageActionToolbar(target=currentImageToolbarTarget()){
     const width = imageActionToolbar.offsetWidth || 1;
     const height = imageActionToolbar.offsetHeight || 42;
     const centerX = Math.max(width / 2 + 14, Math.min(shellRect.width - width / 2 - 14, nodeRect.left - shellRect.left + nodeRect.width / 2));
-    const above = nodeRect.top - shellRect.top - height - 12;
-    const top = above >= 12 ? above : Math.min(shellRect.height - height - 14, nodeRect.bottom - shellRect.top + 12);
+    const above = nodeRect.top - shellRect.top - height - 36;
+    const top = Math.max(12, above);
     imageActionToolbar.style.left = `${Math.round(centerX)}px`;
     imageActionToolbar.style.top = `${Math.round(top)}px`;
 }
@@ -8204,6 +8205,10 @@ function runImageToolbarAction(action){
     }
     if(action === 'download'){
         downloadPreviewFile(node.images?.[index] || item);
+        return;
+    }
+    if(action === 'delete'){
+        deleteImage(node.id, index);
         return;
     }
     if(action === 'upscale'){
@@ -8438,10 +8443,11 @@ function canvasOrganizerHtml(node){
             <textarea class="smart-note-text" aria-label="便签内容">${escapeHtml(node.text || '')}</textarea><div class="node-resize-handle" data-resize="1"></div></div>`;
     }
     delete node.titleFontSize;
+    const organizerTitle = String(node.title || '未命名工作流');
+    const organizerTitleChars = Math.max(8, Math.min(64, Array.from(organizerTitle).length));
     return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id) ? 'selected' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${node.w || 520}px;height:${node.h || 320}px;--organizer-color:${color}">
         <div class="workflow-organizer-head">
-        <div class="organizer-title-control"><input class="workflow-organizer-title" value="${escapeAttr(node.title || '未命名工作流')}" aria-label="分组名称"></div>
-        <div class="organizer-description-control"><span class="workflow-organizer-desc" title="${escapeAttr(node.description || '')}">${escapeHtml(node.description || '添加说明')}</span><button class="organizer-edit organizer-description-edit" type="button" title="编辑说明"><i data-lucide="file-pen-line"></i></button></div>
+        <div class="organizer-title-control" style="--organizer-title-ch:${organizerTitleChars}"><input class="workflow-organizer-title" value="${escapeAttr(organizerTitle)}" title="${escapeAttr(organizerTitle)}" aria-label="分组名称"></div>
         <div class="organizer-color-row">${organizerColorButtons(node)}</div><button class="organizer-edit node-delete" type="button" title="删除分组"><i data-lucide="trash-2"></i></button></div>
         <div class="node-resize-handle" data-resize="1"></div></div>`;
 }
@@ -8455,7 +8461,7 @@ function renderSmartOutline(){
     smartOutlineList.innerHTML = list.length ? list.map(node => {
         const note = isSmartNoteNode(node);
         const title = note ? (String(node.text || '').trim().split(/\r?\n/)[0] || '空便签') : (node.title || '未命名工作流');
-        const sub = note ? '便签' : (node.description || '无说明');
+        const sub = note ? '便签' : '工作流分组';
         const count = note ? '' : `${workflowOrganizerMembers(node).length} 节点`;
         return `<button class="smart-outline-item" type="button" data-outline-id="${escapeAttr(node.id)}" style="--item-color:${organizerColor(node)}"><span class="smart-outline-dot"></span><span class="smart-outline-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(sub)}</small></span><span class="smart-outline-count">${count}</span></button>`;
     }).join('') : '<div class="smart-outline-empty">还没有工作流分组或便签</div>';
@@ -8483,7 +8489,7 @@ function render(){
         .map(node => {
         if(isCanvasOrganizerNode(node)) return {node, html:canvasOrganizerHtml(node)};
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? 'Prompt' : node.type === 'smart-loop' ? 'Loop' : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? '提示词' : node.type === 'smart-loop' ? '循环' : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -8495,14 +8501,17 @@ function render(){
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
+        const roleTitle = isHistory ? '历史结果' : title;
+        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartImageUploadNode(node) ? 'upload-cloud' : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+            <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
-            ${!isEmpty && !isGroup ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
+            ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartImageUploadNode(node) && imgs.some(img => mediaKindForItem(imageForDisplay(img)) === 'image')) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
@@ -9099,8 +9108,9 @@ function handlePortDrop(drag, e){
 function pickMediaForSmartNode(nodeId='', options={}){
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*,video/*,audio/*';
-    input.multiple = true;
+    const replacing = Number.isInteger(Number(options.replaceIndex));
+    input.accept = replacing ? 'image/*' : 'image/*,video/*,audio/*';
+    input.multiple = !replacing;
     input.onchange = () => {
         if(input.files?.length) handleFiles(input.files, nodeId, options);
         input.remove();
@@ -9123,7 +9133,13 @@ function bindNodeEvents(){
             });
             const titleInput = el.querySelector('.workflow-organizer-title');
             if(titleInput){
-                titleInput.oninput = e => { nodeForControls.title = e.target.value; renderSmartOutline(); scheduleSave(); };
+                titleInput.oninput = e => {
+                    nodeForControls.title = e.target.value;
+                    e.target.title = e.target.value;
+                    e.target.parentElement?.style.setProperty('--organizer-title-ch', String(Math.max(8, Math.min(64, Array.from(e.target.value || '').length))));
+                    renderSmartOutline();
+                    scheduleSave();
+                };
                 titleInput.onchange = () => scheduleSave();
             }
             const noteInput = el.querySelector('.smart-note-text');
@@ -9143,15 +9159,6 @@ function bindNodeEvents(){
                     scheduleSave();
                 };
             });
-            const editDescription = el.querySelector('.organizer-description-edit');
-            if(editDescription) editDescription.onclick = e => {
-                e.preventDefault();
-                const value = window.prompt('工作流分组说明', nodeForControls.description || '');
-                if(value === null) return;
-                nodeForControls.description = value.trim();
-                render();
-                scheduleSave();
-            };
         }
         if(nodeForControls?.type === 'smart-prompt') bindPromptNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
@@ -9272,6 +9279,17 @@ function bindNodeEvents(){
             btn.addEventListener('click', e => {
                 e.preventDefault(); e.stopPropagation();
                 deleteImage(id, Number(btn.dataset.imageIndex));
+            });
+        });
+        el.querySelectorAll('[data-replace-image]').forEach(btn => {
+            btn.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                pickMediaForSmartNode(id, {replaceIndex:Number(btn.dataset.replaceImage)});
             });
         });
         el.querySelectorAll('.image-name-badge').forEach(badge => {
@@ -9885,6 +9903,10 @@ function updateLoopInsertPreview(){
 function deleteImage(id, imageIndex){
     const node = nodes.find(n => n.id === id);
     if(!node || imageIndex < 0) return;
+    if((node.images || []).length <= 1){
+        deleteNode(id);
+        return;
+    }
     pushUndo();
     node.images = (node.images || []).filter((_, index) => index !== imageIndex);
     node.activeImageIndex = Math.max(0, Math.min(Number(node.activeImageIndex) || 0, node.images.length - 1));
@@ -13208,6 +13230,21 @@ function appendImagesToSmartNode(uploaded, targetId='', opts={}){
     if(!images.length) return null;
     const imageFiles = images.filter(file => mediaKindForItem(file) === 'image');
     const otherFiles = images.filter(file => mediaKindForItem(file) !== 'image');
+    const replaceIndex = Number(opts.replaceIndex);
+    const replaceTarget = nodes.find(node => node.id === targetId && isSmartImageUploadNode(node));
+    if(Number.isInteger(replaceIndex) && replaceIndex >= 0 && replaceTarget?.images?.[replaceIndex] && imageFiles[0]){
+        replaceTarget.images[replaceIndex] = {...imageFiles[0], kind:'image'};
+        replaceTarget.activeImageIndex = replaceIndex;
+        replaceTarget.title = '上传';
+        delete replaceTarget.w;
+        delete replaceTarget.h;
+        selectedId = replaceTarget.id;
+        selectedIds = [];
+        selectedImage = {nodeId:replaceTarget.id, index:replaceIndex};
+        render();
+        scheduleSave();
+        return replaceTarget;
+    }
     let firstCreated = null;
     if(imageFiles.length){
         const target = nodes.find(n => n.id === targetId);
