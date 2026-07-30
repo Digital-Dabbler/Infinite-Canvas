@@ -1250,6 +1250,42 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .asset-mini-btn i,.asset-mini-btn svg { width:13px; height:13px; }
 .asset-tabs { display:flex; gap:5px; padding:3px; border-radius:12px; background:var(--soft); border:1px solid var(--line); }
 .asset-library-select { margin-bottom:8px; }
+
+.photoshop-context-menu {
+    position:fixed;
+    z-index:2400;
+    display:none;
+    min-width:220px;
+    padding:7px;
+    border:1px solid color-mix(in srgb, var(--border) 78%, transparent);
+    border-radius:12px;
+    background:color-mix(in srgb, var(--panel) 96%, transparent);
+    box-shadow:0 18px 48px var(--shadow);
+    backdrop-filter:blur(18px);
+}
+.photoshop-context-menu.open { display:block; }
+.photoshop-context-menu button {
+    width:100%;
+    min-height:40px;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:8px 10px;
+    border:0;
+    border-radius:8px;
+    background:transparent;
+    color:var(--text);
+    font:inherit;
+    text-align:left;
+    cursor:pointer;
+}
+.photoshop-context-menu button:hover,
+.photoshop-context-menu button:focus-visible {
+    outline:none;
+    background:color-mix(in srgb, var(--strong) 12%, transparent);
+}
+.photoshop-context-menu button:disabled { opacity:.55; cursor:wait; }
+.photoshop-context-menu svg { width:17px; height:17px; color:#31a8ff; flex:0 0 auto; }
 .asset-tab { flex:1; height:26px; border-radius:9px; background:transparent; color:var(--muted); font-size:10.5px; font-weight:600; }
 .asset-tab.active { background:var(--strong); color:var(--strong-text); box-shadow:0 6px 16px rgba(15,23,42,.14); }
 .asset-category-row { display:flex; align-items:center; gap:6px; }
@@ -1473,7 +1509,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-group-node.selected { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong), 0 14px 36px var(--shadow); }
 
 /* 纯管理分组与便签：不参与生成节点的视觉和端口体系。 */
-.workflow-organizer-node { z-index:-2; box-sizing:border-box; border:2px solid color-mix(in srgb, var(--organizer-color) 72%, transparent); border-radius:18px; background:color-mix(in srgb, var(--organizer-color) 7%, transparent); box-shadow:none; overflow:visible; }
+.workflow-organizer-node { z-index:-1000; box-sizing:border-box; border:2px solid color-mix(in srgb, var(--organizer-color) 72%, transparent); border-radius:18px; background:color-mix(in srgb, var(--organizer-color) 7%, transparent); box-shadow:none; overflow:visible; }
 .workflow-organizer-node.selected { border-color:var(--organizer-color); box-shadow:0 0 0 3px color-mix(in srgb, var(--organizer-color) 18%, transparent); }
 .workflow-organizer-head { position:absolute; left:0; right:0; bottom:calc(100% + 4px); min-height:34px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; color:var(--text); }
 .organizer-title-control { min-width:120px; max-width:100%; display:flex; align-items:center; gap:5px; flex:1 1 220px; }

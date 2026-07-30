@@ -161,6 +161,19 @@ class ConnectionManager:
             except Exception as e:
                 print(f"Personal message error for {client_id}: {e}")
 
+    async def send_user_client_message(self, message: dict, user_id: str, client_id: str):
+        """向某个登录用户的指定客户端发送消息；返回客户端当前是否在线。"""
+        scoped_client_id = f"{user_id}:{client_id}"
+        ws = self.user_connections.get(scoped_client_id)
+        if not ws:
+            return False
+        try:
+            await ws.send_text(json.dumps(message))
+            return True
+        except Exception as e:
+            print(f"Personal message error for {scoped_client_id}: {e}")
+            return False
+
 manager = ConnectionManager()
 GLOBAL_LOOP = None
 APP_VERSION = "2026.06.03"
@@ -258,6 +271,7 @@ AUTH_SESSIONS_FILE = os.path.join(DATA_DIR, "auth_sessions.json")
 USAGE_AUDIT_DIR = os.path.join(DATA_DIR, "usage_audit")
 USAGE_ALERTS_FILE = os.path.join(DATA_DIR, "usage_alerts.json")
 USAGE_POLICY_FILE = os.path.join(DATA_DIR, "usage_policy.json")
+PHOTOSHOP_BRIDGE_TASKS_FILE = os.path.join(DATA_DIR, "photoshop_bridge_tasks.json")
 GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 LOCAL_IMAGE_IMPORT_MAX_BYTES = int(os.getenv("LOCAL_IMAGE_IMPORT_MAX_BYTES", str(50 * 1024 * 1024)))
@@ -1478,6 +1492,7 @@ app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 # 这些文件刻意不和 history.json 混用：history 是共享展示数据，审计账本是管理员追溯数据。
 AUTH_LOCK = Lock()
 USAGE_AUDIT_LOCK = Lock()
+PHOTOSHOP_BRIDGE_LOCK = Lock()
 USAGE_DEFAULT_POLICY = {
     "alert_thresholds": {"image": 50, "video": 10, "llm": 300},
     "alert_window_seconds": 3600,
@@ -3313,6 +3328,31 @@ class CanvasSaveRequest(BaseModel):
     client_id: str = ""
     base_updated_at: int = 0
     deleted_node_ids: List[str] = []
+
+class PhotoshopBridgeCreateRequest(BaseModel):
+    canvas_id: str = ""
+    node_id: str = ""
+    image_index: int = 0
+
+class PhotoshopBridgeClaimRequest(BaseModel):
+    client_instance_id: str = ""
+
+class PhotoshopBridgeOpenResultRequest(BaseModel):
+    client_instance_id: str = ""
+    error: str = ""
+
+class PhotoshopBridgeCompleteRequest(BaseModel):
+    url: str = ""
+    name: str = ""
+
+class PhotoshopBridgeCancelRequest(BaseModel):
+    reason: str = ""
+
+class PhotoshopBridgeCanvasImportRequest(BaseModel):
+    url: str = ""
+    name: str = ""
+    export_scope: str = "document"
+    selection_bounds: Dict[str, Any] = Field(default_factory=dict)
 
 class AssetUrlLibraryItemRequest(BaseModel):
     url: str = ""
@@ -16568,6 +16608,371 @@ async def delete_conversation(conversation_id: str, request: Request, x_user_id:
     if os.path.exists(path):
         os.remove(path)
     return {"ok": True}
+
+# --- Photoshop 画布桥接 ---
+
+PHOTOSHOP_BRIDGE_CLIENT_ID = "photoshop-canvas-bridge"
+PHOTOSHOP_BRIDGE_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
+PHOTOSHOP_BRIDGE_CLAIM_LEASE_MS = 2 * 60 * 1000
+
+def load_photoshop_bridge_tasks():
+    data = _read_json_file(PHOTOSHOP_BRIDGE_TASKS_FILE, {"tasks": []})
+    tasks = data.get("tasks") if isinstance(data, dict) else []
+    return [item for item in (tasks or []) if isinstance(item, dict) and item.get("id")]
+
+def save_photoshop_bridge_tasks(tasks):
+    cutoff = now_ms() - PHOTOSHOP_BRIDGE_TASK_TTL_MS
+    kept = [
+        item for item in tasks
+        if int(item.get("updated_at") or item.get("created_at") or 0) >= cutoff
+        or item.get("status") in {"pending", "opening", "opened", "open_failed", "claimed", "completing"}
+    ]
+    _write_json_file(PHOTOSHOP_BRIDGE_TASKS_FILE, {"tasks": kept[-500:]})
+
+def photoshop_bridge_public_task(task):
+    return {
+        key: task.get(key)
+        for key in (
+            "id", "canvas_id", "canvas_title", "node_id", "image_index",
+            "source_url", "source_name", "status", "created_at", "updated_at",
+            "source_width", "source_height", "claimed_at", "claimed_by",
+            "opened_at", "completed_at", "returned_url", "returned_node_id", "error",
+        )
+    }
+
+def photoshop_bridge_image_value(value):
+    if isinstance(value, str):
+        return {"url": value, "name": os.path.basename(urllib.parse.urlparse(value).path) or "canvas-image"}
+    if isinstance(value, dict):
+        return value
+    return {}
+
+def photoshop_bridge_source(canvas, node_id, image_index):
+    if normalize_canvas_kind(canvas.get("kind")) != "smart":
+        raise HTTPException(status_code=400, detail="Photoshop 桥接当前仅支持智能画布。")
+    node = next((item for item in (canvas.get("nodes") or []) if str(item.get("id") or "") == node_id), None)
+    if not node:
+        raise HTTPException(status_code=404, detail="图片节点不存在，可能已被删除。")
+    images = node.get("images") if isinstance(node.get("images"), list) else []
+    if image_index < 0 or image_index >= len(images):
+        raise HTTPException(status_code=400, detail="当前图片索引无效，请重新选择图片。")
+    image = photoshop_bridge_image_value(images[image_index])
+    candidates = [
+        image.get("originalLocalUrl"), image.get("localUrl"), image.get("sourceUrl"),
+        image.get("local_url"), image.get("source_url"), image.get("url"),
+    ]
+    url = ""
+    path = None
+    for candidate in candidates:
+        candidate_url = str(candidate or "").strip()
+        candidate_path = output_file_from_url(candidate_url)
+        if candidate_path and os.path.isfile(candidate_path):
+            url, path = candidate_url, candidate_path
+            break
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail="当前图片不是可发送的站内本地图片。")
+    content_type = content_type_for_path(path)
+    if not str(content_type or "").lower().startswith("image/"):
+        raise HTTPException(status_code=400, detail="当前素材不是图片，无法发送到 Photoshop。")
+    name = str(image.get("name") or os.path.basename(path) or "canvas-image")[:120]
+    return node, image, url, name
+
+def photoshop_bridge_return_item(url, name):
+    path = output_file_from_url(url)
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=400, detail="回传图片地址无效或文件不存在。")
+    if not str(content_type_for_path(path) or "").lower().startswith("image/"):
+        raise HTTPException(status_code=400, detail="回传文件不是图片。")
+    item = {"url": url, "name": (name or os.path.basename(path) or "Photoshop-return.png")[:120], "kind": "image"}
+    try:
+        with Image.open(path) as image:
+            item["natural_w"], item["natural_h"] = image.size
+            item["width"], item["height"] = image.size
+    except Exception:
+        pass
+    return item
+
+def photoshop_bridge_client_instance(value):
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "-", str(value or "").strip())[:80].strip(".-")
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="缺少 Photoshop 客户端实例 ID。")
+    return cleaned
+
+def photoshop_bridge_image_size(path):
+    try:
+        with Image.open(path) as image:
+            return int(image.width), int(image.height)
+    except Exception:
+        return 0, 0
+
+def create_photoshop_upload_node(canvas, item, export_scope="document", selection_bounds=None):
+    if normalize_canvas_kind(canvas.get("kind")) != "smart":
+        raise HTTPException(status_code=400, detail="Photoshop 只能发送到智能画布。")
+    nodes = canvas.get("nodes") if isinstance(canvas.get("nodes"), list) else []
+    content_nodes = [
+        node for node in nodes
+        if str(node.get("type") or "") not in {"smart-workflow-group"}
+    ]
+    if content_nodes:
+        right = max(float(node.get("x") or 0) + max(180, float(node.get("w") or 340)) for node in content_nodes)
+        top = min(float(node.get("y") or 0) for node in content_nodes)
+        x, y = round(right + 80), round(top)
+    else:
+        x, y = 0, 0
+    node = {
+        "id": f"upload_ps_{uuid.uuid4().hex[:12]}",
+        "type": "smart-image-upload",
+        "x": x,
+        "y": y,
+        "title": "Photoshop 发送",
+        "images": [item],
+        "activeImageIndex": 0,
+        "created_at": now_ms(),
+        "photoshopImport": {
+            "scope": "selection" if export_scope == "selection" else "document",
+            "selectionBounds": selection_bounds or {},
+        },
+    }
+    nodes.append(node)
+    canvas["nodes"] = nodes
+    save_canvas(canvas)
+    return node
+
+def append_photoshop_return_to_canvas(canvas, task, item):
+    nodes = canvas.get("nodes") if isinstance(canvas.get("nodes"), list) else []
+    source = next((node for node in nodes if str(node.get("id") or "") == str(task.get("node_id") or "")), None)
+    if not source:
+        raise HTTPException(status_code=409, detail="原图片节点已被删除，无法自动返回画布。")
+    node_type = str(source.get("type") or "")
+    if node_type == "smart-image-generation":
+        images = source.get("images") if isinstance(source.get("images"), list) else []
+        images.append(item)
+        source["images"] = images
+        source["activeImageIndex"] = len(images) - 1
+        returned_node = source
+    else:
+        source_x = float(source.get("x") or 0)
+        source_y = float(source.get("y") or 0)
+        source_w = max(240, float(source.get("w") or 340))
+        returned_node = {
+            "id": f"upload_ps_{uuid.uuid4().hex[:12]}",
+            "type": "smart-image-upload",
+            "x": round(source_x + source_w + 80),
+            "y": round(source_y),
+            "title": "Photoshop 回传",
+            "images": [item],
+            "activeImageIndex": 0,
+            "created_at": now_ms(),
+        }
+        nodes.append(returned_node)
+        canvas["nodes"] = nodes
+    save_canvas(canvas)
+    return returned_node
+
+@app.post("/api/photoshop-bridge/tasks")
+async def create_photoshop_bridge_task(payload: PhotoshopBridgeCreateRequest, request: Request):
+    user = require_authenticated(request)
+    canvas_id = str(payload.canvas_id or "").strip()
+    node_id = str(payload.node_id or "").strip()
+    if not canvas_id or not node_id:
+        raise HTTPException(status_code=400, detail="缺少画布或图片节点 ID。")
+    canvas = await asyncio.to_thread(load_canvas, canvas_id)
+    _, _, source_url, source_name = photoshop_bridge_source(canvas, node_id, int(payload.image_index))
+    source_path = output_file_from_url(source_url)
+    source_width, source_height = photoshop_bridge_image_size(source_path) if source_path else (0, 0)
+    timestamp = now_ms()
+    task = {
+        "id": uuid.uuid4().hex,
+        "user_id": user.get("id"),
+        "canvas_id": canvas_id,
+        "canvas_title": str(canvas.get("title") or "智能画布")[:80],
+        "node_id": node_id,
+        "image_index": int(payload.image_index),
+        "source_url": source_url,
+        "source_name": source_name,
+        "source_width": source_width,
+        "source_height": source_height,
+        "status": "pending",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "error": "",
+    }
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        tasks.append(task)
+        save_photoshop_bridge_tasks(tasks)
+    online = await manager.send_user_client_message(
+        {"type": "photoshop_edit_requested", "task": photoshop_bridge_public_task(task)},
+        str(user.get("id") or ""),
+        PHOTOSHOP_BRIDGE_CLIENT_ID,
+    )
+    return {"task": photoshop_bridge_public_task(task), "photoshop_online": online}
+
+@app.get("/api/photoshop-bridge/tasks")
+async def list_photoshop_bridge_tasks(request: Request, status: str = "", limit: int = 50, since: int = 0):
+    user = require_authenticated(request)
+    wanted = {part.strip() for part in str(status or "").split(",") if part.strip()}
+    safe_limit = max(1, min(100, int(limit or 50)))
+    cutoff = max(int(since or 0), now_ms() - PHOTOSHOP_BRIDGE_TASK_TTL_MS)
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        save_photoshop_bridge_tasks(tasks)
+        rows = [
+            photoshop_bridge_public_task(item) for item in tasks
+            if item.get("user_id") == user.get("id")
+            and int(item.get("created_at") or 0) >= cutoff
+            and (not wanted or item.get("status") in wanted)
+        ]
+    rows.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
+    return {"tasks": rows[:safe_limit]}
+
+@app.post("/api/photoshop-bridge/tasks/{task_id}/claim")
+async def claim_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeClaimRequest, request: Request):
+    user = require_authenticated(request)
+    client_instance_id = photoshop_bridge_client_instance(payload.client_instance_id)
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        task = next((item for item in tasks if item.get("id") == task_id and item.get("user_id") == user.get("id")), None)
+        if not task:
+            raise HTTPException(status_code=404, detail="Photoshop 编辑任务不存在。")
+        status = str(task.get("status") or "pending")
+        should_open = False
+        claimed_at = int(task.get("claimed_at") or 0)
+        claim_expired = status == "opening" and claimed_at < now_ms() - PHOTOSHOP_BRIDGE_CLAIM_LEASE_MS
+        if status in {"pending", "open_failed"} or claim_expired:
+            task["status"] = "opening"
+            task["claimed_at"] = now_ms()
+            task["claimed_by"] = client_instance_id
+            task["updated_at"] = task["claimed_at"]
+            task["error"] = ""
+            should_open = True
+            save_photoshop_bridge_tasks(tasks)
+        elif status not in {"opening", "opened", "claimed", "completed"}:
+            raise HTTPException(status_code=409, detail="当前任务不能打开。")
+    return {"task": photoshop_bridge_public_task(task), "should_open": should_open}
+
+@app.post("/api/photoshop-bridge/tasks/{task_id}/opened")
+async def mark_photoshop_bridge_task_opened(task_id: str, payload: PhotoshopBridgeOpenResultRequest, request: Request):
+    user = require_authenticated(request)
+    client_instance_id = photoshop_bridge_client_instance(payload.client_instance_id)
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        task = next((item for item in tasks if item.get("id") == task_id and item.get("user_id") == user.get("id")), None)
+        if not task:
+            raise HTTPException(status_code=404, detail="Photoshop 编辑任务不存在。")
+        if task.get("claimed_by") != client_instance_id:
+            raise HTTPException(status_code=409, detail="此任务已由另一个 Photoshop 客户端处理。")
+        if task.get("status") in {"opening", "open_failed", "claimed"}:
+            task["status"] = "opened"
+            task["opened_at"] = now_ms()
+            task["updated_at"] = task["opened_at"]
+            task["error"] = ""
+            save_photoshop_bridge_tasks(tasks)
+    return {"task": photoshop_bridge_public_task(task)}
+
+@app.post("/api/photoshop-bridge/tasks/{task_id}/open-failed")
+async def mark_photoshop_bridge_task_failed(task_id: str, payload: PhotoshopBridgeOpenResultRequest, request: Request):
+    user = require_authenticated(request)
+    client_instance_id = photoshop_bridge_client_instance(payload.client_instance_id)
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        task = next((item for item in tasks if item.get("id") == task_id and item.get("user_id") == user.get("id")), None)
+        if not task:
+            raise HTTPException(status_code=404, detail="Photoshop 编辑任务不存在。")
+        if task.get("claimed_by") == client_instance_id and task.get("status") in {"opening", "claimed"}:
+            task["status"] = "open_failed"
+            task["updated_at"] = now_ms()
+            task["error"] = str(payload.error or "Photoshop 打开图片失败")[:300]
+            save_photoshop_bridge_tasks(tasks)
+    return {"task": photoshop_bridge_public_task(task)}
+
+@app.post("/api/photoshop-bridge/canvases/{canvas_id}/images")
+async def import_photoshop_image_to_canvas(canvas_id: str, payload: PhotoshopBridgeCanvasImportRequest, request: Request):
+    require_authenticated(request)
+    item = photoshop_bridge_return_item(str(payload.url or "").strip(), str(payload.name or "").strip())
+    def import_image():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            node = create_photoshop_upload_node(
+                canvas,
+                item,
+                payload.export_scope,
+                payload.selection_bounds if isinstance(payload.selection_bounds, dict) else {},
+            )
+            return canvas, node
+    canvas, node = await asyncio.to_thread(import_image)
+    await manager.broadcast_canvas_updated(canvas_id, int(canvas.get("updated_at") or now_ms()), PHOTOSHOP_BRIDGE_CLIENT_ID)
+    return {
+        "ok": True,
+        "node": node,
+        "canvas_id": canvas_id,
+        "canvas_updated_at": canvas.get("updated_at"),
+    }
+
+@app.post("/api/photoshop-bridge/tasks/{task_id}/complete")
+async def complete_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeCompleteRequest, request: Request):
+    user = require_authenticated(request)
+    item = photoshop_bridge_return_item(str(payload.url or "").strip(), str(payload.name or "").strip())
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        task = next((entry for entry in tasks if entry.get("id") == task_id and entry.get("user_id") == user.get("id")), None)
+        if not task:
+            raise HTTPException(status_code=404, detail="Photoshop 编辑任务不存在。")
+        if task.get("status") == "completed":
+            return {"task": photoshop_bridge_public_task(task), "already_completed": True}
+        if task.get("status") not in {"pending", "claimed", "opening", "opened", "open_failed"}:
+            raise HTTPException(status_code=409, detail="当前任务不能回传。")
+        task["status"] = "completing"
+        task["updated_at"] = now_ms()
+        save_photoshop_bridge_tasks(tasks)
+        task_snapshot = dict(task)
+    try:
+        def update_target_canvas():
+            with CANVAS_LOCK:
+                canvas = load_canvas(task_snapshot["canvas_id"])
+                returned_node = append_photoshop_return_to_canvas(canvas, task_snapshot, item)
+                return canvas, returned_node
+        canvas, returned_node = await asyncio.to_thread(update_target_canvas)
+    except Exception as exc:
+        with PHOTOSHOP_BRIDGE_LOCK:
+            tasks = load_photoshop_bridge_tasks()
+            failed = next((entry for entry in tasks if entry.get("id") == task_id), None)
+            if failed and failed.get("status") == "completing":
+                failed["status"] = "claimed"
+                failed["updated_at"] = now_ms()
+                failed["error"] = str(getattr(exc, "detail", None) or exc)[:300]
+                save_photoshop_bridge_tasks(tasks)
+        raise
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        task = next((entry for entry in tasks if entry.get("id") == task_id), task_snapshot)
+        task.update({
+            "status": "completed",
+            "completed_at": now_ms(),
+            "updated_at": now_ms(),
+            "returned_url": item["url"],
+            "returned_node_id": returned_node.get("id"),
+            "error": "",
+        })
+        save_photoshop_bridge_tasks(tasks)
+    await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()), PHOTOSHOP_BRIDGE_CLIENT_ID)
+    return {"task": photoshop_bridge_public_task(task), "canvas_updated_at": canvas.get("updated_at")}
+
+@app.post("/api/photoshop-bridge/tasks/{task_id}/cancel")
+async def cancel_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeCancelRequest, request: Request):
+    user = require_authenticated(request)
+    with PHOTOSHOP_BRIDGE_LOCK:
+        tasks = load_photoshop_bridge_tasks()
+        task = next((item for item in tasks if item.get("id") == task_id and item.get("user_id") == user.get("id")), None)
+        if not task:
+            raise HTTPException(status_code=404, detail="Photoshop 编辑任务不存在。")
+        if task.get("status") == "completed":
+            raise HTTPException(status_code=409, detail="任务已经回传，不能取消。")
+        task["status"] = "cancelled"
+        task["updated_at"] = now_ms()
+        task["error"] = str(payload.reason or "")[:300]
+        save_photoshop_bridge_tasks(tasks)
+    return {"task": photoshop_bridge_public_task(task)}
 
 # --- 画布管理 ---
 

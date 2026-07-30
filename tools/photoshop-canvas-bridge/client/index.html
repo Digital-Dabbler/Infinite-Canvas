@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob: http: https: ws: wss:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';">
+    <title>Infinite Canvas Bridge</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="bridge-shell">
+        <header class="bridge-head">
+            <div class="bridge-mark">IC</div>
+            <div class="brand-copy">
+                <h1>Canvas Bridge</h1>
+                <p>Photoshop 图像交接</p>
+            </div>
+            <span id="connectionDot" class="connection-dot" title="未连接"></span>
+        </header>
+
+        <section id="setupPanel" class="setup-panel">
+            <label>画布服务地址
+                <input id="serverInput" type="text" placeholder="127.0.0.1:3000">
+            </label>
+            <div class="login-grid">
+                <label>账号<input id="usernameInput" type="text" autocomplete="username"></label>
+                <label>密码<input id="passwordInput" type="password" autocomplete="current-password"></label>
+            </div>
+            <button id="connectButton" class="button button-primary" type="button">连接画布</button>
+        </section>
+
+        <div id="statusBar" class="status-bar">填写与 Infinite Canvas 相同的登录账号。</div>
+
+        <section class="inbox-panel">
+            <div class="route" aria-label="图片交接状态">
+                <span class="route-stop">Canvas</span>
+                <span class="route-line"><i></i><b>往返</b></span>
+                <span class="route-stop route-stop-ps">PS</span>
+            </div>
+            <div class="section-heading">
+                <div>
+                    <h2>图片收件箱</h2>
+                    <p id="taskSummary">连接后等待画布发送图片</p>
+                </div>
+                <button id="refreshButton" class="button button-quiet" type="button" disabled>刷新</button>
+            </div>
+            <div id="galleryStage" class="gallery-stage">
+                <div id="galleryGrid" class="gallery-grid"></div>
+                <div id="emptyState" class="empty-state">
+                    <span>↔</span>
+                    <strong>还没有传入图片</strong>
+                    <p>在智能画布图片上右键，选择“发送到 Photoshop”。</p>
+                </div>
+
+                <div id="previewLayer" class="preview-layer" aria-hidden="true">
+                    <button id="previewClose" class="round-button preview-close" type="button" aria-label="关闭预览">×</button>
+                    <button id="previewPrevious" class="round-button preview-arrow previous" type="button" aria-label="上一张">‹</button>
+                    <div class="preview-media"><img id="previewImage" alt=""></div>
+                    <button id="previewNext" class="round-button preview-arrow next" type="button" aria-label="下一张">›</button>
+                    <div class="preview-copy">
+                        <strong id="previewName"></strong>
+                        <span id="previewCanvas"></span>
+                    </div>
+                    <div class="preview-actions">
+                        <button id="previewPlace" class="button" type="button">置入当前文档</button>
+                        <button id="previewOpen" class="button button-accent" type="button">打开为新文档</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <footer class="send-bar">
+            <button id="canvasTargetButton" class="canvas-target" type="button">
+                <span>发送到</span>
+                <strong id="canvasTargetName">选择智能画布</strong>
+                <b>⌄</b>
+            </button>
+            <div class="send-row">
+                <div class="document-state">
+                    <strong id="activeDocumentName">没有活动文档</strong>
+                    <span id="exportScopeText">将发送整张画布</span>
+                </div>
+                <button id="sendButton" class="button button-send" type="button" disabled>发送到画布</button>
+            </div>
+        </footer>
+    </main>
+
+    <div id="choiceDialog" class="modal-layer" aria-hidden="true">
+        <div class="dialog-card">
+            <button class="dialog-close" type="button" data-close-dialog>×</button>
+            <span class="dialog-kicker">打开图片</span>
+            <strong id="choiceName">画布图片</strong>
+            <p>选择图片进入 Photoshop 的方式。</p>
+            <button id="choicePlace" class="button dialog-action" type="button">置入当前文档 · 智能对象</button>
+            <button id="choiceOpen" class="button button-accent dialog-action" type="button">打开为新文档</button>
+        </div>
+    </div>
+
+    <div id="canvasPicker" class="modal-layer" aria-hidden="true">
+        <div class="dialog-card canvas-picker-card">
+            <button class="dialog-close" type="button" data-close-picker>×</button>
+            <span class="dialog-kicker">发送目标</span>
+            <strong>选择智能画布</strong>
+            <input id="canvasSearch" class="canvas-search" type="search" placeholder="输入画布名称快速查找">
+            <div id="canvasList" class="canvas-list"></div>
+        </div>
+    </div>
+
+    <div id="smallSelectionDialog" class="modal-layer" aria-hidden="true">
+        <div class="dialog-card warning-card">
+            <span class="warning-mark">!</span>
+            <strong>选区尺寸较小</strong>
+            <p id="smallSelectionText"></p>
+            <div class="warning-actions">
+                <button id="cancelSmallSelection" class="button" type="button">取消发送</button>
+                <button id="continueSmallSelection" class="button button-accent" type="button">仍然发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/cep.js"></script>
+    <script src="js/net.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

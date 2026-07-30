@@ -24,6 +24,7 @@ const minimapContent = document.getElementById('minimapContent');
 const smartArrangeBtn = document.getElementById('smartArrangeBtn');
 const imageEditModal = document.getElementById('imageEditModal');
 const imageActionToolbar = document.getElementById('imageActionToolbar');
+const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const portConnectMenu = document.getElementById('portConnectMenu');
 const smartLogModal = document.getElementById('smartLogModal');
 const smartLogList = document.getElementById('smartLogList');
@@ -6705,6 +6706,22 @@ function fitSmartNoteToText(node, element=null){
 function workflowOrganizerMembers(group){
     return isWorkflowOrganizerNode(group) ? nodes.filter(node => !isWorkflowOrganizerNode(node) && node.workflowGroupId === group.id) : [];
 }
+function workflowOrganizerLayer(node){
+    if(!isWorkflowOrganizerNode(node)) return 0;
+    const rect = nodeRect(node);
+    const depth = nodes.filter(other => {
+        if(!isWorkflowOrganizerNode(other) || other.id === node.id) return false;
+        const outer = nodeRect(other);
+        const strictlyLarger = outer.width * outer.height > rect.width * rect.height;
+        return strictlyLarger
+            && rect.x >= outer.x
+            && rect.y >= outer.y
+            && rect.x + rect.width <= outer.x + outer.width
+            && rect.y + rect.height <= outer.y + outer.height;
+    }).length;
+    // 所有组织框都保持在连线和内容节点之下；嵌套越深（通常也越小）的框越靠上。
+    return Math.min(-1, -1000 + depth);
+}
 function cleanupWorkflowOrganizerMemberships(){
     const ids = new Set(nodes.filter(isWorkflowOrganizerNode).map(node => node.id));
     nodes.forEach(node => {
@@ -8328,6 +8345,65 @@ function updateImageActionToolbar(){
     });
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
 }
+function closePhotoshopContextMenu(){
+    if(!photoshopContextMenu) return;
+    photoshopContextMenu.classList.remove('open');
+    photoshopContextMenu.setAttribute('aria-hidden', 'true');
+    photoshopContextMenu.innerHTML = '';
+}
+function positionPhotoshopContextMenu(clientX, clientY){
+    if(!photoshopContextMenu) return;
+    const margin = 10;
+    const width = photoshopContextMenu.offsetWidth || 220;
+    const height = photoshopContextMenu.offsetHeight || 54;
+    photoshopContextMenu.style.left = `${Math.max(margin, Math.min(window.innerWidth - width - margin, clientX))}px`;
+    photoshopContextMenu.style.top = `${Math.max(margin, Math.min(window.innerHeight - height - margin, clientY))}px`;
+}
+function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
+    if(!photoshopContextMenu) return;
+    const node = nodes.find(item => item.id === nodeId);
+    const image = imageForDisplay(node?.images?.[imageIndex]);
+    if(!node || !image?.url || mediaKindForItem(image) !== 'image') return;
+    closeCreateMenu();
+    closePortConnectMenu();
+    selectedId = nodeId;
+    selectedIds = [];
+    selectedImage = {nodeId, index:imageIndex};
+    photoshopContextMenu.innerHTML = `<button type="button" role="menuitem" data-send-photoshop><i data-lucide="panels-top-left"></i><span>${escapeHtml(tr('smart.sendToPhotoshop'))}</span></button>`;
+    photoshopContextMenu.classList.add('open');
+    photoshopContextMenu.setAttribute('aria-hidden', 'false');
+    positionPhotoshopContextMenu(clientX, clientY);
+    photoshopContextMenu.querySelector('[data-send-photoshop]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        sendImageToPhotoshop(nodeId, imageIndex, event.currentTarget);
+    });
+    refreshIcons();
+}
+async function sendImageToPhotoshop(nodeId, imageIndex, button){
+    if(!canvasId) return;
+    if(button) button.disabled = true;
+    toast(tr('smart.photoshopSending'));
+    try {
+        const response = await fetch('/api/photoshop-bridge/tasks', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({canvas_id:canvasId, node_id:nodeId, image_index:imageIndex})
+        });
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok) throw new Error(data.detail || tr('smart.photoshopSendFailed'));
+        closePhotoshopContextMenu();
+        toast(data.photoshop_online ? tr('smart.photoshopSent') : tr('smart.photoshopQueued'));
+    } catch(error){
+        if(button) button.disabled = false;
+        toast(`${tr('smart.photoshopSendFailed')}：${error.message || error}`);
+    }
+}
+photoshopContextMenu?.addEventListener('mousedown', event => event.stopPropagation());
+window.addEventListener('mousedown', event => {
+    if(!event.target.closest?.('#photoshopContextMenu')) closePhotoshopContextMenu();
+}, true);
+window.addEventListener('blur', closePhotoshopContextMenu);
 function runImageToolbarAction(action){
     const target = currentImageToolbarTarget();
     if(!target) return;
@@ -8583,7 +8659,7 @@ function canvasOrganizerHtml(node){
     delete node.titleFontSize;
     const organizerTitle = String(node.title || '未命名工作流');
     const organizerTitleChars = Math.max(8, Math.min(64, Array.from(organizerTitle).length));
-    return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id) ? 'selected' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${node.w || 520}px;height:${node.h || 320}px;--organizer-color:${color}">
+    return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id) ? 'selected' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${node.w || 520}px;height:${node.h || 320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}">
         <div class="workflow-organizer-head">
         <div class="organizer-title-control" style="--organizer-title-ch:${organizerTitleChars}"><input class="workflow-organizer-title" value="${escapeAttr(organizerTitle)}" title="${escapeAttr(organizerTitle)}" aria-label="分组名称"></div>
         <div class="organizer-color-row">${organizerColorButtons(node)}</div><button class="organizer-edit node-delete" type="button" title="删除分组"><i data-lucide="trash-2"></i></button></div>
@@ -9485,6 +9561,16 @@ function bindNodeEvents(){
             item.addEventListener('dragstart', e => {
                 e.preventDefault();
             });
+            item.addEventListener('contextmenu', e => {
+                if(e.target.closest('video,audio,.image-delete,.image-name-badge')) return;
+                const target = thumbTarget();
+                if(!target.image || mediaKindForItem(target.image) !== 'image') return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                clearImageClickTimer();
+                openPhotoshopContextMenu(target.targetNodeId, target.imageIndex, e.clientX, e.clientY);
+            }, true);
             item.addEventListener('mousedown', e => {
                 if(e.target.closest('video,audio')) return;
                 if(e.button !== 0 || e.target.closest('.image-delete,.image-name-badge')) return;
@@ -10935,52 +11021,36 @@ function previewCompareSources(){
     }
     return dedup;
 }
-function refreshComparePanel(){
-    const stage = document.getElementById('previewStage');
-    const compareImg = document.getElementById('previewCompareImage');
-    const currentImg = document.getElementById('previewCurrentImage');
-    const currentVideo = document.getElementById('previewCurrentVideo');
-    const compareLayer = document.getElementById('previewCompareLayer');
-    const compareHandle = document.getElementById('previewCompareHandle');
-    const thumbsEl = document.getElementById('compareThumbs');
-    const toggle = document.getElementById('compareToggleBtn');
-    const panoramaToggle = document.getElementById('panoramaToggleBtn');
-    const editing = currentEditImage();
-    const curUrl = editing.image?.url || '';
-    const isVideoPreview = mediaKindForItem(editing.image || {}) === 'video';
-    const isPreviewMode = imageEditMode === 'preview';
-    if(panoramaToggle){
-        panoramaToggle.style.display = isPreviewMode && !isVideoPreview ? 'inline-flex' : 'none';
 function previewGenerationSourceLabel(node){
     const source = node?.runSettings || {};
     const engine = String(source.engine || '').toLowerCase();
     if(!Object.keys(source).length) return tr('smart.previewUnknownSource');
     if(engine === 'comfy'){
-        if(source.comfyMode === 'zimage') return 'ComfyUI ? Z-Image';
-        if(source.comfyMode === 'enhance') return 'ComfyUI ? Z-Image Enhance';
-        if(source.comfyMode === 'edit') return 'ComfyUI ? Image Edit';
+        if(source.comfyMode === 'zimage') return 'ComfyUI · Z-Image';
+        if(source.comfyMode === 'enhance') return 'ComfyUI · Z-Image Enhance';
+        if(source.comfyMode === 'edit') return 'ComfyUI · Image Edit';
         const workflow = comfyWorkflows.find(item => item.name === source.comfyWorkflow);
-        return `ComfyUI ? ${workflow?.title || source.comfyWorkflow || tr('smart.workflow')}`;
+        return `ComfyUI · ${workflow?.title || source.comfyWorkflow || tr('smart.workflow')}`;
     }
     if(engine === 'runninghub'){
         const parsed = parseRunningHubEntryKey(source.rhConfigKey || '');
         const match = parsed ? runningHubAllEntries().find(item => item.kind === parsed.kind && item.id === parsed.id) : null;
         const kind = parsed?.kind === 'workflow' ? tr('smart.workflow') : (parsed?.kind === 'app' ? 'AI App' : tr('smart.model'));
-        return `RunningHub ? ${match ? runningHubEntryLabel(match.entry, match.kind) : (parsed?.id ? `${kind} ${parsed.id}` : kind)}`;
+        return `RunningHub · ${match ? runningHubEntryLabel(match.entry, match.kind) : (parsed?.id ? `${kind} ${parsed.id}` : kind)}`;
     }
     if(engine === 'modelscope'){
         const model = source.msgenModel === 'custom' ? source.msCustomModel : source.msgenModel;
-        return `ModelScope ? ${model || 'Z-Image'}`;
+        return `ModelScope · ${model || 'Z-Image'}`;
     }
     if(engine === 'volcengine'){
         const model = source.apiKind === 'video' ? source.videoModel : source.model;
-        return `${volcengineProvider()?.name || '????'}${model ? ` ? ${model}` : ''}`;
+        return `${volcengineProvider()?.name || '火山引擎'}${model ? ` · ${model}` : ''}`;
     }
     const isVideo = source.apiKind === 'video';
     const providerId = isVideo ? source.videoProvider : source.provider_id;
     const provider = isVideo ? videoProviderById(providerId) : apiProviderById(providerId);
     const model = isVideo ? source.videoModel : source.model;
-    return [provider?.name || providerId || (engine ? engine.toUpperCase() : ''), model].filter(Boolean).join(' ? ') || tr('smart.previewUnknownSource');
+    return [provider?.name || providerId || (engine ? engine.toUpperCase() : ''), model].filter(Boolean).join(' · ') || tr('smart.previewUnknownSource');
 }
 function updatePreviewGenerationPanel(){
     const panel = document.getElementById('previewGenerationPanel');
@@ -11065,7 +11135,7 @@ function reproducePreviewWorkflow(){
     const generationNode = {
         id:uid(kind === 'video' ? 'video' : 'generate'),
         type:kind === 'video' ? 'smart-video-generation' : 'smart-image-generation',
-        x:Math.round(origin.x + 690), y:Math.round(origin.y), title:kind === 'video' ? '????' : '????',
+        x:Math.round(origin.x + 690), y:Math.round(origin.y), title:kind === 'video' ? '视频生成' : '图片生成',
         images:[], activeImageIndex:0, runSettings:cloneSmartSettings(sourceNode.runSettings),
         runPrompt:prompt, promptDraftText:prompt, promptDraftHtml:escapeHtml(prompt),
         inputNodeIds:[...inputNodes.map(node => node.id), ...(promptNode ? [promptNode.id] : [])],
@@ -11087,6 +11157,23 @@ function reproducePreviewWorkflow(){
     centerViewportOnWorldPoint({x:origin.x + 480, y:origin.y + workflowHeight / 2});
     toast(tr('smart.previewReproduced'));
 }
+function refreshComparePanel(){
+    const stage = document.getElementById('previewStage');
+    const compareImg = document.getElementById('previewCompareImage');
+    const currentImg = document.getElementById('previewCurrentImage');
+    const currentVideo = document.getElementById('previewCurrentVideo');
+    const compareLayer = document.getElementById('previewCompareLayer');
+    const compareHandle = document.getElementById('previewCompareHandle');
+    const thumbsEl = document.getElementById('compareThumbs');
+    const toggle = document.getElementById('compareToggleBtn');
+    const panoramaToggle = document.getElementById('panoramaToggleBtn');
+    const editing = currentEditImage();
+    updatePreviewGenerationPanel();
+    const curUrl = editing.image?.url || '';
+    const isVideoPreview = mediaKindForItem(editing.image || {}) === 'video';
+    const isPreviewMode = imageEditMode === 'preview';
+    if(panoramaToggle){
+        panoramaToggle.style.display = isPreviewMode && !isVideoPreview ? 'inline-flex' : 'none';
         panoramaToggle.classList.toggle('active', panoramaState.enabled);
     }
     if(!isPreviewMode && panoramaState.enabled) disposePanoramaPreview();
@@ -11098,7 +11185,6 @@ function reproducePreviewWorkflow(){
         if(compareLayer) compareLayer.style.display = 'none';
         if(compareHandle) compareHandle.style.display = 'none';
         if(thumbsEl){ thumbsEl.style.display = 'none'; thumbsEl.innerHTML = ''; }
-    updatePreviewGenerationPanel();
         if(toggle) toggle.classList.remove('active');
         updatePreviewMetaHint(tr('smart.panoramaHint'));
         return;
@@ -17389,7 +17475,10 @@ shell.onclick = e => {
     render();
 };
 window.addEventListener('keydown', e => {
-    if(e.key === 'Escape') closePortConnectMenu();
+    if(e.key === 'Escape'){
+        closePortConnectMenu();
+        closePhotoshopContextMenu();
+    }
 });
 minimap?.addEventListener('mousedown', e => {
     if(e.button !== 0) return;
