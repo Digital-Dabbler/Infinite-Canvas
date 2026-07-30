@@ -338,6 +338,11 @@ RUNNINGHUB_DEFAULT_BASE_URL = "https://www.runninghub.cn"
 RUNNINGHUB_OPENAPI_BASE_URL = "https://www.runninghub.cn/openapi/v2"
 RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
 RUNNINGHUB_LLM_BASE_URL = "https://llm.runninghub.cn/v1"
+RUNNINGHUB_REMOTE_REFERENCE_CACHE_TTL = 10 * 60
+RUNNINGHUB_REFERENCE_CACHE_MAX = 256
+RUNNINGHUB_REFERENCE_CACHE: Dict[str, Dict[str, Any]] = {}
+RUNNINGHUB_REFERENCE_UPLOADS: Dict[str, asyncio.Task] = {}
+RUNNINGHUB_REFERENCE_CACHE_LOCK = RLock()
 RUNNINGHUB_FILE_HOST_REWRITES = {
     "rh-images-1252422369.cos.ap-beijing.myqcloud.com": "rh-images.xiaoyaoyou.com",
 }
@@ -11090,16 +11095,56 @@ def runninghub_extract_image(raw):
         image["value"] = rewrite_runninghub_file_url(image.get("value"))
     return image
 
-async def runninghub_upload_reference(client, provider, ref):
-    path = output_file_from_url(ref.get("url", ""))
-    if not path:
-        value = ref.get("url", "")
-        return value if str(value).startswith(("http://", "https://")) else ""
+def runninghub_reference_account_hash(provider):
+    account_key = runninghub_api_key(provider, use_wallet=True)
+    return hashlib.sha256(account_key.encode("utf-8")).hexdigest()[:16]
+
+def runninghub_reference_cache_key(provider, content):
+    account_hash = runninghub_reference_account_hash(provider)
+    content_hash = hashlib.sha256(content).hexdigest()
+    return f"{account_hash}:{content_hash}"
+
+def runninghub_reference_source_cache_key(provider, source):
+    account_hash = runninghub_reference_account_hash(provider)
+    source_hash = hashlib.sha256(str(source).encode("utf-8")).hexdigest()
+    return f"{account_hash}:source:{source_hash}"
+
+def runninghub_reference_cache_get(cache_key):
+    now = time.monotonic()
+    with RUNNINGHUB_REFERENCE_CACHE_LOCK:
+        expired = [
+            key for key, item in RUNNINGHUB_REFERENCE_CACHE.items()
+            if float(item.get("expires_at") or 0) > 0
+            and float(item.get("expires_at") or 0) <= now
+        ]
+        for key in expired:
+            RUNNINGHUB_REFERENCE_CACHE.pop(key, None)
+        item = RUNNINGHUB_REFERENCE_CACHE.get(cache_key)
+        return str(item.get("url") or "") if item else ""
+
+def runninghub_reference_cache_put(cache_key, url, ttl=None):
+    now = time.monotonic()
+    expires_at = now + max(1, float(ttl)) if ttl is not None else 0.0
+    with RUNNINGHUB_REFERENCE_CACHE_LOCK:
+        RUNNINGHUB_REFERENCE_CACHE[cache_key] = {
+            "url": str(url),
+            "expires_at": expires_at,
+            "used_at": now,
+        }
+        if len(RUNNINGHUB_REFERENCE_CACHE) > RUNNINGHUB_REFERENCE_CACHE_MAX:
+            oldest = min(
+                RUNNINGHUB_REFERENCE_CACHE,
+                key=lambda key: float(RUNNINGHUB_REFERENCE_CACHE[key].get("used_at") or 0),
+            )
+            RUNNINGHUB_REFERENCE_CACHE.pop(oldest, None)
+
+async def runninghub_upload_reference_content(
+    client, provider, cache_key, source_cache_key, filename, content, content_type, source_cache_ttl
+):
     upload_url = runninghub_openapi_url(provider, "media/upload/binary")
     headers = {"Authorization": bearer_auth_value(runninghub_api_key(provider, use_wallet=True)), "Accept": "application/json"}
-    with open(path, "rb") as fh:
-        files = {"file": (os.path.basename(path), fh, content_type_for_path(path))}
-        response = await client.post(upload_url, headers=headers, files=files, timeout=120)
+    files = {"file": (filename, content, content_type)}
+    response = await client.post(upload_url, headers=headers, files=files, timeout=120)
     response.raise_for_status()
     raw = response.json()
     data = raw.get("data") if isinstance(raw, dict) else None
@@ -11109,8 +11154,112 @@ async def runninghub_upload_reference(client, provider, ref):
             continue
         value = item.get("download_url") or item.get("downloadUrl") or item.get("url") or item.get("fileUrl") or item.get("file_url")
         if value:
-            return str(value)
+            result = str(value)
+            # Content-addressed entries live for this server process. If
+            # RunningHub later rejects the asset, the guarded submit retry
+            # evicts it and uploads the same bytes again once.
+            runninghub_reference_cache_put(cache_key, result)
+            if source_cache_key:
+                runninghub_reference_cache_put(source_cache_key, result, source_cache_ttl)
+            return result
     raise HTTPException(status_code=502, detail=f"RunningHub 上传图片未返回 download_url：{raw}")
+
+async def runninghub_upload_reference(client, provider, ref, force_refresh=False):
+    value = str(ref.get("url", "") if isinstance(ref, dict) else ref or "").strip()
+    if not value:
+        return ""
+    path = output_file_from_url(value)
+    source_cache_key = ""
+    source_cache_ttl = None
+    if path:
+        stat = os.stat(path)
+        source_cache_key = runninghub_reference_source_cache_key(
+            provider,
+            f"local:{os.path.abspath(path)}:{stat.st_size}:{stat.st_mtime_ns}",
+        )
+    elif value.startswith(("http://", "https://")):
+        # This shortcut avoids downloading the same authenticated or temporary
+        # remote image again during the bounded cache window.
+        source_cache_key = runninghub_reference_source_cache_key(provider, f"remote:{value}")
+        source_cache_ttl = RUNNINGHUB_REMOTE_REFERENCE_CACHE_TTL
+    if source_cache_key and not force_refresh:
+        cached = runninghub_reference_cache_get(source_cache_key)
+        if cached:
+            return cached
+    content = None
+    filename = "reference-image"
+    content_type = "application/octet-stream"
+    if path:
+        filename = os.path.basename(path)
+        content_type = content_type_for_path(path)
+        with open(path, "rb") as fh:
+            content = fh.read()
+    elif value.startswith(("http://", "https://")):
+        # Do not pass the original URL through to RunningHub. Canvas references can
+        # be localhost/LAN URLs, expiring proxy URLs, or authenticated media URLs.
+        # RunningHub may accept the task but fail to fetch such a URL, silently
+        # degrading image editing into text-to-image.
+        response = await client.get(value, follow_redirects=True, timeout=120)
+        response.raise_for_status()
+        content = response.content
+        content_type = (response.headers.get("content-type") or content_type).split(";", 1)[0].strip()
+        filename = os.path.basename(urllib.parse.urlsplit(str(response.url)).path) or filename
+    else:
+        raise HTTPException(status_code=400, detail=f"RunningHub 无法读取参考图：{value[:160]}")
+    if not content:
+        raise HTTPException(status_code=400, detail="RunningHub 参考图为空，已停止生成")
+    if not content_type.startswith("image/"):
+        try:
+            with Image.open(BytesIO(content)) as image:
+                detected = Image.MIME.get(image.format)
+            if detected:
+                content_type = detected
+        except Exception:
+            pass
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail=f"RunningHub 参考图不是有效图片（{content_type}），已停止生成")
+    cache_key = runninghub_reference_cache_key(provider, content)
+    if force_refresh:
+        with RUNNINGHUB_REFERENCE_CACHE_LOCK:
+            RUNNINGHUB_REFERENCE_CACHE.pop(cache_key, None)
+            if source_cache_key:
+                RUNNINGHUB_REFERENCE_CACHE.pop(source_cache_key, None)
+    cached = "" if force_refresh else runninghub_reference_cache_get(cache_key)
+    if cached:
+        if source_cache_key:
+            runninghub_reference_cache_put(source_cache_key, cached, source_cache_ttl)
+        return cached
+    with RUNNINGHUB_REFERENCE_CACHE_LOCK:
+        pending = RUNNINGHUB_REFERENCE_UPLOADS.get(cache_key)
+        if pending is None:
+            pending = asyncio.create_task(
+                runninghub_upload_reference_content(
+                    client, provider, cache_key, source_cache_key, filename, content, content_type, source_cache_ttl
+                )
+            )
+            RUNNINGHUB_REFERENCE_UPLOADS[cache_key] = pending
+    try:
+        return await asyncio.shield(pending)
+    finally:
+        if pending.done():
+            with RUNNINGHUB_REFERENCE_CACHE_LOCK:
+                if RUNNINGHUB_REFERENCE_UPLOADS.get(cache_key) is pending:
+                    RUNNINGHUB_REFERENCE_UPLOADS.pop(cache_key, None)
+
+def runninghub_reference_reupload_needed(response, raw):
+    if isinstance(raw, dict) and runninghub_extract_task_id(raw):
+        return False
+    if not response or response.status_code < 400:
+        code = str(raw.get("code") or raw.get("errorCode") or "") if isinstance(raw, dict) else ""
+        if code in {"", "0", "200"}:
+            return False
+    text = json.dumps(raw, ensure_ascii=False).lower() if isinstance(raw, (dict, list)) else str(raw or "").lower()
+    asset_terms = ("image", "reference", "media", "file", "url", "图片", "参考图", "素材", "文件")
+    invalid_terms = (
+        "expired", "expire", "not found", "does not exist", "unavailable", "invalid url",
+        "过期", "不存在", "无效", "不可用", "找不到",
+    )
+    return any(term in text for term in asset_terms) and any(term in text for term in invalid_terms)
 
 async def wait_for_runninghub_image_task(client, provider, task_id):
     query_url = runninghub_openapi_url(provider, "query")
@@ -11540,22 +11689,40 @@ async def generate_runninghub_provider_image(prompt, size, model, reference_imag
     if quality_field:
         body["quality"] = runninghub_schema_value(quality_field, "medium")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=1800.0, write=180.0, pool=20.0)) as client:
-        image_urls = []
-        for ref in (reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX]:
-            url = await runninghub_upload_reference(client, provider, ref)
-            if url:
-                image_urls.append(url)
+        refs_to_upload = list((reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX])
+        async def upload_references(force_refresh=False):
+            urls = []
+            for ref in refs_to_upload:
+                url = await runninghub_upload_reference(client, provider, ref, force_refresh=force_refresh)
+                if url:
+                    urls.append(url)
+            return urls
+        image_urls = await upload_references()
+        image_key = ""
+        image_multiple = False
         if image_urls:
             image_field = runninghub_schema_field(params, "imageUrls", "imageUrl", "images", "image")
-            key = str((image_field or {}).get("fieldKey") or "imageUrls")
-            if key.endswith("s") or (image_field or {}).get("multipleInputs") is True:
-                body[key] = image_urls
+            image_key = str((image_field or {}).get("fieldKey") or "imageUrls")
+            image_multiple = image_key.endswith("s") or (image_field or {}).get("multipleInputs") is True
+            if image_multiple:
+                body[image_key] = image_urls
             else:
-                body[key] = image_urls[0]
+                body[image_key] = image_urls[0]
         runninghub_apply_schema_defaults(body, params)
         response = await client.post(endpoint, headers=runninghub_json_headers(provider), json=body)
+        try:
+            raw = response.json()
+        except Exception:
+            raw = {"message": response.text}
+        if image_urls and runninghub_reference_reupload_needed(response, raw):
+            image_urls = await upload_references(force_refresh=True)
+            body[image_key] = image_urls if image_multiple else image_urls[0]
+            response = await client.post(endpoint, headers=runninghub_json_headers(provider), json=body)
+            try:
+                raw = response.json()
+            except Exception:
+                raw = {"message": response.text}
         response.raise_for_status()
-        raw = response.json()
         try:
             return runninghub_extract_image(raw), raw
         except HTTPException:
