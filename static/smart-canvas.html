@@ -19,7 +19,7 @@
     <script src="/static/vendor/js/lucide.js?v=2026.07.28.1.1783969806"></script>
     <script src="/static/js/theme.js?v=2026.07.28.1.1783969806"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.28.1.1783969806"></script>
-    <script src="/static/js/i18n.js?v=2026.07.28.1.1785255256"></script>
+    <script src="/static/js/i18n.js?v=2026.07.30.preview-generation-meta.1"></script>
     <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.28.1.1785255256">
 </head>
 <body>
@@ -460,6 +460,20 @@
                             <button id="compareToggleBtn" class="compare-toggle" type="button" onclick="togglePreviewCompare()" style="display:none"><i data-lucide="columns-2" class="w-4 h-4"></i><span data-i18n="smart.compareSource">对比原图</span></button>
                         </div>
                     </div>
+                </div>
+                <div id="previewGenerationPanel" class="preview-generation-panel" style="display:none">
+                    <div class="preview-generation-source">
+                        <span class="preview-generation-label" data-i18n="smart.previewSource">????</span>
+                        <span id="previewGenerationSource" class="preview-generation-value">-</span>
+                    </div>
+                    <div class="preview-generation-prompt">
+                        <span class="preview-generation-label" data-i18n="smart.previewPrompt">???</span>
+                        <div id="previewGenerationPrompt" class="preview-generation-prompt-text"></div>
+                    </div>
+                    <button id="previewReproduceBtn" class="preview-reproduce-btn" type="button" onclick="reproducePreviewWorkflow()">
+                        <i data-lucide="workflow" class="w-4 h-4"></i>
+                        <span data-i18n="smart.previewReproduce">????</span>
+                    </button>
                 </div>
                 <div class="image-edit-actions">
                     <span id="imageEditZoomLabel" style="color:#94a3b8;font-size:11px;font-weight:800;padding:0 4px;margin-right:auto;cursor:pointer;user-select:none" title="双击重置缩放" ondblclick="resetImageEditZoom()">100%</span>

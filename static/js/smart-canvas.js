@@ -10940,6 +10940,142 @@ function refreshComparePanel(){
     const isPreviewMode = imageEditMode === 'preview';
     if(panoramaToggle){
         panoramaToggle.style.display = isPreviewMode && !isVideoPreview ? 'inline-flex' : 'none';
+function previewGenerationSourceLabel(node){
+    const source = node?.runSettings || {};
+    const engine = String(source.engine || '').toLowerCase();
+    if(!Object.keys(source).length) return tr('smart.previewUnknownSource');
+    if(engine === 'comfy'){
+        if(source.comfyMode === 'zimage') return 'ComfyUI ? Z-Image';
+        if(source.comfyMode === 'enhance') return 'ComfyUI ? Z-Image Enhance';
+        if(source.comfyMode === 'edit') return 'ComfyUI ? Image Edit';
+        const workflow = comfyWorkflows.find(item => item.name === source.comfyWorkflow);
+        return `ComfyUI ? ${workflow?.title || source.comfyWorkflow || tr('smart.workflow')}`;
+    }
+    if(engine === 'runninghub'){
+        const parsed = parseRunningHubEntryKey(source.rhConfigKey || '');
+        const match = parsed ? runningHubAllEntries().find(item => item.kind === parsed.kind && item.id === parsed.id) : null;
+        const kind = parsed?.kind === 'workflow' ? tr('smart.workflow') : (parsed?.kind === 'app' ? 'AI App' : tr('smart.model'));
+        return `RunningHub ? ${match ? runningHubEntryLabel(match.entry, match.kind) : (parsed?.id ? `${kind} ${parsed.id}` : kind)}`;
+    }
+    if(engine === 'modelscope'){
+        const model = source.msgenModel === 'custom' ? source.msCustomModel : source.msgenModel;
+        return `ModelScope ? ${model || 'Z-Image'}`;
+    }
+    if(engine === 'volcengine'){
+        const model = source.apiKind === 'video' ? source.videoModel : source.model;
+        return `${volcengineProvider()?.name || '????'}${model ? ` ? ${model}` : ''}`;
+    }
+    const isVideo = source.apiKind === 'video';
+    const providerId = isVideo ? source.videoProvider : source.provider_id;
+    const provider = isVideo ? videoProviderById(providerId) : apiProviderById(providerId);
+    const model = isVideo ? source.videoModel : source.model;
+    return [provider?.name || providerId || (engine ? engine.toUpperCase() : ''), model].filter(Boolean).join(' ? ') || tr('smart.previewUnknownSource');
+}
+function updatePreviewGenerationPanel(){
+    const panel = document.getElementById('previewGenerationPanel');
+    const sourceEl = document.getElementById('previewGenerationSource');
+    const promptEl = document.getElementById('previewGenerationPrompt');
+    const reproduceBtn = document.getElementById('previewReproduceBtn');
+    if(!panel || !sourceEl || !promptEl || !reproduceBtn) return;
+    const editing = currentEditImage();
+    const node = editing.node;
+    const show = imageEditMode === 'preview' && Boolean(node);
+    panel.style.display = show ? 'grid' : 'none';
+    if(!show) return;
+    const prompt = String(node.runPrompt || node.promptDraftText || '').trim();
+    sourceEl.textContent = previewGenerationSourceLabel(node);
+    sourceEl.title = sourceEl.textContent;
+    promptEl.textContent = prompt || tr('smart.previewEmptyPrompt');
+    promptEl.classList.toggle('is-empty', !prompt);
+    reproduceBtn.disabled = !node.runSettings || !Object.keys(node.runSettings).length;
+    reproduceBtn.title = reproduceBtn.disabled ? tr('smart.previewCannotReproduce') : tr('smart.previewReproduce');
+}
+function previewWorkflowPlacement(width, height){
+    const center = viewportCenter();
+    const stepX = Math.max(520, width + 90);
+    const stepY = Math.max(360, height + 90);
+    const offsets = [{x:0,y:0},{x:stepX,y:0},{x:-stepX,y:0},{x:0,y:stepY},{x:0,y:-stepY},{x:stepX,y:stepY},{x:-stepX,y:stepY},{x:stepX,y:-stepY},{x:-stepX,y:-stepY}];
+    for(let ring=2; ring<=7; ring++){
+        offsets.push({x:ring * stepX,y:0},{x:-ring * stepX,y:0},{x:0,y:ring * stepY},{x:0,y:-ring * stepY});
+    }
+    for(const offset of offsets){
+        const box = {x:center.x + offset.x - width / 2, y:center.y + offset.y - height / 2, width, height};
+        const occupied = nodes.some(node => {
+            if(node.id === SMART_LOG_PREVIEW_NODE_ID) return false;
+            const rect = nodeRect(node);
+            return box.x < rect.x + rect.width + 44 && box.x + box.width + 44 > rect.x
+                && box.y < rect.y + rect.height + 44 && box.y + box.height + 44 > rect.y;
+        });
+        if(!occupied) return {x:box.x, y:box.y};
+    }
+    return {x:center.x + stepX, y:center.y - height / 2};
+}
+function reproducePreviewWorkflow(){
+    const editing = currentEditImage();
+    const sourceNode = editing.node;
+    if(!sourceNode?.runSettings || !Object.keys(sourceNode.runSettings).length){
+        toast(tr('smart.previewCannotReproduce'));
+        return;
+    }
+    const refs = (Array.isArray(sourceNode.runInputRefs) ? sourceNode.runInputRefs : [])
+        .filter(ref => ref?.url)
+        .filter((ref, index, list) => list.findIndex(item => item.url === ref.url) === index);
+    const prompt = String(sourceNode.runPrompt || sourceNode.promptDraftText || '').trim();
+    const inputCount = Math.max(1, refs.length);
+    const workflowHeight = Math.max(260, inputCount * 190);
+    const origin = previewWorkflowPlacement(960, workflowHeight);
+    pushUndo();
+    const created = [];
+    const inputNodes = refs.map((ref, index) => {
+        const item = imageForDisplay({...ref, name:ref.name || smartImageNameFromUrl(ref.url)});
+        const node = {
+            id:uid('upload'), type:'smart-image-upload', x:Math.round(origin.x), y:Math.round(origin.y + index * 190),
+            title:ref.name || tr('smart.createImportNode'), images:[item], activeImageIndex:0, created_at:Date.now()
+        };
+        node.scale = mediaNodeDefaultScale(node);
+        nodes.push(node);
+        localUnsyncedNodeIds.add(node.id);
+        created.push(node);
+        return node;
+    });
+    let promptNode = null;
+    if(prompt){
+        promptNode = {
+            id:uid('prompt'), type:'smart-prompt', x:Math.round(origin.x + 330), y:Math.round(origin.y),
+            w:316, h:240, title:'Prompt', text:prompt, promptSeparator:';', promptSplitEnabled:false,
+            llmEnabled:false, llmProvider:resolveChatProviderId(), llmModel:resolveChatModel(),
+            llmSystemEnabled:false, llmSystemPrompt:'You are a helpful prompt assistant.', llmInstruction:'', created_at:Date.now()
+        };
+        nodes.push(promptNode);
+        localUnsyncedNodeIds.add(promptNode.id);
+        created.push(promptNode);
+    }
+    const kind = String(sourceNode.runSettings.apiKind || sourceNode.outputKind || '').toLowerCase() === 'video' ? 'video' : 'image';
+    const generationNode = {
+        id:uid(kind === 'video' ? 'video' : 'generate'),
+        type:kind === 'video' ? 'smart-video-generation' : 'smart-image-generation',
+        x:Math.round(origin.x + 690), y:Math.round(origin.y), title:kind === 'video' ? '????' : '????',
+        images:[], activeImageIndex:0, runSettings:cloneSmartSettings(sourceNode.runSettings),
+        runPrompt:prompt, promptDraftText:prompt, promptDraftHtml:escapeHtml(prompt),
+        inputNodeIds:[...inputNodes.map(node => node.id), ...(promptNode ? [promptNode.id] : [])],
+        created_at:Date.now(), scale:MEDIA_NODE_DEFAULT_SCALE
+    };
+    nodes.push(generationNode);
+    created.push(generationNode);
+    canvas.connections = canvas.connections || [];
+    [...inputNodes, ...(promptNode ? [promptNode] : [])].forEach(node => {
+        canvas.connections.push({from:node.id, to:generationNode.id, kind:'input'});
+    });
+    selectedId = generationNode.id;
+    selectedIds = created.length > 1 ? created.map(node => node.id) : [];
+    selectedImage = {nodeId:'', index:-1};
+    closeImageEditor();
+    render();
+    updateComposer();
+    scheduleSave();
+    centerViewportOnWorldPoint({x:origin.x + 480, y:origin.y + workflowHeight / 2});
+    toast(tr('smart.previewReproduced'));
+}
         panoramaToggle.classList.toggle('active', panoramaState.enabled);
     }
     if(!isPreviewMode && panoramaState.enabled) disposePanoramaPreview();
@@ -10951,6 +11087,7 @@ function refreshComparePanel(){
         if(compareLayer) compareLayer.style.display = 'none';
         if(compareHandle) compareHandle.style.display = 'none';
         if(thumbsEl){ thumbsEl.style.display = 'none'; thumbsEl.innerHTML = ''; }
+    updatePreviewGenerationPanel();
         if(toggle) toggle.classList.remove('active');
         updatePreviewMetaHint(tr('smart.panoramaHint'));
         return;
