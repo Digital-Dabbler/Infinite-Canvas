@@ -150,6 +150,7 @@ Infinite Canvas 是一个本地优先的 AI 创作工作台：单个 FastAPI 服
 - 不要读取、打印、复制到日志或响应中，也不要在补丁、示例或测试夹具中写入真实 API Key、访问密钥、Cookie、令牌或 Codex 认证文件。
 - 修改平台配置时保留“返回掩码/存在状态而非密钥原文”的设计。
 - 外部生成接口可能收费。除非任务需要且用户已授权，不要用真实 Key 运行批量或高质量生成测试。
+- RunningHub 的企业级共享（账户余额）Key 调用旧 `/task/openapi/*` 工作流接口时必须保留 Bearer-only 兼容回退：若带 `apiKey` 的请求返回 `ApiKey verification failed`，应去掉 body/form 中的 `apiKey` 后仅通过 `Authorization: Bearer ...` 重试。素材上传、任务提交和结果查询必须使用同一 `useWallet` 选择，不能在轮询阶段退回 RH 币 Key。修改这些调用时运行 `tests/test_runninghub_wallet_auth.py`，不要删除此兼容分支。
 - Codex 图片路径优先解析 Windows 原生 `gpt-image-2-skill.exe`，避免 npm `.CMD` 包装器误解析复杂参数。Codex helper 的尺寸值使用 `auto`、`2K`、`4K` 或明确的 `WIDTHxHEIGHT`；不要传 `1K`。低成本冒烟测试使用 `size=auto`、`quality=low`。
 - 即梦状态同时受 CLI 安装版本、登录会话和本地子进程影响；先调用状态接口再改生成逻辑。
 
