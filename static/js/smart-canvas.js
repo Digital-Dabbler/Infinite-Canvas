@@ -8210,19 +8210,20 @@ function nodeBodyHtml(node, layout){
         return imageTaskRecoverBodyHtml(node, recoverTask, layout);
     }
     if(node.queued && imgs.length === 0 && !node.pending){
-        return `<div class="loading-cell single queued" style="width:${layout.width}px;height:${layout.height}px"></div>`;
+        return generationPendingCellHtml({queued:true, single:true, width:layout.width, height:layout.height});
     }
     if(node.pending && imgs.length === 0){
         const count = Math.max(1, Number(node.pending) || 1);
-        if(count <= 1) return `<div class="loading-cell single" style="width:${layout.width}px;height:${layout.height}px"></div>`;
+        if(count <= 1) return generationPendingCellHtml({single:true, width:layout.width, height:layout.height});
         const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(count))));
         const rows = Math.ceil(count / cols);
-        return `<div class="loading-skeleton" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => `<div class="loading-cell"></div>`).join('')}</div>`;
+        return `<div class="loading-skeleton generation-pending-grid" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => generationPendingCellHtml({compact:true})).join('')}</div>`;
     }
     if(isSmartGenerationNode(node) && imgs.length){
         const activeIndex = Math.max(0, Math.min(imgs.length - 1, Number(node.activeImageIndex) || 0));
         node.activeImageIndex = activeIndex;
         const active = imgs[activeIndex];
+        const isAppending = Boolean(node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length);
         const stack = Math.min(3, Math.max(0, imgs.length - 1));
         const mediaHeight = Number(layout.mediaHeight) || layout.height;
         const thumbHtml = imgs.map((img, index) => `<button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img)}</button>`).join('');
@@ -8230,6 +8231,7 @@ function nodeBodyHtml(node, layout){
             <div class="generation-result-stack" style="--result-stack:${stack}">
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer layer-${index + 1}"></span>`).join('')}
                 <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${mediaHeight}px">${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}</div>
+                ${isAppending ? generationPendingCellHtml({overlay:true, queued:Boolean(node.queued && !node.pending)}) : ''}
                 ${imgs.length > 1 ? `<div class="generation-result-count">${imgs.length} 张</div><button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
             </div>
             ${imgs.length > 1 ? `<div class="generation-result-strip">${thumbHtml}</div>` : ''}
@@ -8246,6 +8248,15 @@ function nodeBodyHtml(node, layout){
         <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
         <span class="upload-node-title">${escapeHtml(tr('smart.createImportNode'))}</span>
         <span class="upload-node-sub">拖拽 / 粘贴 / 点击上传</span>
+    </div>`;
+}
+function generationPendingCellHtml(options={}){
+    const label = options.queued ? tr('smart.waitQueued') : tr('smart.waitCreating');
+    const style = options.single ? ` style="width:${options.width}px;height:${options.height}px"` : '';
+    return `<div class="loading-cell generation-pending-cell${options.single ? ' single' : ''}${options.compact ? ' compact' : ''}${options.overlay ? ' overlay' : ''}${options.queued ? ' queued' : ''}"${style} aria-label="${escapeAttr(label)}" role="status">
+        <span class="generation-pending-beam"></span>
+        <span class="generation-pending-orbit"><span class="generation-pending-core"></span></span>
+        <span class="generation-pending-copy"><strong>${escapeHtml(label)}</strong>${options.compact ? '' : `<small>${escapeHtml(tr('smart.waitSub'))}</small>`}</span>
     </div>`;
 }
 function jimengPendingBodyHtml(node, layout){
