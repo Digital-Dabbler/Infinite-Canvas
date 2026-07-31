@@ -3062,6 +3062,219 @@ async def admin_usage_models(request: Request):
     ]
     return {"user_id": user_id, "total": len(events), "models": models}
 
+def usage_analytics_model_label(item):
+    provider = str(item.get("provider") or "").strip()
+    model = str(item.get("model") or "").strip()
+    return " / ".join(value for value in (provider, model) if value) or str(item.get("function") or "").strip() or "未标明模型"
+
+def usage_analytics_workflow_label(item):
+    provider = str(item.get("provider") or "").strip().lower()
+    model = str(item.get("model") or "").strip()
+    params = item.get("params") if isinstance(item.get("params"), dict) else {}
+    entry = str(params.get("entry") or "").strip().lower()
+    workflow = str(params.get("workflow") or "").strip()
+    lower_model = model.lower()
+    if provider == "comfyui":
+        return f"ComfyUI · {workflow or model or '未标明工作流'}"
+    if lower_model.startswith("workflow:"):
+        return f"RunningHub 工作流 · {model.split(':', 1)[1] or '未标明'}"
+    if lower_model.startswith("app:"):
+        return f"RunningHub 应用 · {model.split(':', 1)[1] or '未标明'}"
+    if "runninghub/workflow-submit" in entry:
+        return f"RunningHub 工作流 · {workflow or model or '未标明'}"
+    if "runninghub/submit" in entry:
+        return f"RunningHub 应用 · {model or '未标明'}"
+    if workflow:
+        return f"工作流 · {workflow}"
+    return ""
+
+def usage_analytics_application_label(item):
+    params = item.get("params") if isinstance(item.get("params"), dict) else {}
+    entry = str(params.get("entry") or "").strip()
+    client_source = str(item.get("client_source") or "web").strip()
+    if client_source == "photoshop":
+        return "Photoshop 插件"
+    if client_source == "chrome-extension":
+        return "浏览器扩展"
+    labels = {
+        "canvas": "画布",
+        "generate": "工作流生成",
+        "chat": "GPT 对话",
+        "chat-agent": "GPT 对话 · Agent",
+        "chat-stream": "GPT 对话 · 流式",
+        "/api/runninghub/submit": "RunningHub 应用",
+        "/api/runninghub/workflow-submit": "RunningHub 工作流",
+        "/api/angle/generate": "视角控制",
+        "/api/ms/generate": "ModelScope 工具",
+    }
+    return labels.get(entry, entry or "网页工具")
+
+def usage_analytics_provider_label(item):
+    provider = str(item.get("provider") or "").strip()
+    return provider or "未标明服务"
+
+def usage_analytics_breakdown(events, labeler, limit=10):
+    counts = {}
+    for item in events:
+        label = str(labeler(item) or "").strip()
+        if label:
+            counts[label] = counts.get(label, 0) + 1
+    ordered = sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))
+    safe_limit = max(1, min(20, int(limit or 10)))
+    rows = [{"label": label, "count": count} for label, count in ordered[:safe_limit]]
+    other = sum(count for _, count in ordered[safe_limit:])
+    if other:
+        rows.append({"label": "其他", "count": other, "is_other": True})
+    total = sum(counts.values())
+    for row in rows:
+        row["share"] = round(row["count"] / total, 6) if total else 0
+    return {"total": total, "items": rows, "distinct": len(counts)}
+
+@app.get("/api/admin/usage/analytics")
+async def admin_usage_analytics(request: Request):
+    require_admin(request)
+    events = usage_events()
+    start_at = str(request.query_params.get("start_at") or "").strip()
+    end_at = str(request.query_params.get("end_at") or "").strip()
+    if start_at:
+        events = [item for item in events if str(item.get("created_at_iso") or "") >= start_at]
+    if end_at:
+        events = [item for item in events if str(item.get("created_at_iso") or "") <= end_at]
+
+    user_limit = max(3, min(25, int(request.query_params.get("user_limit") or 10)))
+    model_limit = max(3, min(12, int(request.query_params.get("model_limit") or 6)))
+    dimension_limit = max(3, min(20, int(request.query_params.get("dimension_limit") or 10)))
+    bucket_minutes = max(1, min(1440, int(request.query_params.get("bucket_minutes") or 10)))
+    selected_user_id = str(request.query_params.get("selected_user_id") or "").strip()
+
+    summary = {"total": len(events), "succeeded": 0, "failed": 0, "queued": 0, "average_duration_ms": 0}
+    duration_total = 0
+    for item in events:
+        status = str(item.get("status") or "")
+        if status in ("succeeded", "failed", "queued"):
+            summary[status] += 1
+        duration_total += max(0, int(item.get("duration_ms") or 0))
+    if events:
+        summary["average_duration_ms"] = round(duration_total / len(events))
+
+    buckets = {}
+    for item in events:
+        try:
+            created = datetime.datetime.fromtimestamp(float(item.get("created_at") or 0))
+        except (TypeError, ValueError, OSError):
+            continue
+        minute = created.minute - (created.minute % bucket_minutes)
+        bucket_at = created.replace(minute=minute, second=0, microsecond=0).isoformat(timespec="minutes")
+        bucket = buckets.setdefault(bucket_at, {"at": bucket_at, "succeeded": 0, "failed": 0, "queued": 0})
+        status = str(item.get("status") or "")
+        if status in ("succeeded", "failed", "queued"):
+            bucket[status] += 1
+
+    user_groups = {}
+    for item in events:
+        user_id = str(item.get("user_id") or item.get("username") or "unknown")
+        group = user_groups.setdefault(user_id, {
+            "user_id": user_id,
+            "username": str(item.get("username") or ""),
+            "name": str(item.get("name") or item.get("username") or "未知用户"),
+            "department": str(item.get("department") or ""),
+            "events": [],
+        })
+        group["events"].append(item)
+    ordered_users = sorted(user_groups.values(), key=lambda group: (-len(group["events"]), group["name"], group["username"]))
+    top_model_counts = {}
+    for item in events:
+        label = usage_analytics_model_label(item)
+        top_model_counts[label] = top_model_counts.get(label, 0) + 1
+    top_models = [label for label, _ in sorted(top_model_counts.items(), key=lambda pair: (-pair[1], pair[0]))[:model_limit]]
+
+    def analytics_user_row(group, is_other=False):
+        rows = group["events"]
+        model_counts = {label: 0 for label in top_models}
+        other_models = 0
+        failed = 0
+        for item in rows:
+            label = usage_analytics_model_label(item)
+            if label in model_counts:
+                model_counts[label] += 1
+            else:
+                other_models += 1
+            if item.get("status") == "failed":
+                failed += 1
+        models = [{"label": label, "count": model_counts[label]} for label in top_models if model_counts[label]]
+        if other_models:
+            models.append({"label": "其他模型", "count": other_models, "is_other": True})
+        return {
+            "user_id": group["user_id"], "username": group["username"], "name": group["name"], "department": group["department"],
+            "count": len(rows), "share": round(len(rows) / len(events), 6) if events else 0,
+            "failed": failed, "success_rate": round((len(rows) - failed) / len(rows), 6) if rows else 0,
+            "models": models, "is_other": is_other,
+        }
+
+    visible_groups = list(ordered_users[:user_limit])
+    selected_group = user_groups.get(selected_user_id) if selected_user_id else None
+    if selected_group and selected_group not in visible_groups:
+        visible_groups.append(selected_group)
+    user_rows = [analytics_user_row(group) for group in visible_groups]
+    hidden_group_ids = {group["user_id"] for group in visible_groups}
+    other_groups = [group for group in ordered_users if group["user_id"] not in hidden_group_ids]
+    if other_groups:
+        other_group = {
+            "user_id": "__other__", "username": "", "name": f"其他 {len(other_groups)} 位用户", "department": "",
+            "events": [item for group in other_groups for item in group["events"]],
+        }
+        user_rows.append(analytics_user_row(other_group, True))
+
+    scoped_events = selected_group["events"] if selected_group else events
+    selected_user = None
+    if selected_group:
+        selected_user = {
+            "user_id": selected_group["user_id"], "username": selected_group["username"],
+            "name": selected_group["name"], "department": selected_group["department"],
+        }
+    health_groups = {}
+    for item in events:
+        label = usage_analytics_model_label(item)
+        group = health_groups.setdefault(label, {"label": label, "total": 0, "succeeded": 0, "failed": 0, "queued": 0, "durations": []})
+        group["total"] += 1
+        status = str(item.get("status") or "")
+        if status in ("succeeded", "failed", "queued"):
+            group[status] += 1
+        duration = max(0, int(item.get("duration_ms") or 0))
+        if duration:
+            group["durations"].append(duration)
+    health_rows = []
+    for group in health_groups.values():
+        durations = sorted(group.pop("durations"))
+        p95_index = max(0, math.ceil(len(durations) * 0.95) - 1) if durations else 0
+        group["p95_duration_ms"] = durations[p95_index] if durations else 0
+        group["success_rate"] = round(group["succeeded"] / group["total"], 6) if group["total"] else 0
+        group["failure_rate"] = round(group["failed"] / group["total"], 6) if group["total"] else 0
+        health_rows.append(group)
+    health_rows.sort(key=lambda group: (
+        -(1 if group["failed"] or group["queued"] else 0),
+        -group["failure_rate"],
+        -group["queued"],
+        -group["p95_duration_ms"],
+        -group["total"],
+        group["label"],
+    ))
+    dimensions = {
+        "models": usage_analytics_breakdown(scoped_events, usage_analytics_model_label, dimension_limit),
+        "workflows": usage_analytics_breakdown(scoped_events, usage_analytics_workflow_label, dimension_limit),
+        "applications": usage_analytics_breakdown(scoped_events, usage_analytics_application_label, dimension_limit),
+        "providers": usage_analytics_breakdown(scoped_events, usage_analytics_provider_label, dimension_limit),
+    }
+    return {
+        "range": {"start_at": start_at, "end_at": end_at, "bucket_minutes": bucket_minutes},
+        "summary": summary,
+        "trend": [buckets[key] for key in sorted(buckets)],
+        "users": {"total": len(ordered_users), "items": user_rows, "top_models": top_models},
+        "selected_user": selected_user,
+        "health": {"total": len(health_rows), "items": health_rows[:6]},
+        "dimensions": dimensions,
+    }
+
 @app.get("/api/admin/usage/summary")
 async def admin_usage_summary(request: Request):
     require_admin(request)
