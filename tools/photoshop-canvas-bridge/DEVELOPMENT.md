@@ -1,6 +1,6 @@
 # Infinite Canvas Photoshop Bridge 开发基线
 
-> 状态基线：0.2.7
+> 状态基线：0.2.8
 > 记录日期：2026-07-31
 > 适用目录：`tools/photoshop-canvas-bridge/` 及 `main.py` 中的 `/api/photoshop-bridge/*`
 
@@ -155,3 +155,4 @@ Bridge 是独立的 Photoshop CEP 面板，不依赖、不替代现有的 `photo
 | 2026-07-31 | 移除 3 秒收件箱轮询，采用 WebSocket + 心跳 + 重连补拉 | 高频轮询会造成空闲请求、重复渲染，并破坏一键清除语义 |
 | 2026-07-31 | 一键清除仅隐藏当前窗口记录，手动刷新恢复 | 保持操作快速可逆，避免误删跨设备任务历史 |
 | 2026-07-31 | 面板脚本加载时立即按 Adobe 标准事件格式注册 Photoshop Persistent | 关闭或隐藏面板后仍需保留 WebSocket 和自动打开能力，不能要求 UI 常驻 |
+| 2026-07-31 | 读取文档和选区前临时切换 Photoshop 标尺为像素并立即恢复 | CC 2018 在百分比等标尺单位下可能把 `.as("px")` 转成 `NaN`，导致 `null × null` 和无效裁切 |

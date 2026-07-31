@@ -76,7 +76,7 @@ class PhotoshopBridgeTests(unittest.TestCase):
         runtime = root.find("./ExecutionEnvironment/RequiredRuntimeList/RequiredRuntime")
 
         self.assertEqual(root.attrib["Version"], "7.0")
-        self.assertEqual(root.attrib["ExtensionBundleVersion"], "0.2.7")
+        self.assertEqual(root.attrib["ExtensionBundleVersion"], "0.2.8")
         self.assertIsNotNone(runtime)
         self.assertEqual(runtime.attrib["Name"], "CSXS")
         self.assertEqual(runtime.attrib["Version"], "7.0")
@@ -169,6 +169,34 @@ class PhotoshopBridgeTests(unittest.TestCase):
         self.assertIn('scope:"APPLICATION"', cep_source)
         self.assertIn('extensionId:extensionId || "com.daxiong.infinitecanvas.bridge.panel"', cep_source)
         self.assertNotIn("appId:appId", cep_source)
+
+    def test_cc2018_selection_bounds_are_read_with_pixel_rulers_and_validated(self):
+        host_source = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "photoshop-canvas-bridge"
+            / "host"
+            / "index.jsx"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("function bridgePixelNumber(value)", host_source)
+        self.assertGreaterEqual(host_source.count("app.preferences.rulerUnits = Units.PIXELS;"), 2)
+        self.assertGreaterEqual(host_source.count("app.preferences.rulerUnits = previousRulerUnits;"), 2)
+        self.assertIn('throw new Error("无法将 Photoshop 选区边界转换为像素")', host_source)
+        self.assertIn("Math.max(0, Math.min(documentWidth, Math.floor(left)))", host_source)
+        self.assertIn("Math.max(0, Math.min(documentHeight, Math.ceil(bottom)))", host_source)
+
+        app_source = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "photoshop-canvas-bridge"
+            / "client"
+            / "js"
+            / "app.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("function validPixelSelection(bounds)", app_source)
+        self.assertIn('typeof bounds[fields[i]] !== "number"', app_source)
+        self.assertIn("Boolean(lastDocumentState.selectionError)", app_source)
 
     def test_panel_can_switch_users_without_reusing_old_token(self):
         app_path = (

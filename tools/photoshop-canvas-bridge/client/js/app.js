@@ -497,8 +497,21 @@
         el.picker.className = "modal-layer";
         el.picker.setAttribute("aria-hidden", "true");
     }
+    function validPixelSelection(bounds) {
+        if (!bounds) { return false; }
+        var fields = ["left", "top", "right", "bottom", "width", "height"];
+        var i;
+        for (i = 0; i < fields.length; i += 1) {
+            if (typeof bounds[fields[i]] !== "number" || !isFinite(bounds[fields[i]])) { return false; }
+        }
+        return bounds.right > bounds.left && bounds.bottom > bounds.top && bounds.width > 0 && bounds.height > 0;
+    }
     function renderDocumentState(state) {
         lastDocumentState = state || {hasDocument:false, selection:null};
+        if (lastDocumentState.selection && !validPixelSelection(lastDocumentState.selection)) {
+            lastDocumentState.selection = null;
+            lastDocumentState.selectionError = "Photoshop 返回了无效的选区边界，请取消选区后重新选择。";
+        }
         if (!lastDocumentState.hasDocument) {
             el.activeDocument.textContent = "没有活动文档";
             el.scopeText.textContent = "打开文档后即可发送";
@@ -506,6 +519,8 @@
             el.activeDocument.textContent = lastDocumentState.name || "当前 Photoshop 文档";
             if (lastDocumentState.selection) {
                 el.scopeText.textContent = "将按选区 " + lastDocumentState.selection.width + " × " + lastDocumentState.selection.height + " px 裁切";
+            } else if (lastDocumentState.selectionError) {
+                el.scopeText.textContent = lastDocumentState.selectionError;
             } else {
                 el.scopeText.textContent = "将发送整张画布";
             }
@@ -522,7 +537,8 @@
     function renderSendState() {
         var canvas = canvasById(targetCanvasId);
         if (canvas) { el.targetName.textContent = canvas.title || "智能画布"; }
-        el.send.disabled = !connected || !lastDocumentState.hasDocument || !targetCanvasId;
+        el.send.disabled = !connected || !lastDocumentState.hasDocument || !targetCanvasId ||
+            Boolean(lastDocumentState.selectionError);
     }
     function confirmSmallSelection(bounds, continuation) {
         smallSelectionContinue = continuation;
@@ -575,6 +591,7 @@
         cep.call("bridgeDocumentState", []).then(function (state) {
             renderDocumentState(state);
             if (!state.hasDocument) { throw new Error("Photoshop 中没有打开的文档"); }
+            if (state.selectionError) { throw new Error(state.selectionError); }
             var selection = state.selection;
             if (selection && (selection.width < 64 || selection.height < 64)) {
                 confirmSmallSelection(selection, function () { executeSendToCanvas(state); });

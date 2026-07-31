@@ -1,4 +1,4 @@
-# Infinite Canvas Bridge 0.2.7 · Photoshop CEP 面板
+# Infinite Canvas Bridge 0.2.8 · Photoshop CEP 面板
 
 独立的 Photoshop 图像交接面板，不修改也不依赖现有的
 `photoshop-asset-connector` UXP 面板。

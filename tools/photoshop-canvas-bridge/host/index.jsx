@@ -36,24 +36,75 @@ function bridgeError(error) {
     return bridgeJson({error:String(error)});
 }
 
+function bridgePixelNumber(value) {
+    var number = NaN;
+    try {
+        if (value && typeof value.as === "function") {
+            number = Number(value.as("px"));
+        }
+    } catch (ignoreAs) {}
+    if (!isFinite(number)) {
+        try {
+            if (value && typeof value.value !== "undefined") {
+                number = Number(value.value);
+            } else {
+                number = Number(value);
+            }
+        } catch (ignoreValue) {}
+    }
+    return isFinite(number) ? number : null;
+}
+
 function bridgeDocumentInfo(doc) {
-    return {
-        documentId:Number(doc.id),
-        name:String(doc.name),
-        width:Math.round(doc.width.as("px")),
-        height:Math.round(doc.height.as("px"))
-    };
+    var previousRulerUnits = app.preferences.rulerUnits;
+    try {
+        app.preferences.rulerUnits = Units.PIXELS;
+        var width = bridgePixelNumber(doc.width);
+        var height = bridgePixelNumber(doc.height);
+        if (width === null || height === null) {
+            throw new Error("无法读取 Photoshop 文档的像素尺寸");
+        }
+        return {
+            documentId:Number(doc.id),
+            name:String(doc.name),
+            width:Math.round(width),
+            height:Math.round(height)
+        };
+    } finally {
+        app.preferences.rulerUnits = previousRulerUnits;
+    }
 }
 
 function bridgeSelectionBounds(doc) {
+    var previousRulerUnits = app.preferences.rulerUnits;
     try {
-        var bounds = doc.selection.bounds;
+        app.preferences.rulerUnits = Units.PIXELS;
+        var bounds = null;
+        try {
+            bounds = doc.selection.bounds;
+        } catch (noSelection) {
+            return null;
+        }
         if (!bounds || bounds.length < 4) { return null; }
-        var left = Math.round(bounds[0].as("px"));
-        var top = Math.round(bounds[1].as("px"));
-        var right = Math.round(bounds[2].as("px"));
-        var bottom = Math.round(bounds[3].as("px"));
-        if (right <= left || bottom <= top) { return null; }
+        var left = bridgePixelNumber(bounds[0]);
+        var top = bridgePixelNumber(bounds[1]);
+        var right = bridgePixelNumber(bounds[2]);
+        var bottom = bridgePixelNumber(bounds[3]);
+        var documentWidth = bridgePixelNumber(doc.width);
+        var documentHeight = bridgePixelNumber(doc.height);
+        if (
+            left === null || top === null || right === null || bottom === null ||
+            documentWidth === null || documentHeight === null
+        ) {
+            throw new Error("无法将 Photoshop 选区边界转换为像素");
+        }
+        left = Math.max(0, Math.min(documentWidth, Math.floor(left)));
+        top = Math.max(0, Math.min(documentHeight, Math.floor(top)));
+        right = Math.max(0, Math.min(documentWidth, Math.ceil(right)));
+        bottom = Math.max(0, Math.min(documentHeight, Math.ceil(bottom)));
+        if (right <= left || bottom <= top) {
+            throw new Error("Photoshop 选区为空或没有与画布重叠");
+        }
         return {
             left:left,
             top:top,
@@ -62,8 +113,8 @@ function bridgeSelectionBounds(doc) {
             width:right - left,
             height:bottom - top
         };
-    } catch (ignore) {
-        return null;
+    } finally {
+        app.preferences.rulerUnits = previousRulerUnits;
     }
 }
 
