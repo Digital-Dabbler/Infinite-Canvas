@@ -20,7 +20,7 @@
     <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1785394520"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785406072">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785441959">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -78,6 +78,25 @@
             <button type="button" class="image-toolbar-delete" data-image-toolbar-action="delete" title="删除当前图片"><i data-lucide="trash-2"></i><span>删除</span></button>
         </div>
         <div id="photoshopContextMenu" class="photoshop-context-menu" role="menu" aria-hidden="true"></div>
+        <div id="photoshopInstallModal" class="photoshop-install-modal" aria-hidden="true">
+            <div class="photoshop-install-card" role="dialog" aria-modal="true" aria-labelledby="photoshopInstallTitle">
+                <button id="photoshopInstallClose" class="photoshop-install-close" type="button" title="关闭" data-i18n-title="common.close"><i data-lucide="x"></i></button>
+                <div class="photoshop-install-mark"><i data-lucide="panels-top-left"></i></div>
+                <div class="photoshop-install-kicker">Photoshop Bridge</div>
+                <h3 id="photoshopInstallTitle" data-i18n="smart.photoshopInstallTitle">未检测到插件连接</h3>
+                <p id="photoshopInstallStatus" data-i18n="smart.photoshopInstallIntro">如果已经安装，请打开 Photoshop 和 Bridge 面板；如果尚未安装，可一键下载公司共享目录中的最新版。</p>
+                <div class="photoshop-install-steps">
+                    <div><span>1</span><p data-i18n="smart.photoshopInstallStep1">下载最新插件 ZIP</p></div>
+                    <div><span>2</span><p data-i18n="smart.photoshopInstallStep2">关闭 Photoshop，解压并运行 install.bat</p></div>
+                    <div><span>3</span><p data-i18n="smart.photoshopInstallStep3">重新打开 Photoshop 和 Bridge 面板</p></div>
+                </div>
+                <div class="photoshop-install-actions">
+                    <button id="photoshopInstallDownload" class="photoshop-install-primary" type="button"><i data-lucide="download"></i><span data-i18n="smart.photoshopInstallDownload">下载最新版插件</span></button>
+                    <button id="photoshopInstallRetry" class="photoshop-install-secondary" type="button"><i data-lucide="refresh-cw"></i><span data-i18n="smart.photoshopInstallRetry">重新检测连接</span></button>
+                </div>
+                <button id="photoshopInstallQueue" class="photoshop-install-queue" type="button" data-i18n="smart.photoshopInstallQueue">仍然排队发送</button>
+            </div>
+        </div>
         <div id="portConnectMenu" class="port-connect-menu" hidden aria-label="节点连接选择"></div>
         <div id="createMenu" class="create-menu">
             <div class="create-menu-grid">
@@ -491,6 +510,6 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785406099"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785441936"></script>
 </body>
 </html>

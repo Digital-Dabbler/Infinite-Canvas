@@ -37,16 +37,10 @@
     function dispatchApplicationEvent(type, data) {
         if (!global.__adobe_cep__ || !global.__adobe_cep__.dispatchEvent) { return false; }
         var extensionId = "";
-        var appId = "PHXS";
         try { extensionId = global.__adobe_cep__.getExtensionId(); } catch (ignore) {}
-        try {
-            var environment = JSON.parse(global.__adobe_cep__.getHostEnvironment() || "{}");
-            appId = environment.appId || appId;
-        } catch (ignoreEnvironment) {}
         global.__adobe_cep__.dispatchEvent(JSON.stringify({
             type:type,
             scope:"APPLICATION",
-            appId:appId,
             extensionId:extensionId || "com.daxiong.infinitecanvas.bridge.panel",
             data:data || ""
         }));

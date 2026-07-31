@@ -13,7 +13,7 @@ $LatestZip = Join-Path $Dist "Infinite-Canvas-Photoshop-Bridge.zip"
 
 New-Item -ItemType Directory -Force -Path $Bundle | Out-Null
 Get-ChildItem -LiteralPath $ProjectRoot -Force |
-    Where-Object { $_.Name -ne "dist" } |
+    Where-Object { $_.Name -ne "dist" -and $_.Name -ne "backup-latest-plugin.bat" } |
     Copy-Item -Destination $Bundle -Recurse -Force
 New-Item -ItemType Directory -Force -Path $Dist | Out-Null
 if (Test-Path -LiteralPath $Zip) { Remove-Item -LiteralPath $Zip -Force }

@@ -25,6 +25,12 @@ const smartArrangeBtn = document.getElementById('smartArrangeBtn');
 const imageEditModal = document.getElementById('imageEditModal');
 const imageActionToolbar = document.getElementById('imageActionToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
+const photoshopInstallModal = document.getElementById('photoshopInstallModal');
+const photoshopInstallClose = document.getElementById('photoshopInstallClose');
+const photoshopInstallStatus = document.getElementById('photoshopInstallStatus');
+const photoshopInstallDownload = document.getElementById('photoshopInstallDownload');
+const photoshopInstallRetry = document.getElementById('photoshopInstallRetry');
+const photoshopInstallQueue = document.getElementById('photoshopInstallQueue');
 const portConnectMenu = document.getElementById('portConnectMenu');
 const smartLogModal = document.getElementById('smartLogModal');
 const smartLogList = document.getElementById('smartLogList');
@@ -8351,6 +8357,73 @@ function closePhotoshopContextMenu(){
     photoshopContextMenu.setAttribute('aria-hidden', 'true');
     photoshopContextMenu.innerHTML = '';
 }
+let pendingPhotoshopSend = null;
+function setPhotoshopInstallStatus(text, tone=''){
+    if(!photoshopInstallStatus) return;
+    photoshopInstallStatus.textContent = text || '';
+    photoshopInstallStatus.dataset.tone = tone;
+}
+function closePhotoshopInstallGuide(clearPending=true){
+    if(!photoshopInstallModal) return;
+    photoshopInstallModal.classList.remove('open');
+    photoshopInstallModal.setAttribute('aria-hidden', 'true');
+    if(clearPending) pendingPhotoshopSend = null;
+}
+function openPhotoshopInstallGuide(nodeId, imageIndex){
+    if(!photoshopInstallModal) return;
+    pendingPhotoshopSend = {nodeId, imageIndex};
+    closePhotoshopContextMenu();
+    setPhotoshopInstallStatus(tr('smart.photoshopInstallIntro'));
+    photoshopInstallModal.classList.add('open');
+    photoshopInstallModal.setAttribute('aria-hidden', 'false');
+    refreshIcons();
+}
+async function photoshopBridgeConnectionStatus(){
+    const response = await fetch('/api/photoshop-bridge/status', {cache:'no-store'});
+    const data = await response.json().catch(() => ({}));
+    if(!response.ok) throw new Error(data.detail || tr('smart.photoshopStatusFailed'));
+    return data;
+}
+function photoshopInstallerFilename(response){
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if(encoded){
+        try { return decodeURIComponent(encoded[1]); } catch(_error){}
+    }
+    const simple = disposition.match(/filename="?([^";]+)"?/i);
+    return simple?.[1] || 'Infinite-Canvas-Photoshop-Bridge.zip';
+}
+async function downloadLatestPhotoshopInstaller(){
+    if(!photoshopInstallDownload) return;
+    const label = photoshopInstallDownload.querySelector('span');
+    photoshopInstallDownload.disabled = true;
+    if(label) label.textContent = tr('smart.photoshopInstallDownloading');
+    setPhotoshopInstallStatus(tr('smart.photoshopInstallFetching'));
+    try {
+        const response = await fetch('/api/photoshop-bridge/installer/latest', {cache:'no-store'});
+        if(!response.ok){
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || tr('smart.photoshopInstallDownloadFailed'));
+        }
+        const blob = await response.blob();
+        const filename = photoshopInstallerFilename(response);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 30000);
+        setPhotoshopInstallStatus(trf('smart.photoshopInstallDownloaded', {name:filename}), 'success');
+        toast(trf('smart.photoshopInstallDownloadedToast', {name:filename}));
+    } catch(error){
+        setPhotoshopInstallStatus(`${tr('smart.photoshopInstallDownloadFailed')}：${error.message || error}`, 'error');
+    } finally {
+        photoshopInstallDownload.disabled = false;
+        if(label) label.textContent = tr('smart.photoshopInstallDownloadAgain');
+    }
+}
 function positionPhotoshopContextMenu(clientX, clientY){
     if(!photoshopContextMenu) return;
     const margin = 10;
@@ -8380,7 +8453,7 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
     });
     refreshIcons();
 }
-async function sendImageToPhotoshop(nodeId, imageIndex, button){
+async function createPhotoshopBridgeTask(nodeId, imageIndex, button){
     if(!canvasId) return;
     if(button) button.disabled = true;
     toast(tr('smart.photoshopSending'));
@@ -8399,11 +8472,61 @@ async function sendImageToPhotoshop(nodeId, imageIndex, button){
         toast(`${tr('smart.photoshopSendFailed')}：${error.message || error}`);
     }
 }
+async function sendImageToPhotoshop(nodeId, imageIndex, button){
+    if(!canvasId) return;
+    if(button) button.disabled = true;
+    try {
+        const status = await photoshopBridgeConnectionStatus();
+        if(status.online){
+            await createPhotoshopBridgeTask(nodeId, imageIndex, button);
+            return;
+        }
+        openPhotoshopInstallGuide(nodeId, imageIndex);
+    } catch(error){
+        if(button) button.disabled = false;
+        toast(`${tr('smart.photoshopStatusFailed')}：${error.message || error}`);
+    }
+}
+photoshopInstallClose?.addEventListener('click', () => closePhotoshopInstallGuide());
+photoshopInstallDownload?.addEventListener('click', downloadLatestPhotoshopInstaller);
+photoshopInstallRetry?.addEventListener('click', async () => {
+    if(!pendingPhotoshopSend) return;
+    photoshopInstallRetry.disabled = true;
+    setPhotoshopInstallStatus(tr('smart.photoshopInstallChecking'));
+    try {
+        const status = await photoshopBridgeConnectionStatus();
+        if(!status.online){
+            setPhotoshopInstallStatus(tr('smart.photoshopInstallStillOffline'), 'error');
+            return;
+        }
+        const pending = pendingPhotoshopSend;
+        closePhotoshopInstallGuide();
+        await createPhotoshopBridgeTask(pending.nodeId, pending.imageIndex);
+    } catch(error){
+        setPhotoshopInstallStatus(`${tr('smart.photoshopStatusFailed')}：${error.message || error}`, 'error');
+    } finally {
+        photoshopInstallRetry.disabled = false;
+    }
+});
+photoshopInstallQueue?.addEventListener('click', async () => {
+    if(!pendingPhotoshopSend) return;
+    const pending = pendingPhotoshopSend;
+    closePhotoshopInstallGuide();
+    await createPhotoshopBridgeTask(pending.nodeId, pending.imageIndex);
+});
+photoshopInstallModal?.addEventListener('mousedown', event => {
+    if(event.target === photoshopInstallModal) closePhotoshopInstallGuide();
+});
 photoshopContextMenu?.addEventListener('mousedown', event => event.stopPropagation());
 window.addEventListener('mousedown', event => {
     if(!event.target.closest?.('#photoshopContextMenu')) closePhotoshopContextMenu();
 }, true);
 window.addEventListener('blur', closePhotoshopContextMenu);
+window.addEventListener('keydown', event => {
+    if(event.key === 'Escape' && photoshopInstallModal?.classList.contains('open')){
+        closePhotoshopInstallGuide();
+    }
+});
 function runImageToolbarAction(action){
     const target = currentImageToolbarTarget();
     if(!target) return;

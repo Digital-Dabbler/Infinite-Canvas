@@ -1,7 +1,10 @@
-# Infinite Canvas Bridge 0.2.3 · Photoshop CEP 面板
+# Infinite Canvas Bridge 0.2.7 · Photoshop CEP 面板
 
 独立的 Photoshop 图像交接面板，不修改也不依赖现有的
 `photoshop-asset-connector` UXP 面板。
+
+后续开发前请先阅读 [DEVELOPMENT.md](DEVELOPMENT.md)。其中记录了当前能力、
+长期目标、不可破坏的行为约束、明确的非目标和变更验收清单。
 
 ## 工作方式
 
@@ -18,6 +21,11 @@ WebSocket；但 Photoshop 每次启动后仍需至少加载并连接一次面板
 
 收件箱展示当前账号最近 7 天、最多 50 张图片。单击进入大图预览，双击可选择
 “置入当前文档”或“打开为新文档”。
+
+互传记录按 Infinite Canvas 登录账号隔离。连接后状态栏会显示当前账号；点击
+“切换账号”会退出旧账号、清空当前面板的收件箱，再要求使用新账号登录。同一
+账号连接多台 Photoshop 时，各端收件箱都会更新，但只有最先认领任务的一台会
+自动打开图片；如需完全独立的记录，应分别登录不同的 Infinite Canvas 账号。
 
 ### Photoshop → 智能画布
 

@@ -41,7 +41,15 @@
                     <h2>图片收件箱</h2>
                     <p id="taskSummary">连接后等待画布发送图片</p>
                 </div>
-                <button id="refreshButton" class="button button-quiet" type="button" disabled>刷新</button>
+                <div class="inbox-actions">
+                    <button id="clearButton" class="button button-quiet button-clear" type="button" disabled>一键清除</button>
+                    <button id="refreshButton" class="button button-quiet icon-button" type="button" title="刷新收件箱" aria-label="刷新收件箱" disabled>
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 11a8 8 0 1 0-2.34 5.66"></path>
+                            <path d="M20 4v7h-7"></path>
+                        </svg>
+                    </button>
+                </div>
             </div>
             <div id="galleryStage" class="gallery-stage">
                 <div id="galleryGrid" class="gallery-grid"></div>

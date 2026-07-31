@@ -162,17 +162,35 @@ class ConnectionManager:
                 print(f"Personal message error for {client_id}: {e}")
 
     async def send_user_client_message(self, message: dict, user_id: str, client_id: str):
-        """向某个登录用户的指定客户端发送消息；返回客户端当前是否在线。"""
+        """向某个登录用户的全部同类客户端发送消息；返回是否至少送达一个实例。"""
+        connections = self.user_client_connections(user_id, client_id)
+        delivered = False
+        data = json.dumps(message)
+        for scoped_client_id, ws in connections:
+            try:
+                await ws.send_text(data)
+                delivered = True
+            except Exception as e:
+                print(f"Personal message error for {scoped_client_id}: {e}")
+                if ws in self.active_connections:
+                    self.active_connections.remove(ws)
+                self.connection_clients.pop(ws, None)
+                if self.user_connections.get(scoped_client_id) is ws:
+                    del self.user_connections[scoped_client_id]
+        return delivered
+
+    def user_client_connections(self, user_id: str, client_id: str):
+        """兼容旧固定 client_id，并匹配带实例后缀的多台客户端。"""
         scoped_client_id = f"{user_id}:{client_id}"
-        ws = self.user_connections.get(scoped_client_id)
-        if not ws:
-            return False
-        try:
-            await ws.send_text(json.dumps(message))
-            return True
-        except Exception as e:
-            print(f"Personal message error for {scoped_client_id}: {e}")
-            return False
+        instance_prefix = f"{scoped_client_id}:"
+        return [
+            (key, ws) for key, ws in list(self.user_connections.items())
+            if (key == scoped_client_id or key.startswith(instance_prefix))
+            and ws in self.active_connections
+        ]
+
+    def has_user_client(self, user_id: str, client_id: str):
+        return bool(self.user_client_connections(user_id, client_id))
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
@@ -16614,6 +16632,10 @@ async def delete_conversation(conversation_id: str, request: Request, x_user_id:
 PHOTOSHOP_BRIDGE_CLIENT_ID = "photoshop-canvas-bridge"
 PHOTOSHOP_BRIDGE_TASK_TTL_MS = 7 * 24 * 60 * 60 * 1000
 PHOTOSHOP_BRIDGE_CLAIM_LEASE_MS = 2 * 60 * 1000
+PHOTOSHOP_BRIDGE_INSTALLER_DIR = os.environ.get(
+    "PHOTOSHOP_BRIDGE_INSTALLER_DIR",
+    r"\\192.168.1.2\美术\2_原画\07_学习软件\AI\无限画布PS插件版本",
+).strip()
 
 def load_photoshop_bridge_tasks():
     data = _read_json_file(PHOTOSHOP_BRIDGE_TASKS_FILE, {"tasks": []})
@@ -16704,6 +16726,22 @@ def photoshop_bridge_image_size(path):
             return int(image.width), int(image.height)
     except Exception:
         return 0, 0
+
+def latest_photoshop_bridge_installer(source_dir=None):
+    directory = str(source_dir or PHOTOSHOP_BRIDGE_INSTALLER_DIR or "").strip()
+    if not directory:
+        raise FileNotFoundError("未配置 Photoshop 插件共享目录。")
+    candidates = []
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if not entry.is_file(follow_symlinks=False) or not entry.name.lower().endswith(".zip"):
+                continue
+            stat = entry.stat(follow_symlinks=False)
+            candidates.append((int(stat.st_mtime_ns), entry.name.lower(), entry.path, entry.name, int(stat.st_size)))
+    if not candidates:
+        raise FileNotFoundError("共享目录中没有 Photoshop 插件 ZIP。")
+    _, _, path, name, size = max(candidates)
+    return {"path": path, "name": name, "size": size}
 
 def create_photoshop_upload_node(canvas, item, export_scope="document", selection_bounds=None):
     if normalize_canvas_kind(canvas.get("kind")) != "smart":
@@ -16825,6 +16863,35 @@ async def list_photoshop_bridge_tasks(request: Request, status: str = "", limit:
         ]
     rows.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
     return {"tasks": rows[:safe_limit]}
+
+@app.get("/api/photoshop-bridge/status")
+async def photoshop_bridge_status(request: Request):
+    user = require_authenticated(request)
+    return {
+        "online": manager.has_user_client(str(user.get("id") or ""), PHOTOSHOP_BRIDGE_CLIENT_ID),
+        "installer_download_url": "/api/photoshop-bridge/installer/latest",
+    }
+
+@app.get("/api/photoshop-bridge/installer/latest")
+async def download_latest_photoshop_bridge_installer(request: Request):
+    require_authenticated(request)
+    try:
+        installer = await asyncio.wait_for(
+            asyncio.to_thread(latest_photoshop_bridge_installer),
+            timeout=12,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="访问公司插件共享目录超时，请确认已连接公司局域网。")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=f"无法访问公司插件共享目录：{exc}")
+    return FileResponse(
+        installer["path"],
+        media_type="application/zip",
+        filename=installer["name"],
+        headers={"Cache-Control": "no-store"},
+    )
 
 @app.post("/api/photoshop-bridge/tasks/{task_id}/claim")
 async def claim_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeClaimRequest, request: Request):

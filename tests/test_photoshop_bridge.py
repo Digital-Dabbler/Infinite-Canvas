@@ -1,3 +1,5 @@
+import os
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +14,56 @@ import main
 
 
 class PhotoshopBridgeTests(unittest.TestCase):
+    def test_build_package_excludes_local_backup_helper(self):
+        script = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "photoshop-canvas-bridge"
+            / "build-package.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('$_.Name -ne "backup-latest-plugin.bat"', script)
+
+    def test_latest_installer_uses_newest_zip_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            older = root / "bridge-0.1.zip"
+            newest = root / "bridge-0.2.zip"
+            ignored = root / "notes.txt"
+            older.write_bytes(b"old")
+            newest.write_bytes(b"new")
+            ignored.write_text("ignore", encoding="utf-8")
+            os.utime(older, (100, 100))
+            os.utime(newest, (200, 200))
+
+            installer = main.latest_photoshop_bridge_installer(directory)
+
+        self.assertEqual(installer["name"], newest.name)
+        self.assertEqual(installer["path"], str(newest))
+        self.assertEqual(installer["size"], 3)
+
+    def test_connection_manager_checks_user_scoped_plugin(self):
+        manager = main.ConnectionManager()
+        websocket = object()
+        manager.active_connections.append(websocket)
+        manager.user_connections["user-1:photoshop-canvas-bridge"] = websocket
+
+        self.assertTrue(manager.has_user_client("user-1", "photoshop-canvas-bridge"))
+        self.assertFalse(manager.has_user_client("user-2", "photoshop-canvas-bridge"))
+
+    def test_connection_manager_finds_multiple_photoshop_instances(self):
+        manager = main.ConnectionManager()
+        first = object()
+        second = object()
+        manager.active_connections.extend([first, second])
+        manager.user_connections["user-1:photoshop-canvas-bridge:pc-a"] = first
+        manager.user_connections["user-1:photoshop-canvas-bridge:pc-b"] = second
+
+        matches = manager.user_client_connections("user-1", "photoshop-canvas-bridge")
+
+        self.assertEqual({item[1] for item in matches}, {first, second})
+        self.assertTrue(manager.has_user_client("user-1", "photoshop-canvas-bridge"))
+
     def test_cep_manifest_uses_cc2018_compatible_schema(self):
         manifest_path = (
             Path(__file__).resolve().parents[1]
@@ -24,10 +76,38 @@ class PhotoshopBridgeTests(unittest.TestCase):
         runtime = root.find("./ExecutionEnvironment/RequiredRuntimeList/RequiredRuntime")
 
         self.assertEqual(root.attrib["Version"], "7.0")
-        self.assertEqual(root.attrib["ExtensionBundleVersion"], "0.2.3")
+        self.assertEqual(root.attrib["ExtensionBundleVersion"], "0.2.7")
         self.assertIsNotNone(runtime)
         self.assertEqual(runtime.attrib["Name"], "CSXS")
         self.assertEqual(runtime.attrib["Version"], "7.0")
+
+    def test_panel_uses_canvas_entry_icons_for_light_and_dark_themes(self):
+        bridge_root = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "photoshop-canvas-bridge"
+        )
+        manifest = ElementTree.parse(bridge_root / "CSXS" / "manifest.xml").getroot()
+        icons = {
+            icon.attrib["Type"]: icon.text
+            for icon in manifest.findall("./DispatchInfoList/Extension/DispatchInfo/UI/Icons/Icon")
+        }
+        self.assertEqual(
+            icons,
+            {
+                "Normal": "./icons/canvas-light.png",
+                "RollOver": "./icons/canvas-light.png",
+                "DarkNormal": "./icons/canvas-dark.png",
+                "DarkRollOver": "./icons/canvas-dark.png",
+            },
+        )
+
+        for theme in ("light", "dark"):
+            for suffix, expected_size in (("", (23, 23)), ("_x2", (46, 46))):
+                icon_path = bridge_root / "icons" / f"canvas-{theme}{suffix}.png"
+                png = icon_path.read_bytes()
+                self.assertEqual(png[:8], b"\x89PNG\r\n\x1a\n")
+                self.assertEqual(struct.unpack(">II", png[16:24]), expected_size)
 
     def test_panel_css_avoids_unsupported_cc2018_positioning(self):
         css_path = (
@@ -56,6 +136,80 @@ class PhotoshopBridgeTests(unittest.TestCase):
 
         self.assertIn("socketHistoryIds[task.id] = true", source)
         self.assertIn("if (isHistorical) { return; }", source)
+
+    def test_panel_recovers_inbox_on_reconnect_without_constant_polling(self):
+        app_path = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "photoshop-canvas-bridge"
+            / "client"
+            / "js"
+            / "app.js"
+        )
+        source = app_path.read_text(encoding="utf-8")
+
+        self.assertIn('currentSocket.send("ping")', source)
+        self.assertIn("Date.now() - lastSocketActivity > 45000", source)
+        self.assertIn("refreshTasks(true)", source)
+        self.assertNotIn("inboxPollTimer", source)
+        self.assertNotIn("}, 3000);", source)
+        self.assertIn("claimAndOpen(task, true)", source)
+        self.assertIn("if (inboxBaselineReady && task && task.id", source)
+        self.assertIn('"photoshop-canvas-bridge:" + instanceId', source)
+
+    def test_panel_registers_photoshop_persistent_before_connecting(self):
+        root = Path(__file__).resolve().parents[1] / "tools" / "photoshop-canvas-bridge" / "client" / "js"
+        app_source = (root / "app.js").read_text(encoding="utf-8")
+        cep_source = (root / "cep.js").read_text(encoding="utf-8")
+
+        initial_registration = app_source.rfind("cep.requestPersistent();")
+        automatic_connect = app_source.rfind("if (net.state.token) { connect(); }")
+        self.assertGreater(initial_registration, 0)
+        self.assertLess(initial_registration, automatic_connect)
+        self.assertIn('scope:"APPLICATION"', cep_source)
+        self.assertIn('extensionId:extensionId || "com.daxiong.infinitecanvas.bridge.panel"', cep_source)
+        self.assertNotIn("appId:appId", cep_source)
+
+    def test_panel_can_switch_users_without_reusing_old_token(self):
+        app_path = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "photoshop-canvas-bridge"
+            / "client"
+            / "js"
+            / "app.js"
+        )
+        source = app_path.read_text(encoding="utf-8")
+
+        self.assertIn('el.connect.textContent = value ? "切换账号" : "连接画布"', source)
+        self.assertIn('localStorage.removeItem(LS_TOKEN)', source)
+        self.assertIn('var wantsLogin = Boolean(username || password)', source)
+        self.assertIn('wantsLogin ? net.login(username, password)', source)
+        self.assertIn('收件箱只显示此账号的互传记录', source)
+
+    def test_inbox_has_separate_clear_and_refresh_controls(self):
+        root = Path(__file__).resolve().parents[1] / "tools" / "photoshop-canvas-bridge" / "client"
+        markup = (root / "index.html").read_text(encoding="utf-8")
+        source = (root / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="clearButton"', markup)
+        self.assertIn(">一键清除</button>", markup)
+        self.assertIn('aria-label="刷新收件箱"', markup)
+        self.assertIn('el.clear.addEventListener("click"', source)
+        self.assertIn("clearTaskInbox(false);", source)
+        self.assertIn("hiddenTaskIds[task.id] = true", source)
+        self.assertIn("!hiddenTaskIds[task.id]", source)
+        self.assertIn("hiddenTaskIds = {};", source)
+
+    def test_canvas_picker_groups_canvases_by_project(self):
+        root = Path(__file__).resolve().parents[1] / "tools" / "photoshop-canvas-bridge" / "client"
+        source = (root / "js" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "style.css").read_text(encoding="utf-8")
+
+        self.assertIn('groups[projectId].canvases.push(canvas)', source)
+        self.assertIn('data-project-toggle=', source)
+        self.assertIn('collapsedProjects[projectId] = willCollapse', source)
+        self.assertIn('.canvas-project.collapsed .canvas-project-items', styles)
 
     def test_generation_return_appends_and_activates_result(self):
         canvas = {
@@ -280,6 +434,29 @@ class PhotoshopBridgeStateTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["tasks"][0]["id"], "mine-00")
         self.assertNotIn("old", {item["id"] for item in result["tasks"]})
         self.assertNotIn("other-user", {item["id"] for item in result["tasks"]})
+
+    async def test_status_reports_current_users_plugin_connection(self):
+        with patch.object(main.manager, "has_user_client", return_value=True) as probe:
+            result = await main.photoshop_bridge_status(self.request())
+
+        self.assertTrue(result["online"])
+        self.assertEqual(result["installer_download_url"], "/api/photoshop-bridge/installer/latest")
+        probe.assert_called_once_with("user-1", main.PHOTOSHOP_BRIDGE_CLIENT_ID)
+
+    async def test_installer_download_returns_fixed_latest_zip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "bridge-latest.zip"
+            package.write_bytes(b"zip")
+            with patch.object(
+                main,
+                "latest_photoshop_bridge_installer",
+                return_value={"path": str(package), "name": package.name, "size": 3},
+            ):
+                response = await main.download_latest_photoshop_bridge_installer(self.request())
+
+        self.assertEqual(response.path, str(package))
+        self.assertEqual(response.media_type, "application/zip")
+        self.assertIn("bridge-latest.zip", response.headers["content-disposition"])
 
 
 if __name__ == "__main__":

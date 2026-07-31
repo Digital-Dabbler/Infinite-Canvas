@@ -1286,6 +1286,129 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 }
 .photoshop-context-menu button:disabled { opacity:.55; cursor:wait; }
 .photoshop-context-menu svg { width:17px; height:17px; color:#31a8ff; flex:0 0 auto; }
+.photoshop-install-modal {
+    position:fixed;
+    z-index:2600;
+    inset:0;
+    display:none;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+    background:rgba(15,23,42,.4);
+    backdrop-filter:blur(14px);
+}
+.photoshop-install-modal.open { display:flex; }
+.photoshop-install-card {
+    position:relative;
+    width:min(430px, calc(100vw - 36px));
+    max-height:calc(100vh - 36px);
+    overflow:auto;
+    padding:24px;
+    border:1px solid color-mix(in srgb, #31a8ff 22%, var(--line));
+    border-radius:22px;
+    background:color-mix(in srgb, var(--panel) 98%, #31a8ff 2%);
+    color:var(--text);
+    box-shadow:0 28px 80px rgba(15,23,42,.28);
+}
+.theme-dark .photoshop-install-card { box-shadow:0 28px 80px rgba(0,0,0,.5); }
+.photoshop-install-close {
+    position:absolute;
+    right:14px;
+    top:14px;
+    width:30px;
+    height:30px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border:1px solid var(--line);
+    border-radius:10px;
+    background:var(--soft);
+    color:var(--muted);
+}
+.photoshop-install-close:hover { color:var(--text); background:var(--card); }
+.photoshop-install-close svg { width:15px; height:15px; }
+.photoshop-install-mark {
+    width:44px;
+    height:44px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    margin-bottom:15px;
+    border:1px solid rgba(49,168,255,.32);
+    border-radius:14px;
+    background:rgba(49,168,255,.1);
+    color:#31a8ff;
+}
+.photoshop-install-mark svg { width:21px; height:21px; }
+.photoshop-install-kicker { color:#31a8ff; font-size:10px; font-weight:850; letter-spacing:.12em; text-transform:uppercase; }
+.photoshop-install-card h3 { margin:5px 36px 0 0; color:var(--text); font-size:20px; line-height:1.25; }
+.photoshop-install-card > p { margin:10px 0 17px; color:var(--muted); font-size:12px; line-height:1.65; }
+.photoshop-install-card > p[data-tone="success"] { color:#16a36a; }
+.photoshop-install-card > p[data-tone="error"] { color:#dc4c4c; }
+.theme-dark .photoshop-install-card > p[data-tone="success"] { color:#68d7a8; }
+.theme-dark .photoshop-install-card > p[data-tone="error"] { color:#ff8e8e; }
+.photoshop-install-steps {
+    display:grid;
+    gap:7px;
+    margin-bottom:17px;
+    padding:10px;
+    border:1px solid var(--line);
+    border-radius:15px;
+    background:var(--soft);
+}
+.photoshop-install-steps > div { display:flex; align-items:center; gap:9px; min-width:0; }
+.photoshop-install-steps span {
+    width:22px;
+    height:22px;
+    flex:0 0 auto;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:7px;
+    background:var(--panel);
+    color:#31a8ff;
+    font-size:10px;
+    font-weight:850;
+    box-shadow:inset 0 0 0 1px var(--line);
+}
+.photoshop-install-steps p { margin:0; color:var(--text); font-size:11px; line-height:1.4; }
+.photoshop-install-actions { display:grid; grid-template-columns:1.35fr 1fr; gap:9px; }
+.photoshop-install-primary,
+.photoshop-install-secondary {
+    min-height:38px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:7px;
+    padding:0 12px;
+    border-radius:12px;
+    font-size:11px;
+    font-weight:800;
+}
+.photoshop-install-primary { background:#31a8ff; color:#07111a; box-shadow:0 10px 24px rgba(49,168,255,.2); }
+.photoshop-install-primary:hover { background:#55b7ff; }
+.photoshop-install-secondary { border:1px solid var(--line); background:var(--card); color:var(--text); }
+.photoshop-install-primary:disabled,
+.photoshop-install-secondary:disabled { opacity:.55; cursor:wait; }
+.photoshop-install-primary svg,
+.photoshop-install-secondary svg { width:14px; height:14px; }
+.photoshop-install-queue {
+    display:block;
+    margin:13px auto 0;
+    padding:5px 9px;
+    border-radius:8px;
+    background:transparent;
+    color:var(--muted);
+    font-size:10.5px;
+    text-decoration:underline;
+    text-underline-offset:3px;
+}
+.photoshop-install-queue:hover { color:var(--text); background:var(--soft); }
+@media (max-width:560px) {
+    .photoshop-install-modal { padding:14px; }
+    .photoshop-install-card { width:100%; padding:20px 18px; border-radius:18px; }
+    .photoshop-install-actions { grid-template-columns:1fr; }
+}
 .asset-tab { flex:1; height:26px; border-radius:9px; background:transparent; color:var(--muted); font-size:10.5px; font-weight:600; }
 .asset-tab.active { background:var(--strong); color:var(--strong-text); box-shadow:0 6px 16px rgba(15,23,42,.14); }
 .asset-category-row { display:flex; align-items:center; gap:6px; }

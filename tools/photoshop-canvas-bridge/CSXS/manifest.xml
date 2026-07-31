@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0"
     ExtensionBundleId="com.daxiong.infinitecanvas.bridge"
-    ExtensionBundleVersion="0.2.3"
+    ExtensionBundleVersion="0.2.7"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
     <ExtensionList>
-        <Extension Id="com.daxiong.infinitecanvas.bridge.panel" Version="0.2.3"/>
+        <Extension Id="com.daxiong.infinitecanvas.bridge.panel" Version="0.2.7"/>
     </ExtensionList>
     <ExecutionEnvironment>
         <HostList>
@@ -49,6 +49,12 @@
                             <Height>1600</Height>
                         </MaxSize>
                     </Geometry>
+                    <Icons>
+                        <Icon Type="Normal">./icons/canvas-light.png</Icon>
+                        <Icon Type="RollOver">./icons/canvas-light.png</Icon>
+                        <Icon Type="DarkNormal">./icons/canvas-dark.png</Icon>
+                        <Icon Type="DarkRollOver">./icons/canvas-dark.png</Icon>
+                    </Icons>
                 </UI>
             </DispatchInfo>
         </Extension>

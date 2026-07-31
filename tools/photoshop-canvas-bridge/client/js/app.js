@@ -12,16 +12,23 @@
     var targetCanvasId = "";
     var socket = null;
     var socketHistoryIds = {};
+    var hiddenTaskIds = {};
     var reconnectTimer = null;
+    var heartbeatTimer = null;
+    var socketGeneration = 0;
+    var lastSocketActivity = 0;
+    var inboxBaselineReady = false;
     var opening = {};
     var thumbnailUrls = {};
     var fullImageUrls = {};
     var previewIndex = -1;
     var choiceTaskId = "";
     var tileClickTimer = null;
+    var collapsedProjects = {};
     var lastDocumentState = {hasDocument:false, selection:null};
     var documentPollTimer = null;
     var smallSelectionContinue = null;
+    var currentUser = null;
     var LS_HOST = "infinite_canvas_bridge_host";
     var LS_TOKEN = "infinite_canvas_bridge_token";
     var LS_TARGET = "infinite_canvas_bridge_target_canvas";
@@ -36,6 +43,7 @@
         connect:document.getElementById("connectButton"),
         status:document.getElementById("statusBar"),
         dot:document.getElementById("connectionDot"),
+        clear:document.getElementById("clearButton"),
         refresh:document.getElementById("refreshButton"),
         summary:document.getElementById("taskSummary"),
         galleryStage:document.getElementById("galleryStage"),
@@ -86,10 +94,49 @@
     function setConnected(value) {
         connected = value;
         el.dot.className = "connection-dot" + (value ? " online" : "");
+        el.clear.disabled = !value;
         el.refresh.disabled = !value;
         el.setup.className = "setup-panel" + (value ? " compact" : "");
-        el.connect.textContent = value ? "已连接" : "连接画布";
+        el.connect.textContent = value ? "切换账号" : "连接画布";
         renderSendState();
+    }
+    function clearTaskInbox(resetHistory) {
+        if (!resetHistory) {
+            tasks.forEach(function (task) {
+                if (task && task.id) { hiddenTaskIds[task.id] = true; }
+            });
+        }
+        tasks = [];
+        if (resetHistory) {
+            socketHistoryIds = {};
+            hiddenTaskIds = {};
+            inboxBaselineReady = false;
+        }
+        closePreview();
+        releaseUnusedImages();
+        renderGallery();
+    }
+    function finishAccountSwitch() {
+        if (socket) { try { socket.close(); } catch (ignore) {} }
+        socket = null;
+        clearTimeout(reconnectTimer);
+        clearInterval(heartbeatTimer);
+        clearInterval(documentPollTimer);
+        net.state.token = "";
+        currentUser = null;
+        localStorage.removeItem(LS_TOKEN);
+        el.password.value = "";
+        clearTaskInbox(true);
+        setConnected(false);
+        setStatus("已退出当前账号，请输入另一位 Infinite Canvas 用户的账号和密码。");
+        try { el.username.focus(); } catch (ignoreFocus) {}
+    }
+    function switchAccount() {
+        el.connect.disabled = true;
+        net.post("/api/auth/logout", {}).catch(function () {}).then(function () {
+            finishAccountSwitch();
+            el.connect.disabled = false;
+        });
     }
     function escapeHtml(text) {
         var div = document.createElement("div");
@@ -364,11 +411,29 @@
             setStatus("置入失败：" + (error.message || error), "error");
         });
     }
-    function refreshTasks() {
+    function refreshTasks(openNewTasks) {
         return net.get("/api/photoshop-bridge/tasks?limit=50").then(function (data) {
-            tasks = data.tasks || [];
+            var incoming = data.tasks || [];
+            var newlyReceived = [];
+            incoming.forEach(function (task) {
+                if (inboxBaselineReady && task && task.id && !socketHistoryIds[task.id]) {
+                    newlyReceived.push(task);
+                }
+                if (task && task.id) { socketHistoryIds[task.id] = true; }
+            });
+            tasks = incoming.filter(function (task) {
+                return !task || !task.id || !hiddenTaskIds[task.id];
+            });
             tasks.sort(function (a, b) { return Number(b.created_at || 0) - Number(a.created_at || 0); });
             renderGallery();
+            inboxBaselineReady = true;
+            if (openNewTasks) {
+                newlyReceived.forEach(function (task) {
+                    if (task.status !== "pending" && task.status !== "open_failed") { return; }
+                    setTargetCanvas(task.canvas_id, task.canvas_title);
+                    claimAndOpen(task, true);
+                });
+            }
         });
     }
     function loadCanvases() {
@@ -387,11 +452,32 @@
             var projectName = projects[canvas.project] || "默认项目";
             return !keyword || String(canvas.title || "").toLowerCase().indexOf(keyword) >= 0 || projectName.toLowerCase().indexOf(keyword) >= 0;
         });
-        el.canvasList.innerHTML = filtered.length ? filtered.map(function (canvas) {
+        var groups = {};
+        var groupList = [];
+        filtered.forEach(function (canvas) {
+            var projectId = String(canvas.project || "__default__");
             var projectName = projects[canvas.project] || "默认项目";
-            return '<button class="canvas-card' + (canvas.id === targetCanvasId ? " selected" : "") + '" type="button" data-canvas="' + escapeHtml(canvas.id) + '">' +
-                '<span class="canvas-icon">' + escapeHtml(canvasIcon(canvas)) + '</span><span class="canvas-card-copy"><strong>' + escapeHtml(canvas.title || "智能画布") +
-                '</strong><span>' + escapeHtml(projectName) + ' · ' + escapeHtml(formatTime(canvas.updated_at)) + '</span></span></button>';
+            if (!groups[projectId]) {
+                groups[projectId] = {id:projectId, name:projectName, canvases:[]};
+                groupList.push(groups[projectId]);
+            }
+            groups[projectId].canvases.push(canvas);
+        });
+        groupList.sort(function (a, b) {
+            return String(a.name).localeCompare(String(b.name), "zh-CN");
+        });
+        el.canvasList.innerHTML = groupList.length ? groupList.map(function (group) {
+            var containsTarget = group.canvases.some(function (canvas) { return canvas.id === targetCanvasId; });
+            var collapsed = !keyword && !containsTarget && Boolean(collapsedProjects[group.id]);
+            var cards = group.canvases.map(function (canvas) {
+                return '<button class="canvas-card' + (canvas.id === targetCanvasId ? " selected" : "") + '" type="button" data-canvas="' + escapeHtml(canvas.id) + '">' +
+                    '<span class="canvas-icon">' + escapeHtml(canvasIcon(canvas)) + '</span><span class="canvas-card-copy"><strong>' + escapeHtml(canvas.title || "智能画布") +
+                    '</strong><span>' + escapeHtml(formatTime(canvas.updated_at)) + '</span></span></button>';
+            }).join("");
+            return '<section class="canvas-project' + (collapsed ? " collapsed" : "") + '" data-project="' + escapeHtml(group.id) + '">' +
+                '<button class="canvas-project-heading" type="button" data-project-toggle="' + escapeHtml(group.id) + '" aria-expanded="' + (collapsed ? "false" : "true") + '">' +
+                '<span class="project-chevron">⌄</span><strong>' + escapeHtml(group.name) + '</strong><span class="project-count">' +
+                group.canvases.length + ' 个画布</span></button><div class="canvas-project-items">' + cards + '</div></section>';
         }).join("") : '<div class="empty-state"><strong>没有匹配的智能画布</strong></div>';
     }
     function formatTime(timestamp) {
@@ -502,33 +588,55 @@
     function openSocket() {
         if (socket) { try { socket.close(); } catch (ignore) {} }
         clearTimeout(reconnectTimer);
-        socketHistoryIds = {};
-        tasks.forEach(function (task) {
-            if (task && task.id) { socketHistoryIds[task.id] = true; }
-        });
-        var url = "ws://" + net.state.host + "/ws/stats?client_id=photoshop-canvas-bridge&access_token=" + encodeURIComponent(net.state.token);
-        socket = new WebSocket(url);
-        socket.onopen = function () {
+        clearInterval(heartbeatTimer);
+        socketGeneration += 1;
+        var generation = socketGeneration;
+        var clientId = "photoshop-canvas-bridge:" + instanceId;
+        var url = "ws://" + net.state.host + "/ws/stats?client_id=" + encodeURIComponent(clientId) +
+            "&access_token=" + encodeURIComponent(net.state.token);
+        var currentSocket = new WebSocket(url);
+        socket = currentSocket;
+        currentSocket.onopen = function () {
+            if (generation !== socketGeneration) { return; }
+            lastSocketActivity = Date.now();
             setConnected(true);
-            refreshTasks().catch(function () {});
+            refreshTasks(true).catch(function () {});
+            heartbeatTimer = setInterval(function () {
+                if (generation !== socketGeneration || currentSocket.readyState !== WebSocket.OPEN) { return; }
+                if (Date.now() - lastSocketActivity > 45000) {
+                    setStatus("实时连接已中断，正在重新连接…", "error");
+                    try { currentSocket.close(); } catch (ignoreClose) {}
+                    return;
+                }
+                try { currentSocket.send("ping"); } catch (ignorePing) {}
+            }, 15000);
         };
-        socket.onmessage = function (event) {
+        currentSocket.onmessage = function (event) {
+            if (generation !== socketGeneration) { return; }
+            lastSocketActivity = Date.now();
             var message;
             try { message = JSON.parse(event.data); } catch (ignore) { return; }
             if (message.type === "photoshop_edit_requested" && message.task) {
                 var isHistorical = Boolean(socketHistoryIds[message.task.id]);
                 socketHistoryIds[message.task.id] = true;
+                if (hiddenTaskIds[message.task.id]) { return; }
                 mergeTask(message.task);
                 if (isHistorical) { return; }
                 setTargetCanvas(message.task.canvas_id, message.task.canvas_title);
                 claimAndOpen(message.task, true);
             }
         };
-        socket.onclose = function () {
+        currentSocket.onclose = function () {
+            if (generation !== socketGeneration) { return; }
+            clearInterval(heartbeatTimer);
+            socket = null;
             setConnected(false);
             if (net.state.token) { reconnectTimer = setTimeout(openSocket, 3000); }
         };
-        socket.onerror = function () { try { socket.close(); } catch (ignore) {} };
+        currentSocket.onerror = function () {
+            if (generation !== socketGeneration) { return; }
+            try { currentSocket.close(); } catch (ignore) {}
+        };
     }
     function connect() {
         var host = net.cleanHost(el.server.value);
@@ -536,24 +644,32 @@
         var password = String(el.password.value || "");
         if (!host) { setStatus("请填写画布服务地址。", "error"); return; }
         if (connected) {
-            refreshTasks();
-            loadCanvases();
+            switchAccount();
             return;
         }
         net.state.host = host;
         localStorage.setItem(LS_HOST, host);
         el.connect.disabled = true;
-        var authentication = net.state.token ? Promise.resolve({access_token:net.state.token}) : net.login(username, password);
+        var wantsLogin = Boolean(username || password);
+        if (wantsLogin && (!username || !password)) {
+            setStatus("请输入完整的账号和密码。", "error");
+            el.connect.disabled = false;
+            return;
+        }
+        var authentication = wantsLogin ? net.login(username, password) :
+            (net.state.token ? Promise.resolve({access_token:net.state.token}) : Promise.reject(new Error("请输入账号和密码")));
         authentication.then(function (data) {
             if (data.access_token) {
                 net.state.token = data.access_token;
                 localStorage.setItem(LS_TOKEN, data.access_token);
             }
             return net.get("/api/auth/me");
-        }).then(function () {
+        }).then(function (data) {
+            currentUser = data.user || null;
+            clearTaskInbox(true);
             cep.requestPersistent();
-            setConnected(true);
-            setStatus("已连接 " + host + "，隐藏面板后仍会接收新图片。", "success");
+            setStatus("当前账号：" + ((currentUser && (currentUser.name || currentUser.username)) || "未知用户") +
+                "。收件箱只显示此账号的互传记录。", "success");
             return Promise.all([refreshTasks(), loadCanvases()]);
         }).then(function () {
             openSocket();
@@ -562,6 +678,7 @@
             documentPollTimer = setInterval(pollDocumentState, 1500);
         }).catch(function (error) {
             net.state.token = "";
+            currentUser = null;
             localStorage.removeItem(LS_TOKEN);
             setConnected(false);
             setStatus("连接失败：" + (error.message || error), "error");
@@ -569,7 +686,12 @@
     }
 
     el.connect.addEventListener("click", connect);
+    el.clear.addEventListener("click", function () {
+        clearTaskInbox(false);
+        setStatus("已清空当前窗口的图片；需要恢复时可点击旁边的刷新按钮。", "success");
+    });
     el.refresh.addEventListener("click", function () {
+        hiddenTaskIds = {};
         refreshTasks().then(loadCanvases).catch(function (error) {
             setStatus("刷新失败：" + (error.message || error), "error");
         });
@@ -629,6 +751,16 @@
         if (exact.length === 1) { setTargetCanvas(exact[0].id); closeCanvasPicker(); }
     });
     el.canvasList.addEventListener("click", function (event) {
+        var toggle = event.target.closest ? event.target.closest("[data-project-toggle]") : null;
+        if (toggle) {
+            var projectId = toggle.getAttribute("data-project-toggle");
+            var section = toggle.parentElement;
+            var willCollapse = !section.classList.contains("collapsed");
+            collapsedProjects[projectId] = willCollapse;
+            section.classList.toggle("collapsed", willCollapse);
+            toggle.setAttribute("aria-expanded", willCollapse ? "false" : "true");
+            return;
+        }
         var card = event.target.closest ? event.target.closest("[data-canvas]") : null;
         if (!card) { return; }
         setTargetCanvas(card.getAttribute("data-canvas"));
@@ -661,6 +793,8 @@
     });
 
     loadState();
+    // Photoshop Persistent 必须在面板生命周期尽可能早地注册；登录成功后还会再确认一次。
+    cep.requestPersistent();
     renderGallery();
     renderDocumentState({hasDocument:false, selection:null});
     if (net.state.token) { connect(); }
