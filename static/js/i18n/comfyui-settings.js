@@ -1,7 +1,7 @@
 (function(){
     if(!window.StudioI18n) return;
     window.StudioI18n.register({
-        "comfy.title": { zh: "工作流设置", en: "Workflow Settings" },
+        "comfy.title": { zh: "ComfyUI 与工作流", en: "ComfyUI & Workflows" },
         "comfy.subtitle": { zh: "选择本地 ComfyUI 工作流，配置可暴露到画布的输入参数。", en: "Choose local ComfyUI workflows, then configure the inputs exposed to Canvas." },
         "comfy.localWorkflowMode": { zh: "本地 ComfyUI 工作流", en: "Local ComfyUI Workflow" },
         "comfy.workflowList": { zh: "工作流列表", en: "Workflows" },

@@ -16,10 +16,29 @@ button { font-family:inherit; cursor:pointer; border:0; background:transparent; 
 .page-head .title { font-size:26px; line-height:1.05; font-weight:900; letter-spacing:-.015em; }
 .page-head .sub { margin-top:8px; color:var(--muted); font-size:12.5px; line-height:1.55; font-weight:600; max-width:520px; }
 .page-head .status { color:var(--muted); font-size:11.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; min-height:16px; }
+.api-profile-bar { margin:-10px 4px 24px; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:18px; border:1px solid var(--line-strong); border-radius:14px; background:var(--panel); }
+.api-profile-bar[hidden] { display:none; }
+.api-profile-label { font-size:12px; font-weight:900; color:var(--text); }
+.api-profile-hint { margin-top:3px; font-size:10.5px; line-height:1.45; color:var(--muted); }
+.api-profile-bar select { min-width:240px; height:38px; padding:0 34px 0 12px; border:1px solid var(--line-strong); border-radius:10px; background:var(--soft); color:var(--text); font:800 12px/1 inherit; }
 .layout { display:grid; grid-template-columns:260px minmax(0,1fr); gap:36px; align-items:start; }
 /* Sidebar */
 .sidebar { display:flex; flex-direction:column; gap:12px; position:sticky; top:32px; max-height:calc(100vh - 64px); overflow-y:auto; -webkit-overflow-scrolling:touch; padding:16px; background:var(--panel); border:1px solid var(--line); border-radius:16px; }
 .side-section-title { color:var(--faint); font-size:10px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; padding:2px 4px; }
+.provider-groups { display:flex; flex-direction:column; gap:0; }
+.settings-category { display:flex; flex-direction:column; gap:9px; min-width:0; padding:14px 0; border-top:1px solid var(--line); }
+.settings-category:first-child { padding-top:0; border-top:0; }
+.settings-category-local { padding-bottom:0; }
+.settings-category-head { display:flex; align-items:center; gap:9px; min-width:0; padding:0 3px; }
+.settings-category-head > span:last-child { display:flex; flex-direction:column; min-width:0; gap:2px; }
+.settings-category-head strong { color:var(--text); font-size:11.5px; line-height:1.2; font-weight:900; letter-spacing:.02em; }
+.settings-category-head small { color:var(--faint); font-size:9.5px; line-height:1.35; font-weight:650; }
+.settings-category-icon { width:26px; height:26px; flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:8px; background:var(--soft); color:var(--muted); }
+.settings-category-icon svg { width:13px; height:13px; }
+.settings-category .provider-list { padding-bottom:0; margin-bottom:0; border-bottom:0; }
+.settings-category-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+.settings-category-actions .add-btn,.settings-category-actions .api-link-btn { height:36px; min-width:0; font-size:11px; }
+.settings-category-actions .api-link-btn { background:var(--panel); }
 .provider-list { display:flex; flex-direction:column; gap:4px; padding-bottom:8px; border-bottom:1px solid var(--line); margin-bottom:4px; }
 .provider-card { width:100%; text-align:left; border:1px solid transparent; background:transparent; border-radius:12px; padding:8px 10px; display:flex; align-items:center; gap:10px; color:var(--muted); transition:all .15s ease; min-height:48px; }
 .provider-card:hover { border-color:var(--text); color:var(--text); }
@@ -71,6 +90,14 @@ html.studio-theme-dark body .api-link-btn:hover { background:#ffffff; border-col
     line-height:1.45;
     font-weight:650;
 }
+.local-service-btn { width:100%; min-height:54px; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; padding:8px 9px; border:1px solid var(--line); border-radius:12px; background:var(--soft); color:var(--text); text-align:left; transition:border-color .15s ease, background .15s ease, transform .15s ease; }
+.local-service-btn:hover { border-color:var(--text); background:var(--panel); transform:translateY(-1px); }
+.local-service-mark { width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; border-radius:9px; border:1px solid var(--line); background:var(--panel); color:var(--muted); }
+.local-service-mark svg { width:15px; height:15px; }
+.local-service-copy { min-width:0; display:flex; flex-direction:column; gap:3px; }
+.local-service-copy strong { font-size:11.5px; line-height:1.2; font-weight:900; }
+.local-service-copy small { color:var(--muted); font-size:9.5px; line-height:1.35; font-weight:650; }
+.local-service-arrow { width:14px; height:14px; color:var(--faint); }
 .recommend-api-body { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; padding:18px 20px 6px; }
 /* 推荐分组（稳定/便宜）：组容器占满整行，组内卡片继续两列 */
 .recommend-group { grid-column:1 / -1; display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; }

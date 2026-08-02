@@ -1,6 +1,10 @@
 let providers = [];
 let selectedId = '';
+let apiProfiles = [];
+let currentApiProfileId = localStorage.getItem('studio_admin_api_profile_id') || '';
 const providerList = document.getElementById('providerList');
+const apiProfileBar = document.getElementById('apiProfileBar');
+const apiProfileSelect = document.getElementById('apiProfileSelect');
 const editorTitle = document.getElementById('editorTitle');
 const statusEl = document.getElementById('status');
 const nameInput = document.getElementById('nameInput');
@@ -2376,8 +2380,7 @@ function providerDragAttrs(item){
     const id = escapeAttr(item.id);
     return ` draggable="true" data-provider-id="${id}" ondragstart="handleProviderDragStart(event,'${id}')" ondragover="handleProviderDragOver(event,'${id}')" ondrop="handleProviderDrop(event,'${id}')" ondragend="handleProviderDragEnd()"`;
 }
-function renderProviderList(){
-    providerList.innerHTML = sortedProviders().map(item => {
+function providerCardHtml(item){
         const active = item.id === selectedId ? 'active' : '';
         const itemProtocol = String(item.protocol || 'openai').toLowerCase();
         const stateClass = item.enabled === false ? 'is-disabled' : (item.has_key || item.has_wallet_key || CLI_PROTOCOLS.has(itemProtocol) ? 'has-key' : 'missing-key');
@@ -2438,8 +2441,55 @@ function renderProviderList(){
                 </span>
             </button>
         `;
-    }).join('');
+}
+function renderProviderList(){
+    const items = sortedProviders();
+    const onlineProviders = items.filter(item => !CLI_PROTOCOLS.has(String(item.protocol || '').toLowerCase()));
+    const cliProviders = items.filter(item => CLI_PROTOCOLS.has(String(item.protocol || '').toLowerCase()));
+    const providerCards = list => list.map(providerCardHtml).join('');
+    providerList.innerHTML = `
+        <section class="settings-category settings-category-api">
+            <div class="settings-category-head">
+                <span class="settings-category-icon"><i data-lucide="cloud"></i></span>
+                <span>
+                    <strong>${escapeHtml(tr('api.onlineApis'))}</strong>
+                    <small>${escapeHtml(tr('api.onlineApisHint'))}</small>
+                </span>
+            </div>
+            <div class="provider-list">${providerCards(onlineProviders)}</div>
+            <div class="settings-category-actions">
+                <button class="add-btn" type="button" onclick="addProvider()"><i data-lucide="plus" class="w-4 h-4"></i><span>${escapeHtml(tr('api.addProvider'))}</span></button>
+                <button class="api-link-btn" type="button" onclick="openRecommendApi()"><i data-lucide="sparkles" class="w-4 h-4"></i><span>${escapeHtml(tr('api.recommendApi'))}</span></button>
+            </div>
+        </section>
+        <section class="settings-category settings-category-cli">
+            <div class="settings-category-head">
+                <span class="settings-category-icon"><i data-lucide="terminal-square"></i></span>
+                <span>
+                    <strong>${escapeHtml(tr('api.cliSettings'))}</strong>
+                    <small>${escapeHtml(tr('api.cliSettingsHint'))}</small>
+                </span>
+            </div>
+            ${cliProviders.length ? `<div class="provider-list provider-list-cli">${providerCards(cliProviders)}</div>` : ''}
+            <div class="cli-quick-list">
+                <button class="cli-quick-btn" type="button" onclick="addCliProvider('jimeng')"><i data-lucide="image" class="w-3.5 h-3.5"></i><span>即梦 CLI</span></button>
+                <button class="cli-quick-btn" type="button" onclick="addCliProvider('codex')"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span>GPT CLI</span></button>
+                <button class="cli-quick-btn" type="button" onclick="addCliProvider('gemini-cli')"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i><span>Antigravity CLI</span></button>
+                <div class="cli-quick-note">${escapeHtml(tr('api.cliInstallHint'))}</div>
+            </div>
+        </section>
+    `;
     refreshIcons();
+}
+function openLocalServiceSettings(){
+    try {
+        if(window.parent && window.parent !== window && typeof window.parent.switchUI === 'function'){
+            const entry = window.parent.document.getElementById('api-settings-entry-btn');
+            window.parent.switchUI(entry, 'comfyui-settings');
+            return;
+        }
+    } catch(e) {}
+    window.location.href = '/static/comfyui-settings.html';
 }
 function handleProviderDragStart(event, id){
     const item = providers.find(provider => provider.id === id);
@@ -2984,6 +3034,7 @@ async function probeAsync(){
                     base_url:baseUrl,
                     api_key:apiKey,
                     provider_id:'runninghub',
+                    api_profile_id:currentApiProfileId,
                     protocol:'runninghub',
                     image_request_mode:'openai'
                 })
@@ -3005,6 +3056,7 @@ async function probeAsync(){
                 base_url: baseUrl,
                 api_key: apiKey,
                 provider_id: item.id,
+                api_profile_id:currentApiProfileId,
                 protocol: currentProtocol,
                 image_request_mode: imageRequestModeInput?.value || item.image_request_mode || 'openai'
             })
@@ -3071,6 +3123,7 @@ async function testConnection(){
                 base_url: baseUrl,
                 api_key: apiKey,
                 provider_id: runninghubContext ? 'runninghub' : item.id,
+                api_profile_id:currentApiProfileId,
                 protocol: runninghubContext ? 'runninghub' : (protocolInput?.value || 'openai'),
                 image_request_mode: imageRequestModeInput?.value || item.image_request_mode || 'openai'
             })
@@ -3229,6 +3282,7 @@ async function fetchModels(){
                 base_url:baseUrl,
                 api_key:apiKey,
                 provider_id:runninghubContext ? 'runninghub' : item.id,
+                api_profile_id:currentApiProfileId,
                 protocol:runninghubContext ? 'runninghub' : (protocolInput?.value || 'openai'),
                 image_request_mode:imageRequestModeInput?.value || item.image_request_mode || 'openai'
             })
@@ -3735,8 +3789,33 @@ function removeModel(kind, index){
 async function loadProviders(){
     setStatus(tr('api.loading'));
     try {
-        const data = await fetch('/api/providers').then(r => r.json());
+        const query = currentApiProfileId ? `?api_profile_id=${encodeURIComponent(currentApiProfileId)}` : '';
+        const response = await fetch(`/api/providers${query}`);
+        const data = await response.json();
+        if(!response.ok){
+            if(response.status === 404 && currentApiProfileId){
+                currentApiProfileId = '';
+                localStorage.removeItem('studio_admin_api_profile_id');
+                return loadProviders();
+            }
+            throw new Error(data.detail || tr('api.loadFailed'));
+        }
         providers = data.providers || [];
+        currentApiProfileId = data.api_profile?.id || currentApiProfileId;
+        if(data.can_manage){
+            const profilesResponse = await fetch('/api/admin/api-profiles');
+            const profilesData = await profilesResponse.json();
+            if(!profilesResponse.ok) throw new Error(profilesData.detail || tr('api.loadFailed'));
+            apiProfiles = profilesData.profiles || [];
+            apiProfileBar.hidden = false;
+            apiProfileSelect.innerHTML = apiProfiles.map(item =>
+                `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}${item.enabled ? '' : '（已停用）'}</option>`
+            ).join('');
+            apiProfileSelect.value = currentApiProfileId;
+            localStorage.setItem('studio_admin_api_profile_id', currentApiProfileId);
+        }else{
+            apiProfileBar.hidden = true;
+        }
         selectedId = sortedProviders()[0]?.id || '';
         renderEditor();
         openRecommendApi();
@@ -3805,7 +3884,8 @@ async function saveProviders(){
     }
     setStatus(tr('api.saving'));
     try {
-        const res = await fetch('/api/providers', {
+        const query = currentApiProfileId ? `?api_profile_id=${encodeURIComponent(currentApiProfileId)}` : '';
+        const res = await fetch(`/api/providers${query}`, {
             method:'PUT',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify(providers.map(item => ({
@@ -3819,6 +3899,7 @@ async function saveProviders(){
                 image_edit_endpoint:item.image_edit_endpoint || '',
                 enabled:item.enabled !== false,
                 primary:false,
+                billing_scope:item.billing_scope || 'department',
                 image_models:item.image_models || [],
                 chat_models:item.chat_models || [],
                 video_models:item.video_models || [],
@@ -3863,6 +3944,13 @@ async function saveProviders(){
         setStatus(err.message || tr('api.saveFailed'));
         return false;
     }
+}
+if(apiProfileSelect){
+    apiProfileSelect.addEventListener('change', async () => {
+        currentApiProfileId = apiProfileSelect.value;
+        localStorage.setItem('studio_admin_api_profile_id', currentApiProfileId);
+        await loadProviders();
+    });
 }
 function escapeHtml(str){
     return String(str || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));

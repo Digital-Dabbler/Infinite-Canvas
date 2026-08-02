@@ -19,8 +19,8 @@
     <script src="/static/vendor/js/lucide.js?v=2026.07.29.1784512371"></script>
     <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1784512402"></script>
-    <script src="/static/js/i18n.js?v=2026.07.29.1785394520"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785441959">
+    <script src="/static/js/i18n.js?v=2026.07.29.1785607755"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785643821">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -30,11 +30,7 @@
                     <div class="composer-head">
                         <div class="composer-head-left">
                             <select id="engineSelect" class="engine-select">
-                                <option value="api" data-i18n="smart.engineApi">API生成</option>
-                                <option value="volcengine" data-i18n="smart.engineVolcengine">火山引擎</option>
-                                <option value="modelscope" data-i18n="smart.engineMs">MS生成</option>
-                                <option value="comfy" data-i18n="smart.engineComfy">ComfyUI生成</option>
-                                <option value="runninghub" data-i18n="smart.engineRh">RunningHub</option>
+                                <option value="" data-i18n="smart.platformLoading">正在读取平台…</option>
                             </select>
                             <div id="apiKindToggle" class="kind-toggle" style="display:none">
                                 <button type="button" data-kind="image" class="active"><i data-lucide="image"></i><span data-i18n="smart.kindImage">图片</span></button>
@@ -64,18 +60,20 @@
         </div>
         <button class="smart-back" type="button" onclick="backToCanvasList()"><i data-lucide="arrow-left"></i><span data-i18n="canvas.backToList">返回画布列表</span></button>
         <div id="smartTitle" class="smart-title" data-i18n="smart.title">智能画布</div>
-        <div id="imageActionToolbar" class="image-action-toolbar" aria-label="图片工具">
-            <button type="button" data-image-toolbar-action="edit" title="图片编辑"><i data-lucide="sparkles"></i><span>图片编辑</span></button>
-            <button type="button" data-image-toolbar-action="crop" title="裁剪"><i data-lucide="crop"></i><span>裁剪</span></button>
-            <button type="button" data-image-toolbar-action="outpaint" title="扩图"><i data-lucide="expand"></i><span>扩图</span></button>
-            <button type="button" data-image-toolbar-action="mask" title="遮罩"><i data-lucide="brush"></i><span>遮罩</span></button>
-            <button type="button" data-image-toolbar-action="brush" title="画笔"><i data-lucide="paintbrush"></i><span>画笔</span></button>
-            <button type="button" data-image-toolbar-action="upscale" title="放大"><i data-lucide="maximize-2"></i><span>放大</span></button>
-            <button type="button" data-image-toolbar-action="grid" title="宫格切分"><i data-lucide="grid-3x3"></i><span>宫格切分</span></button>
+        <div id="imageActionToolbar" class="image-action-toolbar" aria-label="媒体工具">
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="edit" title="图片编辑"><i data-lucide="sparkles"></i><span>图片编辑</span></button>
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="crop" title="裁剪"><i data-lucide="crop"></i><span>裁剪</span></button>
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="outpaint" title="扩图"><i data-lucide="expand"></i><span>扩图</span></button>
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="mask" title="遮罩"><i data-lucide="brush"></i><span>遮罩</span></button>
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="brush" title="画笔"><i data-lucide="paintbrush"></i><span>画笔</span></button>
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="upscale" title="放大"><i data-lucide="maximize-2"></i><span>放大</span></button>
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="grid" title="宫格切分"><i data-lucide="grid-3x3"></i><span>宫格切分</span></button>
+            <button type="button" data-toolbar-kind="video" data-image-toolbar-action="trim" title="截取视频片段" data-i18n-title="smart.videoTrim"><i data-lucide="scissors"></i><span data-i18n="smart.videoTrimShort">截取片段</span></button>
+            <button type="button" data-toolbar-kind="video" data-image-toolbar-action="frames" title="逐帧查看与导出画面" data-i18n-title="smart.videoFrameTools"><i data-lucide="gallery-horizontal-end"></i><span data-i18n="smart.videoFrameToolsShort">帧工具</span></button>
             <span class="image-action-divider"></span>
             <button type="button" data-image-toolbar-action="preview" title="预览"><i data-lucide="eye"></i><span>预览</span></button>
             <button type="button" data-image-toolbar-action="download" title="下载"><i data-lucide="download"></i><span>下载</span></button>
-            <button type="button" class="image-toolbar-delete" data-image-toolbar-action="delete" title="删除当前图片"><i data-lucide="trash-2"></i><span>删除</span></button>
+            <button type="button" class="image-toolbar-delete" data-image-toolbar-action="delete" title="删除当前结果"><i data-lucide="trash-2"></i><span>删除</span></button>
         </div>
         <div id="photoshopContextMenu" class="photoshop-context-menu" role="menu" aria-hidden="true"></div>
         <div id="photoshopInstallModal" class="photoshop-install-modal" aria-hidden="true">
@@ -498,9 +496,20 @@
                 <div class="image-edit-actions">
                     <span id="imageEditZoomLabel" style="color:#94a3b8;font-size:11px;font-weight:800;padding:0 4px;margin-right:auto;cursor:pointer;user-select:none" title="双击重置缩放" ondblclick="resetImageEditZoom()">100%</span>
                     <div id="videoFrameTools" class="video-frame-tools" style="display:none">
-                        <button class="image-edit-btn secondary" type="button" onclick="exportVideoFrame('first')"><i data-lucide="skip-back" class="w-4 h-4"></i><span>导出首帧</span></button>
-                        <button class="image-edit-btn primary" type="button" onclick="exportVideoFrame('current')"><i data-lucide="image-down" class="w-4 h-4"></i><span>导出当前帧</span></button>
-                        <button class="image-edit-btn secondary" type="button" onclick="exportVideoFrame('last')"><i data-lucide="skip-forward" class="w-4 h-4"></i><span>导出尾帧</span></button>
+                        <div class="video-frame-tool-row">
+                            <button class="image-edit-btn secondary" type="button" onclick="exportVideoFrame('first')"><i data-lucide="skip-back" class="w-4 h-4"></i><span data-i18n="smart.videoExportFirstFrame">导出首帧</span></button>
+                            <button class="image-edit-btn primary" type="button" onclick="exportVideoFrame('current')"><i data-lucide="image-down" class="w-4 h-4"></i><span data-i18n="smart.videoExportCurrentFrame">导出当前帧</span></button>
+                            <button class="image-edit-btn secondary" type="button" onclick="exportVideoFrame('last')"><i data-lucide="skip-forward" class="w-4 h-4"></i><span data-i18n="smart.videoExportLastFrame">导出尾帧</span></button>
+                        </div>
+                        <div class="video-trim-tool-row">
+                            <button class="image-edit-btn secondary" type="button" onclick="markVideoTrimPoint('start')"><i data-lucide="flag"></i><span data-i18n="smart.videoSetTrimStart">设为起点</span></button>
+                            <span id="videoTrimRange" class="video-trim-range">00:00.0 — 00:00.0</span>
+                            <button class="image-edit-btn secondary" type="button" onclick="markVideoTrimPoint('end')"><i data-lucide="flag"></i><span data-i18n="smart.videoSetTrimEnd">设为终点</span></button>
+                            <button id="videoTrimPreviewBtn" class="image-edit-btn secondary" type="button" onclick="previewVideoTrimRange()"><i data-lucide="play"></i><span data-i18n="smart.videoPreviewTrim">预览片段</span></button>
+                            <button id="videoTrimMuteBtn" class="image-edit-btn secondary" type="button" onclick="toggleVideoTrimMute()"><i data-lucide="volume-2"></i><span data-i18n="smart.videoKeepAudio">保留声音</span></button>
+                            <button id="videoPreviewSpeedBtn" class="image-edit-btn secondary" type="button" onclick="cyclePreviewVideoSpeed()"><i data-lucide="gauge"></i><span>1×</span></button>
+                            <button id="videoTrimExportBtn" class="image-edit-btn primary" type="button" onclick="exportVideoTrim()"><i data-lucide="scissors"></i><span data-i18n="smart.videoExportTrim">导出片段</span></button>
+                        </div>
                     </div>
                     <button id="imageEditCancelBtn" class="image-edit-btn secondary" type="button" onclick="closeImageEditor()" data-i18n="common.cancel">取消</button>
                     <button id="imageEditApplyBtn" class="image-edit-btn primary" type="button" onclick="applyImageEdit()"><i data-lucide="crop" class="w-4 h-4"></i><span data-i18n="canvas.applyCrop">应用裁剪</span></button>
@@ -510,6 +519,6 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785441936"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785643784"></script>
 </body>
 </html>

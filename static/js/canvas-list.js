@@ -11,6 +11,7 @@ function escapeAttr(str){ return escapeHtml(str); }
 function L(zh, en){ return langIsEn() ? en : zh; }
 function compactLabel(fullZh, compactZh, en){ return window.innerWidth <= 760 ? L(compactZh, en) : L(fullZh, en); }
 const CANVAS_LIST_PROJECT_KEY = 'canvasListCurrentProjectId';
+let canvasStaticVersion = '';
 
 function rememberedProjectId(){
     try {
@@ -178,12 +179,15 @@ function canvasesInProject(pid){ return canvases.filter(c => (c.project || 'defa
 
 async function loadAll(){
     try {
-        const [pRes, cRes] = await Promise.all([
+        const [pRes, cRes, appInfoRes] = await Promise.all([
             fetch('/api/projects'),
-            fetch('/api/canvases')
+            fetch('/api/canvases'),
+            fetch('/api/app-info', { cache:'no-store' }).catch(() => null)
         ]);
         const pData = pRes.ok ? await pRes.json() : { projects: [] };
         const cData = cRes.ok ? await cRes.json() : { canvases: [] };
+        const appInfo = appInfoRes?.ok ? await appInfoRes.json().catch(() => ({})) : {};
+        canvasStaticVersion = String(appInfo.canvas_static_version || appInfo.version || 'current');
         projects = (pData.projects || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
         if(!projects.length) projects = [{ id: 'default', name: L('默认项目','Default'), order: 0, canvas_count: 0 }];
         canvases = cData.canvases || [];
@@ -465,10 +469,13 @@ function attachCardDrag(card, c){
 function openCanvas(c){
     const enc = encodeURIComponent(c.id);
     const project = encodeURIComponent(c.project || currentProjectId || 'default');
+    // 同一套画布代码复用同一版本缓存；只有相关 HTML/JS/CSS/词条变化时，
+    // 服务端给出的版本才会改变，从而避免更新后继续复用旧页面。
+    const cacheVersion = encodeURIComponent(canvasStaticVersion || 'current');
     rememberProjectId(c.project || currentProjectId || 'default');
     window.location.href = (c.kind === 'smart')
-        ? `/static/smart-canvas.html?id=${enc}&project=${project}&v=2026.07.03.4`
-        : `/static/canvas.html?id=${enc}&project=${project}&v=2026.07.03.4`;
+        ? `/static/smart-canvas.html?id=${enc}&project=${project}&v=${cacheVersion}`
+        : `/static/canvas.html?id=${enc}&project=${project}&v=${cacheVersion}`;
 }
 
 /* ===== Card create flow ===== */

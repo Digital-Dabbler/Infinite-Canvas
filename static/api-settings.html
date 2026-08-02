@@ -16,12 +16,12 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.07.28.1782696751"></script>
-    <script src="/static/vendor/js/lucide.js?v=2026.07.28.1782696749"></script>
-    <script src="/static/js/theme.js?v=2026.07.28.1783117645"></script>
-    <script src="/static/js/i18n.js?v=2026.07.28.1784772334"></script>
-    <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.28.1782696682">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.28.1783956643">
+    <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.07.29.1784512371"></script>
+    <script src="/static/vendor/js/lucide.js?v=2026.07.29.1784512371"></script>
+    <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
+    <script src="/static/js/i18n.js?v=2026.07.29.1785607755"></script>
+    <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1784512371">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.29.1785639435">
 </head>
 <body>
     <div class="page">
@@ -29,26 +29,38 @@
             <header class="page-head">
                 <div>
                     <div class="title" data-i18n="api.title">API 设置</div>
-                    <div class="sub" data-i18n="api.subtitle">管理平台地址、模型列表和 Key。Key 写入后端 env，页面不会回显完整内容。</div>
+                    <div class="sub" data-i18n="api.subtitle">统一管理在线 API、CLI 与本地服务。Key 写入后端 env，页面不会回显完整内容。</div>
                 </div>
                 <div id="status" class="status"></div>
             </header>
+            <section id="apiProfileBar" class="api-profile-bar" hidden>
+                <div>
+                    <div class="api-profile-label" data-i18n="api.profileLabel">当前 API 配置组</div>
+                    <div class="api-profile-hint" data-i18n="api.profileHint">平台、模型和凭据只保存到当前配置组。</div>
+                </div>
+                <select id="apiProfileSelect" aria-label="API 配置组"></select>
+            </section>
 
             <div class="layout">
                 <aside class="sidebar">
-                    <div class="side-section-title" data-i18n="api.providersTitle">平台列表</div>
-                    <div id="providerList" class="provider-list"></div>
-                    <button class="add-btn" type="button" onclick="addProvider()"><i data-lucide="plus" class="w-4 h-4"></i><span data-i18n="api.addProvider">新增平台</span></button>
-                    <button class="api-link-btn" type="button" onclick="openRecommendApi()"><i data-lucide="sparkles" class="w-4 h-4"></i><span data-i18n="api.recommendApi">推荐API</span></button>
-                    <div class="cli-quick-group">
-                        <div class="side-section-title" data-i18n="api.cliSettings">CLI 设置</div>
-                        <div class="cli-quick-list">
-                            <button class="cli-quick-btn" type="button" onclick="addCliProvider('jimeng')"><i data-lucide="image" class="w-3.5 h-3.5"></i><span>即梦 CLI</span></button>
-                            <button class="cli-quick-btn" type="button" onclick="addCliProvider('codex')"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span>GPT CLI</span></button>
-                            <button class="cli-quick-btn" type="button" onclick="addCliProvider('gemini-cli')"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i><span>Antigravity CLI</span></button>
-                            <div class="cli-quick-note">需要先安装 CLI文件夹中的依赖。</div>
+                    <div id="providerList" class="provider-groups"></div>
+                    <section class="settings-category settings-category-local">
+                        <div class="settings-category-head">
+                            <span class="settings-category-icon"><i data-lucide="hard-drive"></i></span>
+                            <span>
+                                <strong data-i18n="api.localServices">本地服务</strong>
+                                <small data-i18n="api.localServicesHint">使用本机算力与工作流</small>
+                            </span>
                         </div>
-                    </div>
+                        <button class="local-service-btn" type="button" onclick="openLocalServiceSettings()">
+                            <span class="local-service-mark"><i data-lucide="workflow"></i></span>
+                            <span class="local-service-copy">
+                                <strong data-i18n="api.comfyLocalService">ComfyUI 与工作流</strong>
+                                <small data-i18n="api.comfyLocalServiceHint">后端地址、工作流与节点参数</small>
+                            </span>
+                            <i data-lucide="chevron-right" class="local-service-arrow"></i>
+                        </button>
+                    </section>
                 </aside>
 
                 <main id="settingsContent" class="content">
@@ -566,6 +578,6 @@
         </div>
     </div>
 
-    <script src="/static/js/api-settings.js?v=2026.07.28.1785119308"></script>
+    <script src="/static/js/api-settings.js?v=2026.07.29.1785639335"></script>
 </body>
 </html>

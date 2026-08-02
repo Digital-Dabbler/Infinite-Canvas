@@ -1,44 +1,51 @@
-**Source visual truth**
+**Comparison target**
 
-- `C:\tmp\openclaw\rh-output\usage-dashboard-pulse-20260721.png`
-- Target viewport: desktop, 2048 × 1152 reference composition.
-- Target state: dark-mode analytics dashboard with an active chart-to-table drill-down filter.
+- Source visual truth: `C:\Users\admin\AppData\Local\Temp\codex-clipboard-51a2feb4-74a7-4485-b17d-bcf92011570b.png`
+- Implementation screenshot: `C:\AI\Infinite-Canvas\design-qa-implementation.png`
+- Combined comparison: `C:\AI\Infinite-Canvas\design-qa-comparison.png`
+- Viewport: 1280 × 720 CSS px, device scale factor 1
+- Source pixels: 1517 × 907
+- Implementation pixels: 1280 × 720
+- Normalization: both images were proportionally fit to a shared 720 px-high comparison canvas.
+- State: dark theme, generated image preview open, generation source and prompt present, reproduction enabled.
 
-**Implementation evidence**
+**Full-view comparison evidence**
 
-- Local target: `http://127.0.0.1:3000/static/admin.html`.
-- Browser-rendered implementation screenshot: unavailable. The server correctly redirected the unauthenticated browser session to the login page before it could render the administrator-only dashboard.
-- Browser console checks for the dashboard are blocked by the same administrator authentication boundary.
-- Static verification completed: `main.py` AST parse and the extracted `admin.html` inline JavaScript syntax check both passed.
+- The new information area sits directly below the preview image and above the existing footer, matching the annotated placement.
+- The source, prompt, and primary reproduction action preserve the intended left-to-right hierarchy.
+- The implementation intentionally uses the application's existing compact sizing, tokens, radii, and Lucide icons instead of reproducing the red annotation marks.
 
-**Findings**
+**Focused region comparison evidence**
 
-- [P1] Authenticated visual comparison is blocked.
-  Location: administrator-only `/static/admin.html` route.
-  Evidence: the local browser opened the login screen rather than the dashboard, as required by the application authentication contract.
-  Impact: the selected reference image and rendered implementation cannot be placed in a single visual comparison input, and chart click states cannot be exercised in-browser.
-  Fix: sign in with an administrator session, then capture the default dashboard and one selected chart state at the desktop target viewport.
+- Focused inspection of the lower preview region confirms that the source text truncates safely, the prompt remains readable, and the primary button stays visually distinct.
+- At 1280 × 720, the panel measured 929.45 × 59.31 CSS px and remained fully visible without hiding the footer controls.
 
 **Required fidelity surfaces**
 
-- Fonts and typography: blocked from rendered comparison; implementation uses the project’s system/Microsoft YaHei stack.
-- Spacing and layout rhythm: blocked from rendered comparison; implementation follows the selected design’s KPI → dominant trend → compact analyses → detail-table sequence.
-- Colors and visual tokens: blocked from rendered comparison; implementation maps the reference charcoal, border, green, red, yellow, blue, and purple tokens into local CSS variables.
-- Image quality and asset fidelity: no raster artwork is required by this dashboard surface; Lucide is loaded from the project’s local vendor bundle for the filter icon.
-- Copy and content: blocked from rendered comparison; UI copy was implemented in Chinese and retains the existing detail-table vocabulary.
+- Fonts and typography: existing application font stack and optical weights are preserved; labels, values, and action hierarchy are clear.
+- Spacing and layout rhythm: the three requested areas align on one row at desktop width and collapse responsively at 860 px and 620 px.
+- Colors and visual tokens: all surfaces use the existing `--card`, `--soft`, `--line`, `--text`, `--muted`, and `--strong` tokens.
+- Image quality and asset fidelity: existing preview rendering is unchanged; no visible asset was replaced or approximated.
+- Copy and content: bilingual strings cover generation source, prompt, empty metadata, unavailable reproduction, and success feedback.
 
-**Implementation checklist**
+**Findings**
 
-1. Authenticate as an administrator and open the local dashboard.
-2. Confirm the trend point, status segment, and ranking row each update the table and display filter chips.
-3. Capture the default and selected states, compare with the source visual, then resolve any P0/P1/P2 deviations.
+- No actionable P0, P1, or P2 visual mismatch remains.
 
-**Follow-up polish**
+**Interaction verification**
 
-- Consider adding an explicit date-preset control once real usage history spans multiple days.
+- Generation source resolved to the recorded provider and model.
+- The full recorded prompt rendered in the prompt area.
+- Reproduction was enabled when `runSettings` existed.
+- Browser console errors checked: none.
+- The destructive/persistent reproduction click was not executed against the user's existing canvas data; its graph construction path was verified statically.
 
 **Comparison history**
 
-- Iteration 1: blocked before rendered implementation capture because the browser session is unauthenticated.
+- Initial pass: no P0/P1/P2 issue found, so no visual fix loop was required.
 
-final result: blocked
+**Follow-up polish**
+
+- P3: a future iteration could add an optional copy-prompt icon if prompt reuse without workflow recreation becomes common.
+
+final result: passed

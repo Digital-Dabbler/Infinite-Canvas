@@ -111,6 +111,12 @@ let portDragJustFinishedAt = 0;
 let connectionEraseState = null;
 let saveTimer = null;
 let apiProviders = [];
+const imageModelCapabilityCache = new Map();
+const imageModelCapabilityRequests = new Map();
+const imageProviderCapabilityRequests = new Map();
+const videoModelCapabilityCache = new Map();
+const videoModelCapabilityRequests = new Map();
+const videoProviderCapabilityRequests = new Map();
 let comfyWorkflows = [];
 let comfyInstanceCount = 1;
 let assetLibrary = {categories:[]};
@@ -291,6 +297,7 @@ let previewCompareDrag = false;
 let previewComparePos = 50;
 let imageEditPanDrag = null;
 let previewNavState = {nodeId:'', index:0, count:0};
+let videoTrimState = {start:0, end:0, mute:false, previewing:false, speed:1};
 const PANORAMA_RATIO_PRESETS = {
     square:{w:1, h:1},
     portrait:{w:2, h:3},
@@ -341,6 +348,11 @@ let settings = {
     customHeight:'',
     quality:'auto',
     count:1,
+    imageCapabilityKey:'',
+    imageCapabilitySize:'',
+    imageCapabilityWidth:'',
+    imageCapabilityHeight:'',
+    imageModelParams:{},
     videoProvider:'',
     videoModel:'',
     videoDuration:5,
@@ -351,6 +363,7 @@ let settings = {
     videoWatermark:false,
     videoCameraFixed:false,
     videoGenerateAudio:false,
+    videoReturnLastFrame:false,
     videoMultimodal:true,
     _videoMultimodalUserSet:false,
     videoUseFrameRoles:false,
@@ -370,6 +383,7 @@ let settings = {
     comfyMode:'text',
     comfyWorkflow:'',
     comfyParams:{},
+    rhCapability:'model',
     rhConfigKey:'',
     rhPayment:'free',
     rhInstanceType:'',
@@ -701,6 +715,153 @@ function normalizeSmartVideoModeSettings(target, preferMultimodal=false){
 }
 function isApiLikeEngine(engine){
     return ['api', 'volcengine'].includes(String(engine || '').toLowerCase());
+}
+const SMART_CLI_PROTOCOLS = new Set(['jimeng', 'codex', 'gemini-cli']);
+function smartProviderProtocol(provider){
+    return String(provider?.protocol || '').trim().toLowerCase();
+}
+function composerEngineSelectValue(source=settings){
+    const engine = String(source?.engine || 'api').toLowerCase();
+    if(engine === 'comfy') return 'local:comfy';
+    if(engine === 'modelscope') return 'provider:modelscope';
+    if(engine === 'volcengine') return 'provider:volcengine';
+    if(engine === 'runninghub') return 'provider:runninghub';
+    const providerId = source?.apiKind === 'video' ? source?.videoProvider : source?.provider_id;
+    return providerId ? `provider:${providerId}` : '';
+}
+function composerProviderSupportsKind(provider, kind=settings.apiKind){
+    if(!provider || provider.enabled === false) return false;
+    if(provider.id === 'runninghub' && ((provider.rh_apps || []).length || (provider.rh_workflows || []).length)) return true;
+    return kind === 'video' ? Boolean((provider.video_models || []).length) : Boolean((provider.image_models || []).length);
+}
+function composerPlatformGroups(){
+    const kind = settings.apiKind === 'video' ? 'video' : 'image';
+    const providers = (apiProviders || []).filter(provider => composerProviderSupportsKind(provider, kind));
+    return [
+        {label:tr('smart.engineGroupApi'), items:providers.filter(provider => !SMART_CLI_PROTOCOLS.has(smartProviderProtocol(provider)))},
+        {label:tr('smart.engineGroupCli'), items:providers.filter(provider => SMART_CLI_PROTOCOLS.has(smartProviderProtocol(provider)))},
+        {label:tr('smart.engineGroupLocal'), items:[{id:'comfy', name:'ComfyUI', local:true}]}
+    ].filter(group => group.items.length);
+}
+function syncComposerEngineSelect(){
+    if(!engineSelect) return;
+    if(!(apiProviders || []).length){
+        engineSelect.innerHTML = `<option value="">${escapeHtml(tr('smart.platformLoading'))}</option>`;
+        engineSelect.disabled = true;
+        return;
+    }
+    engineSelect.disabled = false;
+    const current = composerEngineSelectValue(settings);
+    engineSelect.innerHTML = '';
+    composerPlatformGroups().forEach(group => {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = group.label;
+        group.items.forEach(item => {
+            const option = document.createElement('option');
+            option.value = item.local ? `local:${item.id}` : `provider:${item.id}`;
+            option.textContent = item.name || item.id;
+            optgroup.appendChild(option);
+        });
+        engineSelect.appendChild(optgroup);
+    });
+    const options = [...engineSelect.options];
+    engineSelect.value = options.some(option => option.value === current) ? current : (options[0]?.value || '');
+}
+function runningHubCapabilityAvailable(kind, apiKind=settings.apiKind){
+    if(kind === 'model'){
+        const provider = runningHubProvider();
+        return apiKind === 'video' ? Boolean((provider?.video_models || []).length) : Boolean((provider?.image_models || []).length);
+    }
+    return runningHubEntries(kind).length > 0;
+}
+function currentRunningHubCapability(source=settings){
+    source = source || settings;
+    if(source.engine === 'runninghub'){
+        const parsed = parseRunningHubEntryKey(source.rhConfigKey || '');
+        const kind = ['app','workflow'].includes(source.rhCapability) ? source.rhCapability : parsed?.kind;
+        if(kind) return kind;
+    }
+    if(source.engine === 'api'){
+        const providerId = source.apiKind === 'video' ? source.videoProvider : source.provider_id;
+        if(providerId === 'runninghub') return 'model';
+    }
+    return ['model','app','workflow'].includes(source.rhCapability) ? source.rhCapability : 'model';
+}
+function switchRunningHubCapability(kind, options={}){
+    const apiKind = settings.apiKind === 'video' ? 'video' : 'image';
+    const capability = ['model','app','workflow'].includes(kind) ? kind : 'model';
+    settings.rhCapability = capability;
+    if(capability === 'model'){
+        settings.engine = 'api';
+        settings.apiKind = apiKind;
+        const provider = runningHubProvider();
+        if(apiKind === 'video'){
+            settings.videoProvider = 'runninghub';
+            const models = provider?.video_models || [];
+            if(!models.includes(settings.videoModel)) settings.videoModel = models[0] || '';
+        } else {
+            settings.provider_id = 'runninghub';
+            const models = provider?.image_models || [];
+            if(!models.includes(settings.model)) settings.model = models[0] || '';
+        }
+    } else {
+        settings.engine = 'runninghub';
+        const entries = runningHubEntries(capability);
+        const parsed = parseRunningHubEntryKey(settings.rhConfigKey || '');
+        const entry = parsed?.kind === capability
+            ? entries.find(item => runningHubEntryId(item, capability) === parsed.id)
+            : null;
+        const selected = entry || entries[0] || null;
+        settings.rhConfigKey = selected ? runningHubEntryKey(capability, runningHubEntryId(selected, capability)) : '';
+        if(options.resetParams !== false){
+            settings.rhParams = {};
+            settings.rhRandomActive = {};
+        }
+    }
+    sanitizeSmartApiSelection(settings);
+}
+function applyComposerEngineSelection(value){
+    const selected = String(value || '');
+    const requestedApiKind = settings.apiKind === 'video' ? 'video' : 'image';
+    if(selected === 'local:comfy'){
+        settings.engine = 'comfy';
+        applyRecentSmartSettingsForCurrentMode();
+        return true;
+    }
+    const providerId = selected.startsWith('provider:') ? selected.slice(9) : '';
+    const provider = (apiProviders || []).find(item => item.id === providerId && item.enabled !== false);
+    if(!provider){
+        toast(tr('smart.platformNotConfigured'));
+        syncComposerEngineSelect();
+        return false;
+    }
+    if(providerId === 'runninghub'){
+        const wasRunningHub = composerEngineSelectValue(settings) === 'provider:runninghub';
+        const capability = wasRunningHub ? currentRunningHubCapability(settings) : 'model';
+        settings.engine = capability === 'model' ? 'api' : 'runninghub';
+        applyRecentSmartSettingsForCurrentMode();
+        settings.apiKind = requestedApiKind;
+        switchRunningHubCapability(capability);
+        return true;
+    }
+    if(providerId === 'modelscope'){
+        settings.engine = 'modelscope';
+        applyRecentSmartSettingsForCurrentMode();
+        return true;
+    }
+    if(providerId === 'volcengine'){
+        settings.engine = 'volcengine';
+        settings.apiKind = requestedApiKind;
+        applyRecentSmartSettingsForCurrentMode();
+        return true;
+    }
+    settings.engine = 'api';
+    applyRecentSmartSettingsForCurrentMode();
+    settings.apiKind = requestedApiKind;
+    if(requestedApiKind === 'video') settings.videoProvider = providerId;
+    else settings.provider_id = providerId;
+    sanitizeSmartApiSelection(settings);
+    return true;
 }
 function smartLoopRoundSettings(runSettings, ctx=smartLoopContext){
     const next = {...(runSettings || {})};
@@ -2385,7 +2546,7 @@ function volcengineProvider(){
         id:'volcengine',
         name:'火山引擎',
         image_models:[],
-        video_models:DEFAULT_VIDEO_MODELS,
+        video_models:[],
         enabled:true
     };
 }
@@ -2432,8 +2593,14 @@ function selectedRunningHubRef(sourceSettings=settings){
     const all = runningHubAllEntries();
     sourceSettings = sourceSettings || settings;
     const parsed = parseRunningHubEntryKey(sourceSettings.rhConfigKey || '');
-    let ref = parsed ? all.find(item => item.kind === parsed.kind && item.id === parsed.id) : null;
-    if(!ref && all.length) ref = all[0];
+    const desiredKind = sourceSettings.engine === 'runninghub'
+        ? (['app','workflow'].includes(sourceSettings.rhCapability) ? sourceSettings.rhCapability : parsed?.kind)
+        : (['model','app','workflow'].includes(sourceSettings.rhCapability) ? sourceSettings.rhCapability : parsed?.kind);
+    let ref = parsed && (!desiredKind || parsed.kind === desiredKind)
+        ? all.find(item => item.kind === parsed.kind && item.id === parsed.id)
+        : null;
+    if(!ref && desiredKind) ref = all.find(item => item.kind === desiredKind) || null;
+    if(!ref && !desiredKind && all.length) ref = all[0];
     if(ref && sourceSettings === settings) settings.rhConfigKey = runningHubEntryKey(ref.kind, ref.id);
     return ref || null;
 }
@@ -2643,10 +2810,10 @@ function sanitizeSmartApiSelection(target=settings){
         if(!target.resolution) target.resolution = allowAuto ? defaultSmartApiResolution(target.model) : '1k';
         if(!allowAuto && target.resolution === 'auto') target.resolution = '1k';
     }
-    if(target.videoProvider){
-        const models = providerVideoModels(target.videoProvider);
-        if(models.length && !models.includes(target.videoModel)) target.videoModel = models[0] || '';
-    }
+    const videoProviders = videoApiProviders();
+    if(!videoProviders.some(provider => provider.id === target.videoProvider)) target.videoProvider = videoProviders[0]?.id || '';
+    const models = providerVideoModels(target.videoProvider);
+    if(!models.includes(target.videoModel)) target.videoModel = models[0] || '';
     return target;
 }
 function modelscopeProvider(){
@@ -2655,11 +2822,8 @@ function modelscopeProvider(){
 function modelscopeImageModels(){
     return modelscopeProvider()?.image_models || ['Tongyi-MAI/Z-Image-Turbo'];
 }
-const DEFAULT_VIDEO_MODELS = ['veo3-fast','veo3','sora','runway','kling','pika','minimax-video','wan-v2','seedance-1.0-pro','jimeng-vide-3.0','jimeng-video-3.0-pro'];
 function videoApiProviders(){
-    const fromConfig = (apiProviders || []).filter(p => p.enabled !== false && p.id !== 'volcengine' && (p.video_models || []).length);
-    if(fromConfig.length) return fromConfig;
-    return [{id:'comfly', name:'Comfly', video_models:DEFAULT_VIDEO_MODELS, enabled:true}];
+    return (apiProviders || []).filter(p => p.enabled !== false && p.id !== 'volcengine' && (p.video_models || []).length);
 }
 function videoProviderById(providerId){
     if(providerId === 'volcengine') return volcengineProvider();
@@ -2668,32 +2832,293 @@ function videoProviderById(providerId){
 function providerVideoModels(providerId){
     if(providerId === 'volcengine') return volcengineVideoModels();
     const provider = videoApiProviders().find(p => p.id === providerId);
-    // API 设置页与画布页各自维护一份前端状态；即梦 CLI 的模型集合是本地固定能力，
-    // 因此节点侧要把已拉取列表与当前 CLI 支持列表合并，避免旧缓存漏掉新模型。
-    const models = isJimengProviderId(providerId)
-        ? [...(provider?.video_models || []), ...JIMENG_SEEDANCE_VIDEO_MODELS]
-        : (provider?.video_models || DEFAULT_VIDEO_MODELS);
-    return [...new Set(models)];
+    return [...new Set(provider?.video_models || [])];
 }
 function volcengineVideoModels(){
     const provider = (apiProviders || []).find(p => p.id === 'volcengine');
-    return [...new Set(provider?.video_models || DEFAULT_VIDEO_MODELS)];
+    return [...new Set(provider?.video_models || [])];
 }
-function renderVideoProviderControl(providers){
-    const current = (providers || []).find(p => p.id === settings.videoProvider) || videoProviderById(settings.videoProvider);
-    return `<div class="smart-control provider-control">
-        <button class="smart-pill" type="button"><i data-lucide="plug-zap"></i><span class="sub">${escapeHtml(current?.name || settings.videoProvider || tr('smart.platform'))}</span></button>
-        <div class="smart-popover compact-popover">
-            <div class="smart-popover-title">${escapeHtml(tr('smart.videoPlatform'))}</div>
-            <div class="model-list">
-                ${providers.map(p => `<button type="button" class="direct-option ${p.id === settings.videoProvider ? 'active' : ''}" data-smart-param="videoProvider" data-smart-value="${escapeHtml(p.id)}"><span>${escapeHtml(p.name || p.id)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noVideoPlatform'))}</div>`}
-            </div>
-        </div>
-    </div>`;
+function configuredVideoSelection(sourceSettings=settings){
+    const source = sourceSettings || settings;
+    if(!isApiLikeEngine(source.engine) || source.apiKind !== 'video') return {ok:true, provider:null, models:[]};
+    const provider = (apiProviders || []).find(item => item.enabled !== false && item.id === source.videoProvider);
+    const models = [...new Set(provider?.video_models || [])];
+    if(!provider || !models.length) return {ok:false, reason:'provider', provider, models};
+    if(!source.videoModel || !models.includes(source.videoModel)) return {ok:false, reason:'model', provider, models};
+    return {ok:true, provider, models};
+}
+function isRunningHubVideoProvider(providerId){
+    const provider = (apiProviders || []).find(item => item.id === providerId);
+    return String(provider?.protocol || '').toLowerCase() === 'runninghub' || String(provider?.id || '').toLowerCase() === 'runninghub';
+}
+function imageCapabilityCacheKey(providerId, model){
+    return `${String(providerId || '').trim()}::${String(model || '').trim()}`;
+}
+function imageRatioSettingValue(value){
+    const raw = String(value || '').trim().toLowerCase();
+    const map = {
+        '1:1':'square', '2:3':'portrait', '3:2':'landscape', '3:4':'portrait43',
+        '4:3':'landscape43', '9:16':'story', '16:9':'wide', '21:9':'ultrawide', '9:21':'ultratall'
+    };
+    return map[raw] || raw || 'square';
+}
+function imageAspectValueForRun(source=settings){
+    const raw = String(source?.ratio || 'square').trim();
+    const map = {
+        square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4',
+        landscape43:'4:3', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21',
+        source:'adaptive'
+    };
+    return raw === 'custom' ? String(source?.customRatio || '').trim() : (map[raw] || raw);
+}
+function applyImageCapabilityDefaults(capability, key){
+    if(!capability?.discovered || settings.imageCapabilityKey === key) return;
+    settings.imageModelParams = {};
+    const ratioField = videoCapabilityField(capability, 'aspectRatio', 'aspect_ratio', 'ratio');
+    const resolutionField = videoCapabilityField(capability, 'resolution');
+    const sizeField = videoCapabilityField(capability, 'size');
+    const widthField = videoCapabilityField(capability, 'width');
+    const heightField = videoCapabilityField(capability, 'height');
+    const qualityField = videoCapabilityField(capability, 'quality');
+    const choose = (current, field, transform=value => value) => {
+        if(!field) return current;
+        const options = videoCapabilityOptions(field);
+        const optionValues = options.map(option => transform(option.value));
+        const transformedCurrent = transform(current);
+        if(optionValues.includes(transformedCurrent)) return transformedCurrent;
+        return transform(field.default ?? options[0]?.value ?? current);
+    };
+    if(ratioField) settings.ratio = choose(settings.ratio, ratioField, imageRatioSettingValue);
+    if(resolutionField){
+        const resolutionOptions = videoCapabilityOptions(resolutionField).map(option => option.value);
+        const currentResolution = String(settings.resolution || '');
+        settings.resolution = resolutionOptions.includes(currentResolution)
+            ? currentResolution
+            : String(resolutionField.default ?? (resolutionField.required ? (resolutionOptions[0] || '') : ''));
+    }
+    settings.imageCapabilitySize = sizeField ? String(choose(settings.imageCapabilitySize, sizeField, value => String(value || ''))) : '';
+    settings.imageCapabilityWidth = widthField ? Number(widthField.default ?? widthField.min ?? (settings.imageCapabilityWidth || 1024)) : '';
+    settings.imageCapabilityHeight = heightField ? Number(heightField.default ?? heightField.min ?? (settings.imageCapabilityHeight || 1024)) : '';
+    if(qualityField) settings.quality = String(choose(settings.quality, qualityField, value => String(value || '')));
+    imageCapabilityExtraFields(capability).forEach(field => {
+        const options = videoCapabilityOptions(field);
+        let value = field.default;
+        if((value === undefined || value === null || value === '') && field.required && options.length) value = options[0].value;
+        if(value !== undefined && value !== null) settings.imageModelParams[field.key] = imageCapabilityTypedValue(field, value);
+    });
+    settings.imageCapabilityKey = key;
+}
+function currentImageModelCapability(){
+    return imageModelCapabilityCache.get(imageCapabilityCacheKey(settings.provider_id, settings.model)) || null;
+}
+async function preloadImageModelCapabilities(){
+    const providers = (apiProviders || []).filter(provider =>
+        provider?.enabled !== false
+        && isRunningHubVideoProvider(provider.id)
+        && Array.isArray(provider.image_models)
+        && provider.image_models.length
+    );
+    await Promise.all(providers.map(async provider => {
+        const providerId = String(provider.id || '').trim();
+        if(!providerId) return;
+        if(imageProviderCapabilityRequests.has(providerId)) return imageProviderCapabilityRequests.get(providerId);
+        const request = fetch(`/api/image-model-capabilities?provider_id=${encodeURIComponent(providerId)}`)
+            .then(async response => {
+                const data = await response.json().catch(() => ({}));
+                if(!response.ok) throw new Error(data.detail || tr('smart.imageCapabilityFailed'));
+                (data.models || []).forEach(capability => {
+                    const model = String(capability?.model || '').trim();
+                    if(model) imageModelCapabilityCache.set(imageCapabilityCacheKey(providerId, model), capability);
+                });
+                if(settings.provider_id === providerId && settings.apiKind !== 'video'){
+                    const key = imageCapabilityCacheKey(providerId, settings.model);
+                    const current = imageModelCapabilityCache.get(key);
+                    if(current?.discovered) applyImageCapabilityDefaults(current, key);
+                    renderDynamicParams();
+                }
+                return data;
+            })
+            .catch(() => null)
+            .finally(() => imageProviderCapabilityRequests.delete(providerId));
+        imageProviderCapabilityRequests.set(providerId, request);
+        return request;
+    }));
+}
+async function ensureImageModelCapability(providerId, model){
+    const key = imageCapabilityCacheKey(providerId, model);
+    if(!providerId || !model || !isRunningHubVideoProvider(providerId) || imageModelCapabilityCache.has(key)) return imageModelCapabilityCache.get(key) || null;
+    const providerRequest = imageProviderCapabilityRequests.get(providerId);
+    if(providerRequest){
+        await providerRequest;
+        if(imageModelCapabilityCache.has(key)) return imageModelCapabilityCache.get(key);
+    }
+    if(imageModelCapabilityRequests.has(key)) return imageModelCapabilityRequests.get(key);
+    const request = fetch(`/api/image-model-capabilities?provider_id=${encodeURIComponent(providerId)}&model=${encodeURIComponent(model)}`)
+        .then(async response => {
+            const data = await response.json().catch(() => ({}));
+            if(!response.ok) throw new Error(data.detail || tr('smart.imageCapabilityFailed'));
+            imageModelCapabilityCache.set(key, data);
+            if(settings.provider_id === providerId && settings.model === model){
+                applyImageCapabilityDefaults(data, key);
+                renderDynamicParams();
+            }
+            return data;
+        })
+        .catch(error => {
+            const failed = {discovered:false, fields:[], error:error?.message || tr('smart.imageCapabilityFailed')};
+            imageModelCapabilityCache.set(key, failed);
+            if(settings.provider_id === providerId && settings.model === model) renderDynamicParams();
+            return failed;
+        })
+        .finally(() => imageModelCapabilityRequests.delete(key));
+    imageModelCapabilityRequests.set(key, request);
+    return request;
+}
+function videoCapabilityCacheKey(providerId, model){
+    return `${String(providerId || '').trim()}::${String(model || '').trim()}`;
+}
+function videoCapabilityField(capability, ...names){
+    const wanted = new Set(names.map(name => String(name || '').toLowerCase()));
+    return (capability?.fields || []).find(field => wanted.has(String(field?.key || '').toLowerCase())) || null;
+}
+function videoCapabilityOptions(field){
+    return (field?.options || []).map(option => ({
+        value:String(option?.value ?? ''),
+        label:String(option?.label ?? option?.value ?? '')
+    })).filter(option => option.value !== '');
+}
+function videoCapabilityBooleanDefault(field){
+    const value = field?.default;
+    return value === true || String(value || '').toLowerCase() === 'true' || String(value || '') === '1';
+}
+function renderVideoInputCapabilityNote(capability){
+    const fields = capability?.fields || [];
+    const byType = type => fields.filter(field => String(field?.type || '').toUpperCase() === type);
+    const firstFrame = videoCapabilityField(capability, 'firstFrameUrl', 'first_frame_url', 'firstFrameImage', 'first_frame_image');
+    const lastFrame = videoCapabilityField(capability, 'lastFrameUrl', 'last_frame_url', 'lastFrameImage', 'last_frame_image');
+    const images = byType('IMAGE').filter(field => field !== firstFrame && field !== lastFrame);
+    const videos = byType('VIDEO');
+    const audios = byType('AUDIO');
+    let text = '';
+    if(firstFrame){
+        text = lastFrame ? tr('smart.videoInputFirstLastFrame') : tr('smart.videoInputFirstFrame');
+    } else if(images.length || videos.length || audios.length){
+        const maxFor = list => list.reduce((max, field) => Math.max(max, Number(field.maxInputNum) || 1), 0);
+        text = tr('smart.videoInputMultimodal')
+            .replace('{images}', String(maxFor(images)))
+            .replace('{videos}', String(maxFor(videos)))
+            .replace('{audios}', String(maxFor(audios)));
+    } else {
+        text = tr('smart.videoInputTextOnly');
+    }
+    return `<div class="muted-note" title="${escapeAttr(text)}"><i data-lucide="circle-help"></i><span>${escapeHtml(text)}</span></div>`;
+}
+function applyVideoCapabilityDefaults(capability, key){
+    if(!capability?.discovered || settings.videoCapabilityKey === key) return;
+    const pick = (settingKey, field) => {
+        if(!field) return;
+        const options = videoCapabilityOptions(field);
+        const fallback = String(field.default ?? options[0]?.value ?? '');
+        const current = String(settings[settingKey] ?? '');
+        settings[settingKey] = options.some(option => option.value === current) ? current : fallback;
+    };
+    pick('videoResolution', videoCapabilityField(capability, 'resolution'));
+    pick('videoAspect', videoCapabilityField(capability, 'ratio', 'aspectRatio', 'aspect_ratio'));
+    const durationField = videoCapabilityField(capability, 'duration');
+    if(durationField){
+        const options = videoCapabilityOptions(durationField);
+        const current = String(settings.videoDuration ?? '');
+        const fallback = String(durationField.default ?? options[0]?.value ?? '5');
+        settings.videoDuration = Number(options.some(option => option.value === current) ? current : fallback) || 5;
+    }
+    const booleanMappings = [
+        ['videoGenerateAudio', ['generateAudio', 'generate_audio']],
+        ['videoWatermark', ['watermark']],
+        ['videoCameraFixed', ['cameraFixed', 'camerafixed']],
+        ['videoEnhancePrompt', ['enhancePrompt', 'enhance_prompt']],
+        ['videoEnableUpsample', ['enableUpsample', 'enable_upsample']],
+        ['videoReturnLastFrame', ['returnLastFrame', 'return_last_frame']]
+    ];
+    booleanMappings.forEach(([settingKey, names]) => {
+        const field = videoCapabilityField(capability, ...names);
+        settings[settingKey] = field ? videoCapabilityBooleanDefault(field) : false;
+    });
+    if(!videoCapabilityField(capability, 'lastFrameUrl', 'last_frame_url', 'lastFrameImage', 'last_frame_image')) settings.videoUseFrameRoles = false;
+    settings.videoMultimodal = false;
+    settings.videoTrustedAsset = false;
+    settings.videoCapabilityKey = key;
+}
+function currentVideoModelCapability(){
+    const key = videoCapabilityCacheKey(settings.videoProvider, settings.videoModel);
+    return videoModelCapabilityCache.get(key) || null;
+}
+async function preloadVideoModelCapabilities(){
+    const providers = (apiProviders || []).filter(provider =>
+        provider?.enabled !== false
+        && isRunningHubVideoProvider(provider.id)
+        && Array.isArray(provider.video_models)
+        && provider.video_models.length
+    );
+    await Promise.all(providers.map(async provider => {
+        const providerId = String(provider.id || '').trim();
+        if(!providerId) return;
+        if(videoProviderCapabilityRequests.has(providerId)) return videoProviderCapabilityRequests.get(providerId);
+        const request = fetch(`/api/video-model-capabilities?provider_id=${encodeURIComponent(providerId)}`)
+            .then(async response => {
+                const data = await response.json().catch(() => ({}));
+                if(!response.ok) throw new Error(data.detail || tr('smart.videoCapabilityFailed'));
+                (data.models || []).forEach(capability => {
+                    const model = String(capability?.model || '').trim();
+                    if(model) videoModelCapabilityCache.set(videoCapabilityCacheKey(providerId, model), capability);
+                });
+                if(settings.videoProvider === providerId){
+                    const key = videoCapabilityCacheKey(providerId, settings.videoModel);
+                    const current = videoModelCapabilityCache.get(key);
+                    if(current?.discovered) applyVideoCapabilityDefaults(current, key);
+                    renderDynamicParams();
+                }
+                return data;
+            })
+            .catch(() => null)
+            .finally(() => videoProviderCapabilityRequests.delete(providerId));
+        videoProviderCapabilityRequests.set(providerId, request);
+        return request;
+    }));
+}
+async function ensureVideoModelCapability(providerId, model){
+    const key = videoCapabilityCacheKey(providerId, model);
+    if(!providerId || !model || !isRunningHubVideoProvider(providerId) || videoModelCapabilityCache.has(key)) return videoModelCapabilityCache.get(key) || null;
+    const providerRequest = videoProviderCapabilityRequests.get(providerId);
+    if(providerRequest){
+        await providerRequest;
+        if(videoModelCapabilityCache.has(key)) return videoModelCapabilityCache.get(key);
+    }
+    if(videoModelCapabilityRequests.has(key)) return videoModelCapabilityRequests.get(key);
+    const request = fetch(`/api/video-model-capabilities?provider_id=${encodeURIComponent(providerId)}&model=${encodeURIComponent(model)}`)
+        .then(async response => {
+            const data = await response.json().catch(() => ({}));
+            if(!response.ok) throw new Error(data.detail || tr('smart.videoCapabilityFailed'));
+            videoModelCapabilityCache.set(key, data);
+            if(settings.videoProvider === providerId && settings.videoModel === model){
+                applyVideoCapabilityDefaults(data, key);
+                renderDynamicParams();
+            }
+            return data;
+        })
+        .catch(error => {
+            const failed = {discovered:false, fields:[], error:error?.message || tr('smart.videoCapabilityFailed')};
+            videoModelCapabilityCache.set(key, failed);
+            if(settings.videoProvider === providerId && settings.videoModel === model) renderDynamicParams();
+            return failed;
+        })
+        .finally(() => videoModelCapabilityRequests.delete(key));
+    videoModelCapabilityRequests.set(key, request);
+    return request;
 }
 function renderVideoModelControl(models){
+    const label = settings.videoModel || tr('smart.noVideoModel');
     return `<div class="smart-control model-control">
-        <button class="smart-pill" type="button"><i data-lucide="film"></i><span class="sub">${escapeHtml(settings.videoModel || tr('smart.model'))}</span></button>
+        <button class="smart-pill" type="button"><i data-lucide="film"></i><span class="sub">${escapeHtml(label)}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.videoModel'))}</div>
             <div class="model-list">
@@ -2702,9 +3127,10 @@ function renderVideoModelControl(models){
         </div>
     </div>`;
 }
-function renderVideoDurationControl(){
+function renderVideoDurationControl(schemaField=null){
     const v = Math.max(1, Math.min(60, Number(settings.videoDuration) || 5));
-    const quick = [3, 4, 5, 6, 8, 10, 12, 15];
+    const schemaOptions = videoCapabilityOptions(schemaField);
+    const quick = schemaOptions.length ? schemaOptions.map(option => Number(option.value)).filter(Number.isFinite) : [3, 4, 5, 6, 8, 10, 12, 15];
     return `<div class="smart-control duration-control" title="${escapeHtml(tr('smart.videoDurationTip'))}">
         <button class="smart-pill" type="button"><i data-lucide="timer"></i><span>${v}s</span></button>
         <div class="smart-popover compact-popover">
@@ -2712,18 +3138,20 @@ function renderVideoDurationControl(){
             <div class="duration-grid">
                 ${quick.map(n => `<button type="button" class="duration-option ${n === v ? 'active' : ''}" data-smart-param="videoDuration" data-smart-value="${n}">${n}s</button>`).join('')}
             </div>
-            <label class="duration-custom">
+            ${schemaOptions.length ? '' : `<label class="duration-custom">
                 <span>${escapeHtml(tr('smart.custom'))}</span>
                 <input type="number" min="1" max="60" step="1" data-param="videoDuration" value="${v}">
-            </label>
+            </label>`}
         </div>
     </div>`;
 }
-function renderVideoAspectControl(){
-    const options = [
+function renderVideoAspectControl(schemaField=null){
+    const defaults = [
         ['16:9','16:9'], ['9:16','9:16'], ['1:1','1:1'], ['4:3','4:3'], ['3:4','3:4'],
         ['21:9','21:9'], ['9:21','9:21'], ['keep_ratio', tr('smart.videoAspectKeep')], ['adaptive', tr('smart.videoAspectAdaptive')]
     ];
+    const schemaOptions = videoCapabilityOptions(schemaField);
+    const options = schemaOptions.length ? schemaOptions.map(option => [option.value, option.label]) : defaults;
     const value = settings.videoAspect || '16:9';
     const labelMap = Object.fromEntries(options);
     return `<div class="smart-control aspect-control">
@@ -2736,8 +3164,9 @@ function renderVideoAspectControl(){
         </div>
     </div>`;
 }
-function renderVideoResolutionControl(){
-    const options = [['', tr('smart.videoResAuto')], ['720p','720P'], ['1080p','1080P'], ['4k','4K']];
+function renderVideoResolutionControl(schemaField=null){
+    const schemaOptions = videoCapabilityOptions(schemaField);
+    const options = schemaOptions.length ? schemaOptions.map(option => [option.value, option.label]) : [['', tr('smart.videoResAuto')], ['720p','720P'], ['1080p','1080P'], ['4k','4K']];
     const value = settings.videoResolution || '';
     const labelMap = Object.fromEntries(options);
     return `<div class="smart-control resolution-control">
@@ -2789,7 +3218,7 @@ function parseRatioValue(value){
 function apiImageSize(ratioValue, resolutionValue, customRatioValue='', customSizeValue=''){
     if(resolutionValue === 'auto') return 'auto';
     if(resolutionValue === 'custom') return String(customSizeValue || '').trim();
-    const resolutionKey = resolutionValue || '1k';
+    const resolutionKey = String(resolutionValue || '1k').toLowerCase();
     if(ratioValue === 'custom' || ratioValue === 'source'){
         const parsed = parseRatioValue(customRatioValue);
         const longSide = RES_LONG_SIDE[resolutionKey] || 1024;
@@ -2940,14 +3369,14 @@ function renderDynamicParams(options={}){
     clearVolcengineSelectionOutsideVolcengine(settings);
     const renderKey = dynamicParamsStateKey();
     if(!options.force && dynamicParamsRenderKey === renderKey && dynamicParams.children.length){
-        engineSelect.value = settings.engine;
+        syncComposerEngineSelect();
         syncApiKindToggleVisibility();
         updatePromptPlaceholder();
         persistActiveSmartSettings();
         return;
     }
     dynamicParamsRenderKey = renderKey;
-    engineSelect.value = settings.engine;
+    syncComposerEngineSelect();
     syncApiKindToggleVisibility();
     if(settings.engine === 'api'){
         if(settings.apiKind === 'video') renderApiVideoParams();
@@ -2960,11 +3389,13 @@ function renderDynamicParams(options={}){
     else if(settings.engine === 'modelscope') renderMsParams();
     else if(settings.engine === 'runninghub') renderRunningHubParams();
     else renderComfyParams();
+    syncComposerEngineSelect();
     bindDynamicParams();
     restoreOpenControl(keepOpen);
     restoreDynamicParamsScroll(scrollState);
     updatePromptPlaceholder();
     persistActiveSmartSettings();
+    syncRunButtonState();
     if(window.lucide) lucide.createIcons();
 }
 function renderApiParams(){
@@ -2972,15 +3403,38 @@ function renderApiParams(){
     if(!settings.provider_id || !providers.some(p => p.id === settings.provider_id)) settings.provider_id = providers[0]?.id || '';
     const models = filterJimengImageModels(providerImageModels(settings.provider_id));
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
+    const runningHub = isRunningHubVideoProvider(settings.provider_id);
+    const capabilityKey = imageCapabilityCacheKey(settings.provider_id, settings.model);
+    const capability = runningHub ? currentImageModelCapability() : null;
+    if(runningHub && capability?.discovered) applyImageCapabilityDefaults(capability, capabilityKey);
+    if(runningHub && !capability) ensureImageModelCapability(settings.provider_id, settings.model);
+    const capabilityField = (...names) => videoCapabilityField(capability, ...names);
     // 切换平台/模型时保留用户已选的分辨率（记忆），normalizeApiSizeSettings 只会修正非法的 auto。
-    normalizeApiSizeSettings('');
-    const outpaintLocked = settings.outpaintResolutionLocked === true;
+    if(!runningHub) normalizeApiSizeSettings('');
+    const runningHubParams = !runningHub ? '' : !capability
+        ? `<div class="muted-note">${escapeHtml(tr('smart.imageCapabilityLoading'))}</div>`
+        : capability.error
+        ? `<div class="muted-note">${escapeHtml(capability.error)}</div>`
+        : !capability.discovered
+        ? `<div class="muted-note">${escapeHtml(tr('smart.imageCapabilityUnavailable'))}</div>`
+        : `
+            ${renderImageInputCapabilityNote(capability)}
+            ${capabilityField('aspectRatio', 'aspect_ratio', 'ratio') && videoCapabilityOptions(capabilityField('aspectRatio', 'aspect_ratio', 'ratio')).length ? renderImageCapabilityRatioControl(capabilityField('aspectRatio', 'aspect_ratio', 'ratio')) : ''}
+            ${capabilityField('resolution') && videoCapabilityOptions(capabilityField('resolution')).length ? renderImageCapabilityResolutionControl(capabilityField('resolution')) : ''}
+            ${capabilityField('size') && videoCapabilityOptions(capabilityField('size')).length ? renderImageCapabilitySizeControl(capabilityField('size')) : ''}
+            ${(capabilityField('width') || capabilityField('height')) && !settings.resolution ? renderImageCapabilityDimensionControls(capabilityField('width'), capabilityField('height')) : ''}
+            ${capabilityField('quality') && videoCapabilityOptions(capabilityField('quality')).length ? renderImageCapabilityQualityControl(capabilityField('quality')) : ''}
+            ${imageCapabilityExtraFields(capability).map(renderImageCapabilityExtraControl).join('')}
+            ${renderCountVisualControl()}
+        `;
     dynamicParams.innerHTML = `
-        ${renderProviderControl(providers)}
+        ${runningHub ? renderRhCapabilityControl('model') : ''}
         ${renderModelControl(models)}
-        ${renderSizePickerControl('', true)}
-        ${renderQualityControl()}
-        ${renderCountVisualControl()}
+        ${runningHub ? runningHubParams : `
+            ${renderSizePickerControl('', true)}
+            ${renderQualityControl()}
+            ${renderCountVisualControl()}
+        `}
         ${isJimengProviderId(settings.provider_id) ? renderJimengUpscaleControl() : ''}
     `;
 }
@@ -3000,23 +3454,49 @@ function renderJimengUpscaleControl(){
 }
 function renderApiVideoParams(){
     const providers = videoApiProviders();
-    if(!settings.videoProvider || !providers.some(p => p.id === settings.videoProvider)) settings.videoProvider = providers[0]?.id || 'comfly';
+    if(!settings.videoProvider || !providers.some(p => p.id === settings.videoProvider)) settings.videoProvider = providers[0]?.id || '';
     const models = filterJimengVideoModels(providerVideoModels(settings.videoProvider));
-    if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || 'veo3-fast';
+    if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || '';
+    const runningHub = isRunningHubVideoProvider(settings.videoProvider);
+    const capabilityKey = videoCapabilityCacheKey(settings.videoProvider, settings.videoModel);
+    const capability = runningHub ? currentVideoModelCapability() : null;
+    if(runningHub && capability?.discovered) applyVideoCapabilityDefaults(capability, capabilityKey);
+    if(runningHub && !capability) ensureVideoModelCapability(settings.videoProvider, settings.videoModel);
+    const capabilityField = (...names) => videoCapabilityField(capability, ...names);
+    const runningHubParams = !runningHub ? '' : !capability
+        ? `<div class="muted-note">${escapeHtml(tr('smart.videoCapabilityLoading'))}</div>`
+        : capability.error
+        ? `<div class="muted-note">${escapeHtml(capability.error)}</div>`
+        : !capability.discovered
+        ? `<div class="muted-note">${escapeHtml(tr('smart.videoCapabilityUnavailable'))}</div>`
+        : `
+            ${renderVideoInputCapabilityNote(capability)}
+            ${capabilityField('resolution') ? renderVideoResolutionControl(capabilityField('resolution')) : ''}
+            ${capabilityField('ratio', 'aspectRatio', 'aspect_ratio') ? renderVideoAspectControl(capabilityField('ratio', 'aspectRatio', 'aspect_ratio')) : ''}
+            ${capabilityField('duration') ? renderVideoDurationControl(capabilityField('duration')) : ''}
+            ${capabilityField('enhancePrompt', 'enhance_prompt') ? renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt')) : ''}
+            ${capabilityField('enableUpsample', 'enable_upsample') ? renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample')) : ''}
+            ${capabilityField('generateAudio', 'generate_audio') ? renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio')) : ''}
+            ${capabilityField('cameraFixed', 'camerafixed') ? renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed')) : ''}
+            ${capabilityField('watermark') ? renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark')) : ''}
+            ${capabilityField('lastFrameUrl', 'last_frame_url', 'lastFrameImage', 'last_frame_image') ? renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles')) : ''}
+        `;
     dynamicParams.innerHTML = `
-        ${renderVideoProviderControl(providers)}
+        ${runningHub ? renderRhCapabilityControl('model') : ''}
         ${renderVideoModelControl(models)}
-        ${renderVideoResolutionControl()}
-        ${renderVideoAspectControl()}
-        ${renderVideoDurationControl()}
-        ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-        ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-        ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-        ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-        ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-        ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-        ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-        ${isJimengProviderId(settings.videoProvider) ? '' : renderVideoTrustedAssetControl()}
+        ${runningHub ? runningHubParams : `
+            ${renderVideoResolutionControl()}
+            ${renderVideoAspectControl()}
+            ${renderVideoDurationControl()}
+            ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
+            ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
+            ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
+            ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
+            ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
+            ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
+            ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
+            ${isJimengProviderId(settings.videoProvider) ? '' : renderVideoTrustedAssetControl()}
+        `}
     `;
 }
 function renderVolcengineParams(){
@@ -3028,7 +3508,6 @@ function renderVolcengineParams(){
     normalizeApiSizeSettings('');
     const outpaintLocked = settings.outpaintResolutionLocked === true;
     dynamicParams.innerHTML = `
-        ${renderProviderControl(providers)}
         ${renderModelControl(models)}
         ${renderSizePickerControl('', true)}
         ${renderQualityControl()}
@@ -3040,9 +3519,8 @@ function renderVolcengineVideoParams(){
     const providers = [provider];
     const models = volcengineVideoModels();
     settings.videoProvider = 'volcengine';
-    if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || 'seedance-1.0-pro';
+    if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || '';
     dynamicParams.innerHTML = `
-        ${renderVideoProviderControl(providers)}
         ${renderVideoModelControl(models)}
         ${renderVideoResolutionControl()}
         ${renderVideoAspectControl()}
@@ -3058,57 +3536,68 @@ function renderVolcengineVideoParams(){
     `;
 }
 function renderRunningHubParams(){
+    const capability = currentRunningHubCapability();
     const ref = selectedRunningHubRef();
     const fields = rhActiveFields();
     settings.rhPayment = settings.rhPayment === 'wallet' ? 'wallet' : 'free';
     settings.rhParams = settings.rhParams || {};
     settings.rhRandomActive = settings.rhRandomActive || {};
     if(!ref){
-        dynamicParams.innerHTML = `<div class="muted-note">${escapeHtml(tr('smart.rhNeedConfig'))}</div>`;
+        dynamicParams.innerHTML = `${renderRhCapabilityControl(capability)}<div class="muted-note">${escapeHtml(tr('smart.rhNeedConfig'))}</div>`;
         return;
     }
     if(ref.kind === 'model'){
-        settings.provider_id = 'runninghub';
-        settings.model = ref.id;
-        normalizeApiSizeSettings('');
-        dynamicParams.innerHTML = `
-            ${renderRhConfigControl(ref)}
-            ${renderSizePickerControl('', true)}
-            ${renderQualityControl()}
-            ${renderCountVisualControl()}
-        `;
+        switchRunningHubCapability('model', {resetParams:false});
+        renderApiParams();
         return;
     }
     const mediaFields = fields.filter(f => ['image','video','audio'].includes(rhFieldRole(f))).length;
     const promptFields = fields.filter(f => rhFieldRole(f) === 'prompt').length;
     dynamicParams.innerHTML = `
-        ${renderRhConfigControl(ref)}
+        ${renderRhCapabilityControl(capability)}
+        ${renderRhConfigControl(ref, capability)}
         ${renderRhPaymentControl()}
         ${renderRhMachineControl()}
         <div class="rh-mini-summary">${escapeHtml(mediaFields)} 素材 · ${escapeHtml(promptFields)} 提示词</div>
         ${fields.length ? fields.filter(f => !['image','video','audio','prompt'].includes(rhFieldRole(f))).map(renderRhSettingField).join('') : `<div class="muted-note">${escapeHtml(tr('smart.rhNeedFields'))}</div>`}
     `;
 }
-function renderRhConfigControl(ref){
-    const models = runningHubEntries('model');
-    const apps = runningHubEntries('app');
-    const workflows = runningHubEntries('workflow');
+function renderRhCapabilityControl(current=currentRunningHubCapability()){
+    const labels = {
+        model:tr('smart.rhCapabilityModel'),
+        app:tr('smart.rhCapabilityApp'),
+        workflow:tr('smart.rhCapabilityWorkflow')
+    };
+    const capabilities = ['model','app','workflow'];
+    const value = capabilities.includes(current) ? current : 'model';
+    return `<div class="smart-control rh-capability-control">
+        <button class="smart-pill" type="button"><i data-lucide="layers-3"></i><span>${escapeHtml(labels[value])}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover compact-popover rh-picker-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.rhCapability'))}</div>
+            <div class="model-list">
+                ${capabilities.map(kind => {
+                    const configured = runningHubCapabilityAvailable(kind, settings.apiKind);
+                    return `<button type="button" class="direct-option ${kind === value ? 'active' : ''} ${configured ? '' : 'is-unavailable'}" data-smart-param="rhCapability" data-smart-value="${escapeHtml(kind)}" title="${escapeAttr(configured ? labels[kind] : tr('smart.rhCapabilityNotConfigured'))}"><span>${escapeHtml(labels[kind])}</span>${configured ? '' : `<small>${escapeHtml(tr('smart.notConfigured'))}</small>`}</button>`;
+                }).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+function renderRhConfigControl(ref, kind=currentRunningHubCapability()){
+    const entries = runningHubEntries(kind);
     const selected = ref ? runningHubEntryKey(ref.kind, ref.id) : '';
-    const groupHtml = (kind, entries, label) => entries.length ? `
-        <div class="model-list-label rh-list-label">${escapeHtml(label)}<span class="count">${entries.length}</span></div>
-        ${entries.map(entry => {
+    const title = kind === 'workflow' ? tr('smart.rhCapabilityWorkflow') : tr('smart.rhCapabilityApp');
+    const icon = kind === 'workflow' ? 'workflow' : 'sparkles';
+    return `<div class="smart-control rh-config-control">
+        <button class="smart-pill" type="button"><i data-lucide="${icon}"></i><span class="sub">${escapeHtml(ref ? runningHubEntryLabel(ref.entry, ref.kind) : title)}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
+        <div class="smart-popover compact-popover rh-picker-popover">
+            <div class="smart-popover-title">${escapeHtml(title)}</div>
+            <div class="model-list rh-config-list">
+                ${entries.map(entry => {
             const id = runningHubEntryId(entry, kind);
             const key = runningHubEntryKey(kind, id);
-            const icon = kind === 'workflow' ? 'workflow' : kind === 'model' ? 'box' : 'sparkles';
             return `<button type="button" class="direct-option rh-entry-option ${key === selected ? 'active' : ''}" data-smart-param="rhConfigKey" data-smart-value="${escapeHtml(key)}"><i data-lucide="${icon}"></i><span>${escapeHtml(runningHubEntryLabel(entry, kind))}</span></button>`;
-        }).join('')}
-    ` : '';
-    return `<div class="smart-control rh-config-control">
-        <button class="smart-pill" type="button"><i data-lucide="workflow"></i><span class="sub">${escapeHtml(ref ? runningHubEntryLabel(ref.entry, ref.kind) : tr('smart.rhConfig'))}</span><i data-lucide="chevron-down" class="pill-caret"></i></button>
-        <div class="smart-popover compact-popover rh-picker-popover">
-            <div class="smart-popover-title">${escapeHtml(tr('smart.rhConfig'))}</div>
-            <div class="model-list rh-config-list">
-                ${groupHtml('model', models, '模型 API')}${groupHtml('app', apps, 'AI 应用')}${groupHtml('workflow', workflows, '工作流') || ''}
+                }).join('') || `<div class="muted-note">${escapeHtml(tr('smart.rhNeedConfig'))}</div>`}
             </div>
         </div>
     </div>`;
@@ -3312,18 +3801,6 @@ function videoAspectIconClass(value){
     if(value === 'keep_ratio' || value === 'adaptive') return 'r-source';
     return '';
 }
-function renderProviderControl(providers){
-    const current = (providers || []).find(p => p.id === settings.provider_id) || apiProviderById(settings.provider_id);
-    return `<div class="smart-control provider-control">
-        <button class="smart-pill" type="button"><i data-lucide="plug-zap"></i><span class="sub">${escapeHtml(current?.name || settings.provider_id || tr('smart.platform'))}</span></button>
-        <div class="smart-popover compact-popover">
-            <div class="smart-popover-title">${escapeHtml(tr('smart.apiPlatform'))}</div>
-            <div class="model-list">
-                ${providers.map(p => `<button type="button" class="direct-option ${p.id === settings.provider_id ? 'active' : ''}" data-smart-param="provider_id" data-smart-value="${escapeHtml(p.id)}"><span>${escapeHtml(p.name || p.id)}</span></button>`).join('') || `<div class="muted-note">${escapeHtml(tr('smart.noApiPlatform'))}</div>`}
-            </div>
-        </div>
-    </div>`;
-}
 function renderModelControl(models){
     return `<div class="smart-control model-control">
         <button class="smart-pill" type="button"><i data-lucide="sparkles"></i><span class="sub">${escapeHtml(settings.model || tr('smart.model'))}</span></button>
@@ -3334,6 +3811,171 @@ function renderModelControl(models){
             </div>
         </div>
     </div>`;
+}
+function renderImageInputCapabilityNote(capability){
+    const imageFields = (capability?.fields || []).filter(field => String(field?.type || '').toUpperCase() === 'IMAGE');
+    if(!imageFields.length){
+        const text = tr('smart.imageInputTextOnly');
+        return `<div class="muted-note" title="${escapeAttr(text)}"><i data-lucide="circle-help"></i><span>${escapeHtml(text)}</span></div>`;
+    }
+    const required = imageFields.some(field => field.required === true);
+    const max = imageFields.reduce((value, field) => Math.max(value, Number(field.maxInputNum) || 1), 1);
+    const text = tr(required ? 'smart.imageInputRequired' : 'smart.imageInputOptional').replace('{max}', String(max));
+    return `<div class="muted-note" title="${escapeAttr(text)}"><i data-lucide="circle-help"></i><span>${escapeHtml(text)}</span></div>`;
+}
+function renderImageCapabilityRatioControl(field){
+    const options = videoCapabilityOptions(field).map(option => ({
+        value:imageRatioSettingValue(option.value),
+        label:option.label
+    }));
+    const current = settings.ratio || imageRatioSettingValue(field?.default);
+    const label = options.find(option => option.value === current)?.label || imageAspectValueForRun(settings) || tr('smart.ratio');
+    return `<div class="smart-control ratio-control">
+        <button class="smart-pill" type="button"><i data-lucide="scan"></i><span>${escapeHtml(label)}</span></button>
+        <div class="smart-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.ratio'))}</div>
+            <div class="ratio-grid">
+                ${options.map(option => `<button type="button" class="ratio-option ${option.value === current ? 'active' : ''}" data-smart-param="ratio" data-smart-value="${escapeHtml(option.value)}"><span class="ratio-icon ${ratioIconClass(option.value) || (['auto','adaptive','empty'].includes(option.value) ? 'r-source' : '')}"></span><span>${escapeHtml(option.label)}</span></button>`).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+function renderImageCapabilityResolutionControl(field){
+    const options = videoCapabilityOptions(field);
+    if(field?.required !== true && !options.some(option => option.value === '')){
+        options.unshift({value:'', label:tr('smart.customSize')});
+    }
+    const current = String(settings.resolution || field?.default || options[0]?.value || '');
+    const label = options.find(option => String(option.value) === current)?.label || current.toUpperCase();
+    return `<div class="smart-control resolution-control">
+        <button class="smart-pill" type="button"><i data-lucide="monitor"></i><span>${escapeHtml(label)}</span></button>
+        <div class="smart-popover compact-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.resolution'))}</div>
+            <div class="seg-row">
+                ${options.map(option => {
+                    const value = String(option.value);
+                    return `<button type="button" class="${value === current ? 'active' : ''}" data-smart-param="resolution" data-smart-value="${escapeHtml(value)}">${escapeHtml(option.label)}</button>`;
+                }).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+function renderImageCapabilityDimensionControls(widthField, heightField){
+    const renderDimension = (field, settingKey, fallback, label) => {
+        if(!field) return '';
+        const value = Number(settings[settingKey] || field.default || fallback);
+        return `<label class="num-compact" title="${escapeAttr(field.description || label)}">
+            <span class="num-label">${escapeHtml(label)}</span>
+            <input type="number" data-param="${escapeAttr(settingKey)}"
+                ${Number.isFinite(Number(field.min)) ? `min="${escapeAttr(field.min)}"` : ''}
+                ${Number.isFinite(Number(field.max)) ? `max="${escapeAttr(field.max)}"` : ''}
+                ${Number.isFinite(Number(field.step)) ? `step="${escapeAttr(field.step)}"` : ''}
+                value="${escapeAttr(value)}">
+        </label>`;
+    };
+    return `${renderDimension(widthField, 'imageCapabilityWidth', 1024, tr('smart.width'))}${renderDimension(heightField, 'imageCapabilityHeight', 1024, tr('smart.height'))}`;
+}
+function renderImageCapabilitySizeControl(field){
+    const options = videoCapabilityOptions(field);
+    const current = String(settings.imageCapabilitySize || field?.default || options[0]?.value || '');
+    const label = options.find(option => String(option.value) === current)?.label || current;
+    return `<div class="smart-control resolution-control">
+        <button class="smart-pill" type="button"><i data-lucide="monitor"></i><span>${escapeHtml(label)}</span></button>
+        <div class="smart-popover compact-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.size'))}</div>
+            <div class="seg-row">
+                ${options.map(option => {
+                    const value = String(option.value);
+                    return `<button type="button" class="${value === current ? 'active' : ''}" data-smart-param="imageCapabilitySize" data-smart-value="${escapeHtml(value)}">${escapeHtml(option.label)}</button>`;
+                }).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+function renderImageCapabilityQualityControl(field){
+    const options = videoCapabilityOptions(field);
+    const current = String(settings.quality || field?.default || options[0]?.value || '');
+    const label = options.find(option => String(option.value) === current)?.label || current;
+    return `<div class="smart-control quality-control">
+        <button class="smart-pill" type="button"><i data-lucide="sliders-horizontal"></i><span>${escapeHtml(label)}</span></button>
+        <div class="smart-popover compact-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.quality'))}</div>
+            <div class="seg-row">
+                ${options.map(option => {
+                    const value = String(option.value);
+                    return `<button type="button" class="${value === current ? 'active' : ''}" data-smart-param="quality" data-smart-value="${escapeHtml(value)}">${escapeHtml(option.label)}</button>`;
+                }).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+function imageCapabilityExtraFields(capability){
+    const reserved = new Set(['prompt','aspectratio','aspect_ratio','ratio','resolution','size','width','height','quality']);
+    return (capability?.fields || []).filter(field => {
+        const key = String(field?.key || '').trim();
+        const type = String(field?.type || '').trim().toUpperCase();
+        return key && !reserved.has(key.toLowerCase()) && !['IMAGE','VIDEO','AUDIO'].includes(type);
+    });
+}
+function imageCapabilityTypedValue(field, value){
+    const type = String(field?.type || '').toUpperCase();
+    if(type === 'BOOLEAN') return value === true || ['true','1','yes','on'].includes(String(value || '').toLowerCase());
+    if(['INT','INTEGER','FLOAT','NUMBER'].includes(type)){
+        const number = Number(value);
+        return Number.isFinite(number) ? number : value;
+    }
+    return value;
+}
+function imageCapabilityParamValue(field){
+    settings.imageModelParams = settings.imageModelParams && typeof settings.imageModelParams === 'object' ? settings.imageModelParams : {};
+    if(Object.prototype.hasOwnProperty.call(settings.imageModelParams, field.key)) return settings.imageModelParams[field.key];
+    const options = videoCapabilityOptions(field);
+    const value = field.default ?? (field.required ? options[0]?.value : '');
+    return imageCapabilityTypedValue(field, value ?? '');
+}
+function imageCapabilityFieldLabel(field){
+    const labels = {
+        negativePrompt:'smart.imageParamNegativePrompt', seed:'smart.imageParamSeed',
+        chaos:'smart.imageParamChaos', stylize:'smart.imageParamStylize',
+        weird:'smart.imageParamWeird', raw:'smart.imageParamRaw', iw:'smart.imageParamImageWeight',
+        sw:'smart.imageParamStyleWeight', sv:'smart.imageParamStyleVersion',
+        stop:'smart.imageParamStop', tile:'smart.imageParamTile',
+        sequentialImageGeneration:'smart.imageParamSequential',
+        maxImages:'smart.imageParamMaxImages', toolsType:'smart.imageParamTools'
+    };
+    return labels[field?.key] ? tr(labels[field.key]) : (field?.label || field?.key || tr('smart.parameter'));
+}
+function renderImageCapabilityExtraControl(field){
+    const key = String(field?.key || '');
+    const label = imageCapabilityFieldLabel(field);
+    const value = imageCapabilityParamValue(field);
+    const options = videoCapabilityOptions(field);
+    const type = String(field?.type || '').toUpperCase();
+    const title = field?.description || label;
+    if(options.length){
+        const current = String(value ?? '');
+        const currentLabel = options.find(option => option.value === current)?.label || current || label;
+        return `<div class="smart-control image-model-param-control" title="${escapeAttr(title)}">
+            <button class="smart-pill" type="button"><i data-lucide="sliders-horizontal"></i><span class="sub">${escapeHtml(label)}</span><span>${escapeHtml(currentLabel)}</span></button>
+            <div class="smart-popover compact-popover">
+                <div class="smart-popover-title">${escapeHtml(label)}</div>
+                <div class="model-list">
+                    ${options.map(option => `<button type="button" class="direct-option ${option.value === current ? 'active' : ''}" data-image-param-pick="${escapeAttr(key)}" data-image-param-value="${escapeAttr(option.value)}"><span>${escapeHtml(option.label)}</span></button>`).join('')}
+                </div>
+            </div>
+        </div>`;
+    }
+    if(type === 'BOOLEAN'){
+        return `<button type="button" class="setting-check ${value ? 'active' : ''}" data-image-param-toggle="${escapeAttr(key)}" title="${escapeAttr(title)}"><span class="check-box"></span><span>${escapeHtml(label)}</span></button>`;
+    }
+    const numeric = ['INT','INTEGER','FLOAT','NUMBER'].includes(type);
+    const attrs = numeric
+        ? `type="number" ${Number.isFinite(Number(field.min)) ? `min="${escapeAttr(field.min)}"` : ''} ${Number.isFinite(Number(field.max)) ? `max="${escapeAttr(field.max)}"` : ''} ${Number.isFinite(Number(field.step)) ? `step="${escapeAttr(field.step)}"` : ''}`
+        : `type="text" maxlength="${escapeAttr(field.maxLength || 20000)}"`;
+    return `<label class="num-compact ${numeric ? '' : 'rh-text-param'}" title="${escapeAttr(title)}">
+        <span class="num-label">${escapeHtml(label)}</span>
+        <input ${attrs} data-image-param-input="${escapeAttr(key)}" data-image-param-type="${escapeAttr(type)}" value="${escapeAttr(value ?? '')}">
+    </label>`;
 }
 function msModelLabel(key){
     if(key === 'custom') return tr('smart.custom');
@@ -4101,11 +4743,37 @@ function smartComfyRandomValue(field){
     return Math.floor(value);
 }
 function setDynamicSetting(key, value){
-    const numericKeys = new Set(['count','width','height','videoDuration','enhanceStrength','enhanceUpscaleRes','editUpscaleRes','customRatioWidth','customRatioHeight','customWidth','customHeight','msCustomRatioWidth','msCustomRatioHeight','msCustomWidth','msCustomHeight']);
-    const layoutKeys = new Set(['provider_id','model','resolution','ratio','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','videoAspect','videoResolution','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','jimengUpscaleRes','rhConfigKey','rhPayment','rhInstanceType']);
+    const numericKeys = new Set(['count','width','height','imageCapabilityWidth','imageCapabilityHeight','videoDuration','enhanceStrength','enhanceUpscaleRes','editUpscaleRes','customRatioWidth','customRatioHeight','customWidth','customHeight','msCustomRatioWidth','msCustomRatioHeight','msCustomWidth','msCustomHeight']);
+    const layoutKeys = new Set(['provider_id','model','resolution','ratio','imageCapabilitySize','msgenModel','msCustomModel','msResolution','msRatio','videoProvider','videoModel','videoAspect','videoResolution','comfyMode','comfyWorkflow','quality','count','enhanceUpscaleRes','editUpscaleRes','jimengUpscaleRes','rhCapability','rhConfigKey','rhPayment','rhInstanceType']);
+    if(key === 'rhCapability'){
+        switchRunningHubCapability(value);
+        persistActiveSmartSettings();
+        rememberRecentSmartSettings(settings, activeSettingsSubject());
+        renderDynamicParams();
+        scheduleSave();
+        return;
+    }
     settings[key] = numericKeys.has(key) && value !== '' ? Number(value) : value;
-    if(key === 'provider_id') settings.model = '';
-    if(key === 'videoProvider') settings.videoModel = '';
+    if(key === 'provider_id'){
+        settings.model = '';
+        settings.imageCapabilityKey = '';
+        settings.imageCapabilitySize = '';
+        settings.imageCapabilityWidth = '';
+        settings.imageCapabilityHeight = '';
+        settings.imageModelParams = {};
+    }
+    if(key === 'model'){
+        settings.imageCapabilityKey = '';
+        settings.imageCapabilitySize = '';
+        settings.imageCapabilityWidth = '';
+        settings.imageCapabilityHeight = '';
+        settings.imageModelParams = {};
+    }
+    if(key === 'videoProvider'){
+        settings.videoModel = '';
+        settings.videoCapabilityKey = '';
+    }
+    if(key === 'videoModel') settings.videoCapabilityKey = '';
     if(key === 'videoMultimodal') settings._videoMultimodalUserSet = true;
     if(key === 'videoMultimodal' && settings.videoMultimodal) settings.videoUseFrameRoles = false;
     normalizeSmartVideoModeSettings(settings, key === 'videoUseFrameRoles');
@@ -4186,6 +4854,50 @@ function bindDynamicParams(){
             markControlInteracting(btn);
             setDynamicSetting(btn.dataset.smartParam, btn.dataset.smartValue);
             if(btn.dataset.smartParam === 'videoDuration') renderDynamicParams();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-image-param-pick]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            markControlInteracting(btn);
+            settings.imageModelParams = settings.imageModelParams || {};
+            settings.imageModelParams[btn.dataset.imageParamPick] = btn.dataset.imageParamValue;
+            persistActiveSmartSettings();
+            rememberRecentSmartSettings(settings, activeSettingsSubject());
+            renderDynamicParams({force:true});
+            scheduleSave();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-image-param-toggle]').forEach(btn => {
+        btn.onclick = event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const key = btn.dataset.imageParamToggle;
+            settings.imageModelParams = settings.imageModelParams || {};
+            settings.imageModelParams[key] = !Boolean(settings.imageModelParams[key]);
+            persistActiveSmartSettings();
+            rememberRecentSmartSettings(settings, activeSettingsSubject());
+            renderDynamicParams({force:true});
+            scheduleSave();
+        };
+    });
+    dynamicParams.querySelectorAll('[data-image-param-input]').forEach(input => {
+        input.onclick = event => event.stopPropagation();
+        input.oninput = input.onchange = event => {
+            event?.stopPropagation?.();
+            const key = input.dataset.imageParamInput;
+            const type = String(input.dataset.imageParamType || '').toUpperCase();
+            let value = input.value;
+            if(['INT','INTEGER','FLOAT','NUMBER'].includes(type) && value !== ''){
+                const numeric = Number(value);
+                if(Number.isFinite(numeric)) value = numeric;
+            }
+            settings.imageModelParams = settings.imageModelParams || {};
+            settings.imageModelParams[key] = value;
+            persistActiveSmartSettings();
+            rememberRecentSmartSettings(settings, activeSettingsSubject());
+            scheduleSave();
         };
     });
     dynamicParams.querySelectorAll('[data-size-scope]').forEach(btn => {
@@ -4419,6 +5131,9 @@ async function loadConfig(options={}){
         const cfg = await fetch('/api/config').then(r => r.json());
         apiProviders = Array.isArray(cfg.api_providers) ? cfg.api_providers : [];
         comfyInstanceCount = Math.max(1, (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : []).filter(Boolean).length || 1);
+        // 在用户切换模型前后台批量预取 RunningHub 参数；不阻塞画布首屏。
+        preloadImageModelCapabilities();
+        preloadVideoModelCapabilities();
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
         if(renderDuringLoad) updateProviderModels();
@@ -5434,7 +6149,12 @@ function syncRunButtonState(node=selectedNode()){
     // API 图片任务提交后由服务端队列独立运行，同一节点可继续追加任务。
     // 视频、ComfyUI 和其他同步型运行仍保持单次执行，避免共享节点状态互相覆盖。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
-    runBtn.disabled = !isSmartRunnableNode(node) || (smartNodeInFlight(node) && !smartNodeAllowsConcurrentSubmit(node)) || smartCascadeIsLoopRunning(node?.id);
+    const runSettings = node ? smartSettingsForNode(node) : settings;
+    const videoSelection = configuredVideoSelection(runSettings);
+    runBtn.disabled = !isSmartRunnableNode(node) || !videoSelection.ok || (smartNodeInFlight(node) && !smartNodeAllowsConcurrentSubmit(node)) || smartCascadeIsLoopRunning(node?.id);
+    runBtn.title = !videoSelection.ok
+        ? tr(videoSelection.reason === 'provider' ? 'smart.noVideoPlatform' : 'smart.errNoVideoModel')
+        : '';
 }
 function smartNodeAllowsConcurrentSubmit(node){
     if(!node || !isSmartImageGenerationNode(node)) return false;
@@ -8318,15 +9038,20 @@ function smartNodeToolbarImageIndex(node){
     if(Number.isFinite(index) && index >= 0 && index < images.length) return index;
     return 0;
 }
-function currentImageToolbarTarget(){
+function currentMediaToolbarTarget(){
     const node = selectedNode();
     if(!isSmartImageNode(node)) return null;
     const index = smartNodeToolbarImageIndex(node);
     const item = imageForDisplay(node.images?.[index]);
-    if(!item?.url || mediaKindForItem(item) !== 'image') return null;
-    return {node, index, item};
+    const kind = mediaKindForItem(item);
+    if(!item?.url || !['image','video'].includes(kind)) return null;
+    return {node, index, item, kind};
 }
-function positionImageActionToolbar(target=currentImageToolbarTarget()){
+function currentImageToolbarTarget(){
+    const target = currentMediaToolbarTarget();
+    return target?.kind === 'image' ? target : null;
+}
+function positionImageActionToolbar(target=currentMediaToolbarTarget()){
     if(!imageActionToolbar || !target) return;
     const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(target.node.id)}"]`);
     if(!nodeEl) return;
@@ -8342,11 +9067,13 @@ function positionImageActionToolbar(target=currentImageToolbarTarget()){
 }
 function updateImageActionToolbar(){
     if(!imageActionToolbar) return;
-    const target = currentImageToolbarTarget();
+    const target = currentMediaToolbarTarget();
     imageActionToolbar.classList.toggle('open', Boolean(target));
     imageActionToolbar.setAttribute('aria-hidden', target ? 'false' : 'true');
     imageActionToolbar.querySelectorAll('[data-image-toolbar-action]').forEach(button => {
         const action = button.dataset.imageToolbarAction || '';
+        const requiredKind = button.dataset.toolbarKind || '';
+        button.hidden = Boolean(target && requiredKind && requiredKind !== target.kind);
         button.disabled = !target || (action === 'upscale' && !jimengImageProviderId());
     });
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
@@ -8528,10 +9255,30 @@ window.addEventListener('keydown', event => {
     }
 });
 function runImageToolbarAction(action){
-    const target = currentImageToolbarTarget();
+    const target = currentMediaToolbarTarget();
     if(!target) return;
-    const {node, index, item} = target;
+    const {node, index, item, kind} = target;
     selectedImage = {nodeId:node.id, index};
+    if(kind === 'video'){
+        if(action === 'preview'){
+            openImagePreview(node.id, index);
+            return;
+        }
+        if(action === 'download'){
+            downloadPreviewFile(node.images?.[index] || item);
+            return;
+        }
+        if(action === 'delete'){
+            deleteImage(node.id, index);
+            return;
+        }
+        if(action === 'trim' || action === 'frames'){
+            openImagePreview(node.id, index);
+            if(action === 'trim') requestAnimationFrame(() => currentPreviewVideo()?.focus?.());
+            return;
+        }
+        return;
+    }
     if(action === 'edit'){
         createImageEditGenerationNode(node);
         return;
@@ -11313,6 +12060,7 @@ function refreshComparePanel(){
         return;
     }
     const onCurrentLoaded = () => {
+        if(isVideoPreview && currentVideo) initializeVideoTrimState(currentVideo);
         if(currentImg.dataset.previewQuick !== '1') rememberPreviewImageResolution();
         syncPreviewFrameSize();
         updatePreviewMetaHint();
@@ -11453,6 +12201,151 @@ function currentPreviewVideo(){
     if(!imageEditModal.classList.contains('open')) return null;
     if(mediaKindForItem(currentEditImage().image || {}) !== 'video') return null;
     return document.getElementById('previewCurrentVideo');
+}
+function videoTimeLabel(seconds){
+    const value = Math.max(0, Number(seconds) || 0);
+    const minutes = Math.floor(value / 60);
+    const secs = value - minutes * 60;
+    return `${String(minutes).padStart(2, '0')}:${secs.toFixed(1).padStart(4, '0')}`;
+}
+function syncVideoTrimControls(){
+    const range = document.getElementById('videoTrimRange');
+    if(range) range.textContent = `${videoTimeLabel(videoTrimState.start)} — ${videoTimeLabel(videoTrimState.end)}`;
+    const previewBtn = document.getElementById('videoTrimPreviewBtn');
+    if(previewBtn){
+        previewBtn.classList.toggle('primary', videoTrimState.previewing);
+        previewBtn.classList.toggle('secondary', !videoTrimState.previewing);
+        const span = previewBtn.querySelector('span');
+        if(span) span.textContent = tr(videoTrimState.previewing ? 'smart.videoStopTrimPreview' : 'smart.videoPreviewTrim');
+        const icon = previewBtn.querySelector('i');
+        if(icon) icon.setAttribute('data-lucide', videoTrimState.previewing ? 'square' : 'play');
+    }
+    const muteBtn = document.getElementById('videoTrimMuteBtn');
+    if(muteBtn){
+        muteBtn.classList.toggle('primary', videoTrimState.mute);
+        muteBtn.classList.toggle('secondary', !videoTrimState.mute);
+        const span = muteBtn.querySelector('span');
+        if(span) span.textContent = tr(videoTrimState.mute ? 'smart.videoMuteExport' : 'smart.videoKeepAudio');
+        const icon = muteBtn.querySelector('i');
+        if(icon) icon.setAttribute('data-lucide', videoTrimState.mute ? 'volume-x' : 'volume-2');
+    }
+    const speedBtn = document.getElementById('videoPreviewSpeedBtn');
+    if(speedBtn){
+        const span = speedBtn.querySelector('span');
+        if(span) span.textContent = `${videoTrimState.speed}×`;
+    }
+    refreshIcons();
+}
+function initializeVideoTrimState(video, force=false){
+    if(!video) return;
+    const source = video.currentSrc || video.getAttribute('src') || '';
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    if(force || source !== videoTrimState.source){
+        videoTrimState = {source, start:0, end:duration, mute:false, previewing:false, speed:1};
+    } else if(duration && (!videoTrimState.end || videoTrimState.end > duration)){
+        videoTrimState.end = duration;
+    }
+    video.playbackRate = Number(videoTrimState.speed || 1);
+    video.muted = Boolean(videoTrimState.mute);
+    video.ontimeupdate = () => {
+        if(!videoTrimState.previewing) return;
+        if(Number(video.currentTime || 0) + 0.025 < Number(videoTrimState.end || 0)) return;
+        video.pause?.();
+        videoTrimState.previewing = false;
+        syncVideoTrimControls();
+    };
+    syncVideoTrimControls();
+}
+function markVideoTrimPoint(which){
+    const video = currentPreviewVideo();
+    if(!video || video.readyState < 1){ toast('视频还没有加载完成'); return; }
+    initializeVideoTrimState(video);
+    const current = Math.max(0, Number(video.currentTime || 0));
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : videoTrimState.end;
+    if(which === 'start'){
+        if(current >= videoTrimState.end - 0.1){ toast('起点必须早于终点'); return; }
+        videoTrimState.start = current;
+    } else {
+        const end = duration ? Math.min(duration, current) : current;
+        if(end <= videoTrimState.start + 0.1){ toast('终点必须晚于起点'); return; }
+        videoTrimState.end = end;
+    }
+    syncVideoTrimControls();
+}
+async function previewVideoTrimRange(){
+    const video = currentPreviewVideo();
+    if(!video) return;
+    initializeVideoTrimState(video);
+    if(videoTrimState.previewing){
+        video.pause?.();
+        videoTrimState.previewing = false;
+        syncVideoTrimControls();
+        return;
+    }
+    if(videoTrimState.end - videoTrimState.start < 0.1){ toast('请先设置有效的截取范围'); return; }
+    video.pause?.();
+    await seekVideoForFrame(video, videoTrimState.start);
+    video.playbackRate = Number(videoTrimState.speed || 1);
+    videoTrimState.previewing = true;
+    syncVideoTrimControls();
+    video.play?.().catch(() => {
+        videoTrimState.previewing = false;
+        syncVideoTrimControls();
+    });
+}
+function toggleVideoTrimMute(){
+    const video = currentPreviewVideo();
+    videoTrimState.mute = !videoTrimState.mute;
+    if(video) video.muted = videoTrimState.mute;
+    syncVideoTrimControls();
+}
+function cyclePreviewVideoSpeed(){
+    const speeds = [0.5, 1, 1.5, 2];
+    const current = speeds.indexOf(Number(videoTrimState.speed || 1));
+    videoTrimState.speed = speeds[(current + 1) % speeds.length];
+    const video = currentPreviewVideo();
+    if(video) video.playbackRate = videoTrimState.speed;
+    syncVideoTrimControls();
+}
+async function exportVideoTrim(){
+    const video = currentPreviewVideo();
+    const editing = currentEditImage();
+    if(!video || !editing.image?.url){ toast('没有可剪辑的视频'); return; }
+    initializeVideoTrimState(video);
+    const start = Number(videoTrimState.start || 0);
+    const end = Number(videoTrimState.end || 0);
+    if(end - start < 0.1){ toast('截取片段至少需要 0.1 秒'); return; }
+    const button = document.getElementById('videoTrimExportBtn');
+    if(button) button.disabled = true;
+    try {
+        const response = await fetch('/api/video-tools/trim', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({url:editing.image.url, start, end, mute:Boolean(videoTrimState.mute)})
+        });
+        const result = await response.json().catch(() => ({}));
+        if(!response.ok) throw new Error(result.detail || '视频片段导出失败');
+        pushUndo();
+        const rect = editing.node ? nodeRect(editing.node) : null;
+        const point = rect
+            ? {x:rect.x + rect.width + 240, y:rect.y + rect.height / 2}
+            : viewportCenter();
+        const created = createVideoGenerationNode(point, {skipUndo:true, select:true});
+        created.title = '视频片段';
+        created.images = [{...result, kind:'video'}];
+        created.activeImageIndex = 0;
+        created.outputKind = 'video';
+        created.runPrompt = editing.node?.runPrompt || '';
+        selectedIds = [];
+        selectedImage = {nodeId:created.id, index:0};
+        render();
+        scheduleSave();
+        toast('视频片段已导出到画布');
+    } catch(error){
+        toast((error.message || '视频片段导出失败').slice(0, 180));
+    } finally {
+        if(button) button.disabled = false;
+    }
 }
 function videoFrameStep(){
     const image = currentEditImage().image || {};
@@ -12650,6 +13543,7 @@ function closeImageEditor(){
         previewVideo.pause?.();
         previewVideo.onloadedmetadata = null;
         previewVideo.onloadeddata = null;
+        previewVideo.ontimeupdate = null;
         previewVideo.removeAttribute('src');
         previewVideo.load?.();
         previewVideo.style.display = 'none';
@@ -12657,6 +13551,7 @@ function closeImageEditor(){
     clearEditDrawing(true);
     cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
     previewNavState = {nodeId:'', index:0, count:0};
+    videoTrimState = {source:'', start:0, end:0, mute:false, previewing:false, speed:1};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     disposePanoramaPreview();
@@ -16575,7 +17470,32 @@ function comfyFieldKind(field){
 async function runApiGeneration(prompt, refs, runSettings=settings){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
-    const payload = {prompt, provider_id:runSettings.provider_id, model:runSettings.model, size:sizeForRun(runSettings), aspect_ratio:runSettings.ratio === 'custom' ? (runSettings.customRatio || '') : (runSettings.ratio || ''), resolution:runSettings.resolution || '', quality:runSettings.quality || 'auto', n:1, reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX)};
+    const runningHub = isRunningHubVideoProvider(runSettings.provider_id);
+    const aspectRatio = runningHub
+        ? imageAspectValueForRun(runSettings)
+        : (runSettings.ratio === 'custom' ? (runSettings.customRatio || '') : (runSettings.ratio || ''));
+    const capability = runningHub ? imageModelCapabilityCache.get(imageCapabilityCacheKey(runSettings.provider_id, runSettings.model)) : null;
+    const hasDimensions = Boolean(videoCapabilityField(capability, 'width') || videoCapabilityField(capability, 'height'));
+    const dimensionSize = hasDimensions && !runSettings.resolution && runSettings.imageCapabilityWidth && runSettings.imageCapabilityHeight
+        ? `${Math.round(Number(runSettings.imageCapabilityWidth))}x${Math.round(Number(runSettings.imageCapabilityHeight))}`
+        : '';
+    const requestSize = runningHub && runSettings.imageCapabilitySize
+        ? runSettings.imageCapabilitySize
+        : (dimensionSize || sizeForRun(runSettings));
+    const payload = {
+        prompt,
+        provider_id:runSettings.provider_id,
+        model:runSettings.model,
+        size:requestSize,
+        aspect_ratio:aspectRatio,
+        resolution:hasDimensions && !runSettings.resolution ? '__custom_dimensions__' : (runSettings.resolution || ''),
+        quality:runSettings.quality || 'auto',
+        n:1,
+        reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX),
+        model_params:runningHub && runSettings.imageModelParams && typeof runSettings.imageModelParams === 'object'
+            ? {...runSettings.imageModelParams}
+            : {}
+    };
     const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
         if(!r.ok) throw new Error(await r.text());
         return r.json();
@@ -16625,14 +17545,15 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     throw new Error(tr('smart.rhTimeout'));
 }
 async function runApiVideoGeneration(prompt, refs, runSettings=settings){
-    if(!runSettings.videoModel) throw new Error(tr('smart.errNoVideoModel'));
+    const videoSelection = configuredVideoSelection(runSettings);
+    if(!videoSelection.ok) throw new Error(tr(videoSelection.reason === 'provider' ? 'smart.noVideoPlatform' : 'smart.errNoVideoModel'));
     try {
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
         const trustedMode = Boolean(runSettings.videoTrustedAsset);
         const trustedSource = trustedMode ? (['library','cloud','manual'].includes(runSettings.videoTrustedSource) ? runSettings.videoTrustedSource : 'library') : 'none';
         // 仅「素材库链接」来源才走 asset:// 认证地址 + 后端可信素材路由；上传云端/手动网址走普通直链。
         const useAssetUris = trustedSource === 'library';
-        const targetPlatform = videoProviderPlatform(runSettings.videoProvider || 'comfly');
+        const targetPlatform = videoProviderPlatform(runSettings.videoProvider);
         let mismatchedAsset = false;
         const effUrl = ref => {
             const uris = (ref && ref.asset_uris && typeof ref.asset_uris === 'object') ? ref.asset_uris : null;
@@ -16673,8 +17594,8 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings){
         if(mismatchedAsset) toast('部分认证素材属于其它平台，已回退为普通素材。切换到对应平台的视频接口才能用 asset:// 认证地址。');
         const payload = {
             prompt,
-            provider_id: runSettings.videoProvider || 'comfly',
-            model: runSettings.videoModel || 'veo3-fast',
+            provider_id: runSettings.videoProvider,
+            model: runSettings.videoModel,
             duration: Math.max(1, Math.min(60, Number(runSettings.videoDuration) || 5)),
             aspect_ratio: runSettings.videoAspect || '16:9',
             resolution: runSettings.videoResolution || '',
@@ -16686,6 +17607,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings){
             watermark: Boolean(runSettings.videoWatermark),
             camerafixed: Boolean(runSettings.videoCameraFixed),
             generate_audio: Boolean(runSettings.videoGenerateAudio),
+            return_last_frame: Boolean(runSettings.videoReturnLastFrame),
             multimodal: Boolean(runSettings.videoMultimodal),
             trusted_asset: useAssetUris
         };
@@ -18228,8 +19150,7 @@ window.addEventListener('blur', () => {
     isRKeyDown = false;
 });
 engineSelect.onchange = () => {
-    settings.engine = engineSelect.value;
-    applyRecentSmartSettingsForCurrentMode();
+    if(!applyComposerEngineSelection(engineSelect.value)) return;
     syncApiKindToggleVisibility();
     renderDynamicParams();
     persistActiveSmartSettings();

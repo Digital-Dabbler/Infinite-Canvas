@@ -47,6 +47,9 @@
         root.querySelectorAll('[data-i18n-title]').forEach(el => {
             el.setAttribute('title', t(el.dataset.i18nTitle));
         });
+        root.querySelectorAll('[data-i18n-label]').forEach(el => {
+            el.setAttribute('label', t(el.dataset.i18nLabel));
+        });
         root.documentElement?.setAttribute('lang', lang() === 'en' ? 'en' : 'zh-CN');
         window.dispatchEvent(new CustomEvent('studio-lang-change', { detail:{ lang:lang() } }));
     }

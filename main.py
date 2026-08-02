@@ -218,6 +218,10 @@ async def startup_event():
             print("已从 ADMIN_USERNAME / ADMIN_PASSWORD 创建首个管理员账号。")
     except Exception as exc:
         print(f"初始化管理员账号失败: {exc}")
+    try:
+        ensure_legacy_api_profile_migration()
+    except Exception as exc:
+        print(f"初始化 API 配置组失败，将继续使用现有全局配置: {exc}")
     sync_static_html_versions()
     # 启动时整理资产库：给所有图片分组（含默认角色/场景）建好文件夹，并把根目录里的旧素材归整进去。
     try:
@@ -282,6 +286,8 @@ ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
+API_PROFILES_FILE = os.path.join(DATA_DIR, "api_profiles.json")
+DEPARTMENTS_FILE = os.path.join(DATA_DIR, "departments.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
 AUTH_USERS_FILE = os.path.join(DATA_DIR, "auth_users.json")
@@ -369,6 +375,8 @@ SUPPORTED_IMAGE_REQUEST_MODES = {"openai", "openai-json", "openai-video-proxy", 
 RUNNINGHUB_DEFAULT_BASE_URL = "https://www.runninghub.cn"
 RUNNINGHUB_OPENAPI_BASE_URL = "https://www.runninghub.cn/openapi/v2"
 RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
+RUNNINGHUB_MODEL_REGISTRY_CACHE_TTL = 300
+RUNNINGHUB_MODEL_REGISTRY_CACHE = {}
 RUNNINGHUB_LLM_BASE_URL = "https://llm.runninghub.cn/v1"
 RUNNINGHUB_REMOTE_REFERENCE_CACHE_TTL = 10 * 60
 RUNNINGHUB_REFERENCE_CACHE_MAX = 256
@@ -753,7 +761,13 @@ VIDEO_MODELS = model_list("VIDEO_MODELS", "veo3-fast", [
     "doubao-seedance-1-0-lite-i2v-250428",
 ])
 
-def provider_key_env(provider_id):
+def api_profile_env_token(api_profile_id):
+    return re.sub(r"[^A-Za-z0-9]", "_", str(api_profile_id or "").strip()).upper()
+
+def provider_key_env(provider_id, api_profile_id=""):
+    profile_id = str(api_profile_id or "").strip().lower()
+    if profile_id and profile_id != LEGACY_API_PROFILE_ID:
+        return f"API_PROFILE_{api_profile_env_token(profile_id)}_PROVIDER_{re.sub(r'[^A-Za-z0-9]', '_', provider_id).upper()}_KEY"
     if provider_id == "comfly":
         return "COMFLY_API_KEY"
     if provider_id == "modelscope":
@@ -764,13 +778,22 @@ def provider_key_env(provider_id):
         return "ARK_API_KEY"
     return f"API_PROVIDER_{re.sub(r'[^A-Za-z0-9]', '_', provider_id).upper()}_KEY"
 
-def runninghub_wallet_key_env():
+def runninghub_wallet_key_env(api_profile_id=""):
+    profile_id = str(api_profile_id or "").strip().lower()
+    if profile_id and profile_id != LEGACY_API_PROFILE_ID:
+        return f"API_PROFILE_{api_profile_env_token(profile_id)}_RUNNINGHUB_WALLET_API_KEY"
     return "RUNNINGHUB_WALLET_API_KEY"
 
-def volcengine_access_key_env():
+def volcengine_access_key_env(api_profile_id=""):
+    profile_id = str(api_profile_id or "").strip().lower()
+    if profile_id and profile_id != LEGACY_API_PROFILE_ID:
+        return f"API_PROFILE_{api_profile_env_token(profile_id)}_VOLCENGINE_ACCESS_KEY_ID"
     return "VOLCENGINE_ACCESS_KEY_ID"
 
-def volcengine_secret_key_env():
+def volcengine_secret_key_env(api_profile_id=""):
+    profile_id = str(api_profile_id or "").strip().lower()
+    if profile_id and profile_id != LEGACY_API_PROFILE_ID:
+        return f"API_PROFILE_{api_profile_env_token(profile_id)}_VOLCENGINE_SECRET_ACCESS_KEY"
     return "VOLCENGINE_SECRET_ACCESS_KEY"
 
 def read_api_env_value(key: str) -> str:
@@ -790,26 +813,26 @@ def read_api_env_value(key: str) -> str:
         return ""
     return ""
 
-def provider_env_key_value(provider_id: str) -> str:
+def provider_env_key_value(provider_id: str, api_profile_id="") -> str:
     provider_id = str(provider_id or "").strip().lower()
-    env_key = provider_key_env(provider_id)
+    env_key = provider_key_env(provider_id, api_profile_id)
     key = os.getenv(env_key, "") or read_api_env_value(env_key)
     if key:
         return key
-    if provider_id == "modelscope":
+    if provider_id == "modelscope" and (not api_profile_id or api_profile_id == LEGACY_API_PROFILE_ID):
         return MODELSCOPE_API_KEY or ""
     return ""
 
-def runninghub_wallet_key_value() -> str:
-    env_key = runninghub_wallet_key_env()
+def runninghub_wallet_key_value(api_profile_id="") -> str:
+    env_key = runninghub_wallet_key_env(api_profile_id)
     return os.getenv(env_key, "") or read_api_env_value(env_key)
 
-def volcengine_access_key_value() -> str:
-    env_key = volcengine_access_key_env()
+def volcengine_access_key_value(api_profile_id="") -> str:
+    env_key = volcengine_access_key_env(api_profile_id)
     return os.getenv(env_key, "") or read_api_env_value(env_key)
 
-def volcengine_secret_key_value() -> str:
-    env_key = volcengine_secret_key_env()
+def volcengine_secret_key_value(api_profile_id="") -> str:
+    env_key = volcengine_secret_key_env(api_profile_id)
     return os.getenv(env_key, "") or read_api_env_value(env_key)
 
 def volcengine_provider_api_key(explicit_key: str = "") -> str:
@@ -1332,6 +1355,9 @@ def normalize_provider(item):
         "image_edit_endpoint": image_edit_endpoint,
         "enabled": bool(item.get("enabled", True)),
         "primary": bool(item.get("primary", False)),
+        "billing_scope": str(item.get("billing_scope") or "department").strip().lower()
+        if str(item.get("billing_scope") or "department").strip().lower() in {"department", "shared", "local", "disabled"}
+        else "department",
         "image_models": model_list_from_values(item.get("image_models") or []),
         "chat_models": model_list_from_values(item.get("chat_models") or []),
         "video_models": video_models,
@@ -1344,6 +1370,151 @@ def normalize_provider(item):
         "volcengine_project_name": volc_project,
         "volcengine_region": volc_region,
     }
+
+API_PROFILE_SCHEMA_VERSION = 1
+LEGACY_API_PROFILE_ID = "legacy-shared"
+API_PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,62}[a-z0-9]$")
+
+def normalize_api_profile(item):
+    if not isinstance(item, dict):
+        raise ValueError("API 配置组必须是对象")
+    profile_id = str(item.get("id") or "").strip().lower()
+    if not API_PROFILE_ID_RE.fullmatch(profile_id):
+        raise ValueError(f"API 配置组 ID 不合法：{profile_id or '(empty)'}")
+    name = re.sub(r"\s+", " ", str(item.get("name") or profile_id).strip())[:80] or profile_id
+    providers = []
+    seen = set()
+    for raw_provider in item.get("providers") or []:
+        if not isinstance(raw_provider, dict):
+            continue
+        provider = normalize_provider(raw_provider)
+        if provider["id"] in seen:
+            raise ValueError(f"API 配置组 {profile_id} 中的平台 ID 重复：{provider['id']}")
+        seen.add(provider["id"])
+        providers.append(provider)
+    return {
+        "id": profile_id,
+        "name": name,
+        "enabled": bool(item.get("enabled", True)),
+        "providers": providers,
+    }
+
+def legacy_api_profile(providers=None):
+    source = providers if providers is not None else load_api_providers()
+    return {
+        "id": LEGACY_API_PROFILE_ID,
+        "name": "现有共用账户",
+        "enabled": True,
+        "providers": [normalize_provider(item) for item in source if isinstance(item, dict)],
+    }
+
+def _virtual_legacy_api_profiles(reason=""):
+    return {
+        "version": API_PROFILE_SCHEMA_VERSION,
+        "profiles": [legacy_api_profile()],
+        "migration": {"legacy_users_bound": False},
+        "_fallback_reason": str(reason or ""),
+    }
+
+def load_api_profiles():
+    """读取非敏感配置组；缺失或损坏时只返回兼容视图，不在读取路径写文件。"""
+    if not os.path.exists(API_PROFILES_FILE):
+        return _virtual_legacy_api_profiles("missing")
+    try:
+        with open(API_PROFILES_FILE, "r", encoding="utf-8-sig") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            raise ValueError("顶层结构必须是对象")
+        version = int(raw.get("version") or 0)
+        if version != API_PROFILE_SCHEMA_VERSION:
+            raise ValueError(f"不支持的数据版本：{version}")
+        profiles = []
+        seen = set()
+        for item in raw.get("profiles") or []:
+            profile = normalize_api_profile(item)
+            if profile["id"] in seen:
+                raise ValueError(f"API 配置组 ID 重复：{profile['id']}")
+            seen.add(profile["id"])
+            profiles.append(profile)
+        if not profiles:
+            raise ValueError("至少需要一个 API 配置组")
+        migration = raw.get("migration") if isinstance(raw.get("migration"), dict) else {}
+        return {
+            "version": API_PROFILE_SCHEMA_VERSION,
+            "profiles": profiles,
+            "migration": {"legacy_users_bound": bool(migration.get("legacy_users_bound"))},
+        }
+    except Exception as exc:
+        print(f"加载 API 配置组失败，继续使用现有共用配置：{exc}")
+        return _virtual_legacy_api_profiles(str(exc))
+
+def save_api_profiles(data):
+    """只保存非敏感配置；凭据继续留在服务端部署配置中。"""
+    if not isinstance(data, dict):
+        raise ValueError("API 配置组数据必须是对象")
+    profiles = [normalize_api_profile(item) for item in data.get("profiles") or []]
+    if not profiles:
+        raise ValueError("至少需要一个 API 配置组")
+    ids = [item["id"] for item in profiles]
+    if len(set(ids)) != len(ids):
+        raise ValueError("API 配置组 ID 不能重复")
+    migration = data.get("migration") if isinstance(data.get("migration"), dict) else {}
+    clean = {
+        "version": API_PROFILE_SCHEMA_VERSION,
+        "profiles": profiles,
+        "migration": {"legacy_users_bound": bool(migration.get("legacy_users_bound"))},
+    }
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with GLOBAL_CONFIG_LOCK:
+        tmp_path = f"{API_PROFILES_FILE}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(clean, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, API_PROFILES_FILE)
+    return clean
+
+def api_profile_by_id(profile_id, data=None):
+    target = str(profile_id or "").strip().lower()
+    profiles_data = data if isinstance(data, dict) else load_api_profiles()
+    return next((item for item in profiles_data.get("profiles") or [] if item.get("id") == target), None)
+
+def public_api_profile(profile, assigned_users=0):
+    return {
+        "id": profile.get("id"),
+        "name": profile.get("name"),
+        "enabled": bool(profile.get("enabled", True)),
+        "provider_count": len(profile.get("providers") or []),
+        "assigned_users": max(0, int(assigned_users or 0)),
+        "is_legacy": profile.get("id") == LEGACY_API_PROFILE_ID,
+    }
+
+def ensure_legacy_api_profile_migration():
+    """一次性把现有全局平台和已有用户纳入兼容组；可安全重复执行。"""
+    file_exists = os.path.exists(API_PROFILES_FILE)
+    data = load_api_profiles()
+    if file_exists and data.get("_fallback_reason"):
+        return data
+    if not file_exists:
+        data = {
+            "version": API_PROFILE_SCHEMA_VERSION,
+            "profiles": [legacy_api_profile()],
+            "migration": {"legacy_users_bound": False},
+        }
+        save_api_profiles(data)
+    legacy_exists = any(item.get("id") == LEGACY_API_PROFILE_ID for item in data.get("profiles") or [])
+    migration = data.get("migration") if isinstance(data.get("migration"), dict) else {}
+    if legacy_exists and not migration.get("legacy_users_bound"):
+        changed = False
+        with AUTH_LOCK:
+            users_data = load_auth_users()
+            for user in users_data.get("users") or []:
+                if not str(user.get("api_profile_id") or "").strip():
+                    user["api_profile_id"] = LEGACY_API_PROFILE_ID
+                    changed = True
+            if changed:
+                save_auth_users(users_data)
+        data["migration"] = {"legacy_users_bound": True}
+        data = save_api_profiles(data)
+    return data
 
 def load_api_providers():
     defaults = default_api_providers()
@@ -1358,42 +1529,49 @@ def load_api_providers():
         print(f"加载 API 平台配置失败: {e}")
         return defaults
 
-def save_api_providers(providers):
+def save_api_providers(providers, sync_legacy=True):
     os.makedirs(DATA_DIR, exist_ok=True)
     with GLOBAL_CONFIG_LOCK:
         with open(API_PROVIDERS_FILE, "w", encoding="utf-8") as f:
             json.dump(providers, f, ensure_ascii=False, indent=2)
+    if sync_legacy and os.path.exists(API_PROFILES_FILE):
+        data = load_api_profiles()
+        if not data.get("_fallback_reason"):
+            legacy = api_profile_by_id(LEGACY_API_PROFILE_ID, data)
+            if legacy:
+                legacy["providers"] = [normalize_provider(item) for item in providers]
+                save_api_profiles(data)
 
-def public_provider(provider):
+def public_provider(provider, api_profile_id=""):
     if provider.get("id") == "runninghub":
         try:
             provider = runninghub_provider_with_workflow_store(provider)
         except Exception:
             pass
-    key = provider_env_key_value(provider["id"])
+    key = provider_env_key_value(provider["id"], api_profile_id)
     item = {
         **provider,
         "has_key": bool(key),
         "key_preview": mask_secret(key),
-        "key_env": provider_key_env(provider["id"]),
+        "key_env": provider_key_env(provider["id"], api_profile_id),
     }
     if provider.get("id") == "runninghub":
-        wallet_key = runninghub_wallet_key_value()
+        wallet_key = runninghub_wallet_key_value(api_profile_id)
         item.update({
             "has_wallet_key": bool(wallet_key),
             "wallet_key_preview": mask_secret(wallet_key),
-            "wallet_key_env": runninghub_wallet_key_env(),
+            "wallet_key_env": runninghub_wallet_key_env(api_profile_id),
         })
     if provider.get("id") == "volcengine":
-        ak = volcengine_access_key_value()
-        sk = volcengine_secret_key_value()
+        ak = volcengine_access_key_value(api_profile_id)
+        sk = volcengine_secret_key_value(api_profile_id)
         item.update({
             "has_volcengine_access_key": bool(ak),
             "volcengine_access_key_preview": mask_secret(ak),
-            "volcengine_access_key_env": volcengine_access_key_env(),
+            "volcengine_access_key_env": volcengine_access_key_env(api_profile_id),
             "has_volcengine_secret_key": bool(sk),
             "volcengine_secret_key_preview": mask_secret(sk),
-            "volcengine_secret_key_env": volcengine_secret_key_env(),
+            "volcengine_secret_key_env": volcengine_secret_key_env(api_profile_id),
             "volcengine_project_name": provider.get("volcengine_project_name") or VOLCENGINE_DEFAULT_PROJECT_NAME,
             "volcengine_region": provider.get("volcengine_region") or VOLCENGINE_DEFAULT_REGION,
         })
@@ -1401,6 +1579,52 @@ def public_provider(provider):
 
 def public_api_providers():
     return [public_provider(p) for p in load_api_providers()]
+
+def save_profile_providers(api_profile_id, providers):
+    profile_id = str(api_profile_id or "").strip().lower()
+    data = load_api_profiles()
+    if data.get("_fallback_reason"):
+        raise HTTPException(status_code=409, detail="API 配置组文件损坏或版本不兼容，请先恢复该文件。")
+    profile = api_profile_by_id(profile_id, data)
+    if not profile:
+        raise HTTPException(status_code=404, detail="API 配置组不存在。")
+    profile["providers"] = [normalize_provider(item) for item in providers]
+    save_api_profiles(data)
+    if profile_id == LEGACY_API_PROFILE_ID:
+        save_api_providers(profile["providers"], sync_legacy=False)
+    return profile["providers"]
+
+def request_api_profile(request, allow_admin_selection=False, require_enabled=True):
+    user = require_authenticated(request)
+    profile_id = str(user.get("api_profile_id") or "").strip().lower()
+    if allow_admin_selection and user.get("role") == "admin":
+        selected = str(request.query_params.get("api_profile_id") or "").strip().lower()
+        if selected:
+            profile_id = selected
+        elif not profile_id:
+            profile_id = LEGACY_API_PROFILE_ID
+    if not profile_id:
+        raise HTTPException(status_code=403, detail="账号尚未分配 API 配置组，请联系管理员。")
+    profile = api_profile_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=403, detail="账号绑定的 API 配置组不存在，请联系管理员。")
+    if require_enabled and not profile.get("enabled", True):
+        raise HTTPException(status_code=403, detail="账号绑定的 API 配置组已停用，请联系管理员。")
+    return profile
+
+def provider_from_api_profile(profile, provider_id="", allow_default=False):
+    providers = profile.get("providers") or []
+    target = str(provider_id or "").strip().lower()
+    if not target and allow_default:
+        target = get_primary_provider_id(providers)
+    provider = next((item for item in providers if item.get("id") == target), None)
+    if not provider:
+        raise HTTPException(status_code=400, detail=f"当前 API 配置组未配置平台：{target or '(empty)'}")
+    if not provider.get("enabled", True):
+        raise HTTPException(status_code=400, detail=f"当前 API 配置组已停用平台：{provider.get('name') or target}")
+    runtime = dict(provider)
+    runtime["_api_profile_id"] = profile.get("id")
+    return runtime
 
 def get_primary_provider_id(providers=None):
     """返回当前首选 provider 的 id；优先 primary=True 的，否则取第一个非 modelscope 的，再次取第一个。"""
@@ -1413,7 +1637,13 @@ def get_primary_provider_id(providers=None):
         return non_ms["id"]
     return providers[0]["id"] if providers else "modelscope"
 
-def get_api_provider(provider_id="comfly"):
+def get_api_provider(provider_id="comfly", api_profile_id=""):
+    profile_id = str(api_profile_id or "").strip().lower()
+    if profile_id:
+        profile = api_profile_by_id(profile_id)
+        if not profile:
+            raise HTTPException(status_code=400, detail=f"未找到 API 配置组：{profile_id}")
+        return provider_from_api_profile(profile, provider_id, allow_default=not bool(str(provider_id or "").strip()))
     providers = load_api_providers()
     target = (provider_id or "").strip().lower()
     # 兼容旧的 "comfly" 硬编码：若 comfly 不存在或未指定，回退到首选 provider
@@ -1426,7 +1656,13 @@ def get_api_provider(provider_id="comfly"):
         raise HTTPException(status_code=400, detail=f"API 平台已禁用：{provider.get('name') or target}")
     return provider
 
-def get_api_provider_exact(provider_id: str):
+def get_api_provider_exact(provider_id: str, api_profile_id=""):
+    profile_id = str(api_profile_id or "").strip().lower()
+    if profile_id:
+        profile = api_profile_by_id(profile_id)
+        if not profile:
+            raise HTTPException(status_code=400, detail=f"未找到 API 配置组：{profile_id}")
+        return provider_from_api_profile(profile, provider_id, allow_default=False)
     providers = load_api_providers()
     target = (provider_id or "").strip().lower()
     provider = next((p for p in providers if p["id"] == target), None)
@@ -1436,15 +1672,19 @@ def get_api_provider_exact(provider_id: str):
         raise HTTPException(status_code=400, detail=f"API 平台已禁用：{provider.get('name') or target}")
     return provider
 
-def modelscope_provider_config():
-    return get_api_provider_exact("modelscope")
+def modelscope_provider_config(api_profile_id=""):
+    return get_api_provider_exact("modelscope", api_profile_id)
 
-def modelscope_api_key(explicit_key: str = ""):
-    return (
-        strip_auth_scheme(explicit_key, "Bearer")
-        or strip_auth_scheme(provider_env_key_value("modelscope"), "Bearer")
-        or strip_auth_scheme(MODELSCOPE_API_KEY, "Bearer")
-    )
+def modelscope_api_key(explicit_key: str = "", api_profile_id=""):
+    explicit = strip_auth_scheme(explicit_key, "Bearer")
+    if explicit:
+        return explicit
+    scoped = strip_auth_scheme(provider_env_key_value("modelscope", api_profile_id), "Bearer")
+    if scoped:
+        return scoped
+    if api_profile_id and api_profile_id != LEGACY_API_PROFILE_ID:
+        return ""
+    return strip_auth_scheme(MODELSCOPE_API_KEY, "Bearer")
 
 def modelscope_api_root(provider=None):
     provider = provider or modelscope_provider_config()
@@ -1509,6 +1749,7 @@ app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 # --- 局域网账号、权限与用量审计 ---
 # 这些文件刻意不和 history.json 混用：history 是共享展示数据，审计账本是管理员追溯数据。
 AUTH_LOCK = Lock()
+DEPARTMENT_LOCK = Lock()
 USAGE_AUDIT_LOCK = Lock()
 PHOTOSHOP_BRIDGE_LOCK = Lock()
 USAGE_DEFAULT_POLICY = {
@@ -1518,6 +1759,7 @@ USAGE_DEFAULT_POLICY = {
 }
 AUTH_PUBLIC_PATHS = {
     "/api/auth/register", "/api/auth/login", "/api/auth/reset-password",
+    "/api/departments",
     "/static/login.html", "/favicon.ico",
 }
 PASSWORD_RESET_ATTEMPTS = {}
@@ -1574,6 +1816,74 @@ def load_auth_users():
 def save_auth_users(data):
     _write_json_file(AUTH_USERS_FILE, data)
 
+DEPARTMENT_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]{2,63}")
+
+def _department_id_for_name(name):
+    digest = hashlib.sha1(str(name or "").encode("utf-8")).hexdigest()[:12]
+    return f"dept-{digest}"
+
+def _normalize_department(item):
+    if not isinstance(item, dict):
+        return None
+    department_id = str(item.get("id") or "").strip().lower()
+    name = re.sub(r"\s+", " ", str(item.get("name") or "").strip())[:80]
+    if not DEPARTMENT_ID_RE.fullmatch(department_id) or not name:
+        return None
+    return {"id": department_id, "name": name, "enabled": bool(item.get("enabled", True))}
+
+def load_departments():
+    """读取部门目录，并把旧账号中的自由文本部门作为兼容条目带入。"""
+    saved = _read_json_file(DEPARTMENTS_FILE, {"version": 1, "departments": []})
+    rows = saved.get("departments") if isinstance(saved, dict) else []
+    departments = []
+    seen_ids = set()
+    seen_names = set()
+    for raw in rows if isinstance(rows, list) else []:
+        item = _normalize_department(raw)
+        if not item or item["id"] in seen_ids or item["name"].casefold() in seen_names:
+            continue
+        departments.append(item)
+        seen_ids.add(item["id"])
+        seen_names.add(item["name"].casefold())
+    users_data = _read_json_file(AUTH_USERS_FILE, {"users": []})
+    users = users_data.get("users") if isinstance(users_data, dict) else []
+    for user in users if isinstance(users, list) else []:
+        if str(user.get("role") or "user") == "admin":
+            continue
+        name = re.sub(r"\s+", " ", str(user.get("department") or "").strip())[:80]
+        if not name or name.casefold() in seen_names:
+            continue
+        department_id = str(user.get("department_id") or "").strip().lower()
+        if not DEPARTMENT_ID_RE.fullmatch(department_id) or department_id in seen_ids:
+            department_id = _department_id_for_name(name)
+        departments.append({"id": department_id, "name": name, "enabled": True})
+        seen_ids.add(department_id)
+        seen_names.add(name.casefold())
+    return {"version": 1, "departments": departments}
+
+def save_departments(data):
+    normalized = []
+    for raw in data.get("departments") or []:
+        item = _normalize_department(raw)
+        if item:
+            normalized.append(item)
+    _write_json_file(DEPARTMENTS_FILE, {"version": 1, "departments": normalized})
+
+def department_by_id(department_id, data=None):
+    target = str(department_id or "").strip().lower()
+    return next((item for item in (data or load_departments()).get("departments", []) if item.get("id") == target), None)
+
+def resolve_department(value, include_disabled=False):
+    target = str(value or "").strip()
+    folded = target.casefold()
+    item = next((row for row in load_departments().get("departments", [])
+                 if row.get("id") == target.lower() or str(row.get("name") or "").casefold() == folded), None)
+    if not item:
+        raise HTTPException(status_code=400, detail="请选择管理员设置的部门。")
+    if not include_disabled and not item.get("enabled", True):
+        raise HTTPException(status_code=400, detail="该部门已停用，请联系管理员。")
+    return item
+
 def load_auth_sessions():
     data = _read_json_file(AUTH_SESSIONS_FILE, {"sessions": []})
     sessions = data.get("sessions") if isinstance(data, dict) else []
@@ -1587,7 +1897,9 @@ def save_auth_sessions(data):
 def public_user(user):
     return {
         "id": user.get("id"), "username": user.get("username"), "name": user.get("name"),
-        "department": user.get("department"), "role": user.get("role", "user"),
+        "department": user.get("department"), "department_id": str(user.get("department_id") or ""),
+        "role": user.get("role", "user"),
+        "api_profile_id": str(user.get("api_profile_id") or ""),
         "enabled": bool(user.get("enabled", True)), "must_change_password": bool(user.get("must_change_password")),
         "quota": user.get("quota") or {}, "created_at": user.get("created_at", 0),
     }
@@ -1606,7 +1918,7 @@ def ensure_admin_bootstrap():
         data["users"].append({
             "id": uuid.uuid4().hex, "username": username, "name": "系统管理员", "department": "管理",
             "role": "admin", "enabled": True, "password_salt": salt, "password_hash": digest,
-            "must_change_password": True, "quota": {}, "created_at": now_ms(),
+            "must_change_password": True, "quota": {}, "api_profile_id": "", "created_at": now_ms(),
         })
         save_auth_users(data)
     return True
@@ -1766,11 +2078,13 @@ def maybe_create_usage_alert(event):
 
 def begin_usage_event(request, function, provider="", model="", params=None):
     user = require_authenticated(request)
+    profile = request_api_profile(request)
     category = usage_category(function)
     user_quota_allows(user, category)
     event = {
         "id": uuid.uuid4().hex, "created_at": time.time(), "created_at_iso": datetime.datetime.now().isoformat(timespec="seconds"),
         "completed_at": 0, "user_id": user["id"], "username": user.get("username", ""), "name": user.get("name", ""), "department": user.get("department", ""),
+        "api_profile_id": profile.get("id", ""), "api_profile_name": profile.get("name", ""),
         "client_source": user.get("client_source", "web"), "client_ip": (request.client.host if request.client else ""),
         "user_agent": str(request.headers.get("user-agent") or "")[:300], "function": function, "category": category,
         "provider": str(provider or ""), "model": str(model or ""), "params": params or {}, "status": "queued", "error": "", "duration_ms": 0, "raw_usage": None,
@@ -2109,11 +2423,34 @@ def parse_prompt_template_markdown(text: str):
         })
     return templates
 
+def canvas_static_version():
+    paths = [
+        os.path.join(STATIC_DIR, "canvas.html"),
+        os.path.join(STATIC_DIR, "smart-canvas.html"),
+        os.path.join(STATIC_DIR, "css", "canvas.css"),
+        os.path.join(STATIC_DIR, "css", "smart-canvas.css"),
+        os.path.join(STATIC_DIR, "js", "canvas.js"),
+        os.path.join(STATIC_DIR, "js", "smart-canvas.js"),
+        os.path.join(STATIC_DIR, "js", "i18n.js"),
+        os.path.join(STATIC_DIR, "js", "i18n-core.js"),
+        os.path.join(STATIC_DIR, "js", "i18n", "common.js"),
+        os.path.join(STATIC_DIR, "js", "i18n", "canvas.js"),
+        os.path.join(STATIC_DIR, "js", "i18n", "smart-canvas.js"),
+    ]
+    revisions = []
+    for path in paths:
+        try:
+            revisions.append(os.stat(path).st_mtime_ns)
+        except OSError:
+            continue
+    return str(max(revisions) if revisions else current_app_version())
+
 @app.get("/api/app-info")
 def app_info():
     version = current_app_version()
     return {
         "version": version,
+        "canvas_static_version": canvas_static_version(),
         "repo_url": GITHUB_REPO_URL,
         "version_url": GITHUB_VERSION_URL,
         "tree_url": GITHUB_TREE_URL,
@@ -2854,6 +3191,24 @@ class AdminUserUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     role: Optional[str] = None
     quota: Optional[Dict[str, int]] = None
+    api_profile_id: Optional[str] = None
+    department_id: Optional[str] = None
+
+class AdminDepartmentCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+class AdminDepartmentUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    enabled: Optional[bool] = None
+
+class AdminApiProfileCreateRequest(BaseModel):
+    id: str = Field(min_length=3, max_length=64)
+    name: str = Field(min_length=1, max_length=80)
+    copy_from: str = ""
+
+class AdminApiProfileUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    enabled: Optional[bool] = None
 
 class AdminPasswordResetRequest(BaseModel):
     new_password: str = Field(min_length=10, max_length=200)
@@ -2870,12 +3225,13 @@ async def auth_register(payload: AuthRegisterRequest):
     username = re.sub(r"[^a-zA-Z0-9_.-]", "", payload.username.strip().lower())
     if len(username) < 3:
         raise HTTPException(status_code=400, detail="账号只能使用 3-40 位字母、数字、点、下划线或连字符。")
+    department = resolve_department(payload.department)
     with AUTH_LOCK:
         data = load_auth_users()
         if any(str(item.get("username") or "").lower() == username for item in data["users"]):
             raise HTTPException(status_code=409, detail="该账号已被注册。")
         salt, digest = _password_hash(payload.password)
-        user = {"id": uuid.uuid4().hex, "username": username, "name": payload.name.strip(), "department": payload.department.strip(), "role": "user", "enabled": True, "password_salt": salt, "password_hash": digest, "must_change_password": False, "quota": {}, "created_at": now_ms()}
+        user = {"id": uuid.uuid4().hex, "username": username, "name": payload.name.strip(), "department": department["name"], "department_id": department["id"], "api_profile_id": "", "role": "user", "enabled": True, "password_salt": salt, "password_hash": digest, "must_change_password": False, "quota": {}, "created_at": now_ms()}
         data["users"].append(user)
         save_auth_users(data)
     return {"user": public_user(user), "message": "注册成功，请登录。"}
@@ -2901,14 +3257,18 @@ async def auth_reset_password(payload: AuthPasswordResetRequest, request: Reques
     _password_reset_allowed(request)
     username = re.sub(r"[^a-zA-Z0-9_.-]", "", payload.username.strip().lower())
     name = payload.name.strip()
-    department = payload.department.strip()
+    department = resolve_department(payload.department, include_disabled=True)
     with AUTH_LOCK:
         data = load_auth_users()
         user = next((item for item in data["users"] if str(item.get("username") or "").lower() == username), None)
+        department_matches = bool(user and (
+            (user.get("department_id") and hmac.compare_digest(str(user.get("department_id")).encode("utf-8"), department["id"].encode("utf-8")))
+            or (not user.get("department_id") and hmac.compare_digest(str(user.get("department") or "").encode("utf-8"), department["name"].encode("utf-8")))
+        ))
         # 管理员凭据只能由已登录管理员处理，不能通过公开入口重置。
         verified = bool(user and user.get("enabled", True) and user.get("role") != "admin"
                         and hmac.compare_digest(str(user.get("name") or "").encode("utf-8"), name.encode("utf-8"))
-                        and hmac.compare_digest(str(user.get("department") or "").encode("utf-8"), department.encode("utf-8")))
+                        and department_matches)
         if not verified:
             raise HTTPException(status_code=400, detail="账号、姓名或部门不匹配，无法重置密码。")
         salt, digest = _password_hash(payload.new_password)
@@ -2956,6 +3316,168 @@ async def admin_users(request: Request):
     require_admin(request)
     return {"users": [public_user(item) for item in load_auth_users().get("users", [])]}
 
+@app.get("/api/departments")
+async def public_departments():
+    return {"departments": load_departments().get("departments", [])}
+
+@app.get("/api/admin/departments")
+async def admin_departments(request: Request):
+    require_admin(request)
+    users = load_auth_users().get("users", [])
+    data = load_departments()
+    result = []
+    for item in data.get("departments", []):
+        count = sum(1 for user in users if user.get("role") != "admin" and (
+            str(user.get("department_id") or "") == item["id"]
+            or (not user.get("department_id") and str(user.get("department") or "").casefold() == item["name"].casefold())
+        ))
+        result.append({**item, "assigned_users": count})
+    return {"departments": result}
+
+@app.post("/api/admin/departments")
+async def admin_create_department(payload: AdminDepartmentCreateRequest, request: Request):
+    require_admin(request)
+    name = re.sub(r"\s+", " ", payload.name.strip())[:80]
+    if not name:
+        raise HTTPException(status_code=400, detail="部门名称不能为空。")
+    with DEPARTMENT_LOCK:
+        data = load_departments()
+        if any(str(item.get("name") or "").casefold() == name.casefold() for item in data.get("departments", [])):
+            raise HTTPException(status_code=409, detail="该部门已经存在。")
+        department_id = _department_id_for_name(name)
+        while department_by_id(department_id, data):
+            department_id = f"dept-{uuid.uuid4().hex[:12]}"
+        item = {"id": department_id, "name": name, "enabled": True}
+        data["departments"].append(item)
+        save_departments(data)
+    return {"department": item}
+
+@app.patch("/api/admin/departments/{department_id}")
+async def admin_update_department(department_id: str, payload: AdminDepartmentUpdateRequest, request: Request):
+    require_admin(request)
+    with DEPARTMENT_LOCK:
+        data = load_departments()
+        item = department_by_id(department_id, data)
+        if not item:
+            raise HTTPException(status_code=404, detail="部门不存在。")
+        old_name = item["name"]
+        if payload.name is not None:
+            name = re.sub(r"\s+", " ", payload.name.strip())[:80]
+            if not name:
+                raise HTTPException(status_code=400, detail="部门名称不能为空。")
+            if any(row["id"] != item["id"] and row["name"].casefold() == name.casefold() for row in data.get("departments", [])):
+                raise HTTPException(status_code=409, detail="该部门名称已经存在。")
+            item["name"] = name
+        if payload.enabled is not None:
+            item["enabled"] = bool(payload.enabled)
+        save_departments(data)
+    if item["name"] != old_name:
+        with AUTH_LOCK:
+            users_data = load_auth_users()
+            for user in users_data["users"]:
+                if (str(user.get("department_id") or "") == item["id"]
+                        or (not user.get("department_id") and str(user.get("department") or "").casefold() == old_name.casefold())):
+                    user["department_id"] = item["id"]
+                    user["department"] = item["name"]
+            save_auth_users(users_data)
+    return {"department": item}
+
+@app.delete("/api/admin/departments/{department_id}")
+async def admin_delete_department(department_id: str, request: Request):
+    require_admin(request)
+    target = str(department_id or "").strip().lower()
+    data = load_departments()
+    item = department_by_id(target, data)
+    if not item:
+        raise HTTPException(status_code=404, detail="部门不存在。")
+    users = load_auth_users().get("users", [])
+    if any(user.get("role") != "admin" and (
+           str(user.get("department_id") or "") == target
+           or (not user.get("department_id") and str(user.get("department") or "").casefold() == item["name"].casefold()))
+           for user in users):
+        raise HTTPException(status_code=409, detail="仍有用户属于此部门，请先重新分配用户。")
+    with DEPARTMENT_LOCK:
+        current = load_departments()
+        current["departments"] = [row for row in current.get("departments", []) if row.get("id") != target]
+        save_departments(current)
+    return {"ok": True}
+
+@app.get("/api/admin/api-profiles")
+async def admin_api_profiles(request: Request):
+    require_admin(request)
+    data = load_api_profiles()
+    counts = {}
+    for user in load_auth_users().get("users", []):
+        profile_id = str(user.get("api_profile_id") or "")
+        if profile_id:
+            counts[profile_id] = counts.get(profile_id, 0) + 1
+    return {
+        "version": data.get("version", API_PROFILE_SCHEMA_VERSION),
+        "profiles": [public_api_profile(item, counts.get(item.get("id"), 0)) for item in data.get("profiles") or []],
+    }
+
+@app.post("/api/admin/api-profiles")
+async def admin_create_api_profile(payload: AdminApiProfileCreateRequest, request: Request):
+    require_admin(request)
+    profile_id = str(payload.id or "").strip().lower()
+    if not API_PROFILE_ID_RE.fullmatch(profile_id):
+        raise HTTPException(status_code=400, detail="配置组 ID 仅支持小写字母、数字、下划线和连字符，长度 3–64。")
+    data = load_api_profiles()
+    if data.get("_fallback_reason"):
+        raise HTTPException(status_code=409, detail="API 配置组文件损坏或版本不兼容，请先恢复该文件。")
+    if api_profile_by_id(profile_id, data):
+        raise HTTPException(status_code=400, detail=f"API 配置组 ID 已存在：{profile_id}")
+    providers = []
+    copy_from = str(payload.copy_from or "").strip().lower()
+    if copy_from:
+        source = api_profile_by_id(copy_from, data)
+        if not source:
+            raise HTTPException(status_code=400, detail=f"复制来源不存在：{copy_from}")
+        providers = [dict(item) for item in source.get("providers") or []]
+    profile = normalize_api_profile({
+        "id": profile_id,
+        "name": payload.name,
+        "enabled": True,
+        "providers": providers,
+    })
+    data["profiles"].append(profile)
+    save_api_profiles(data)
+    return {"profile": public_api_profile(profile)}
+
+@app.patch("/api/admin/api-profiles/{profile_id}")
+async def admin_update_api_profile(profile_id: str, payload: AdminApiProfileUpdateRequest, request: Request):
+    require_admin(request)
+    data = load_api_profiles()
+    if data.get("_fallback_reason"):
+        raise HTTPException(status_code=409, detail="API 配置组文件损坏或版本不兼容，请先恢复该文件。")
+    profile = api_profile_by_id(profile_id, data)
+    if not profile:
+        raise HTTPException(status_code=404, detail="API 配置组不存在。")
+    if payload.name is not None:
+        profile["name"] = re.sub(r"\s+", " ", payload.name.strip())[:80]
+    if payload.enabled is not None:
+        profile["enabled"] = bool(payload.enabled)
+    save_api_profiles(data)
+    return {"profile": public_api_profile(profile)}
+
+@app.delete("/api/admin/api-profiles/{profile_id}")
+async def admin_delete_api_profile(profile_id: str, request: Request):
+    require_admin(request)
+    target = str(profile_id or "").strip().lower()
+    if target == LEGACY_API_PROFILE_ID:
+        raise HTTPException(status_code=400, detail="兼容配置组不能删除；完成灰度迁移后可以停用。")
+    users = load_auth_users().get("users", [])
+    if any(str(item.get("api_profile_id") or "") == target for item in users):
+        raise HTTPException(status_code=409, detail="仍有用户绑定此配置组，请先重新分配用户。")
+    data = load_api_profiles()
+    if data.get("_fallback_reason"):
+        raise HTTPException(status_code=409, detail="API 配置组文件损坏或版本不兼容，请先恢复该文件。")
+    if not api_profile_by_id(target, data):
+        raise HTTPException(status_code=404, detail="API 配置组不存在。")
+    data["profiles"] = [item for item in data.get("profiles") or [] if item.get("id") != target]
+    save_api_profiles(data)
+    return {"ok": True}
+
 @app.patch("/api/admin/users/{user_id}")
 async def admin_update_user(user_id: str, payload: AdminUserUpdateRequest, request: Request):
     admin = require_admin(request)
@@ -2975,6 +3497,23 @@ async def admin_update_user(user_id: str, payload: AdminUserUpdateRequest, reque
         if payload.quota is not None:
             allowed = {"daily_image", "daily_video", "daily_llm", "concurrent_image", "concurrent_video", "concurrent_llm"}
             user["quota"] = {key: max(0, int(value or 0)) for key, value in payload.quota.items() if key in allowed}
+        if payload.api_profile_id is not None:
+            profile_id = str(payload.api_profile_id or "").strip().lower()
+            if profile_id:
+                profile = api_profile_by_id(profile_id)
+                if not profile:
+                    raise HTTPException(status_code=400, detail="指定的 API 配置组不存在。")
+                if not profile.get("enabled", True):
+                    raise HTTPException(status_code=400, detail="不能把用户分配到已停用的 API 配置组。")
+            user["api_profile_id"] = profile_id
+        if payload.department_id is not None:
+            department = department_by_id(payload.department_id)
+            if not department:
+                raise HTTPException(status_code=400, detail="指定的部门不存在。")
+            if not department.get("enabled", True) and str(user.get("department_id") or "") != department["id"]:
+                raise HTTPException(status_code=400, detail="不能把用户分配到已停用的部门。")
+            user["department_id"] = department["id"]
+            user["department"] = department["name"]
         save_auth_users(data)
     if payload.enabled is False:
         revoke_user_sessions(user_id)
@@ -3355,9 +3894,16 @@ class OnlineImageRequest(BaseModel):
     quality: str = "auto"
     n: int = 1
     reference_images: List[AIReference] = []
+    model_params: Dict[str, Any] = Field(default_factory=dict)
     # operation="upscale" 走即梦 image_upscale（对一张已有图片放大），resolution_type ∈ {2k,4k,8k}
     operation: str = ""
     resolution_type: str = ""
+
+class VideoTrimRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+    start: float = Field(default=0, ge=0, le=36000)
+    end: float = Field(gt=0, le=36000)
+    mute: bool = False
 
 class ImageTaskQueryRequest(BaseModel):
     provider_id: str = "comfly"
@@ -3461,6 +4007,7 @@ class ApiProviderPayload(BaseModel):
     image_edit_endpoint: str = ""
     enabled: bool = True
     primary: bool = False
+    billing_scope: str = "department"
     image_models: List[str] = []
     chat_models: List[str] = []
     video_models: List[str] = []
@@ -4414,16 +4961,18 @@ def display_title(text):
     title = re.sub(r"\s+", " ", text or "").strip()
     return title[:24] or "新对话"
 
-def resolve_chat_provider(provider: str, model: str, ms_model: str):
+def resolve_chat_provider(provider: str, model: str, ms_model: str, api_profile_id=""):
     if provider == "modelscope":
-        clean_token = modelscope_api_key()
+        ms_provider = get_api_provider("modelscope", api_profile_id)
+        clean_token = modelscope_api_key(api_profile_id=api_profile_id)
         if not clean_token:
             raise HTTPException(status_code=400, detail="未配置 ModelScope API Key，请在 API 设置中填写。")
-        base = modelscope_api_root()
+        base = modelscope_api_root(ms_provider)
         hdrs = {"Authorization": bearer_auth_value(clean_token), "Content-Type": "application/json"}
-        mdl = selected_model(ms_model or model, MODELSCOPE_CHAT_MODELS[0] if MODELSCOPE_CHAT_MODELS else "MiniMax/MiniMax-M2.7")
+        scoped_models = ms_provider.get("chat_models") or MODELSCOPE_CHAT_MODELS
+        mdl = selected_model(ms_model or model, scoped_models[0] if scoped_models else "MiniMax/MiniMax-M2.7")
         return base, hdrs, mdl
-    api_provider = get_api_provider(provider or "")
+    api_provider = get_api_provider(provider or "", api_profile_id)
     if is_codex_provider(api_provider):
         raise HTTPException(status_code=400, detail="OpenAI CLI 使用本机 codex 登录态，不需要 API Key。请使用画布/聊天里的 OpenAI CLI 专用通道。")
     if is_gemini_cli_provider(api_provider):
@@ -4480,7 +5029,7 @@ def api_headers(json_body=True, provider=None, model=""):
     if provider:
         if is_codex_provider(provider) or is_gemini_cli_provider(provider):
             raise HTTPException(status_code=400, detail="CLI 协议使用本机登录态，不需要 API Key。当前入口应走对应 CLI 专用通道。")
-        api_key = provider_env_key_value(provider["id"])
+        api_key = provider_env_key_value(provider["id"], provider.get("_api_profile_id"))
         provider_name = provider.get("name") or provider["id"]
         if not api_key:
             raise HTTPException(status_code=400, detail=f"未配置 {provider_name} 的 API Key，请在 API 平台管理中填写。")
@@ -7749,6 +8298,79 @@ async def media_preview(url: str, w: int = 512):
             return FileResponse(path, media_type=content_type_for_path(path))
         raise HTTPException(status_code=415, detail=f"无法生成预览图：{exc}") from exc
 
+def trim_local_video(path: str, output_path: str, start: float, duration: float, mute: bool = False):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("当前服务器未安装 FFmpeg，暂时不能导出视频片段。")
+    common = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", f"{start:.3f}", "-i", path, "-t", f"{duration:.3f}",
+        "-map", "0:v:0",
+    ]
+    if not mute:
+        common.extend(["-map", "0:a?"])
+    attempts = [
+        [*common, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"],
+        [*common, "-c:v", "mpeg4", "-q:v", "3"],
+    ]
+    for command in attempts:
+        if mute:
+            command.append("-an")
+        else:
+            command.extend(["-c:a", "aac", "-b:a", "192k"])
+        command.extend(["-movflags", "+faststart", output_path])
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=max(120, int(duration * 8)))
+        if proc.returncode == 0 and os.path.isfile(output_path) and os.path.getsize(output_path) > 0:
+            return
+        try:
+            os.remove(output_path)
+        except OSError:
+            pass
+        last_error = (proc.stderr or "FFmpeg 导出失败").strip()[-800:]
+    raise RuntimeError(last_error)
+
+@app.post("/api/video-tools/trim")
+async def trim_video(payload: VideoTrimRequest, request: Request):
+    path = output_file_from_url(payload.url)
+    if not path or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="只能剪辑已经保存到本项目中的视频。")
+    if not is_video_preview_file(path):
+        raise HTTPException(status_code=400, detail="选择的素材不是可剪辑的视频文件。")
+    start = max(0.0, float(payload.start or 0))
+    end = max(0.0, float(payload.end or 0))
+    if end - start < 0.1:
+        raise HTTPException(status_code=400, detail="截取片段至少需要 0.1 秒。")
+    source_duration = probe_local_audio_duration_seconds(payload.url)
+    if source_duration:
+        end = min(end, source_duration)
+    duration = end - start
+    if duration < 0.1:
+        raise HTTPException(status_code=400, detail="截取范围已经超出视频时长。")
+    request.state.usage_event = begin_usage_event(
+        request, "video", "local", "ffmpeg-trim",
+        {"entry": "smart-canvas", "duration": round(duration, 3), "mute": bool(payload.mute)},
+    )
+    source_name = os.path.splitext(os.path.basename(path))[0]
+    filename = sanitize_export_filename(
+        f"{source_name}-clip-{uuid.uuid4().hex[:8]}.mp4",
+        f"video-clip-{uuid.uuid4().hex[:8]}.mp4",
+    )
+    output_path = output_path_for(filename, "output")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    try:
+        await asyncio.to_thread(trim_local_video, path, output_path, start, duration, bool(payload.mute))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {
+        "url": output_url_for(filename, "output"),
+        "name": filename,
+        "kind": "video",
+        "duration": round(duration, 3),
+        "trim_start": round(start, 3),
+        "trim_end": round(end, 3),
+        "muted": bool(payload.mute),
+    }
+
 @app.get("/api/image-jpeg")
 async def image_jpeg(url: str, w: int = 0):
     """把任意图片转成 JPEG 返回（带缓存）。给不支持 WebP 等格式显示的客户端（PS UXP）用。
@@ -10589,7 +11211,7 @@ def friendly_video_error_detail(text, model="", provider=None):
     return ""
 
 async def generate_modelscope_provider_image(prompt, size, model, reference_images=None, provider=None):
-    clean_token = modelscope_api_key()
+    clean_token = modelscope_api_key(api_profile_id=str((provider or {}).get("_api_profile_id") or ""))
     if not clean_token:
         raise HTTPException(status_code=400, detail="未配置 ModelScope API Key，请在 API 设置中填写。")
     width, height = parse_size_pair(size)
@@ -10745,8 +11367,9 @@ def runninghub_provider():
 def runninghub_api_key(provider=None, use_wallet=False, prefer_wallet=False):
     provider = provider or runninghub_provider()
     provider_id = (provider or {}).get("id") or "runninghub"
-    free_key = str((provider or {}).get("api_key") or "").strip() or provider_env_key_value(provider_id)
-    wallet_key = str((provider or {}).get("wallet_api_key") or "").strip() or runninghub_wallet_key_value()
+    profile_id = str((provider or {}).get("_api_profile_id") or "")
+    free_key = str((provider or {}).get("api_key") or "").strip() or provider_env_key_value(provider_id, profile_id)
+    wallet_key = str((provider or {}).get("wallet_api_key") or "").strip() or runninghub_wallet_key_value(profile_id)
     if use_wallet and not wallet_key:
         raise HTTPException(status_code=400, detail="未配置 RunningHub 账户余额 API Key。标准模型接口只能走账户余额，请在 RH 设置中填写账户余额 Key。")
     api_key = wallet_key if (use_wallet or prefer_wallet) and wallet_key else free_key
@@ -11053,6 +11676,18 @@ async def fetch_runninghub_llm_models(provider=None):
     return [], {"source": "", "count": 0, "errors": errors[-3:]}
 
 async def fetch_runninghub_model_registry(provider=None, include_fallback=True, include_meta=False):
+    provider = provider if isinstance(provider, dict) else {}
+    cache_key = "|".join([
+        str(provider.get("_api_profile_id") or LEGACY_API_PROFILE_ID),
+        str(provider.get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL).rstrip("/"),
+    ])
+    cached = RUNNINGHUB_MODEL_REGISTRY_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and now - float(cached.get("at") or 0) < RUNNINGHUB_MODEL_REGISTRY_CACHE_TTL:
+        cached_items = list(cached.get("items") or [])
+        cached_meta = dict(cached.get("meta") or {})
+        if cached_items:
+            return (cached_items, cached_meta) if include_meta else cached_items
     urls = [
         ("openapi", runninghub_openapi_url(provider, "models")),
         ("github", RUNNINGHUB_MODEL_REGISTRY_URL),
@@ -11100,6 +11735,11 @@ async def fetch_runninghub_model_registry(provider=None, include_fallback=True, 
             "llm_count": len(llm_items),
             "llm_source": llm_meta.get("source") or "",
             "errors": [*errors[-3:], *((llm_meta.get("errors") or [])[-3:])],
+        }
+        RUNNINGHUB_MODEL_REGISTRY_CACHE[cache_key] = {
+            "at": now,
+            "items": list(combined),
+            "meta": dict(meta),
         }
         return (combined, meta) if include_meta else combined
     if include_fallback:
@@ -11206,6 +11846,51 @@ async def runninghub_model_definition(provider, model):
     endpoint = runninghub_endpoint_alias_for_model(requested) or endpoint
     return {"name_en": requested, "endpoint": endpoint or RUNNINGHUB_DEFAULT_IMAGE_MODELS[0], "output_type": classify_upstream_model(requested), "params": []}
 
+def public_runninghub_model_capabilities(model_def):
+    fields = []
+    for raw in model_def.get("params") or []:
+        if not isinstance(raw, dict):
+            continue
+        key = str(raw.get("fieldKey") or "").strip()
+        if not key:
+            continue
+        item = {
+            "key": key,
+            "type": str(raw.get("type") or "").strip().upper(),
+            "required": bool(raw.get("required")),
+            "label": str(raw.get("label") or key).strip()[:120],
+            "description": str(raw.get("description") or "").strip()[:500],
+            "multiple": bool(raw.get("multipleInputs")),
+        }
+        default = raw.get("defaultValue")
+        if isinstance(default, (str, int, float, bool)) or default is None:
+            item["default"] = default
+        for numeric_key in ("min", "max", "step", "maxInputNum", "maxSize", "maxLength"):
+            value = raw.get(numeric_key)
+            if isinstance(value, (int, float)):
+                item[numeric_key] = value
+        options = []
+        for option in raw.get("options") or []:
+            if isinstance(option, dict):
+                value = option.get("value")
+                label = option.get("description") or option.get("descriptionEn") or value
+            else:
+                value = option
+                label = option
+            if isinstance(value, (str, int, float, bool)):
+                options.append({"value": value, "label": str(label or value)[:120]})
+        if options:
+            item["options"] = options
+        fields.append(item)
+    return {
+        "provider": "runninghub",
+        "model": runninghub_model_id(model_def),
+        "display_name": runninghub_model_display_name(model_def),
+        "output_type": str(model_def.get("output_type") or "").strip().lower(),
+        "fields": fields,
+        "discovered": bool(fields),
+    }
+
 def runninghub_schema_options(field):
     values = []
     for item in (field or {}).get("options") or []:
@@ -11304,6 +11989,70 @@ def runninghub_apply_schema_defaults(body, params):
         else:
             body[key] = default
     return body
+
+def runninghub_image_model_params(params, values):
+    """只允许并转换当前 RunningHub 图片模型声明过的非媒体扩展参数。"""
+    if not isinstance(values, dict) or not values:
+        return {}
+    if len(values) > 64:
+        raise HTTPException(status_code=400, detail="图片模型参数数量过多。")
+    fields = {
+        str(field.get("fieldKey") or "").strip(): field
+        for field in (params or [])
+        if isinstance(field, dict) and str(field.get("fieldKey") or "").strip()
+    }
+    reserved = {
+        "prompt", "aspectratio", "aspect_ratio", "ratio", "resolution",
+        "size", "width", "height", "quality",
+    }
+    result = {}
+    for raw_key, raw_value in values.items():
+        key = str(raw_key or "").strip()
+        field = fields.get(key)
+        if not field:
+            raise HTTPException(status_code=400, detail=f"当前图片模型不支持参数：{key or '未知参数'}")
+        field_type = str(field.get("type") or "").strip().upper()
+        if key.lower() in reserved or field_type in {"IMAGE", "VIDEO", "AUDIO"}:
+            continue
+        options = runninghub_schema_options(field)
+        if options:
+            text_value = str(raw_value)
+            if text_value not in options:
+                raise HTTPException(status_code=400, detail=f"参数 {key} 的值不在模型允许范围内。")
+            value = text_value
+        elif field_type == "BOOLEAN":
+            if isinstance(raw_value, bool):
+                value = raw_value
+            elif str(raw_value).strip().lower() in {"true", "1", "yes", "on"}:
+                value = True
+            elif str(raw_value).strip().lower() in {"false", "0", "no", "off"}:
+                value = False
+            else:
+                raise HTTPException(status_code=400, detail=f"参数 {key} 必须是开关值。")
+        elif field_type in {"INT", "INTEGER"}:
+            try:
+                value = int(raw_value)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"参数 {key} 必须是整数。")
+        elif field_type in {"FLOAT", "NUMBER"}:
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail=f"参数 {key} 必须是数字。")
+        else:
+            value = str(raw_value)
+            max_length = min(20000, max(1, int(field.get("maxLength") or 20000)))
+            if len(value) > max_length:
+                raise HTTPException(status_code=400, detail=f"参数 {key} 最多允许 {max_length} 个字符。")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            minimum = field.get("min")
+            maximum = field.get("max")
+            if isinstance(minimum, (int, float)) and value < minimum:
+                raise HTTPException(status_code=400, detail=f"参数 {key} 不能小于 {minimum}。")
+            if isinstance(maximum, (int, float)) and value > maximum:
+                raise HTTPException(status_code=400, detail=f"参数 {key} 不能大于 {maximum}。")
+        result[key] = value
+    return result
 
 def runninghub_query_status(raw):
     if not isinstance(raw, dict):
@@ -11433,12 +12182,15 @@ async def runninghub_upload_reference_content(
             if source_cache_key:
                 runninghub_reference_cache_put(source_cache_key, result, source_cache_ttl)
             return result
-    raise HTTPException(status_code=502, detail=f"RunningHub 上传图片未返回 download_url：{raw}")
+    raise HTTPException(status_code=502, detail=f"RunningHub 上传素材未返回 download_url：{raw}")
 
-async def runninghub_upload_reference(client, provider, ref, force_refresh=False):
+async def runninghub_upload_reference(client, provider, ref, force_refresh=False, expected_kind="image"):
     value = str(ref.get("url", "") if isinstance(ref, dict) else ref or "").strip()
     if not value:
         return ""
+    expected_kind = str(expected_kind or "image").strip().lower()
+    if expected_kind not in {"image", "video", "audio"}:
+        expected_kind = "image"
     path = output_file_from_url(value)
     source_cache_key = ""
     source_cache_ttl = None
@@ -11476,10 +12228,10 @@ async def runninghub_upload_reference(client, provider, ref, force_refresh=False
         content_type = (response.headers.get("content-type") or content_type).split(";", 1)[0].strip()
         filename = os.path.basename(urllib.parse.urlsplit(str(response.url)).path) or filename
     else:
-        raise HTTPException(status_code=400, detail=f"RunningHub 无法读取参考图：{value[:160]}")
+        raise HTTPException(status_code=400, detail=f"RunningHub 无法读取参考素材：{value[:160]}")
     if not content:
-        raise HTTPException(status_code=400, detail="RunningHub 参考图为空，已停止生成")
-    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="RunningHub 参考素材为空，已停止生成")
+    if expected_kind == "image" and not content_type.startswith("image/"):
         try:
             with Image.open(BytesIO(content)) as image:
                 detected = Image.MIME.get(image.format)
@@ -11487,8 +12239,13 @@ async def runninghub_upload_reference(client, provider, ref, force_refresh=False
                 content_type = detected
         except Exception:
             pass
-    if not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail=f"RunningHub 参考图不是有效图片（{content_type}），已停止生成")
+    if content_type == "application/octet-stream":
+        guessed = mimetypes.guess_type(filename)[0]
+        if guessed:
+            content_type = guessed
+    if not content_type.startswith(f"{expected_kind}/"):
+        kind_label = {"image": "图片", "video": "视频", "audio": "音频"}[expected_kind]
+        raise HTTPException(status_code=400, detail=f"RunningHub 参考素材不是有效{kind_label}（{content_type}），已停止生成")
     cache_key = runninghub_reference_cache_key(provider, content)
     if force_refresh:
         with RUNNINGHUB_REFERENCE_CACHE_LOCK:
@@ -11931,15 +12688,19 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             # 804 运行中 / 813 排队中 / 其他状态继续轮询
         raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload}")
 
-async def generate_runninghub_provider_image(prompt, size, model, reference_images=None, provider=None):
+async def generate_runninghub_provider_image(
+    prompt, size, model, reference_images=None, provider=None,
+    aspect_ratio="", resolution="", quality="", model_params=None
+):
     entry = runninghub_entry_config_from_model(provider, model)
     if entry:
         return await generate_runninghub_entry_image(prompt, size, model, reference_images, provider, entry)
     model_def = await runninghub_model_definition(provider, model)
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or model)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
-    aspect = runninghub_aspect_from_size(size, "1:1")
-    resolution = runninghub_resolution_from_size(size, "2k")
+    aspect = str(aspect_ratio or "").strip() or runninghub_aspect_from_size(size, "1:1")
+    explicit_dimensions = str(resolution or "").strip() == "__custom_dimensions__"
+    requested_resolution = "" if explicit_dimensions else (str(resolution or "").strip() or runninghub_resolution_from_size(size, "2k"))
     body = {"prompt": prompt}
     if runninghub_schema_field(params, "aspectRatio"):
         field = runninghub_schema_field(params, "aspectRatio")
@@ -11947,9 +12708,12 @@ async def generate_runninghub_provider_image(prompt, size, model, reference_imag
     elif runninghub_schema_field(params, "ratio"):
         field = runninghub_schema_field(params, "ratio")
         body["ratio"] = runninghub_schema_value(field, aspect)
-    if runninghub_schema_field(params, "resolution"):
+    if runninghub_schema_field(params, "resolution") and not explicit_dimensions:
         field = runninghub_schema_field(params, "resolution")
-        body["resolution"] = runninghub_schema_value(field, resolution)
+        body["resolution"] = runninghub_schema_value(field, requested_resolution)
+    if runninghub_schema_field(params, "size"):
+        field = runninghub_schema_field(params, "size")
+        body["size"] = runninghub_schema_value(field, size)
     width, height = parse_size_pair(size)
     if width and height:
         if runninghub_schema_field(params, "width"):
@@ -11958,9 +12722,24 @@ async def generate_runninghub_provider_image(prompt, size, model, reference_imag
             body["height"] = height
     quality_field = runninghub_schema_field(params, "quality")
     if quality_field:
-        body["quality"] = runninghub_schema_value(quality_field, "medium")
+        body["quality"] = runninghub_schema_value(quality_field, str(quality or "").strip() or "medium")
+    body.update(runninghub_image_model_params(params, model_params))
+    image_field = runninghub_schema_field(
+        params,
+        "imageUrls", "image_urls", "imageUrl", "image_url", "images", "image",
+        "referenceImages", "referenceImageUrls",
+    )
+    if not image_field:
+        image_field = next(
+            (field for field in params if isinstance(field, dict) and str(field.get("type") or "").strip().upper() == "IMAGE"),
+            None,
+        )
+    refs_to_upload = list((reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX])
+    if params and refs_to_upload and not image_field:
+        raise HTTPException(status_code=400, detail="当前 RunningHub 模型是文生图，不会使用已连接的参考图。请断开参考图或切换图生图模型。")
+    if image_field and image_field.get("required") is True and not refs_to_upload:
+        raise HTTPException(status_code=400, detail="当前 RunningHub 模型需要参考图，请连接图片后再生成。")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=1800.0, write=180.0, pool=20.0)) as client:
-        refs_to_upload = list((reference_images or [])[:ONLINE_IMAGE_REFERENCE_MAX])
         async def upload_references(force_refresh=False):
             urls = []
             for ref in refs_to_upload:
@@ -11972,7 +12751,6 @@ async def generate_runninghub_provider_image(prompt, size, model, reference_imag
         image_key = ""
         image_multiple = False
         if image_urls:
-            image_field = runninghub_schema_field(params, "imageUrls", "imageUrl", "images", "image")
             image_key = str((image_field or {}).get("fieldKey") or "imageUrls")
             image_multiple = image_key.endswith("s") or (image_field or {}).get("multipleInputs") is True
             if image_multiple:
@@ -12027,6 +12805,17 @@ async def generate_runninghub_video(payload, provider):
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or payload.model)
     image_to_video = runninghub_is_image_to_video(payload.model) or runninghub_is_image_to_video(model_def.get("endpoint")) or runninghub_is_image_to_video(endpoint)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
+    first_field = runninghub_schema_field(params, "firstFrameUrl", "first_frame_url", "firstFrameImage", "first_frame_image")
+    last_field = runninghub_schema_field(params, "lastFrameUrl", "last_frame_url", "lastFrameImage", "last_frame_image")
+    image_field = runninghub_schema_field(params, "imageUrls", "image_urls", "imageUrl", "image_url", "referenceImages", "referenceImageUrls")
+    video_field = runninghub_schema_field(params, "videoUrls", "video_urls", "videoUrl", "video_url", "referenceVideos", "referenceVideoUrls")
+    audio_field = runninghub_schema_field(params, "audioUrls", "audio_urls", "audioUrl", "audio_url", "referenceAudios", "referenceAudioUrls")
+    if payload.images and not (first_field or last_field or image_field or image_to_video):
+        raise HTTPException(status_code=400, detail="当前 RunningHub 模型是文生视频，不会使用已连接的图片。请断开图片或切换图生视频/全能参考模型。")
+    if payload.videos and not video_field:
+        raise HTTPException(status_code=400, detail="当前 RunningHub 模型不支持参考视频，请断开视频或切换全能参考模型。")
+    if payload.audios and not audio_field:
+        raise HTTPException(status_code=400, detail="当前 RunningHub 模型不支持参考音频，请断开音频或切换全能参考模型。")
     body = {"prompt": str(payload.prompt or "")}
     aspect = str(payload.aspect_ratio or "16:9").strip() or "16:9"
     if runninghub_schema_field(params, "aspectRatio"):
@@ -12048,6 +12837,21 @@ async def generate_runninghub_video(payload, provider):
         body["generateAudio"] = bool(payload.generate_audio)
     if runninghub_schema_field(params, "watermark"):
         body["watermark"] = bool(payload.watermark)
+    if runninghub_schema_field(params, "cameraFixed", "camerafixed"):
+        field = runninghub_schema_field(params, "cameraFixed", "camerafixed")
+        body[str(field.get("fieldKey"))] = bool(payload.camerafixed)
+    if runninghub_schema_field(params, "enhancePrompt", "enhance_prompt"):
+        field = runninghub_schema_field(params, "enhancePrompt", "enhance_prompt")
+        body[str(field.get("fieldKey"))] = bool(payload.enhance_prompt)
+    if runninghub_schema_field(params, "enableUpsample", "enable_upsample"):
+        field = runninghub_schema_field(params, "enableUpsample", "enable_upsample")
+        body[str(field.get("fieldKey"))] = bool(payload.enable_upsample)
+    if runninghub_schema_field(params, "returnLastFrame", "return_last_frame"):
+        field = runninghub_schema_field(params, "returnLastFrame", "return_last_frame")
+        body[str(field.get("fieldKey"))] = bool(payload.return_last_frame)
+    if payload.seed is not None and runninghub_schema_field(params, "seed"):
+        field = runninghub_schema_field(params, "seed")
+        body[str(field.get("fieldKey"))] = int(payload.seed)
     async with httpx.AsyncClient(timeout=VIDEO_POLL_TIMEOUT) as client:
         image_refs = []
         for ref in (payload.images or [])[:10]:
@@ -12060,13 +12864,10 @@ async def generate_runninghub_video(payload, provider):
         if image_urls:
             first_url = next((item["url"] for item in image_refs if item.get("role") in {"first_frame", "first"}), image_urls[0])
             last_url = next((item["url"] for item in image_refs if item.get("role") in {"last_frame", "last"}), image_urls[1] if len(image_urls) > 1 else "")
-            first_field = runninghub_schema_field(params, "firstFrameUrl", "first_frame_url", "firstFrameImage", "first_frame_image")
-            last_field = runninghub_schema_field(params, "lastFrameUrl", "last_frame_url", "lastFrameImage", "last_frame_image")
             if first_field and first_url:
                 body[str(first_field.get("fieldKey"))] = first_url
             if last_field and last_url:
                 body[str(last_field.get("fieldKey"))] = last_url
-            image_field = runninghub_schema_field(params, "imageUrls", "image_urls", "imageUrl", "image_url", "referenceImages", "referenceImageUrls")
             key = str((image_field or {}).get("fieldKey") or "")
             if key and key in body:
                 pass
@@ -12076,6 +12877,21 @@ async def generate_runninghub_video(payload, provider):
                 body[key] = image_urls[0]
             elif image_to_video and "firstFrameUrl" not in body:
                 body["firstFrameUrl"] = first_url
+        for field, sources, media_kind in (
+            (video_field, payload.videos or [], "video"),
+            (audio_field, payload.audios or [], "audio"),
+        ):
+            if not field or not sources:
+                continue
+            limit = max(1, int(field.get("maxInputNum") or len(sources)))
+            uploaded = []
+            for source in sources[:limit]:
+                value = await runninghub_upload_reference(client, provider, source, expected_kind=media_kind)
+                if value:
+                    uploaded.append(value)
+            key = str(field.get("fieldKey") or "")
+            if key and uploaded:
+                body[key] = uploaded if key.endswith("s") or field.get("multipleInputs") is True else uploaded[0]
         first_required = runninghub_schema_field(params, "firstFrameUrl", "first_frame_url", "firstFrameImage", "first_frame_image")
         if first_required and not body.get(str(first_required.get("fieldKey") or "")):
             raise HTTPException(status_code=400, detail="当前 RunningHub 模型是图生视频，需要连接一张首帧图片后再生成。")
@@ -12102,8 +12918,8 @@ async def generate_runninghub_video(payload, provider):
         local_urls = [await save_remote_video_to_output(url, prefix="rh_video_") for url in urls]
         return {"videos": local_urls, "task_id": task_id, "raw": result}
 
-async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution=""):
-    provider = get_api_provider(provider_id)
+async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution="", api_profile_id="", model_params=None):
+    provider = get_api_provider(provider_id, api_profile_id)
     if provider["id"] == "modelscope":
         return await generate_modelscope_provider_image(prompt, size, model, reference_images, provider)
     if is_codex_provider(provider):
@@ -12113,7 +12929,11 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
     if is_jimeng_provider(provider):
         return await generate_jimeng_provider_image(prompt, size, model, reference_images, provider)
     if is_runninghub_provider(provider):
-        return await generate_runninghub_provider_image(prompt, size, model, reference_images, provider)
+        return await generate_runninghub_provider_image(
+            prompt, size, model, reference_images, provider,
+            aspect_ratio=aspect_ratio, resolution=resolution, quality=quality,
+            model_params=model_params,
+        )
     is_apimart = is_apimart_provider(provider)
     if effective_protocol(provider, model) == "gemini" and not is_apimart:
         return await generate_gemini_provider_image(prompt, size, model, reference_images, provider)
@@ -12464,18 +13284,30 @@ def chat_split_parallel_prompts(prompt, count):
         return [text] * count
     return [f"{item}的{suffix}" for item in candidates[:count]]
 
-def pick_chat_image_provider(provider_id="", fallback_id=""):
-    providers = [p for p in load_api_providers() if p.get("enabled", True) and (p.get("image_models") or [])]
+def pick_chat_image_provider(provider_id="", fallback_id="", api_profile_id=""):
+    if api_profile_id:
+        profile = api_profile_by_id(api_profile_id)
+        if not profile:
+            raise HTTPException(status_code=400, detail=f"未找到 API 配置组：{api_profile_id}")
+        providers = [p for p in profile.get("providers") or [] if p.get("enabled", True) and (p.get("image_models") or [])]
+    else:
+        providers = [p for p in load_api_providers() if p.get("enabled", True) and (p.get("image_models") or [])]
     for target in (provider_id, fallback_id):
         clean = str(target or "").strip().lower()
         if clean:
             matched = next((p for p in providers if p.get("id") == clean), None)
             if matched:
-                return matched
+                runtime = dict(matched)
+                if api_profile_id:
+                    runtime["_api_profile_id"] = api_profile_id
+                return runtime
     if providers:
         primary = next((p for p in providers if p.get("primary")), None)
-        return primary or providers[0]
-    return get_api_provider(provider_id or fallback_id or "comfly")
+        runtime = dict(primary or providers[0])
+        if api_profile_id:
+            runtime["_api_profile_id"] = api_profile_id
+        return runtime
+    return get_api_provider(provider_id or fallback_id or "comfly", api_profile_id)
 
 def heuristic_agent_decision(message, refs, has_previous_image):
     text = str(message or "").strip().lower()
@@ -12511,17 +13343,17 @@ def parse_agent_decision(raw_text, message, refs, has_previous_image):
         action = "generate_image" if any(key.lower() in str(message).lower() for key in AGENT_IMAGE_KEYWORDS) else "chat"
     return {"action": action, "prompt": prompt, "reply": reply}
 
-async def decide_chat_agent_action(payload, conversation, refs):
+async def decide_chat_agent_action(payload, conversation, refs, api_profile_id=""):
     has_previous_image = bool(latest_chat_image_refs(conversation, 1))
     fallback = heuristic_agent_decision(payload.message, refs, has_previous_image)
-    provider_cfg = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+    provider_cfg = get_api_provider(payload.provider, api_profile_id) if payload.provider not in ("modelscope",) else {}
     if is_codex_provider(provider_cfg):
         fallback["router_model"] = selected_model(payload.model, (provider_cfg.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         return fallback
     if is_gemini_cli_provider(provider_cfg):
         fallback["router_model"] = selected_model(payload.model, (provider_cfg.get("chat_models") or GEMINI_CLI_DEFAULT_CHAT_MODELS)[0])
         return fallback
-    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
+    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model, api_profile_id)
     history = conversation["messages"][-MAX_HISTORY_MESSAGES:]
     custom_system_prompt = str(getattr(payload, "system_prompt", "") or "").strip()
     system = (
@@ -12568,8 +13400,8 @@ async def decide_chat_agent_action(payload, conversation, refs):
         fallback["router_model"] = model
         return fallback
 
-async def build_chat_text_reply(payload, conversation):
-    provider_cfg = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+async def build_chat_text_reply(payload, conversation, api_profile_id=""):
+    provider_cfg = get_api_provider(payload.provider, api_profile_id) if payload.provider not in ("modelscope",) else {}
     if is_codex_provider(provider_cfg):
         model = selected_model(payload.model, (provider_cfg.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
@@ -12596,7 +13428,7 @@ async def build_chat_text_reply(payload, conversation):
             "raw_usage": None,
             "raw": raw,
         }
-    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
+    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model, api_profile_id)
     is_apimart = is_apimart_provider(provider_cfg)
     upstream_messages = [{"role": "system", "content": chat_system_prompt(payload)}]
     for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
@@ -14110,33 +14942,182 @@ async def jimeng_query_media(payload: JimengQueryMediaRequest):
         return {"status": "failed", "submit_id": submit_id, "kind": kind, "error": str(getattr(exc, "detail", "") or exc)}
 
 @app.get("/api/config")
-async def ai_config():
-    preferred_chat_model = next((m for m in CHAT_MODELS if m == "gpt-5.5"), CHAT_MODELS[0] if CHAT_MODELS else CHAT_MODEL)
-    providers = public_api_providers()
+async def ai_config(request: Request):
+    profile = request_api_profile(request)
+    enabled = [item for item in profile.get("providers") or [] if item.get("enabled", True)]
+    primary_id = get_primary_provider_id(enabled)
+    primary = next((item for item in enabled if item.get("id") == primary_id), enabled[0] if enabled else {})
+    chat_models = list(dict.fromkeys(model for item in enabled for model in item.get("chat_models") or []))
+    image_models = list(dict.fromkeys(model for item in enabled for model in item.get("image_models") or []))
+    video_models = list(dict.fromkeys(model for item in enabled for model in item.get("video_models") or []))
+    preferred_chat_model = next((m for m in chat_models if m == "gpt-5.5"), chat_models[0] if chat_models else CHAT_MODEL)
+    providers = []
+    for provider in enabled:
+        item = public_provider(provider, profile["id"])
+        for key in (
+            "key_preview", "key_env", "wallet_key_preview", "wallet_key_env",
+            "volcengine_access_key_preview", "volcengine_access_key_env",
+            "volcengine_secret_key_preview", "volcengine_secret_key_env",
+        ):
+            item.pop(key, None)
+        providers.append(item)
     return {
-        "base_url": AI_BASE_URL,
+        "base_url": primary.get("base_url") or "",
         "chat_model": preferred_chat_model,
-        "image_model": IMAGE_MODEL,
-        "chat_models": CHAT_MODELS,
-        "image_models": IMAGE_MODELS,
-        "video_models": VIDEO_MODELS,
+        "image_model": image_models[0] if image_models else IMAGE_MODEL,
+        "chat_models": chat_models,
+        "image_models": image_models,
+        "video_models": video_models,
         "comfy_instances": COMFYUI_INSTANCES,
         "api_providers": providers,
-        "has_api_key": bool(AI_API_KEY),
-        "ms_chat_models": MODELSCOPE_CHAT_MODELS,
-        "has_ms_key": bool(modelscope_api_key()),
+        "has_api_key": bool(provider_env_key_value(primary.get("id"), profile["id"])) if primary else False,
+        "ms_chat_models": next((item.get("chat_models") or [] for item in enabled if item.get("id") == "modelscope"), []),
+        "has_ms_key": bool(modelscope_api_key(api_profile_id=profile["id"])),
+        "api_profile": public_api_profile(profile),
     }
 
+@app.get("/api/video-model-capabilities")
+async def video_model_capabilities(request: Request, provider_id: str = "", model: str = ""):
+    profile = request_api_profile(request)
+    provider = provider_from_api_profile(profile, provider_id, allow_default=False)
+    requested_model = str(model or "").strip()
+    configured_models = model_list_from_values(provider.get("video_models") or [])
+    if requested_model and requested_model not in configured_models:
+        raise HTTPException(status_code=400, detail="该视频模型不属于当前账号的 API 配置组。")
+    if not requested_model:
+        if not is_runninghub_provider(provider):
+            return {
+                "provider": provider.get("id"),
+                "models": [
+                    {
+                        "provider": provider.get("id"),
+                        "model": item,
+                        "display_name": "",
+                        "output_type": "video",
+                        "fields": [],
+                        "discovered": False,
+                    }
+                    for item in configured_models
+                ],
+            }
+        models = []
+        for item in configured_models:
+            model_def = await runninghub_model_definition(provider, item)
+            result = public_runninghub_model_capabilities(model_def)
+            result["provider"] = provider.get("id")
+            result["model"] = item
+            models.append(result)
+        return {"provider": provider.get("id"), "models": models}
+    if not is_runninghub_provider(provider):
+        return {
+            "provider": provider.get("id"),
+            "model": requested_model,
+            "display_name": "",
+            "output_type": "video",
+            "fields": [],
+            "discovered": False,
+        }
+    model_def = await runninghub_model_definition(provider, requested_model)
+    result = public_runninghub_model_capabilities(model_def)
+    result["provider"] = provider.get("id")
+    result["model"] = requested_model
+    return result
+
+@app.get("/api/image-model-capabilities")
+async def image_model_capabilities(request: Request, provider_id: str = "", model: str = ""):
+    profile = request_api_profile(request)
+    provider = provider_from_api_profile(profile, provider_id, allow_default=False)
+    requested_model = str(model or "").strip()
+    configured_models = model_list_from_values(provider.get("image_models") or [])
+    if requested_model and requested_model not in configured_models:
+        raise HTTPException(status_code=400, detail="该图片模型不属于当前账号的 API 配置组。")
+    if not requested_model:
+        if not is_runninghub_provider(provider):
+            return {
+                "provider": provider.get("id"),
+                "models": [
+                    {
+                        "provider": provider.get("id"),
+                        "model": item,
+                        "display_name": "",
+                        "output_type": "image",
+                        "fields": [],
+                        "discovered": False,
+                    }
+                    for item in configured_models
+                ],
+            }
+        models = []
+        for item in configured_models:
+            model_def = await runninghub_model_definition(provider, item)
+            result = public_runninghub_model_capabilities(model_def)
+            result["provider"] = provider.get("id")
+            result["model"] = item
+            models.append(result)
+        return {"provider": provider.get("id"), "models": models}
+    if not is_runninghub_provider(provider):
+        return {
+            "provider": provider.get("id"),
+            "model": requested_model,
+            "display_name": "",
+            "output_type": "image",
+            "fields": [],
+            "discovered": False,
+        }
+    model_def = await runninghub_model_definition(provider, requested_model)
+    result = public_runninghub_model_capabilities(model_def)
+    result["provider"] = provider.get("id")
+    result["model"] = requested_model
+    return result
+
 @app.get("/api/models")
-async def ai_models():
-    return {"chat_models": CHAT_MODELS, "image_models": IMAGE_MODELS, "video_models": VIDEO_MODELS}
+async def ai_models(request: Request):
+    profile = request_api_profile(request, allow_admin_selection=True)
+    providers = [item for item in profile.get("providers") or [] if item.get("enabled", True)]
+    def profile_models(kind):
+        return list(dict.fromkeys(
+            str(model or "").strip()
+            for item in providers
+            for model in item.get(kind) or []
+            if str(model or "").strip()
+        ))
+    return {
+        "chat_models": profile_models("chat_models"),
+        "image_models": profile_models("image_models"),
+        "video_models": profile_models("video_models"),
+    }
 
 @app.get("/api/providers")
-async def api_providers():
-    return {"providers": public_api_providers()}
+async def api_providers(request: Request):
+    user = require_authenticated(request)
+    profile = request_api_profile(
+        request,
+        allow_admin_selection=True,
+        require_enabled=user.get("role") != "admin",
+    )
+    can_manage = user.get("role") == "admin"
+    providers = []
+    for provider in profile.get("providers") or []:
+        item = public_provider(provider, profile.get("id"))
+        if not can_manage:
+            for key in (
+                "key_preview", "key_env", "wallet_key_preview", "wallet_key_env",
+                "volcengine_access_key_preview", "volcengine_access_key_env",
+                "volcengine_secret_key_preview", "volcengine_secret_key_env",
+            ):
+                item.pop(key, None)
+        providers.append(item)
+    return {
+        "providers": providers,
+        "api_profile": public_api_profile(profile),
+        "can_manage": can_manage,
+    }
 
 @app.put("/api/providers")
-async def save_providers(payload: List[ApiProviderPayload]):
+async def save_providers(payload: List[ApiProviderPayload], request: Request):
+    require_admin(request)
+    profile = request_api_profile(request, allow_admin_selection=True, require_enabled=False)
+    profile_id = profile["id"]
     providers = []
     env_updates = {}
     # 收集每个 item 的 primary 字段
@@ -14149,20 +15130,20 @@ async def save_providers(payload: List[ApiProviderPayload]):
         if any(existing["id"] == provider["id"] for existing in providers):
             raise HTTPException(status_code=400, detail=f"API 平台 ID 重复：{provider['id']}")
         providers.append(provider)
-        key_env = provider_key_env(provider["id"])
+        key_env = provider_key_env(provider["id"], profile_id)
         if item.clear_key:
             env_updates[key_env] = ""
         elif item.api_key is not None and item.api_key.strip():
             env_updates[key_env] = item.api_key.strip()
         if provider["id"] == "runninghub":
-            wallet_env = runninghub_wallet_key_env()
+            wallet_env = runninghub_wallet_key_env(profile_id)
             if item.clear_wallet_key:
                 env_updates[wallet_env] = ""
             elif item.wallet_api_key is not None and item.wallet_api_key.strip():
                 env_updates[wallet_env] = item.wallet_api_key.strip()
         if provider["id"] == "volcengine":
-            ak_env = volcengine_access_key_env()
-            sk_env = volcengine_secret_key_env()
+            ak_env = volcengine_access_key_env(profile_id)
+            sk_env = volcengine_secret_key_env(profile_id)
             if item.clear_volcengine_access_key_id:
                 env_updates[ak_env] = ""
             elif item.volcengine_access_key_id is not None and item.volcengine_access_key_id.strip():
@@ -14171,12 +15152,12 @@ async def save_providers(payload: List[ApiProviderPayload]):
                 env_updates[sk_env] = ""
             elif item.volcengine_secret_access_key is not None and item.volcengine_secret_access_key.strip():
                 env_updates[sk_env] = item.volcengine_secret_access_key.strip()
-        if provider["id"] == "comfly":
+        if provider["id"] == "comfly" and profile_id == LEGACY_API_PROFILE_ID:
             env_updates["COMFLY_BASE_URL"] = provider["base_url"]
             env_updates["IMAGE_MODELS"] = ",".join(provider["image_models"])
             env_updates["CHAT_MODELS"] = ",".join(provider["chat_models"])
             env_updates["VIDEO_MODELS"] = ",".join(provider.get("video_models") or [])
-        if provider["id"] == "modelscope":
+        if provider["id"] == "modelscope" and profile_id == LEGACY_API_PROFILE_ID:
             env_updates["MODELSCOPE_CHAT_MODELS"] = ",".join(provider["chat_models"])
         if provider["id"] == "runninghub":
             provider["protocol"] = "runninghub"
@@ -14190,19 +15171,24 @@ async def save_providers(payload: List[ApiProviderPayload]):
         winner = primary_indices[-1]
         for i, p in enumerate(providers):
             p["primary"] = (i == winner)
-    save_api_providers(providers)
+    save_profile_providers(profile_id, providers)
+    profile["providers"] = providers
     if env_updates:
         update_env_values(env_updates)
         reload_env_globals()   # 立即将最新 env 值同步回模块全局变量，无需重启
-    return {"providers": [public_provider(p) for p in providers]}
+    return {
+        "providers": [public_provider(p, profile_id) for p in providers],
+        "api_profile": public_api_profile(profile),
+        "can_manage": True,
+    }
 
 # --- ModelScope Token (从 env 读取，不再支持通过 UI 修改) ---
 
 @app.get("/api/config/token")
 async def get_global_token(request: Request):
     # 历史接口曾把真实 ModelScope token 下发给浏览器；现在仅返回存在状态。
-    require_authenticated(request)
-    return {"configured": bool(modelscope_api_key())}
+    profile = request_api_profile(request, allow_admin_selection=True)
+    return {"configured": bool(modelscope_api_key(api_profile_id=profile["id"]))}
 
 # --- 在线生图 (COMFLY) ---
 
@@ -14210,6 +15196,7 @@ class TestConnectionPayload(BaseModel):
     base_url: str = ""
     api_key: str = ""
     provider_id: str = ""
+    api_profile_id: str = ""
     protocol: str = "openai"
     image_request_mode: str = "openai"
 
@@ -14230,15 +15217,16 @@ def protocol_from_payload(payload):
 def api_key_from_payload(payload, protocol: str = ""):
     explicit = str(getattr(payload, "api_key", "") or "").strip()
     provider_id = str(getattr(payload, "provider_id", "") or "").strip().lower()
+    api_profile_id = str(getattr(payload, "api_profile_id", "") or "").strip().lower()
     protocol = str(protocol or protocol_from_payload(payload) or "").strip().lower()
     if explicit:
         return explicit
     if provider_id:
         if provider_id == "runninghub":
-            value = os.getenv(runninghub_wallet_key_env(), "")
+            value = os.getenv(runninghub_wallet_key_env(api_profile_id), "")
             if value:
                 return value
-        value = provider_env_key_value(provider_id)
+        value = provider_env_key_value(provider_id, api_profile_id)
         if value:
             return value
     if protocol == "volcengine":
@@ -14832,22 +15820,23 @@ async def fetch_upstream_models_from_payload(payload: TestConnectionPayload):
     return await fetch_models_from_upstream(payload.base_url, api_key, protocol, payload.image_request_mode)
 
 @app.get("/api/providers/{provider_id}/fetch-models")
-async def fetch_upstream_models(provider_id: str):
+async def fetch_upstream_models(provider_id: str, request: Request):
     """从已保存的上游 OpenAI 兼容接口拉取 /v1/models 列表，按名称智能分类为 image/chat/video。"""
-    provider = get_api_provider_exact(provider_id)
+    profile = request_api_profile(request, allow_admin_selection=True)
+    provider = provider_from_api_profile(profile, provider_id)
     if is_codex_provider(provider):
         return await fetch_models_from_upstream("", "", "codex", provider.get("image_request_mode") or "openai")
     if is_gemini_cli_provider(provider):
         return await fetch_models_from_upstream("", "", "gemini-cli", provider.get("image_request_mode") or "openai")
-    api_key = os.getenv(runninghub_wallet_key_env(), "") if provider["id"] == "runninghub" else ""
+    api_key = runninghub_wallet_key_value(profile["id"]) if provider["id"] == "runninghub" else ""
     if not api_key:
-        api_key = provider_env_key_value(provider["id"])
+        api_key = provider_env_key_value(provider["id"], profile["id"])
     if not api_key:
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
     return await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
 
-async def build_online_image_result(payload: OnlineImageRequest):
-    provider = get_api_provider(payload.provider_id)
+async def build_online_image_result(payload: OnlineImageRequest, api_profile_id=""):
+    provider = get_api_provider(payload.provider_id, api_profile_id)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
     model = selected_model(payload.model, default_model)
     request_size = snap_size_to_multiple(payload.size, 16)
@@ -14865,7 +15854,11 @@ async def build_online_image_result(payload: OnlineImageRequest):
         if operation == "upscale":
             image_data, raw_item = await generate_jimeng_upscale_image(image_refs, payload.resolution_type)
         else:
-            image_data, raw_item = await generate_ai_image(payload.prompt, request_size, payload.quality, model, image_refs, provider["id"], payload.aspect_ratio, payload.resolution)
+            image_data, raw_item = await generate_ai_image(
+                payload.prompt, request_size, payload.quality, model, image_refs,
+                provider["id"], payload.aspect_ratio, payload.resolution,
+                api_profile_id, payload.model_params,
+            )
         try:
             image_items = extract_images(raw_item) if isinstance(raw_item, dict) else [image_data]
         except HTTPException:
@@ -14920,13 +15913,14 @@ async def build_online_image_result(payload: OnlineImageRequest):
 async def online_image(payload: OnlineImageRequest, request: Request):
     event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n})
     request.state.usage_event = event
-    result = await build_online_image_result(payload)
+    result = await build_online_image_result(payload, event.get("api_profile_id"))
     result["usage_event_id"] = event["id"]
     return result
 
 @app.post("/api/image-task-query")
-async def query_image_task(payload: ImageTaskQueryRequest):
-    provider = get_api_provider(payload.provider_id)
+async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
+    profile = request_api_profile(request)
+    provider = get_api_provider(payload.provider_id, profile["id"])
     task_id = str(payload.task_id or "").strip()
     if is_runninghub_provider(provider):
         api_key = runninghub_api_key(provider)
@@ -15052,13 +16046,13 @@ async def query_image_task(payload: ImageTaskQueryRequest):
         "raw": raw,
     }
 
-async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event=None):
+async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event=None, api_profile_id=""):
     with CANVAS_TASK_LOCK:
         if task_id in CANVAS_TASKS:
             CANVAS_TASKS[task_id]["status"] = "running"
             CANVAS_TASKS[task_id]["updated_at"] = time.time()
     try:
-        result = await build_online_image_result(payload)
+        result = await build_online_image_result(payload, api_profile_id)
         if event:
             result["usage_event_id"] = event["id"]
             finish_usage_event(event, "succeeded", raw_usage=result.get("raw_usage"))
@@ -15116,11 +16110,12 @@ async def create_canvas_image_task(payload: OnlineImageRequest, request: Request
             "result": None,
             "error": "",
             "provider_id": payload.provider_id,
+            "api_profile_id": event.get("api_profile_id", ""),
             "model": payload.model,
             "user_id": event["user_id"],
             "usage_event_id": event["id"],
         }
-    asyncio.create_task(run_canvas_image_task(task_id, payload, event))
+    asyncio.create_task(run_canvas_image_task(task_id, payload, event, event.get("api_profile_id", "")))
     return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
 
 @app.get("/api/canvas-image-tasks/{task_id}")
@@ -15182,6 +16177,7 @@ async def create_canvas_comfy_task(payload: GenerateRequest, request: Request):
             "result": None,
             "error": "",
             "workflow_json": payload.workflow_json,
+            "api_profile_id": event.get("api_profile_id", ""),
             "user_id": event["user_id"],
             "usage_event_id": event["id"],
         }
@@ -16206,8 +17202,20 @@ def volcengine_video_prompt_text(prompt, aspect_ratio="", duration=None):
     suffix_text = " ".join(suffixes)
     return f"{text} {suffix_text}".strip() if text else suffix_text
 
-async def _canvas_video_impl(payload: CanvasVideoRequest):
-    provider = get_api_provider(payload.provider_id)
+async def _canvas_video_impl(payload: CanvasVideoRequest, api_profile_id=""):
+    provider = get_api_provider(payload.provider_id, api_profile_id)
+    configured_models = model_list_from_values(provider.get("video_models") or [])
+    requested_model = str(payload.model or "").strip()
+    if not configured_models:
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前 API 配置组没有为 {provider.get('name') or provider['id']} 配置任何视频模型。",
+        )
+    if not requested_model or requested_model not in configured_models:
+        raise HTTPException(
+            status_code=400,
+            detail=f"视频模型「{requested_model or '未选择'}」不属于当前 API 配置组中的 {provider.get('name') or provider['id']}。",
+        )
     if is_jimeng_provider(provider):
         return await generate_jimeng_video(payload, provider)
     if is_runninghub_provider(provider):
@@ -16226,7 +17234,7 @@ async def _canvas_video_impl(payload: CanvasVideoRequest):
     base_url = video_api_root(provider)
     if not base_url:
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider['id']} 未配置 Base URL")
-    api_key = provider_env_key_value(provider["id"])
+    api_key = provider_env_key_value(provider["id"], api_profile_id)
     if not api_key:
         raise HTTPException(status_code=400, detail=f"未配置 {provider.get('name') or provider['id']} 的 API Key，请在 API 设置中填写。")
     is_apimart = is_apimart_provider(provider)
@@ -16705,7 +17713,7 @@ async def _canvas_video_impl(payload: CanvasVideoRequest):
 async def canvas_video(payload: CanvasVideoRequest, request: Request):
     event = begin_usage_event(request, "video", payload.provider_id, payload.model, {"duration": payload.duration, "aspect_ratio": payload.aspect_ratio, "resolution": payload.resolution})
     request.state.usage_event = event
-    result = await _canvas_video_impl(payload)
+    result = await _canvas_video_impl(payload, event.get("api_profile_id", ""))
     if isinstance(result, dict):
         result["usage_event_id"] = event["id"]
         raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
@@ -16717,7 +17725,8 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
 async def canvas_llm(payload: CanvasLLMRequest, request: Request):
     event = begin_usage_event(request, "llm", payload.provider, payload.model or payload.ms_model, {"images": len(payload.images or []), "videos": len(payload.videos or [])})
     request.state.usage_event = event
-    _provider = get_api_provider(payload.provider)
+    api_profile_id = event.get("api_profile_id", "")
+    _provider = get_api_provider(payload.provider, api_profile_id)
     if is_codex_provider(_provider):
         model = selected_model(payload.model, (_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
@@ -16734,9 +17743,9 @@ async def canvas_llm(payload: CanvasLLMRequest, request: Request):
         finish_usage_event(event, "succeeded")
         request.state.usage_event = None
         return result
-    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
+    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model, api_profile_id)
     # 判断协议：APIMart 异步 vs 标准 OpenAI
-    _llm_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+    _llm_provider = get_api_provider(payload.provider, api_profile_id) if payload.provider not in ("modelscope",) else {}
     _is_apimart = is_apimart_provider(_llm_provider)
     system_prompt = (payload.system_prompt or "").strip()
     upstream_messages = [{"role": "system", "content": system_prompt}] if system_prompt else []
@@ -18683,6 +19692,7 @@ async def purge_canvas(canvas_id: str):
 @app.post("/api/chat")
 async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
     request.state.usage_event = begin_usage_event(request, "image" if payload.mode == "image" else "llm", payload.image_provider if payload.mode == "image" else payload.provider, payload.image_model if payload.mode == "image" else payload.model, {"entry": "chat", "mode": payload.mode, "size": payload.size})
+    api_profile_id = request.state.usage_event.get("api_profile_id", "")
     user_id = safe_user_id(x_user_id, request)
     conversation = (
         load_conversation(user_id, payload.conversation_id)
@@ -18708,12 +19718,12 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
 
     if payload.mode == "image":
         image_provider_id = payload.provider if payload.provider not in {"modelscope"} else "comfly"
-        provider = get_api_provider(image_provider_id)
+        provider = get_api_provider(image_provider_id, api_profile_id)
         default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
         model = selected_model(payload.image_model or payload.model, default_model)
         image_size = chat_prompt_size_override(payload.message, payload.size) or payload.size
         try:
-            image_data, raw = await generate_ai_image(payload.message, image_size, payload.quality, model, image_refs, provider["id"])
+            image_data, raw = await generate_ai_image(payload.message, image_size, payload.quality, model, image_refs, provider["id"], api_profile_id=api_profile_id)
             local_url = await save_ai_image_to_output(image_data, prefix="chat_")
         except httpx.HTTPStatusError as exc:
             text = exc.response.text or ""
@@ -18734,7 +19744,7 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
             "raw_usage": raw.get("usage") if isinstance(raw, dict) else None,
         }
     else:
-        _codex_provider = get_api_provider(payload.provider)
+        _codex_provider = get_api_provider(payload.provider, api_profile_id)
         if is_codex_provider(_codex_provider):
             model = selected_model(payload.model, (_codex_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
             payload.model = model
@@ -18769,8 +19779,8 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
             conversation["updated_at"] = now_ms()
             save_conversation(user_id, conversation)
             return {"conversation": conversation, "message": assistant_message}
-        chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
-        _conv_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+        chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model, api_profile_id)
+        _conv_provider = get_api_provider(payload.provider, api_profile_id) if payload.provider not in ("modelscope",) else {}
         _conv_is_apimart = is_apimart_provider(_conv_provider)
         history = conversation["messages"][-MAX_HISTORY_MESSAGES:]
         upstream_messages = [{"role": "system", "content": chat_system_prompt(payload)}]
@@ -18814,6 +19824,7 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
 @app.post("/api/chat/agent")
 async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
     request.state.usage_event = begin_usage_event(request, "llm", payload.provider, payload.model, {"entry": "chat-agent", "mode": "agent"})
+    api_profile_id = request.state.usage_event.get("api_profile_id", "")
     user_id = safe_user_id(x_user_id, request)
     conversation = (
         load_conversation(user_id, payload.conversation_id)
@@ -18837,7 +19848,7 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
     conversation["updated_at"] = now_ms()
     save_conversation(user_id, conversation)
 
-    decision = await decide_chat_agent_action(payload, conversation, image_refs)
+    decision = await decide_chat_agent_action(payload, conversation, image_refs, api_profile_id)
     action = decision.get("action") or "chat"
     tool_refs = image_refs[:]
     inherited_size = ""
@@ -18848,7 +19859,7 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         action = "generate_image"
 
     if action in {"generate_image", "edit_image"}:
-        image_provider = pick_chat_image_provider(payload.image_provider or payload.provider, payload.provider)
+        image_provider = pick_chat_image_provider(payload.image_provider or payload.provider, payload.provider, api_profile_id)
         default_model = (image_provider.get("image_models") or [IMAGE_MODEL])[0]
         model = selected_model(payload.image_model or default_model, default_model)
         prompt = decision.get("prompt") or payload.message
@@ -18860,7 +19871,7 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
         raw_items = []
         try:
             for item_prompt in prompts:
-                image_data, raw = await generate_ai_image(item_prompt, image_size, payload.quality, model, tool_refs, image_provider["id"])
+                image_data, raw = await generate_ai_image(item_prompt, image_size, payload.quality, model, tool_refs, image_provider["id"], api_profile_id=api_profile_id)
                 local_urls.append(await save_ai_image_to_output(image_data, prefix="chat_"))
                 raw_items.append(raw)
         except httpx.HTTPStatusError as exc:
@@ -18890,7 +19901,7 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
             "raw_usage": raw_items[0].get("usage") if raw_items and isinstance(raw_items[0], dict) else None,
         }
     else:
-        assistant_message = await build_chat_text_reply(payload, conversation)
+        assistant_message = await build_chat_text_reply(payload, conversation, api_profile_id)
         assistant_message["agent_action"] = "chat"
 
     conversation["messages"].append(assistant_message)
@@ -18900,6 +19911,8 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
 
 @app.post("/api/chat/agent/stream")
 async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
+    request.state.usage_event = begin_usage_event(request, "llm", payload.provider, payload.model, {"entry": "chat-agent-stream", "mode": "agent"})
+    api_profile_id = request.state.usage_event.get("api_profile_id", "")
     user_id = safe_user_id(x_user_id, request)
     conversation = (
         load_conversation(user_id, payload.conversation_id)
@@ -18925,7 +19938,7 @@ async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: s
 
     async def stream():
         yield sse_event({"type": "meta", "conversation": conversation})
-        decision = await decide_chat_agent_action(payload, conversation, image_refs)
+        decision = await decide_chat_agent_action(payload, conversation, image_refs, api_profile_id)
         action = decision.get("action") or "chat"
         tool_refs = image_refs[:]
         inherited_size = ""
@@ -18936,7 +19949,7 @@ async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: s
             action = "generate_image"
 
         if action in {"generate_image", "edit_image"}:
-            image_provider = pick_chat_image_provider(payload.image_provider or payload.provider, payload.provider)
+            image_provider = pick_chat_image_provider(payload.image_provider or payload.provider, payload.provider, api_profile_id)
             default_model = (image_provider.get("image_models") or [IMAGE_MODEL])[0]
             model = selected_model(payload.image_model or default_model, default_model)
             prompt = decision.get("prompt") or payload.message
@@ -18948,7 +19961,7 @@ async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: s
             raw_items = []
             try:
                 for item_prompt in prompts:
-                    image_data, raw = await generate_ai_image(item_prompt, image_size, payload.quality, model, tool_refs, image_provider["id"])
+                    image_data, raw = await generate_ai_image(item_prompt, image_size, payload.quality, model, tool_refs, image_provider["id"], api_profile_id=api_profile_id)
                     local_urls.append(await save_ai_image_to_output(image_data, prefix="chat_"))
                     raw_items.append(raw)
             except HTTPException as exc:
@@ -18988,10 +20001,10 @@ async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: s
             yield sse_event({"type": "done", "conversation": conversation, "message": assistant_message, "agent": {"action": action, "decision": decision}})
             return
 
-        provider_cfg = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+        provider_cfg = get_api_provider(payload.provider, api_profile_id) if payload.provider not in ("modelscope",) else {}
         if is_codex_provider(provider_cfg) or is_gemini_cli_provider(provider_cfg):
             try:
-                assistant_message = await build_chat_text_reply(payload, conversation)
+                assistant_message = await build_chat_text_reply(payload, conversation, api_profile_id)
             except HTTPException as exc:
                 yield sse_event({"type": "error", "detail": exc.detail})
                 return
@@ -19003,7 +20016,7 @@ async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: s
             yield sse_event({"type": "done", "conversation": conversation, "message": assistant_message, "agent": {"action": "chat", "decision": decision}})
             return
 
-        chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
+        chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model, api_profile_id)
         upstream_messages = [{"role": "system", "content": chat_system_prompt(payload)}]
         for item in conversation["messages"][-MAX_HISTORY_MESSAGES:]:
             msg = upstream_message_from_record(item)
@@ -19069,6 +20082,7 @@ async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = H
         raise HTTPException(status_code=400, detail="图片模式请使用 /api/chat")
 
     request.state.usage_event = begin_usage_event(request, "llm", payload.provider, payload.model, {"entry": "chat-stream", "mode": "stream"})
+    api_profile_id = request.state.usage_event.get("api_profile_id", "")
 
     user_id = safe_user_id(x_user_id, request)
     conversation = (
@@ -19092,7 +20106,7 @@ async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = H
     conversation["updated_at"] = now_ms()
     save_conversation(user_id, conversation)
 
-    _codex_provider = get_api_provider(payload.provider)
+    _codex_provider = get_api_provider(payload.provider, api_profile_id)
     if is_codex_provider(_codex_provider):
         model = selected_model(payload.model, (_codex_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         payload.model = model
@@ -19149,8 +20163,8 @@ async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = H
 
         return StreamingResponse(gemini_cli_stream(), media_type="text/event-stream")
 
-    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model)
-    _stream_provider = get_api_provider(payload.provider) if payload.provider not in ("modelscope",) else {}
+    chat_base, chat_hdrs, model = resolve_chat_provider(payload.provider, payload.model, payload.ms_model, api_profile_id)
+    _stream_provider = get_api_provider(payload.provider, api_profile_id) if payload.provider not in ("modelscope",) else {}
     history = conversation["messages"][-MAX_HISTORY_MESSAGES:]
     upstream_messages = [{"role": "system", "content": chat_system_prompt(payload)}]
     for item in history:
