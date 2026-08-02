@@ -16642,7 +16642,7 @@ async function generateUrlsForCurrentSettings(node, prompt, refs, runSettings=se
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
     if(isApiLikeEngine(activeSettings.engine) && activeSettings.apiKind === 'video'){
-        return {urls:await runApiVideoGeneration(prompt, refs, activeSettings), kind:'video'};
+        return {urls:await runApiVideoGeneration(prompt, refs, activeSettings, node), kind:'video'};
     }
     if(isApiLikeEngine(activeSettings.engine)){
         const taskResult = await runApiGeneration(prompt, refs, activeSettings);
@@ -17329,7 +17329,7 @@ async function runGeneration(){
             return;
         }
         if(isApiLikeEngine(settings.engine) && settings.apiKind === 'video'){
-            const outVideos = await runApiVideoGeneration(prompt, refs);
+            const outVideos = await runApiVideoGeneration(prompt, refs, settings, pendingNode);
             if(!outVideos.length) throw new Error(tr('smart.errNoOutVideos'));
             finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
@@ -17544,7 +17544,7 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     }
     throw new Error(tr('smart.rhTimeout'));
 }
-async function runApiVideoGeneration(prompt, refs, runSettings=settings){
+async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=null){
     const videoSelection = configuredVideoSelection(runSettings);
     if(!videoSelection.ok) throw new Error(tr(videoSelection.reason === 'provider' ? 'smart.noVideoPlatform' : 'smart.errNoVideoModel'));
     try {
@@ -17611,13 +17611,41 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings){
             multimodal: Boolean(runSettings.videoMultimodal),
             trusted_asset: useAssetUris
         };
-        const result = await fetch('/api/canvas-video', {
+        const submitted = await fetch('/api/canvas-video-tasks', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify(payload)
         }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, tr('smart.errRunFailed'))); return r.json(); });
-        if(result && result.jimeng_pending) throw new JimengPendingSignal({submitId:result.submit_id, kind:result.kind || 'video', queueInfo:result.queue_info, message:result.message});
-        return resultMediaUrls(result);
+        const taskId = submitted?.task_id || '';
+        if(!taskId) throw new Error(tr('smart.errRunFailed'));
+        const live = node ? nodes.find(item => item.id === node.id) : null;
+        if(live){
+            live.pendingTasks = [
+                ...smartPendingTasks(live).filter(item => item.taskId !== taskId),
+                {taskId, kind:'video', providerId:payload.provider_id, model:payload.model}
+            ];
+            live.pending = Math.max(1, Number(live.pending || 0));
+            render();
+            scheduleSave();
+        }
+        try {
+            const result = await pollSmartCanvasTask(taskId, 'video');
+            if(live){
+                live.pendingTasks = smartPendingTasks(live).filter(item => item.taskId !== taskId);
+                live.pending = Math.max(0, Number(live.pending || 0) - 1);
+                if(!live.pendingTasks.length) delete live.pendingTasks;
+                scheduleSave();
+            }
+            return resultMediaUrls(result);
+        } catch(error) {
+            if(error?.jimengPending && live){
+                live.pendingTasks = smartPendingTasks(live).filter(item => item.taskId !== taskId);
+                live.pending = Math.max(0, Number(live.pending || 0) - 1);
+                if(!live.pendingTasks.length) delete live.pendingTasks;
+                scheduleSave();
+            }
+            throw error;
+        }
     } finally {
         transientSmartCloudLinks = [];
     }
@@ -18035,13 +18063,14 @@ function resumeJimengPendingNodes(){
         startJimengPoll(n);
     });
 }
-async function pollSmartCanvasTask(taskId){
+async function pollSmartCanvasTask(taskId, kind='image'){
     if(!taskId) throw new Error(tr('smart.errRunFailed'));
     if(activeSmartTaskPolls.has(taskId)) return activeSmartTaskPolls.get(taskId);
     const promise = (async () => {
         for(let i = 0; i < 900; i++){
             await new Promise(resolve => setTimeout(resolve, 2000));
-            const task = await fetch(`/api/canvas-image-tasks/${encodeURIComponent(taskId)}`).then(async r => {
+            const taskPath = kind === 'video' ? 'canvas-video-tasks' : 'canvas-image-tasks';
+            const task = await fetch(`/api/${taskPath}/${encodeURIComponent(taskId)}`).then(async r => {
                 if(!r.ok) throw new Error(await r.text());
                 return r.json();
             });
@@ -18049,7 +18078,7 @@ async function pollSmartCanvasTask(taskId){
             if(task.status === 'jimeng_pending') throw new JimengPendingSignal({submitId:task.submit_id, kind:task.kind, queueInfo:task.queue_info, message:task.message});
             if(task.status === 'failed'){
                 const recoverTaskId = task.upstream_task_id || extractUpstreamTaskId(task.error || '');
-                if(recoverTaskId) throw new ImageTaskRecoverSignal({taskId, recoverTaskId, providerId:task.provider_id, kind:'image', message:task.error || tr('smart.errRunFailed')});
+                if(recoverTaskId) throw new ImageTaskRecoverSignal({taskId, recoverTaskId, providerId:task.provider_id, kind, message:task.error || tr('smart.errRunFailed')});
                 throw new Error(task.error || tr('smart.errRunFailed'));
             }
         }
@@ -18120,7 +18149,7 @@ async function resumeSmartPendingNode(node, logContext={}){
     await Promise.all(tasks.map(async task => {
         if(task.failed && task.recoverTaskId) return;
         try {
-            const result = await pollSmartCanvasTask(task.taskId);
+            const result = await pollSmartCanvasTask(task.taskId, task.kind || 'image');
             finalizeSmartPendingTask(node, task.taskId, resultMediaUrls(result?.image_items?.length ? result.image_items : (result?.images?.length ? result.images : result)), task.kind || 'image');
             render();
             scheduleSave();

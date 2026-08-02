@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import json
 import os
 import sys
@@ -19,6 +20,9 @@ class ApiProfileMigrationTests(unittest.TestCase):
         self.profiles_path = os.path.join(self.data_dir, "api_profiles.json")
         self.users_path = os.path.join(self.data_dir, "auth_users.json")
         self.env_path = os.path.join(self.data_dir, ".env")
+        self.runninghub_workflow_store_path = os.path.join(
+            self.data_dir, "runninghub_workflows.json"
+        )
         self.providers = [
             {
                 "id": "test-openai",
@@ -65,6 +69,11 @@ class ApiProfileMigrationTests(unittest.TestCase):
             patch.object(main, "API_PROFILES_FILE", self.profiles_path),
             patch.object(main, "AUTH_USERS_FILE", self.users_path),
             patch.object(main, "API_ENV_FILE", self.env_path),
+            patch.object(
+                main,
+                "RUNNINGHUB_WORKFLOW_STORE_FILE",
+                self.runninghub_workflow_store_path,
+            ),
             patch.object(main, "load_api_providers", return_value=self.providers),
         ]
         for patcher in self.patchers:
@@ -197,6 +206,13 @@ class ApiProfileMigrationTests(unittest.TestCase):
         with self.assertRaises(main.HTTPException) as caught:
             main.request_api_profile(request)
         self.assertEqual(caught.exception.status_code, 403)
+        self.assertIsNone(main.optional_upstream_context_for_request(request, allow_default=True))
+
+    def test_unscoped_provider_resolution_is_rejected(self):
+        with self.assertRaises(main.HTTPException) as caught:
+            main.get_api_provider("test-openai")
+        self.assertEqual(caught.exception.status_code, 500)
+        self.assertIn("UpstreamContext", caught.exception.detail)
 
     def test_video_generation_rejects_models_not_configured_in_current_profile(self):
         main.ensure_legacy_api_profile_migration()
@@ -425,6 +441,103 @@ class ApiProfileMigrationTests(unittest.TestCase):
         with self.assertRaises(main.HTTPException) as caught:
             main.get_api_provider("only-in-another-profile", "test-ui")
         self.assertEqual(caught.exception.status_code, 400)
+
+    def test_upstream_context_snapshots_profile_provider_and_credentials(self):
+        main.ensure_legacy_api_profile_migration()
+        data = main.load_api_profiles()
+        provider = {
+            "id": "test-openai",
+            "name": "测试平台",
+            "base_url": "https://example.invalid/v1",
+            "protocol": "openai",
+            "enabled": True,
+            "primary": True,
+            "image_models": ["image-test"],
+        }
+        data["profiles"].extend(
+            [
+                {"id": "ctx-ui", "name": "UI 上下文", "enabled": True, "providers": [provider]},
+                {"id": "ctx-art", "name": "原画上下文", "enabled": True, "providers": [provider]},
+            ]
+        )
+        main.save_api_profiles(data)
+        with open(self.env_path, "w", encoding="utf-8") as f:
+            f.write("API_PROFILE_CTX_UI_PROVIDER_TEST_OPENAI_KEY=CTX_UI_SECRET\n")
+            f.write("API_PROFILE_CTX_ART_PROVIDER_TEST_OPENAI_KEY=CTX_ART_SECRET\n")
+
+        ui = main.upstream_context_for_profile_id("ctx-ui", "test-openai", user_id="ui-user")
+        art = main.upstream_context_for_profile_id("ctx-art", "test-openai", user_id="art-user")
+
+        self.assertEqual(ui.user_id, "ui-user")
+        self.assertEqual(ui.api_profile_id, "ctx-ui")
+        self.assertEqual(ui.provider["_api_profile_id"], "ctx-ui")
+        self.assertEqual(ui.api_key, "CTX_UI_SECRET")
+        self.assertEqual(art.api_key, "CTX_ART_SECRET")
+        self.assertNotEqual(ui.api_key, art.api_key)
+
+    def test_runninghub_workflow_store_migrates_legacy_without_cross_profile_leak(self):
+        legacy_cfg = {
+            "legacy-workflow": {
+                "workflowId": "legacy-workflow",
+                "fields": [{"id": "field-1"}],
+            }
+        }
+        with open(self.runninghub_workflow_store_path, "w", encoding="utf-8") as f:
+            json.dump(legacy_cfg, f)
+
+        self.assertIn(
+            "legacy-workflow",
+            main.load_runninghub_workflow_store(main.LEGACY_API_PROFILE_ID),
+        )
+        self.assertEqual(main.load_runninghub_workflow_store("art-profile"), {})
+
+        art_cfg = {
+            "art-workflow": {
+                "workflowId": "art-workflow",
+                "fields": [{"id": "field-2"}],
+            }
+        }
+        main.save_runninghub_workflow_store(art_cfg, "art-profile")
+
+        self.assertIn(
+            "legacy-workflow",
+            main.load_runninghub_workflow_store(main.LEGACY_API_PROFILE_ID),
+        )
+        self.assertEqual(
+            list(main.load_runninghub_workflow_store("art-profile")),
+            ["art-workflow"],
+        )
+        with open(self.runninghub_workflow_store_path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved["version"], 2)
+        self.assertEqual(
+            set(saved["profiles"]),
+            {main.LEGACY_API_PROFILE_ID, "art-profile"},
+        )
+
+    def test_paid_provider_calls_cannot_use_legacy_unscoped_resolvers(self):
+        tree = ast.parse(Path(main.__file__).read_text(encoding="utf-8"))
+        violations = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            name = node.func.id
+            if name in {"get_api_provider", "get_api_provider_exact"}:
+                has_profile_kw = any(keyword.arg == "api_profile_id" for keyword in node.keywords)
+                if len(node.args) < 2 and not has_profile_kw:
+                    violations.append((name, node.lineno))
+            elif name == "api_headers":
+                has_provider_kw = any(keyword.arg == "provider" for keyword in node.keywords)
+                if len(node.args) < 2 and not has_provider_kw:
+                    violations.append((name, node.lineno))
+            elif name == "provider_env_key_value" and len(node.args) < 2:
+                violations.append((name, node.lineno))
+            elif name == "modelscope_api_key" and node.args:
+                violations.append((name, node.lineno))
+            elif name in {"volcengine_access_key_value", "volcengine_secret_key_value"} and not node.args:
+                violations.append((name, node.lineno))
+
+        self.assertEqual(violations, [])
 
 
 if __name__ == "__main__":

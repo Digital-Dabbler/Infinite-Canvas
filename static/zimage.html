@@ -382,20 +382,17 @@
 
         // 4. ModelScope 云端逻辑
         async function runCloudTask(prompt) {
-            // 优先用 API 设置里集中管理的 Token（服务端）；localStorage 仅作旧版兜底
-            let apiKey = '';
+            // 只读取当前配置组的服务端配置状态；浏览器不再持有或发送上游 Token。
+            let tokenConfigured = false;
             try {
                 const res = await fetch('/api/config/token');
                 const data = await res.json();
-                if (data.token) apiKey = data.token;
+                tokenConfigured = data.configured === true;
             } catch (e) { }
-            if (apiKey) {
-                // 自愈：清掉可能过期的旧版本地 Token，避免覆盖服务端有效 Token
+            if (tokenConfigured) {
                 try { localStorage.removeItem(MS_TOKEN_KEY); } catch (e) { }
-            } else {
-                apiKey = localStorage.getItem(MS_TOKEN_KEY) || '';
             }
-            if (!apiKey) return alert(tr('studio.modelscopeTokenRequired'));
+            if (!tokenConfigured) return alert(tr('studio.modelscopeTokenRequired'));
 
             const btn = document.getElementById('mainGenBtn');
             setLoading(true);
@@ -409,7 +406,6 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         prompt: prompt,
-                        api_key: apiKey,
                         resolution: `${document.getElementById('width').value}x${document.getElementById('height').value}`
                     })
                 });

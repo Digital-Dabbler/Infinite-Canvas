@@ -954,24 +954,22 @@
             if (!uploadedFile) throw new Error("Please upload an image first");
 
             // Get token from centralized management (Global server token first, legacy localStorage fallback)
-            let token = '';
+            let tokenConfigured = false;
             try {
                 const res = await fetch('/api/config/token');
                 if (res.ok) {
                     const data = await res.json();
-                    if (data.token) token = data.token;
+                    tokenConfigured = data.configured === true;
                 }
             } catch (e) {
-                console.warn("Failed to fetch global token", e);
+                console.warn("Failed to fetch ModelScope configuration status", e);
             }
-            if (token) {
-                // 自愈：清掉可能过期的旧版本地 Token，避免覆盖服务端有效 Token
+            if (tokenConfigured) {
+                // 服务端配置组是唯一凭据来源，清掉历史浏览器 Token。
                 try { localStorage.removeItem('modelscope_api_token'); } catch (e) { }
-            } else {
-                token = localStorage.getItem('modelscope_api_token') || '';
             }
 
-            if (!token) {
+            if (!tokenConfigured) {
                 if (window.parent && typeof window.parent.openTokenModal === 'function') {
                     window.parent.openTokenModal();
                     // Allow the error to propagate so user sees the message
@@ -1004,7 +1002,6 @@
 
             const payload = {
                 "prompt": promptInput.value,
-                "api_key": token,
                 "type": "angle",
                 "model": "Qwen/Qwen-Image-Edit-2511",
                 "image_urls": [dataUri],
@@ -1045,7 +1042,6 @@
                          // Call poll endpoint
                          const pollPayload = {
                              "task_id": taskId,
-                             "api_key": token,
                              "client_id": clientId
                          };
                          

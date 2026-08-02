@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -53,20 +54,26 @@ class RunningHubWalletAuthTests(unittest.IsolatedAsyncioTestCase):
             FakeResponse({"code": 0, "msg": "success", "data": {"taskId": "task-1"}}),
         ])
         provider = {"id": "runninghub", "base_url": "https://www.runninghub.cn"}
+        request = SimpleNamespace(
+            state=SimpleNamespace(user={"id": "user-1", "api_profile_id": "profile-1"}),
+            query_params={},
+        )
 
         def fake_api_key(_provider=None, use_wallet=False, prefer_wallet=False):
             return "wallet-secret" if use_wallet else "coin-secret"
 
         with (
-            patch.object(main, "runninghub_provider", return_value=provider),
+            patch.object(main, "runninghub_provider_for_request", return_value=provider),
             patch.object(main, "runninghub_api_key", side_effect=fake_api_key),
+            patch.object(main, "remember_runninghub_task_scope") as remember_scope,
             patch.object(main.httpx, "AsyncClient", return_value=client),
         ):
             result = await main.runninghub_workflow_submit(
                 main.RunningHubWorkflowSubmitRequest(
                     workflowId="workflow-1",
                     useWallet=True,
-                )
+                ),
+                request,
             )
 
         self.assertEqual(result["data"]["taskId"], "task-1")
@@ -79,6 +86,74 @@ class RunningHubWalletAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Authorization", body_only["headers"])
         self.assertNotIn("apiKey", bearer_only["json"])
         self.assertEqual(bearer_only["headers"]["Authorization"], "Bearer wallet-secret")
+        remember_scope.assert_called_once_with(request, "task-1", provider, True)
+
+    def test_known_task_uses_submission_profile_and_wallet_mode(self):
+        request = SimpleNamespace(
+            state=SimpleNamespace(user={"id": "owner-1", "role": "user", "api_profile_id": "new-profile"}),
+            query_params={},
+        )
+        submitted_profile = {
+            "id": "submitted-profile",
+            "enabled": True,
+            "providers": [
+                {
+                    "id": "runninghub",
+                    "name": "RunningHub",
+                    "base_url": "https://submitted.example",
+                    "protocol": "runninghub",
+                    "enabled": True,
+                }
+            ],
+        }
+        scopes = {
+            "version": 1,
+            "tasks": {
+                "task-1": {
+                    "user_id": "owner-1",
+                    "api_profile_id": "submitted-profile",
+                    "provider_id": "runninghub",
+                    "credential_kind": "runninghub_wallet",
+                    "metadata": {"use_wallet": True},
+                }
+            },
+        }
+        with (
+            patch.object(main, "load_upstream_task_scopes", return_value=scopes),
+            patch.object(main, "api_profile_by_id", return_value=submitted_profile),
+        ):
+            provider, use_wallet = main.runninghub_task_provider_for_request(
+                request,
+                "task-1",
+                requested_use_wallet=False,
+            )
+
+        self.assertEqual(provider["_api_profile_id"], "submitted-profile")
+        self.assertEqual(provider["base_url"], "https://submitted.example")
+        self.assertTrue(use_wallet)
+
+    def test_known_task_rejects_other_user(self):
+        request = SimpleNamespace(
+            state=SimpleNamespace(user={"id": "other-user", "role": "user", "api_profile_id": "other-profile"}),
+            query_params={},
+        )
+        scopes = {
+            "version": 1,
+            "tasks": {
+                "task-1": {
+                    "user_id": "owner-1",
+                    "api_profile_id": "submitted-profile",
+                    "provider_id": "runninghub",
+                    "credential_kind": "api_key",
+                    "metadata": {"use_wallet": False},
+                }
+            },
+        }
+        with patch.object(main, "load_upstream_task_scopes", return_value=scopes):
+            with self.assertRaises(main.HTTPException) as caught:
+                main.runninghub_task_provider_for_request(request, "task-1")
+
+        self.assertEqual(caught.exception.status_code, 403)
 
 
 if __name__ == "__main__":

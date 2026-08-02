@@ -2,6 +2,11 @@ let providers = [];
 let selectedId = '';
 let apiProfiles = [];
 let currentApiProfileId = localStorage.getItem('studio_admin_api_profile_id') || '';
+function adminApiProfileUrl(url){
+    if(!currentApiProfileId) return url;
+    const separator = String(url).includes('?') ? '&' : '?';
+    return `${url}${separator}api_profile_id=${encodeURIComponent(currentApiProfileId)}`;
+}
 const providerList = document.getElementById('providerList');
 const apiProfileBar = document.getElementById('apiProfileBar');
 const apiProfileSelect = document.getElementById('apiProfileSelect');
@@ -945,7 +950,7 @@ async function removeRhEntry(kind, index){
     setStatus('已删除，正在保存...');
     if(kind === 'workflow' && entryId){
         try {
-            await fetch(`/api/runninghub/workflows/${encodeURIComponent(entryId)}`, {method:'DELETE'});
+            await fetch(adminApiProfileUrl(`/api/runninghub/workflows/${encodeURIComponent(entryId)}`), {method:'DELETE'});
         } catch(_) {}
     }
     const ok = await saveProviders();
@@ -1064,7 +1069,7 @@ async function loadRhWorkflowEditorConfig(entry){
     let config = null;
     const workflowId = String(entry.workflowId || entry.id || '').trim();
     if(!workflowId) throw new Error('workflowId 为空');
-    const existing = await fetch(`/api/runninghub/workflows/${encodeURIComponent(workflowId)}`).then(async r => {
+    const existing = await fetch(adminApiProfileUrl(`/api/runninghub/workflows/${encodeURIComponent(workflowId)}`)).then(async r => {
         if(r.status === 404) return null;
         const data = await r.json();
         if(!r.ok) throw new Error(data.detail || '读取工作流配置失败');
@@ -1199,7 +1204,7 @@ async function fetchRhAppEditor(force=false){
     const appId = String(entry?.appId || entry?.id || '').trim();
     if(!appId) throw new Error('appId 为空');
     if(force) renderRhWorkflowEditorLoading('正在重新拉取...');
-    const res = await fetch(`/api/runninghub/app-info?webappId=${encodeURIComponent(appId)}`);
+    const res = await fetch(adminApiProfileUrl(`/api/runninghub/app-info?webappId=${encodeURIComponent(appId)}`));
     const data = await res.json();
     if(!res.ok || data.success === false) throw new Error(data.detail || '拉取应用参数失败');
     const fields = rhAppFieldSourceList(data).map(normalizeFetchedRhAppField);
@@ -1223,7 +1228,7 @@ async function fetchRhWorkflowEditor(force=false){
     const workflowId = String(entry.workflowId || entry.id || '').trim();
     if(!workflowId) throw new Error('workflowId 为空');
     if(force) renderRhWorkflowEditorLoading('正在重新拉取...');
-    const res = await fetch('/api/runninghub/workflows/fetch', {
+    const res = await fetch(adminApiProfileUrl('/api/runninghub/workflows/fetch'), {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({
@@ -1392,7 +1397,7 @@ async function saveRhWorkflowEditor(){
             renderRhWorkflowEditor();
             return;
         }
-        const res = await fetch(`/api/runninghub/workflows/${encodeURIComponent(config.workflowId)}`, {
+        const res = await fetch(adminApiProfileUrl(`/api/runninghub/workflows/${encodeURIComponent(config.workflowId)}`), {
             method:'PUT',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
@@ -1632,7 +1637,7 @@ async function rhPreviewUploadValueIfNeeded(value){
     const text = String(value || '').trim();
     if(!text) return '';
     if(!/^https?:\/\//i.test(text) && !text.startsWith('/output/') && !text.startsWith('/assets/')) return text;
-    const res = await fetch('/api/runninghub/upload-asset', {
+    const res = await fetch(adminApiProfileUrl('/api/runninghub/upload-asset'), {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({url:text})
@@ -1717,7 +1722,7 @@ async function testRhMappedPreview(){
             : {webappId:String(config.appId || '').trim(), nodeInfoList};
         if(rhEditorMode === 'workflow' && !body.workflowId) throw new Error('workflowId 为空');
         if(rhEditorMode === 'app' && !body.webappId) throw new Error('webappId 为空');
-        const submit = await fetch(endpoint, {
+        const submit = await fetch(adminApiProfileUrl(endpoint), {
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify(body)
@@ -1733,7 +1738,7 @@ async function testRhMappedPreview(){
         let result = null;
         for(let i = 0; i < 720; i++){
             await new Promise(resolve => setTimeout(resolve, 2500));
-            const data = await fetch(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}`).then(async r => {
+            const data = await fetch(adminApiProfileUrl(`/api/runninghub/query?taskId=${encodeURIComponent(taskId)}`)).then(async r => {
                 const json = await r.json();
                 if(!r.ok || json.success === false) throw new Error(json.detail || json.error || 'RunningHub 查询失败');
                 return json.data || json;

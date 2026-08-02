@@ -3,7 +3,7 @@
 > 文档状态：持续盘点与实施跟踪
 > 用途：防止平台、密钥、异步任务或扩展入口在改造中遗漏
 > 当前状态说明：本表只记录已发现入口；实施阶段仍需通过全仓搜索持续补全
-> 最后更新：2026-08-01
+> 最后更新：2026-08-02
 
 ## 0. 当前实施摘要
 
@@ -11,7 +11,7 @@
 - `GET/PUT /api/providers`、`GET /api/models`、`GET /api/config`：已接入配置组能力，待页面手工验收；
 - 普通 API Key、RunningHub钱包 Key和火山 AK/SK的配置组环境变量命名：已改造；
 - 在线图片、画布图片任务、画布视频、画布 LLM、普通聊天、流式聊天和 Agent聊天：首批调用链已接入，待假上游完整验证；
-- 特殊独立工具页、RunningHub全部路由、扩展生成入口和通用任务恢复：仍待逐项改造；
+- 已建立统一 `UpstreamContext`；主要上游、异步任务持久化、任务所有者、RunningHub组内工作流和扩展身份契约已接入；真实 Chrome/Photoshop与付费上游手工冒烟仍待处理；
 - 清单中的“待确认”行不能因为核心 helper 已实现而自动视为关闭，仍需逐入口达到“已验证”。
 
 ## 1. 使用方法
@@ -65,16 +65,17 @@
 | HTTP 入口 | 页面/调用方 | 上游类型 | 异步 | 配置组要求 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | `POST /api/online-image` | 在线生图、智能画布等 | OpenAI兼容/即梦/其他图片平台 | 视平台而定 | 提交时按登录用户解析 | 待确认 |
-| `POST /api/image-task-query` | 异步图片恢复与查询 | OpenAI兼容/RunningHub等 | 是 | 从已保存任务归属解析，不能信任客户端换组 | 待确认 |
-| `POST /api/canvas-image-tasks` | 智能画布图片任务 | 多图片平台 | 是 | 任务保存 `user_id`、`api_profile_id`、`provider_id` | 待确认 |
-| `GET /api/canvas-image-tasks/{task_id}` | 画布任务轮询 | 多图片平台 | 是 | 任务所有者或管理员；保持提交组 | 待确认 |
-| `POST /api/angle/generate` | 视角控制页 | ModelScope/相关图片平台 | 是/轮询 | 按用户配置组或明确共享策略 | 待确认 |
-| `POST /api/angle/poll_status` | 视角任务轮询 | ModelScope | 是 | 与提交账户一致 | 待确认 |
-| `POST /api/ms/generate` | ModelScope 生成 | ModelScope | 是/同步混合 | 明确部门凭据或共享策略 | 待确认 |
+| `POST /api/image-task-query` | 异步图片恢复与查询 | OpenAI兼容/RunningHub等 | 是 | 从已保存任务归属解析，不能信任客户端换组 | 已改造 |
+| `POST /api/canvas-image-tasks` | 智能画布图片任务 | 多图片平台 | 是 | 任务保存 `user_id`、`api_profile_id`、`provider_id` | 已改造 |
+| `GET /api/canvas-image-tasks/{task_id}` | 画布任务轮询 | 多图片平台 | 是 | 持久化；任务所有者或管理员；保持提交组 | 已验证 |
+| `POST/GET /api/canvas-video-tasks/*` | 普通/智能画布视频任务 | 多视频平台 | 是 | 持久化任务和上游任务 ID；刷新恢复 | 已验证 |
+| `POST /api/angle/generate` | 视角控制页 | ModelScope/相关图片平台 | 是/轮询 | 按用户配置组或明确共享策略 | 已改造 |
+| `POST /api/angle/poll_status` | 视角任务轮询 | ModelScope | 是 | 与提交账户一致 | 已改造 |
+| `POST /api/ms/generate` | ModelScope 生成 | ModelScope | 是/同步混合 | 明确部门凭据或共享策略 | 已改造 |
 | `POST /generate` | 旧兼容生成页 | ComfyUI/旧生成路径 | 视工作流而定 | 确认是否付费、共享或本地 | 待确认 |
 | `POST /api/generate` | ComfyUI与工作流生成 | 本地 ComfyUI | 是/阻塞任务 | 通常标记 local；仍需用户审计与配额 | 待确认 |
-| `POST /api/canvas-comfy-tasks` | 智能画布 ComfyUI任务 | 本地 ComfyUI | 是 | 可共享实例，但任务仍绑定用户与配置组快照 | 待确认 |
-| `GET /api/canvas-comfy-tasks/{task_id}` | ComfyUI任务轮询 | 本地 ComfyUI | 是 | 任务所有者或管理员 | 待确认 |
+| `POST /api/canvas-comfy-tasks` | 智能画布 ComfyUI任务 | 本地 ComfyUI | 是 | `local/shared`，任务绑定用户与配置组快照 | 已验证 |
+| `GET /api/canvas-comfy-tasks/{task_id}` | ComfyUI任务轮询 | 本地 ComfyUI | 是 | 持久化；任务所有者或管理员 | 已验证 |
 
 需要继续追踪的内部 helper：
 
@@ -90,7 +91,7 @@
 
 | HTTP 入口 | 页面/调用方 | 上游类型 | 异步 | 配置组要求 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| `POST /api/canvas-video` | 普通/智能画布视频节点 | OpenAI兼容、RunningHub、火山、即梦等 | 多数是 | 提交时按用户解析并把配置组传入完整轮询链 | 待确认 |
+| `POST /api/canvas-video` | 旧同步兼容视频入口 | OpenAI兼容、RunningHub、火山、即梦等 | 多数是 | 保留兼容；画布已迁移到 `/api/canvas-video-tasks` | 已改造 |
 | 旧视频生成入口（待全仓确认） | 独立页面和历史代码 | 多平台 | 是 | 不得保留全局 Key路径 | 待确认 |
 
 重点 helper 与特殊平台：
@@ -128,17 +129,17 @@
 
 | HTTP 入口 | 用途 | 配置组要求 | 特殊注意点 | 状态 |
 | --- | --- | --- | --- | --- |
-| `GET /api/runninghub/app-info` | 应用信息 | 返回当前组可用信息 | 静态模板与组内覆盖的边界 | 待确认 |
-| `POST /api/runninghub/submit` | 提交生成 | 当前用户配置组 | 纳入统一用量事件 | 待确认 |
-| `POST /api/runninghub/workflow-submit` | 提交工作流 | 当前用户配置组 | 工作流与钱包类型一致 | 待确认 |
-| `GET /api/runninghub/workflow-info` | 工作流信息 | 当前用户组或管理员选定组 | 不泄漏其他组隐藏配置 | 待确认 |
-| `GET /api/runninghub/workflows` | 工作流列表 | 明确静态共享与组内配置 | 当前存储可能是全局 | 待确认 |
-| `GET /api/runninghub/workflows/{workflow_id}` | 单工作流 | 同上 | 路径和权限校验 | 待确认 |
-| `POST /api/runninghub/workflows/fetch` | 拉取工作流 | 仅管理员、选定组 | 使用正确账户 | 待确认 |
-| `PUT /api/runninghub/workflows/{workflow_id}` | 保存工作流配置 | 仅管理员、选定组 | 防止覆盖其他组 | 待确认 |
-| `DELETE /api/runninghub/workflows/{workflow_id}` | 删除组内配置 | 仅管理员、选定组 | 内置工作流不可误删 | 待确认 |
-| `GET /api/runninghub/query` | 查询任务 | 固定提交配置组 | 查询阶段不得换钱包类型 | 待确认 |
-| `POST /api/runninghub/upload-asset` | 上传素材 | 固定提交配置组 | 上传、提交、查询使用同一 `useWallet` | 待确认 |
+| `GET /api/runninghub/app-info` | 应用信息 | 返回当前组可用信息 | 静态模板与组内覆盖的边界 | 已改造 |
+| `POST /api/runninghub/submit` | 提交生成 | 当前用户配置组 | 纳入统一用量事件 | 已改造 |
+| `POST /api/runninghub/workflow-submit` | 提交工作流 | 当前用户配置组 | 工作流与钱包类型一致 | 已改造 |
+| `GET /api/runninghub/workflow-info` | 工作流信息 | 当前用户组或管理员选定组 | 不泄漏其他组隐藏配置 | 已改造 |
+| `GET /api/runninghub/workflows` | 工作流列表 | 静态模板共享、组内配置隔离 | version 2存储按配置组分区 | 已改造 |
+| `GET /api/runninghub/workflows/{workflow_id}` | 单工作流 | 同上 | 路径和权限校验 | 已改造 |
+| `POST /api/runninghub/workflows/fetch` | 拉取工作流 | 仅管理员、选定组 | 使用正确账户 | 已改造 |
+| `PUT /api/runninghub/workflows/{workflow_id}` | 保存工作流配置 | 仅管理员、选定组 | 防止覆盖其他组 | 已改造 |
+| `DELETE /api/runninghub/workflows/{workflow_id}` | 删除组内配置 | 仅管理员、选定组 | 内置工作流通过组内隐藏记录处理 | 已改造 |
+| `GET /api/runninghub/query` | 查询任务 | 固定提交配置组 | 查询阶段不得换钱包类型 | 已改造 |
+| `POST /api/runninghub/upload-asset` | 上传素材 | 固定提交配置组 | 上传、提交、查询使用同一 `useWallet` | 已改造 |
 
 必须保留的兼容约束：
 
@@ -153,15 +154,15 @@
 | 平台/入口 | 当前凭据或状态 | 目标作用域 | 状态 |
 | --- | --- | --- | --- |
 | 火山引擎普通 API Key | 全局 | 配置组 | 待确认 |
-| 火山 Access Key ID | 全局 | 配置组 | 待确认 |
-| 火山 Secret Access Key | 全局 | 配置组 | 待确认 |
-| ModelScope Token | 全局 | 配置组或明确共享 | 待确认 |
-| `GET /api/jimeng/status` | 本地 CLI/登录状态 | 明确共享还是部门级 | 待确认 |
-| `GET /api/jimeng/credit` | 即梦余额 | 管理员或当前组策略 | 避免普通用户看到其他账户余额 | 待确认 |
+| 火山 Access Key ID | 配置组环境变量 + `UpstreamContext` | 配置组 | 已改造 |
+| 火山 Secret Access Key | 配置组环境变量 + `UpstreamContext` | 配置组 | 已改造 |
+| ModelScope Token | 配置组环境变量 + `UpstreamContext` | 配置组或明确共享 | 已改造 |
+| `GET /api/jimeng/status` | 本地 CLI/登录状态 | `local/shared`，不宣称部门隔离 | 已改造 |
+| `GET /api/jimeng/credit` | 即梦余额 | 仅管理员 | 普通用户不可查看共享账户余额 | 已验证 |
 | 即梦登录、登出与帮助接口 | 管理 CLI会话 | 仅管理员 | 本地会话是否能按组隔离需单独决策 | 待确认 |
-| `GET /api/codex/status` | 本地 Codex状态 | 通常 local/shared | 仍需用量和并发策略 | 待确认 |
+| `GET /api/codex/status` | 本地 Codex状态 | `local/shared` | 用量与并发策略进入 M6 | 已改造 |
 | `POST /api/codex/help` | Codex帮助/管理 | 仅管理员 | 不暴露认证文件 | 待确认 |
-| `GET /api/gemini-cli/status` | 本地 Gemini状态 | 通常 local/shared | 仍需用量和并发策略 | 待确认 |
+| `GET /api/gemini-cli/status` | 本地 Gemini状态 | `local/shared` | 用量与并发策略进入 M6 | 已改造 |
 | `POST /api/gemini-cli/help` | Gemini帮助/管理 | 仅管理员 | 不暴露认证文件 | 待确认 |
 
 本地 CLI通常不能像普通 API Key一样自然复制四份。实施前必须明确：
@@ -215,8 +216,8 @@
 | 视角控制 | `static/angle.html` | ModelScope归属和轮询 | 待确认 |
 | 独立生成页 | `zimage.html`、`enhance.html`、`klein.html`等 | 旧直连接口和全局默认值 | 待确认 |
 | 管理后台 | `static/admin.html` | 用户分组、配置组用量和告警 | 待确认 |
-| Chrome扩展 | `tools/chrome-local-asset-importer/` | Bearer用户身份、素材分析和生成入口 | 待确认 |
-| Photoshop面板 | `tools/photoshop-asset-connector/`及相关桥接工具 | Bearer、WebSocket、生成和上传 | 待确认 |
+| Chrome扩展 | `tools/chrome-local-asset-importer/` | 登录换取可撤销 Bearer；平台读取、导入和素材分析绑定用户 | 已改造 |
+| Photoshop面板 | `tools/photoshop-asset-connector/`及相关桥接工具 | Bearer、媒体 Token、WebSocket和用户任务过滤 | 已验证（自动契约） |
 
 前端不得把 `api_profile_id` 当作普通用户可修改的生成参数。管理员页面使用配置组参数时，服务端仍需管理员鉴权。
 
@@ -224,7 +225,7 @@
 
 | 能力 | 风险 | 检查要求 | 状态 |
 | --- | --- | --- | --- |
-| `/ws/stats` | 广播结果可能跨部门可见 | 明确现有共享契约；敏感计费信息不广播 | 待确认 |
+| `/ws/stats` | 广播结果可能跨部门可见 | 完整生成结果只发任务所有者；共享画布/素材通知不含凭据和计费 | 已验证 |
 | 生成历史 | 结果可能全局共享 | 本次是否调整可见性需明确，不与凭据隔离混淆 | 待确认 |
 | `/assets`、`/output` | 媒体访问认证 | 不在 URL中加入真实上游凭据 | 待确认 |
 | 画布保存 | 节点保存平台 ID | 不保存配置组或密钥；重载时按当前用户解析 | 待确认 |

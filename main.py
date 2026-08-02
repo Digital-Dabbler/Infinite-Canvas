@@ -25,9 +25,11 @@ import tempfile
 import math
 import shlex
 import functools
+import contextvars
 import secrets
 import html
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, RLock, Thread
 import httpx
@@ -118,9 +120,16 @@ class ConnectionManager:
                 print(f"Broadcast error: {e}")
                 self.active_connections.remove(connection)
 
-    async def broadcast_new_image(self, image_data: dict):
+    async def broadcast_new_image(self, image_data: dict, user_id: str = ""):
+        """生成结果只通知任务所有者，避免经 WebSocket 泄漏到其他配置组。"""
+        owner_id = str(user_id or "").strip()
+        if not owner_id:
+            return
         data = json.dumps({"type": "new_image", "data": image_data})
         for connection in self.active_connections[:]:
+            client_id = str(self.connection_clients.get(connection) or "")
+            if not (client_id == owner_id or client_id.startswith(f"{owner_id}:")):
+                continue
             try:
                 await connection.send_text(data)
             except Exception as e:
@@ -222,6 +231,10 @@ async def startup_event():
         ensure_legacy_api_profile_migration()
     except Exception as exc:
         print(f"初始化 API 配置组失败，将继续使用现有全局配置: {exc}")
+    try:
+        recover_canvas_tasks_after_restart()
+    except Exception as exc:
+        print(f"恢复画布任务状态失败: {exc}")
     sync_static_html_versions()
     # 启动时整理资产库：给所有图片分组（含默认角色/场景）建好文件夹，并把根目录里的旧素材归整进去。
     try:
@@ -289,6 +302,8 @@ API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 API_PROFILES_FILE = os.path.join(DATA_DIR, "api_profiles.json")
 DEPARTMENTS_FILE = os.path.join(DATA_DIR, "departments.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
+UPSTREAM_TASK_SCOPES_FILE = os.path.join(DATA_DIR, "upstream_task_scopes.json")
+CANVAS_TASKS_FILE = os.path.join(DATA_DIR, "canvas_tasks.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
 AUTH_USERS_FILE = os.path.join(DATA_DIR, "auth_users.json")
 AUTH_SESSIONS_FILE = os.path.join(DATA_DIR, "auth_sessions.json")
@@ -360,6 +375,7 @@ CONVERSATION_LOCK = Lock()
 CANVAS_LOCK = RLock()
 LOAD_LOCK = Lock()
 RUNNINGHUB_WORKFLOW_LOCK = Lock()
+UPSTREAM_TASK_SCOPE_LOCK = Lock()
 NEXT_TASK_ID = 1
 UPDATE_LOCK = Lock()
 JIMENG_LOGIN_SESSION = {
@@ -835,11 +851,14 @@ def volcengine_secret_key_value(api_profile_id="") -> str:
     env_key = volcengine_secret_key_env(api_profile_id)
     return os.getenv(env_key, "") or read_api_env_value(env_key)
 
-def volcengine_provider_api_key(explicit_key: str = "") -> str:
+def volcengine_provider_api_key(explicit_key: str = "", api_profile_id="") -> str:
     explicit_key = str(explicit_key or "").strip()
     if explicit_key:
         return explicit_key
-    return provider_env_key_value("volcengine")
+    profile_id = str(api_profile_id or "").strip().lower()
+    if not profile_id:
+        return ""
+    return provider_env_key_value("volcengine", profile_id)
 
 def mask_secret(value):
     if not value:
@@ -982,6 +1001,7 @@ def merge_default_api_providers(providers, inject_missing=True):
             continue
         current["protocol"] = "jimeng"
         current["base_url"] = ""
+        current["billing_scope"] = "local"
         current["image_models"] = model_list_from_values([
             *[item for item in (current.get("image_models") or []) if str(item or "").strip() not in JIMENG_LEGACY_IMAGE_MODELS],
             *JIMENG_DEFAULT_IMAGE_MODELS,
@@ -997,6 +1017,7 @@ def merge_default_api_providers(providers, inject_missing=True):
             continue
         current["protocol"] = current_protocol
         current["base_url"] = ""
+        current["billing_scope"] = "local"
         default_image_models = CODEX_DEFAULT_IMAGE_MODELS if current_protocol == "codex" else GEMINI_CLI_DEFAULT_IMAGE_MODELS
         default_chat_models = CODEX_DEFAULT_CHAT_MODELS if current_protocol == "codex" else GEMINI_CLI_DEFAULT_CHAT_MODELS
         image_models = current.get("image_models") or []
@@ -1341,6 +1362,7 @@ def normalize_provider(item):
         base_url = ""
     if protocol in {"codex", "gemini-cli"}:
         base_url = ""
+    local_cli = protocol in {"jimeng", "codex", "gemini-cli"}
     if provider_id == "runninghub":
         protocol = "runninghub"
         base_url = base_url or RUNNINGHUB_DEFAULT_BASE_URL
@@ -1355,7 +1377,7 @@ def normalize_provider(item):
         "image_edit_endpoint": image_edit_endpoint,
         "enabled": bool(item.get("enabled", True)),
         "primary": bool(item.get("primary", False)),
-        "billing_scope": str(item.get("billing_scope") or "department").strip().lower()
+        "billing_scope": "local" if local_cli else str(item.get("billing_scope") or "department").strip().lower()
         if str(item.get("billing_scope") or "department").strip().lower() in {"department", "shared", "local", "disabled"}
         else "department",
         "image_models": model_list_from_values(item.get("image_models") or []),
@@ -1545,7 +1567,9 @@ def save_api_providers(providers, sync_legacy=True):
 def public_provider(provider, api_profile_id=""):
     if provider.get("id") == "runninghub":
         try:
-            provider = runninghub_provider_with_workflow_store(provider)
+            runtime_provider = dict(provider)
+            runtime_provider["_api_profile_id"] = str(api_profile_id or "").strip().lower()
+            provider = runninghub_provider_with_workflow_store(runtime_provider)
         except Exception:
             pass
     key = provider_env_key_value(provider["id"], api_profile_id)
@@ -1555,6 +1579,7 @@ def public_provider(provider, api_profile_id=""):
         "key_preview": mask_secret(key),
         "key_env": provider_key_env(provider["id"], api_profile_id),
     }
+    item.pop("_api_profile_id", None)
     if provider.get("id") == "runninghub":
         wallet_key = runninghub_wallet_key_value(api_profile_id)
         item.update({
@@ -1639,46 +1664,119 @@ def get_primary_provider_id(providers=None):
 
 def get_api_provider(provider_id="comfly", api_profile_id=""):
     profile_id = str(api_profile_id or "").strip().lower()
-    if profile_id:
-        profile = api_profile_by_id(profile_id)
-        if not profile:
-            raise HTTPException(status_code=400, detail=f"未找到 API 配置组：{profile_id}")
-        return provider_from_api_profile(profile, provider_id, allow_default=not bool(str(provider_id or "").strip()))
-    providers = load_api_providers()
-    target = (provider_id or "").strip().lower()
-    # 兼容旧的 "comfly" 硬编码：若 comfly 不存在或未指定，回退到首选 provider
-    if not target or not any(p["id"] == target for p in providers):
-        target = get_primary_provider_id(providers)
-    provider = next((p for p in providers if p["id"] == target), None)
-    if not provider:
-        raise HTTPException(status_code=400, detail=f"未找到 API 平台：{target}")
-    if not provider.get("enabled", True):
-        raise HTTPException(status_code=400, detail=f"API 平台已禁用：{provider.get('name') or target}")
-    return provider
+    if not profile_id:
+        raise HTTPException(status_code=500, detail="平台解析必须提供 API 配置组；请使用 UpstreamContext。")
+    profile = api_profile_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=400, detail=f"未找到 API 配置组：{profile_id}")
+    return provider_from_api_profile(profile, provider_id, allow_default=not bool(str(provider_id or "").strip()))
 
 def get_api_provider_exact(provider_id: str, api_profile_id=""):
     profile_id = str(api_profile_id or "").strip().lower()
-    if profile_id:
-        profile = api_profile_by_id(profile_id)
-        if not profile:
-            raise HTTPException(status_code=400, detail=f"未找到 API 配置组：{profile_id}")
-        return provider_from_api_profile(profile, provider_id, allow_default=False)
-    providers = load_api_providers()
-    target = (provider_id or "").strip().lower()
-    provider = next((p for p in providers if p["id"] == target), None)
-    if not provider:
-        raise HTTPException(status_code=400, detail=f"未找到 API 平台：{target or '(empty)'}。新增平台未保存时请使用当前表单拉取模型。")
-    if not provider.get("enabled", True):
-        raise HTTPException(status_code=400, detail=f"API 平台已禁用：{provider.get('name') or target}")
-    return provider
+    if not profile_id:
+        raise HTTPException(status_code=500, detail="精确平台解析必须提供 API 配置组；请使用 UpstreamContext。")
+    profile = api_profile_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=400, detail=f"未找到 API 配置组：{profile_id}")
+    return provider_from_api_profile(profile, provider_id, allow_default=False)
 
-def modelscope_provider_config(api_profile_id=""):
+@dataclass(frozen=True)
+class UpstreamContext:
+    user_id: str
+    api_profile_id: str
+    api_profile_name: str
+    provider_id: str
+    provider: Dict[str, Any]
+    api_key: str = ""
+    runninghub_wallet_key: str = ""
+    volcengine_access_key: str = ""
+    volcengine_secret_key: str = ""
+    billing_scope: str = ""
+
+    def credential(self, kind="api_key"):
+        values = {
+            "api_key": self.api_key,
+            "runninghub_wallet": self.runninghub_wallet_key,
+            "volcengine_access_key": self.volcengine_access_key,
+            "volcengine_secret_key": self.volcengine_secret_key,
+        }
+        if kind not in values:
+            raise HTTPException(status_code=500, detail=f"不支持的上游凭据类型：{kind}")
+        return values[kind]
+
+def upstream_context_for_profile(profile, provider_id="", user=None, allow_default=False):
+    if not isinstance(profile, dict) or not profile.get("id"):
+        raise HTTPException(status_code=403, detail="无法解析 API 配置组。")
+    provider = provider_from_api_profile(profile, provider_id, allow_default=allow_default)
+    profile_id = str(profile.get("id") or "").strip().lower()
+    runtime_provider = dict(provider)
+    provider_id = str(runtime_provider.get("id") or "").strip().lower()
+    api_key = (
+        modelscope_api_key(api_profile_id=profile_id)
+        if provider_id == "modelscope"
+        else provider_env_key_value(provider_id, profile_id)
+    )
+    return UpstreamContext(
+        user_id=str((user or {}).get("id") or ""),
+        api_profile_id=profile_id,
+        api_profile_name=str(profile.get("name") or ""),
+        provider_id=provider_id,
+        provider=runtime_provider,
+        api_key=str(api_key or ""),
+        runninghub_wallet_key=runninghub_wallet_key_value(profile_id) if provider_id == "runninghub" else "",
+        volcengine_access_key=volcengine_access_key_value(profile_id) if provider_id == "volcengine" else "",
+        volcengine_secret_key=volcengine_secret_key_value(profile_id) if provider_id == "volcengine" else "",
+        billing_scope=str(runtime_provider.get("billing_scope") or profile.get("billing_scope") or ""),
+    )
+
+def resolve_upstream_context(request, provider_id="", allow_admin_selection=False, allow_default=False):
+    user = require_authenticated(request)
+    profile = request_api_profile(request, allow_admin_selection=allow_admin_selection)
+    return upstream_context_for_profile(profile, provider_id, user=user, allow_default=allow_default)
+
+def optional_upstream_context_for_request(request, provider_id="", allow_default=False):
+    try:
+        return resolve_upstream_context(
+            request, provider_id, allow_default=allow_default
+        )
+    except HTTPException as exc:
+        if exc.status_code in {400, 403}:
+            return None
+        raise
+
+def upstream_context_for_profile_id(api_profile_id, provider_id="", user_id="", allow_default=False):
+    profile_id = str(api_profile_id or "").strip().lower()
+    profile = api_profile_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=409, detail=f"API 配置组不存在：{profile_id or '(empty)'}")
+    return upstream_context_for_profile(
+        profile,
+        provider_id,
+        user={"id": str(user_id or "")},
+        allow_default=allow_default,
+    )
+
+def upstream_model_for_context(context: UpstreamContext, requested="", kind="image_models", fallback=""):
+    if not isinstance(context, UpstreamContext):
+        raise HTTPException(status_code=500, detail="模型解析缺少上游调用上下文。")
+    configured = [
+        str(item or "").strip()
+        for item in (context.provider.get(kind) or [])
+        if str(item or "").strip()
+    ]
+    model = str(requested or fallback or "").strip()
+    if model and configured and model not in configured:
+        raise HTTPException(status_code=400, detail="所选模型不属于当前账号的 API 配置组。")
+    if model:
+        return model
+    if configured:
+        return configured[0]
+    raise HTTPException(status_code=400, detail="当前 API 配置组未配置可用模型。")
+
+def modelscope_provider_config(api_profile_id):
     return get_api_provider_exact("modelscope", api_profile_id)
 
-def modelscope_api_key(explicit_key: str = "", api_profile_id=""):
-    explicit = strip_auth_scheme(explicit_key, "Bearer")
-    if explicit:
-        return explicit
+def modelscope_api_key(api_profile_id=""):
     scoped = strip_auth_scheme(provider_env_key_value("modelscope", api_profile_id), "Bearer")
     if scoped:
         return scoped
@@ -1686,8 +1784,9 @@ def modelscope_api_key(explicit_key: str = "", api_profile_id=""):
         return ""
     return strip_auth_scheme(MODELSCOPE_API_KEY, "Bearer")
 
-def modelscope_api_root(provider=None):
-    provider = provider or modelscope_provider_config()
+def modelscope_api_root(provider):
+    if not isinstance(provider, dict):
+        raise HTTPException(status_code=500, detail="ModelScope 调用缺少运行时 provider 上下文。")
     base_root = str((provider or {}).get("base_url") or MODELSCOPE_CHAT_BASE_URL).strip().rstrip("/")
     if not base_root:
         base_root = MODELSCOPE_CHAT_BASE_URL
@@ -2123,6 +2222,7 @@ async def auth_middleware(request: Request, call_next):
         "/api/runninghub/workflow-submit": ("image", "runninghub"),
         "/api/angle/generate": ("image", "modelscope"),
         "/api/ms/generate": ("image", "modelscope"),
+        "/generate": ("image", "modelscope"),
     }
     if request.method == "POST" and path in auto_audit:
         function, provider = auto_audit[path]
@@ -3910,7 +4010,133 @@ class ImageTaskQueryRequest(BaseModel):
     task_id: str = Field(min_length=1, max_length=240)
 
 CANVAS_TASKS: Dict[str, Dict[str, Any]] = {}
-CANVAS_TASK_LOCK = Lock()
+CANVAS_TASK_LOCK = RLock()
+CANVAS_TASKS_LOADED = False
+CANVAS_TASK_RETENTION_SECONDS = 7 * 24 * 60 * 60
+CANVAS_TASK_MAX_RECORDS = 1000
+ACTIVE_CANVAS_TASK_ID = contextvars.ContextVar("active_canvas_task_id", default="")
+
+def _save_canvas_tasks_locked():
+    ordered = sorted(
+        (dict(item) for item in CANVAS_TASKS.values() if isinstance(item, dict) and item.get("id")),
+        key=lambda item: float(item.get("updated_at") or item.get("created_at") or 0),
+    )[-CANVAS_TASK_MAX_RECORDS:]
+    _write_json_file(CANVAS_TASKS_FILE, {
+        "version": 1,
+        "tasks": {str(item["id"]): item for item in ordered},
+        "updated_at": time.time(),
+    })
+
+def load_canvas_tasks(force=False):
+    global CANVAS_TASKS_LOADED
+    with CANVAS_TASK_LOCK:
+        if CANVAS_TASKS_LOADED and not force:
+            return CANVAS_TASKS
+        raw = _read_json_file(CANVAS_TASKS_FILE, {"version": 1, "tasks": {}})
+        stored = raw.get("tasks") if isinstance(raw, dict) else {}
+        cutoff = time.time() - CANVAS_TASK_RETENTION_SECONDS
+        loaded = {}
+        if isinstance(stored, dict):
+            for task_id, task in stored.items():
+                if not isinstance(task, dict):
+                    continue
+                clean_id = str(task.get("id") or task_id or "").strip()
+                if not clean_id:
+                    continue
+                updated_at = float(task.get("updated_at") or task.get("created_at") or 0)
+                if updated_at and updated_at < cutoff:
+                    continue
+                item = dict(task)
+                item["id"] = clean_id
+                loaded[clean_id] = item
+        ordered = sorted(
+            loaded.values(),
+            key=lambda item: float(item.get("updated_at") or item.get("created_at") or 0),
+        )[-CANVAS_TASK_MAX_RECORDS:]
+        CANVAS_TASKS.clear()
+        CANVAS_TASKS.update({str(item["id"]): item for item in ordered})
+        CANVAS_TASKS_LOADED = True
+        return CANVAS_TASKS
+
+def canvas_task_create(task):
+    item = dict(task or {})
+    task_id = str(item.get("id") or "").strip()
+    if not task_id:
+        raise ValueError("canvas task id is required")
+    with CANVAS_TASK_LOCK:
+        load_canvas_tasks()
+        CANVAS_TASKS[task_id] = item
+        _save_canvas_tasks_locked()
+        return dict(item)
+
+def canvas_task_update(task_id, updates):
+    with CANVAS_TASK_LOCK:
+        load_canvas_tasks()
+        task = CANVAS_TASKS.get(str(task_id or ""))
+        if not isinstance(task, dict):
+            return {}
+        task.update(dict(updates or {}))
+        task["updated_at"] = time.time()
+        _save_canvas_tasks_locked()
+        return dict(task)
+
+def canvas_task_get(task_id):
+    with CANVAS_TASK_LOCK:
+        load_canvas_tasks()
+        return dict(CANVAS_TASKS.get(str(task_id or "")) or {})
+
+def recover_canvas_tasks_after_restart():
+    """恢复可查询状态，但绝不自动重提可能收费的上游任务。"""
+    interrupted = []
+    now = time.time()
+    with CANVAS_TASK_LOCK:
+        load_canvas_tasks(force=True)
+        for task in CANVAS_TASKS.values():
+            if task.get("status") not in {"queued", "running"}:
+                continue
+            task.update({
+                "status": "failed",
+                "interrupted": True,
+                "error": "服务重启中断了本地等待；任务未自动重提，以避免重复计费。",
+                "updated_at": now,
+            })
+            interrupted.append(dict(task))
+        if interrupted:
+            _save_canvas_tasks_locked()
+    if not interrupted:
+        return []
+    latest_events = {str(item.get("id") or ""): item for item in usage_events()}
+    for task in interrupted:
+        event = latest_events.get(str(task.get("usage_event_id") or ""))
+        if event and event.get("status") in {"queued", "running"}:
+            finish_usage_event(event, "failed", task["error"])
+    return interrupted
+
+def capture_canvas_upstream_task(provider, upstream_task_id, credential_kind="api_key", metadata=None):
+    canvas_task_id = str(ACTIVE_CANVAS_TASK_ID.get() or "").strip()
+    task_id = str(upstream_task_id or "").strip()
+    if not canvas_task_id or not task_id or not isinstance(provider, dict):
+        return
+    task = canvas_task_get(canvas_task_id)
+    if not task:
+        return
+    try:
+        context = upstream_context_for_profile_id(
+            task.get("api_profile_id"),
+            provider.get("id"),
+            user_id=task.get("user_id"),
+        )
+        save_upstream_task_scope(
+            task_id,
+            context,
+            user_id=task.get("user_id"),
+            usage_event_id=task.get("usage_event_id"),
+            credential_kind=credential_kind,
+            metadata={"kind": task.get("type"), **dict(metadata or {})},
+        )
+        canvas_task_update(canvas_task_id, {"upstream_task_id": task_id})
+    except Exception:
+        return
 
 class CanvasVideoRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=VIDEO_PROMPT_MAX_LENGTH)
@@ -5026,17 +5252,14 @@ def log_net_error(context, exc, url=""):
             pass
 
 def api_headers(json_body=True, provider=None, model=""):
-    if provider:
-        if is_codex_provider(provider) or is_gemini_cli_provider(provider):
-            raise HTTPException(status_code=400, detail="CLI 协议使用本机登录态，不需要 API Key。当前入口应走对应 CLI 专用通道。")
-        api_key = provider_env_key_value(provider["id"], provider.get("_api_profile_id"))
-        provider_name = provider.get("name") or provider["id"]
-        if not api_key:
-            raise HTTPException(status_code=400, detail=f"未配置 {provider_name} 的 API Key，请在 API 平台管理中填写。")
-    else:
-        api_key = AI_API_KEY
-        if not api_key:
-            raise HTTPException(status_code=400, detail="未配置 COMFLY_API_KEY，请在 API/.env 中填写。")
+    if not isinstance(provider, dict):
+        raise HTTPException(status_code=500, detail="上游请求头缺少运行时 provider 上下文。")
+    if is_codex_provider(provider) or is_gemini_cli_provider(provider):
+        raise HTTPException(status_code=400, detail="CLI 协议使用本机登录态，不需要 API Key。当前入口应走对应 CLI 专用通道。")
+    api_key = provider_env_key_value(provider["id"], provider.get("_api_profile_id"))
+    provider_name = provider.get("name") or provider["id"]
+    if not api_key:
+        raise HTTPException(status_code=400, detail=f"未配置 {provider_name} 的 API Key，请在 API 平台管理中填写。")
     if provider and effective_protocol(provider, model) == "gemini" and not is_apimart_provider(provider):
         headers = {"Accept": "application/json", "x-goog-api-key": api_key}
     else:
@@ -7758,6 +7981,7 @@ async def fetch_image_task_payload(client, task_id, provider=None):
     return response.json()
 
 async def wait_for_image_task(client, task_id, provider=None):
+    capture_canvas_upstream_task(provider, task_id, metadata={"kind": "image"})
     is_apimart = is_apimart_provider(provider)
     timeout = APIMART_IMAGE_TASK_TIMEOUT if is_apimart else IMAGE_TASK_TIMEOUT
     interval = APIMART_IMAGE_POLL_INTERVAL if is_apimart else IMAGE_POLL_INTERVAL
@@ -8859,22 +9083,30 @@ def asset_classification_prompt(extra_prompt=""):
         return base
     return base + "\n\n用户补充分类要求：\n" + extra[:4000]
 
-async def classify_image_with_provider(abs_path, provider_id="", model="", ms_model="", prompt=""):
+async def classify_image_with_provider(abs_path, provider_id="", model="", ms_model="", prompt="", upstream_context=None):
+    if not isinstance(upstream_context, UpstreamContext):
+        raise HTTPException(status_code=500, detail="素材分类缺少上游调用上下文。")
+    provider_id = upstream_context.provider_id
     text, resolved_model = await caption_image_with_provider(
         abs_path,
         asset_classification_prompt(prompt),
-        provider_id or get_primary_provider_id(),
+        provider_id,
         model,
         ms_model,
+        upstream_context,
     )
     classification = parse_asset_classification_text(text)
     classification["model"] = resolved_model
-    classification["provider"] = provider_id or get_primary_provider_id()
+    classification["provider"] = provider_id
     return classification
 
-async def classify_asset_image_best_effort(abs_path, provider_id="", model="", ms_model="", prompt=""):
+async def classify_asset_image_best_effort(abs_path, provider_id="", model="", ms_model="", prompt="", upstream_context=None):
+    if not isinstance(upstream_context, UpstreamContext):
+        return None
     try:
-        return await classify_image_with_provider(abs_path, provider_id, model, ms_model, prompt)
+        return await classify_image_with_provider(
+            abs_path, provider_id, model, ms_model, prompt, upstream_context
+        )
     except Exception as exc:
         print(f"素材智能分类失败: {exc}")
         return None
@@ -10568,10 +10800,14 @@ def volcengine_sign_v4_headers(ak: str, sk: str, action: str, body_str: str,
         "Authorization": authorization,
     }
 
-async def volcengine_ark_asset_call(client, action: str, body: Dict[str, Any]) -> Dict[str, Any]:
+async def volcengine_ark_asset_call(
+    client, action: str, body: Dict[str, Any], upstream_context: UpstreamContext
+) -> Dict[str, Any]:
     """调用一次火山 Ark Assets OpenAPI，返回 Result 内容；出错抛 HTTPException。"""
-    ak = volcengine_access_key_value()
-    sk = volcengine_secret_key_value()
+    if not isinstance(upstream_context, UpstreamContext) or upstream_context.provider_id != "volcengine":
+        raise HTTPException(status_code=500, detail="火山素材调用缺少正确的上游调用上下文。")
+    ak = upstream_context.volcengine_access_key
+    sk = upstream_context.volcengine_secret_key
     if not ak or not sk:
         raise HTTPException(status_code=400, detail="未配置火山引擎 AK/SK，请在 API 设置中填写 Access Key ID / Secret Access Key。")
     body_str = json.dumps(body, ensure_ascii=False)
@@ -10593,7 +10829,9 @@ async def volcengine_ark_asset_call(client, action: str, body: Dict[str, Any]) -
     result = payload.get("Result") if isinstance(payload, dict) and isinstance(payload.get("Result"), dict) else None
     return result if result is not None else (payload if isinstance(payload, dict) else {})
 
-async def volcengine_ensure_asset_group(client, project_name: str, group_name: str) -> str:
+async def volcengine_ensure_asset_group(
+    client, project_name: str, group_name: str, upstream_context: UpstreamContext
+) -> str:
     """复用同名素材组合，没有则新建。返回 GroupId。"""
     name = (group_name or "可信素材").strip()[:60] or "可信素材"
     project_name = (project_name or "default").strip() or "default"
@@ -10602,7 +10840,7 @@ async def volcengine_ensure_asset_group(client, project_name: str, group_name: s
         listed = await volcengine_ark_asset_call(client, "ListAssetGroups", {
             "Filter": {"Name": name, "GroupType": "AIGC"},
             "PageNumber": 1, "PageSize": 10, "ProjectName": project_name,
-        })
+        }, upstream_context)
         for item in (listed.get("Items") or []):
             if str(item.get("Name") or "").strip() == name and str(item.get("ProjectName") or "default") == project_name:
                 gid = str(item.get("Id") or "").strip()
@@ -10612,36 +10850,41 @@ async def volcengine_ensure_asset_group(client, project_name: str, group_name: s
         pass  # 查询失败不致命，继续走新建
     created = await volcengine_ark_asset_call(client, "CreateAssetGroup", {
         "Name": name, "Description": name, "ProjectName": project_name,
-    })
+    }, upstream_context)
     gid = str(created.get("Id") or "").strip()
     if not gid:
         raise HTTPException(status_code=502, detail=f"火山 CreateAssetGroup 未返回 GroupId：{str(created)[:200]}")
     return gid
 
 async def submit_volcengine_avatar_asset(public_url: str, name: str, kind: str,
-                                         project_name: str = "default", group_name: str = "") -> str:
+                                         project_name: str = "default", group_name: str = "",
+                                         upstream_context: UpstreamContext = None) -> str:
     """把公网可访问素材提交到火山 Ark 私域素材库（异步）。返回 Asset Id 作为任务 ID。"""
     async with httpx.AsyncClient(timeout=120) as client:
-        group_id = await volcengine_ensure_asset_group(client, project_name, group_name)
+        group_id = await volcengine_ensure_asset_group(
+            client, project_name, group_name, upstream_context
+        )
         created = await volcengine_ark_asset_call(client, "CreateAsset", {
             "GroupId": group_id,
             "URL": public_url,
             "AssetType": apimart_avatar_asset_type(kind),
             "Name": (name or "asset")[:60],
             "ProjectName": (project_name or "default").strip() or "default",
-        })
+        }, upstream_context)
     asset_id = str(created.get("Id") or "").strip()
     if not asset_id:
         raise HTTPException(status_code=502, detail=f"火山 CreateAsset 未返回 Asset Id：{str(created)[:200]}")
     return asset_id
 
-async def check_volcengine_avatar_task(asset_id: str, project_name: str = "default") -> Dict[str, Any]:
+async def check_volcengine_avatar_task(
+    asset_id: str, project_name: str = "default", upstream_context: UpstreamContext = None
+) -> Dict[str, Any]:
     """查询一次火山素材状态。返回 {status: Active/Processing/Failed, asset_uri, detail}。"""
     async with httpx.AsyncClient(timeout=60) as client:
         info = await volcengine_ark_asset_call(client, "GetAsset", {
             "Id": asset_id,
             "ProjectName": (project_name or "default").strip() or "default",
-        })
+        }, upstream_context)
     status = str(info.get("Status") or "").strip()
     if status == "Active":
         return {"status": "Active", "asset_uri": f"asset://{asset_id}", "detail": ""}
@@ -11361,11 +11604,181 @@ def runninghub_api_headers(provider, use_wallet=True):
 def runninghub_json_headers(provider, use_wallet=True):
     return runninghub_api_headers(provider, use_wallet=use_wallet)
 
-def runninghub_provider():
-    return get_api_provider_exact("runninghub")
+def runninghub_provider(api_profile_id):
+    return get_api_provider_exact("runninghub", api_profile_id)
 
-def runninghub_api_key(provider=None, use_wallet=False, prefer_wallet=False):
-    provider = provider or runninghub_provider()
+def runninghub_provider_for_request(request, allow_admin_selection=False):
+    return resolve_upstream_context(
+        request, "runninghub", allow_admin_selection=allow_admin_selection
+    ).provider
+
+def load_upstream_task_scopes():
+    raw = _read_json_file(UPSTREAM_TASK_SCOPES_FILE, {"version": 2, "tasks": {}})
+    tasks = raw.get("tasks") if isinstance(raw, dict) else {}
+    return {"version": 2, "tasks": tasks if isinstance(tasks, dict) else {}}
+
+def upstream_task_scope_key(api_profile_id, provider_id, task_id):
+    return "::".join(
+        urllib.parse.quote(str(value or "").strip(), safe="")
+        for value in (api_profile_id, provider_id, task_id)
+    )
+
+def save_upstream_task_scope(
+    task_id,
+    upstream_context: UpstreamContext,
+    user_id="",
+    usage_event_id="",
+    credential_kind="api_key",
+    metadata=None,
+):
+    if not isinstance(upstream_context, UpstreamContext):
+        raise HTTPException(status_code=500, detail="异步任务缺少上游调用上下文。")
+    task_key = str(task_id or "").strip()
+    profile_id = upstream_context.api_profile_id
+    if not task_key or not profile_id:
+        return
+    with UPSTREAM_TASK_SCOPE_LOCK:
+        data = load_upstream_task_scopes()
+        tasks = data["tasks"]
+        scope_key = upstream_task_scope_key(
+            profile_id, upstream_context.provider_id, task_key
+        )
+        tasks[scope_key] = {
+            "task_id": task_key,
+            "user_id": str(user_id or upstream_context.user_id or ""),
+            "api_profile_id": profile_id,
+            "provider_id": upstream_context.provider_id,
+            "credential_kind": str(credential_kind or "api_key"),
+            "metadata": dict(metadata or {}),
+            "usage_event_id": str(usage_event_id or ""),
+            "created_at": time.time(),
+        }
+        if len(tasks) > 10000:
+            oldest = sorted(tasks, key=lambda key: float((tasks.get(key) or {}).get("created_at") or 0))
+            for key in oldest[:len(tasks) - 10000]:
+                tasks.pop(key, None)
+        _write_json_file(UPSTREAM_TASK_SCOPES_FILE, data)
+
+def remember_upstream_task_scope(
+    request, task_id, upstream_context: UpstreamContext, credential_kind="api_key", metadata=None
+):
+    user = require_authenticated(request)
+    usage_event = getattr(request.state, "usage_event", None)
+    save_upstream_task_scope(
+        task_id,
+        upstream_context,
+        user_id=user.get("id"),
+        usage_event_id=usage_event.get("id") if isinstance(usage_event, dict) else "",
+        credential_kind=credential_kind,
+        metadata=metadata,
+    )
+
+def upstream_task_scope_for_request(request, task_id, provider_id="", allow_unknown=False):
+    user = require_authenticated(request)
+    task_key = str(task_id or "").strip()
+    expected_provider = str(provider_id or "").strip()
+    with UPSTREAM_TASK_SCOPE_LOCK:
+        tasks = load_upstream_task_scopes()["tasks"]
+        candidates = []
+        legacy = tasks.get(task_key)
+        if (
+            isinstance(legacy, dict)
+            and (
+                not expected_provider
+                or str(legacy.get("provider_id") or "") == expected_provider
+            )
+        ):
+            candidates.append(legacy)
+        for storage_key, item in tasks.items():
+            if not isinstance(item, dict) or item is legacy:
+                continue
+            stored_task_id = str(item.get("task_id") or "").strip()
+            if not stored_task_id and "::" not in str(storage_key):
+                stored_task_id = str(storage_key)
+            if stored_task_id != task_key:
+                continue
+            if expected_provider and str(item.get("provider_id") or "") != expected_provider:
+                continue
+            candidates.append(item)
+    if user.get("role") != "admin":
+        candidates = [
+            item for item in candidates
+            if str(item.get("user_id") or "") == str(user.get("id") or "")
+        ]
+    if len(candidates) > 1:
+        raise HTTPException(status_code=409, detail="任务 ID 对应多个提交上下文，无法安全确定上游账户。")
+    scope = candidates[0] if candidates else None
+    if not isinstance(scope, dict):
+        if allow_unknown or user.get("role") == "admin":
+            return {}
+        with UPSTREAM_TASK_SCOPE_LOCK:
+            exists_for_other_user = any(
+                isinstance(item, dict)
+                and str(item.get("task_id") or key) == task_key
+                and (not expected_provider or str(item.get("provider_id") or "") == expected_provider)
+                for key, item in tasks.items()
+            )
+        if exists_for_other_user:
+            raise HTTPException(status_code=403, detail="无权查询其他用户提交的异步任务。")
+        raise HTTPException(status_code=404, detail="未找到异步任务的提交上下文，无法安全确认任务所有者。")
+    return scope
+
+def upstream_context_for_task(
+    request, task_id, fallback_provider_id="", allow_admin_selection=False, allow_unknown=False
+):
+    scope = upstream_task_scope_for_request(
+        request, task_id, provider_id=fallback_provider_id, allow_unknown=allow_unknown
+    )
+    if not scope:
+        if not allow_unknown:
+            raise HTTPException(status_code=404, detail="未找到异步任务的上游调用上下文。")
+        return resolve_upstream_context(
+            request,
+            fallback_provider_id,
+            allow_admin_selection=allow_admin_selection,
+            allow_default=not bool(str(fallback_provider_id or "").strip()),
+        ), {}
+    context = upstream_context_for_profile_id(
+        scope.get("api_profile_id"),
+        str(scope.get("provider_id") or fallback_provider_id),
+        user_id=scope.get("user_id"),
+    )
+    return context, scope
+
+def load_runninghub_task_scopes():
+    return load_upstream_task_scopes()
+
+def remember_runninghub_task_scope(request, task_id, provider, use_wallet=False):
+    profile_id = str((provider or {}).get("_api_profile_id") or "").strip().lower()
+    context = upstream_context_for_profile_id(
+        profile_id, str((provider or {}).get("id") or "runninghub")
+    )
+    remember_upstream_task_scope(
+        request,
+        task_id,
+        context,
+        credential_kind="runninghub_wallet" if use_wallet else "api_key",
+        metadata={"use_wallet": bool(use_wallet)},
+    )
+
+def runninghub_task_provider_for_request(request, task_id, requested_use_wallet=False):
+    context, scope = upstream_context_for_task(
+        request,
+        task_id,
+        fallback_provider_id="runninghub",
+        allow_admin_selection=True,
+        allow_unknown=False,
+    )
+    metadata = scope.get("metadata") if isinstance(scope.get("metadata"), dict) else {}
+    use_wallet = (
+        bool(metadata.get("use_wallet"))
+        if scope else bool(requested_use_wallet)
+    )
+    return context.provider, use_wallet
+
+def runninghub_api_key(provider, use_wallet=False, prefer_wallet=False):
+    if not isinstance(provider, dict):
+        raise HTTPException(status_code=500, detail="RunningHub 调用缺少运行时 provider 上下文。")
     provider_id = (provider or {}).get("id") or "runninghub"
     profile_id = str((provider or {}).get("_api_profile_id") or "")
     free_key = str((provider or {}).get("api_key") or "").strip() or provider_env_key_value(provider_id, profile_id)
@@ -11379,7 +11792,8 @@ def runninghub_api_key(provider=None, use_wallet=False, prefer_wallet=False):
 
 def runninghub_app_headers(json_body=True, use_wallet=False, provider=None, include_authorization=True):
     headers = {"Host": "www.runninghub.cn"}
-    provider = provider or runninghub_provider()
+    if not isinstance(provider, dict):
+        raise HTTPException(status_code=500, detail="RunningHub 请求头缺少运行时 provider 上下文。")
     if provider and include_authorization:
         api_key = runninghub_api_key(provider, use_wallet=use_wallet)
         if api_key:
@@ -12290,6 +12704,12 @@ def runninghub_reference_reupload_needed(response, raw):
     return any(term in text for term in asset_terms) and any(term in text for term in invalid_terms)
 
 async def wait_for_runninghub_image_task(client, provider, task_id):
+    capture_canvas_upstream_task(
+        provider,
+        task_id,
+        credential_kind="runninghub_wallet",
+        metadata={"use_wallet": True},
+    )
     query_url = runninghub_openapi_url(provider, "query")
     deadline = time.monotonic() + 1800
     last_payload = None
@@ -12482,9 +12902,12 @@ def runninghub_entry_config_from_model(provider, model):
         return None
     if kind == "workflow":
         key = runninghub_workflow_store_key(entry_id)
+        profile_id = str(provider.get("_api_profile_id") or LEGACY_API_PROFILE_ID).strip().lower()
         with RUNNINGHUB_WORKFLOW_LOCK:
-            store = load_runninghub_workflow_store()
-        cfg = runninghub_select_workflow_config(store.get(key), runninghub_provider_workflow_config(key), key)
+            store = load_runninghub_workflow_store(profile_id)
+        cfg = runninghub_select_workflow_config(
+            store.get(key), runninghub_provider_workflow_config(key, provider), key
+        )
         if not isinstance(cfg, dict):
             # 退回到 provider 列表中的内联条目
             entry = next(
@@ -12544,15 +12967,15 @@ async def runninghub_upload_local_to_filename(client, provider, url, use_wallet=
     upload_url = runninghub_endpoint_url(provider, "/task/openapi/upload")
     files = {"file": (filename, content, content_type)}
     data = {"apiKey": api_key, "fileType": "input"}
-    response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet), data=data, files=files)
+    response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, provider), data=data, files=files)
     raw = response.json()
     if runninghub_should_retry_body_key_only(raw):
-        response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, include_authorization=False), data=data, files=files)
+        response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, provider, include_authorization=False), data=data, files=files)
         raw = response.json()
     if use_wallet and runninghub_should_retry_body_key_only(raw):
         response = await client.post(
             upload_url,
-            headers=runninghub_app_headers(False, use_wallet),
+            headers=runninghub_app_headers(False, use_wallet, provider),
             data=runninghub_wallet_bearer_body(data),
             files=files,
         )
@@ -12640,15 +13063,15 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             submit_url = runninghub_endpoint_url(provider, "/task/openapi/ai-app/run")
             body = {"apiKey": api_key, "webappId": entry_id, "nodeInfoList": node_info_list}
 
-        response = await client.post(submit_url, headers=runninghub_app_headers(True, use_wallet), json=body)
+        response = await client.post(submit_url, headers=runninghub_app_headers(True, use_wallet, provider), json=body)
         raw = response.json()
         if runninghub_should_retry_body_key_only(raw):
-            response = await client.post(submit_url, headers=runninghub_app_headers(True, use_wallet, include_authorization=False), json=body)
+            response = await client.post(submit_url, headers=runninghub_app_headers(True, use_wallet, provider, include_authorization=False), json=body)
             raw = response.json()
         if use_wallet and runninghub_should_retry_body_key_only(raw):
             response = await client.post(
                 submit_url,
-                headers=runninghub_app_headers(True, use_wallet),
+                headers=runninghub_app_headers(True, use_wallet, provider),
                 json=runninghub_wallet_bearer_body(body),
             )
             raw = response.json()
@@ -12663,15 +13086,15 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
         last_payload = None
         while time.monotonic() < deadline:
             await asyncio.sleep(2.5)
-            query_response = await client.post(query_url, headers=runninghub_app_headers(True, use_wallet), json={"apiKey": api_key, "taskId": task_id})
+            query_response = await client.post(query_url, headers=runninghub_app_headers(True, use_wallet, provider), json={"apiKey": api_key, "taskId": task_id})
             query_raw = query_response.json()
             if runninghub_should_retry_body_key_only(query_raw):
-                query_response = await client.post(query_url, headers=runninghub_app_headers(True, use_wallet, include_authorization=False), json={"apiKey": api_key, "taskId": task_id})
+                query_response = await client.post(query_url, headers=runninghub_app_headers(True, use_wallet, provider, include_authorization=False), json={"apiKey": api_key, "taskId": task_id})
                 query_raw = query_response.json()
             if use_wallet and runninghub_should_retry_body_key_only(query_raw):
                 query_response = await client.post(
                     query_url,
-                    headers=runninghub_app_headers(True, use_wallet),
+                    headers=runninghub_app_headers(True, use_wallet, provider),
                     json={"taskId": task_id},
                 )
                 query_raw = query_response.json()
@@ -12782,6 +13205,12 @@ async def generate_runninghub_provider_image(
         return runninghub_extract_image(result), result
 
 async def wait_for_runninghub_openapi_task(client, provider, task_id, output_kind=""):
+    capture_canvas_upstream_task(
+        provider,
+        task_id,
+        credential_kind="runninghub_wallet",
+        metadata={"use_wallet": True, "output_kind": output_kind},
+    )
     query_url = runninghub_openapi_url(provider, "query")
     deadline = time.monotonic() + 1800
     last_payload = None
@@ -13942,7 +14371,8 @@ def migrate_mislabeled_image_extensions():
         print(f"纠正图片扩展名(内容与后缀不符): {fixed} 个")
 
 @app.post("/api/local-assets/upload")
-async def upload_local_assets(files: List[UploadFile] = File(...), folder: str = Form("")):
+async def upload_local_assets(request: Request, files: List[UploadFile] = File(...), folder: str = Form("")):
+    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
     uploaded = []
     folder_rel, folder_abs = _local_upload_safe_folder(folder)
     os.makedirs(folder_abs, exist_ok=True)
@@ -13962,14 +14392,18 @@ async def upload_local_assets(files: List[UploadFile] = File(...), folder: str =
         with open(path, "wb") as f:
             f.write(content)
         if kind == "image":
-            classification = await classify_asset_image_best_effort(path)
+            classification = await classify_asset_image_best_effort(path, upstream_context=upstream_context)
             if classification:
                 _write_local_upload_classification(rel_name, classification)
         uploaded.append(_local_upload_item(rel_name))
     return {"files": uploaded}
 
 @app.post("/api/local-assets/import-urls")
-async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest):
+async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest, request: Request):
+    upstream_context = (
+        resolve_upstream_context(request, payload.provider, allow_default=not bool(str(payload.provider or "").strip()))
+        if payload.classify else None
+    )
     uploaded = []
     results = []
     folder_rel, folder_abs = _local_upload_safe_folder(payload.folder)
@@ -14030,7 +14464,9 @@ async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest):
                 with open(path, "wb") as f:
                     f.write(content)
                 if payload.classify and kind == "image":
-                    classification = await classify_asset_image_best_effort(path, payload.provider, payload.model, payload.ms_model, payload.prompt)
+                    classification = await classify_asset_image_best_effort(
+                        path, payload.provider, payload.model, payload.ms_model, payload.prompt, upstream_context
+                    )
                     if classification:
                         _write_local_upload_classification(rel_name, classification)
                 item = _local_upload_item(rel_name)
@@ -14184,7 +14620,10 @@ async def move_local_assets(payload: dict, request: Request):
     return {"ok": True, "moved": moved, "items": items, "tree": tree}
 
 @app.post("/api/local-assets/caption")
-async def caption_local_assets(payload: LocalAssetCaptionRequest):
+async def caption_local_assets(payload: LocalAssetCaptionRequest, request: Request):
+    upstream_context = resolve_upstream_context(
+        request, payload.provider, allow_default=not bool(str(payload.provider or "").strip())
+    )
     prompt = (payload.prompt or "描述图片").strip() or "描述图片"
     items = []
     ok_count = 0
@@ -14203,6 +14642,7 @@ async def caption_local_assets(payload: LocalAssetCaptionRequest):
                 payload.provider,
                 payload.model,
                 payload.ms_model,
+                upstream_context,
             )
             txt_path = _local_upload_caption_path(filename)
             with open(txt_path, "w", encoding="utf-8", newline="") as f:
@@ -14223,7 +14663,10 @@ async def caption_local_assets(payload: LocalAssetCaptionRequest):
     return {"ok": True, "count": ok_count, "items": items}
 
 @app.post("/api/local-assets/classify")
-async def classify_local_assets(payload: LocalAssetClassifyRequest):
+async def classify_local_assets(payload: LocalAssetClassifyRequest, request: Request):
+    upstream_context = resolve_upstream_context(
+        request, payload.provider, allow_default=not bool(str(payload.provider or "").strip())
+    )
     items = []
     ok_count = 0
     for name in (payload.names or [])[:80]:
@@ -14241,6 +14684,7 @@ async def classify_local_assets(payload: LocalAssetClassifyRequest):
                 payload.model,
                 payload.ms_model,
                 payload.prompt,
+                upstream_context,
             )
             _write_local_upload_classification(filename, classification)
             item.update({
@@ -14293,16 +14737,16 @@ async def import_local_ai_reference(payload: LocalImageImportRequest, request: R
     return {"files": [import_local_image_file(normalize_local_image_path(path)) for path in requested]}
 
 @app.get("/api/runninghub/app-info")
-async def runninghub_app_info(webappId: str = ""):
+async def runninghub_app_info(request: Request, webappId: str = ""):
     webapp_id = str(webappId or "").strip()
     if not webapp_id:
         raise HTTPException(status_code=400, detail="webappId 必填")
-    provider = runninghub_provider()
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
     api_key = runninghub_api_key(provider)
     url = runninghub_endpoint_url(provider, f"/api/webapp/apiCallDemo?apiKey={urllib.parse.quote(api_key)}&webappId={urllib.parse.quote(webapp_id)}")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=20.0)) as client:
         try:
-            response = await client.get(url, headers=runninghub_app_headers(False))
+            response = await client.get(url, headers=runninghub_app_headers(False, provider=provider))
             raw = response.json()
         except httpx.HTTPStatusError as exc:
             raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500]) from exc
@@ -14316,11 +14760,11 @@ async def runninghub_app_info(webappId: str = ""):
     return {"success": True, "data": data or {}}
 
 @app.post("/api/runninghub/submit")
-async def runninghub_submit(payload: RunningHubSubmitRequest):
+async def runninghub_submit(payload: RunningHubSubmitRequest, request: Request):
     webapp_id = str(payload.webappId or "").strip()
     if not webapp_id:
         raise HTTPException(status_code=400, detail="webappId 必填")
-    provider = runninghub_provider()
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
     api_key = runninghub_api_key(provider, use_wallet=payload.useWallet)
     body = {
         "apiKey": api_key,
@@ -14333,15 +14777,15 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
     url = runninghub_endpoint_url(provider, "/task/openapi/ai-app/run")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=180.0, write=120.0, pool=20.0)) as client:
         try:
-            response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet), json=body)
+            response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, provider), json=body)
             raw = response.json()
             if runninghub_should_retry_body_key_only(raw):
-                response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, include_authorization=False), json=body)
+                response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, provider, include_authorization=False), json=body)
                 raw = response.json()
             if payload.useWallet and runninghub_should_retry_body_key_only(raw):
                 response = await client.post(
                     url,
-                    headers=runninghub_app_headers(True, payload.useWallet),
+                    headers=runninghub_app_headers(True, payload.useWallet, provider),
                     json=runninghub_wallet_bearer_body(body),
                 )
                 raw = response.json()
@@ -14353,15 +14797,16 @@ async def runninghub_submit(payload: RunningHubSubmitRequest):
         task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
         if not task_id:
             raise HTTPException(status_code=502, detail=f"RunningHub 未返回 taskId：{raw}")
+        remember_runninghub_task_scope(request, task_id, provider, payload.useWallet)
         return {"success": True, "data": {"taskId": task_id, "raw": raw}}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 提交失败：{raw}")
 
 @app.post("/api/runninghub/workflow-submit")
-async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
+async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest, request: Request):
     workflow_id = str(payload.workflowId or "").strip()
     if not workflow_id:
         raise HTTPException(status_code=400, detail="workflowId 必填")
-    provider = runninghub_provider()
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
     api_key = runninghub_api_key(provider, use_wallet=payload.useWallet)
     body = {
         "apiKey": api_key,
@@ -14379,15 +14824,15 @@ async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
     url = runninghub_endpoint_url(provider, "/task/openapi/create")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=180.0, write=120.0, pool=20.0)) as client:
         try:
-            response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet), json=body)
+            response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, provider), json=body)
             raw = response.json()
             if runninghub_should_retry_body_key_only(raw):
-                response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, include_authorization=False), json=body)
+                response = await client.post(url, headers=runninghub_app_headers(True, payload.useWallet, provider, include_authorization=False), json=body)
                 raw = response.json()
             if payload.useWallet and runninghub_should_retry_body_key_only(raw):
                 response = await client.post(
                     url,
-                    headers=runninghub_app_headers(True, payload.useWallet),
+                    headers=runninghub_app_headers(True, payload.useWallet, provider),
                     json=runninghub_wallet_bearer_body(body),
                 )
                 raw = response.json()
@@ -14399,21 +14844,22 @@ async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest):
         task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
         if not task_id:
             raise HTTPException(status_code=502, detail=f"RunningHub 工作流未返回 taskId：{raw}")
+        remember_runninghub_task_scope(request, task_id, provider, payload.useWallet)
         return {"success": True, "data": {"taskId": task_id, "raw": raw}}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 工作流提交失败：{raw}")
 
 @app.get("/api/runninghub/workflow-info")
-async def runninghub_workflow_info(workflowId: str = ""):
+async def runninghub_workflow_info(request: Request, workflowId: str = ""):
     workflow_id = str(workflowId or "").strip()
     if not workflow_id:
         raise HTTPException(status_code=400, detail="workflowId 必填")
-    provider = runninghub_provider()
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
     api_key = runninghub_api_key(provider)
     url = runninghub_endpoint_url(provider, "/api/openapi/getJsonApiFormat")
     body = {"apiKey": api_key, "workflowId": workflow_id}
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=180.0, write=60.0, pool=20.0)) as client:
         try:
-            response = await client.post(url, headers=runninghub_app_headers(True), json=body)
+            response = await client.post(url, headers=runninghub_app_headers(True, provider=provider), json=body)
             raw = response.json()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"拉取 RunningHub 工作流参数失败：{exc}") from exc
@@ -14435,32 +14881,25 @@ async def runninghub_workflow_info(workflowId: str = ""):
     return {"success": True, "data": {"workflowId": workflow_id, "nodeInfoList": node_info_list, "raw": raw}}
 
 @app.get("/api/runninghub/workflows")
-def list_runninghub_workflows():
-    providers = load_api_providers()
-    hidden_ids = runninghub_saved_hidden_workflow_ids()
-    for provider in providers:
-        if provider.get("id") != "runninghub":
-            continue
-        for entry in provider.get("rh_workflows") or []:
-            workflow_id = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
-            if workflow_id and entry.get("hidden") is True:
-                hidden_ids.add(workflow_id)
+def list_runninghub_workflows(request: Request):
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
+    profile_id = str(provider.get("_api_profile_id") or "").strip().lower()
+    hidden_ids = runninghub_saved_hidden_workflow_ids(provider)
     with RUNNINGHUB_WORKFLOW_LOCK:
-        store = load_runninghub_workflow_store()
+        store = load_runninghub_workflow_store(profile_id)
     merged = {workflow_id: cfg for workflow_id, cfg in store.items() if isinstance(cfg, dict) and workflow_id not in hidden_ids}
-    for provider in providers:
-        if provider.get("id") != "runninghub":
+    for entry in provider.get("rh_workflows") or []:
+        workflow_id = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
+        if not workflow_id:
             continue
-        for entry in provider.get("rh_workflows") or []:
-            workflow_id = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
-            if not workflow_id:
-                continue
-            if entry.get("hidden") is True:
-                merged.pop(workflow_id, None)
-                continue
-            provider_cfg = runninghub_provider_workflow_config(workflow_id)
-            if provider_cfg:
-                merged[workflow_id] = runninghub_select_workflow_config(merged.get(workflow_id), provider_cfg, workflow_id)
+        if entry.get("hidden") is True:
+            merged.pop(workflow_id, None)
+            continue
+        provider_cfg = runninghub_provider_workflow_config(workflow_id, provider)
+        if provider_cfg:
+            merged[workflow_id] = runninghub_select_workflow_config(
+                merged.get(workflow_id), provider_cfg, workflow_id
+            )
     items = []
     for workflow_id, cfg in merged.items():
         if not isinstance(cfg, dict):
@@ -14476,31 +14915,33 @@ def list_runninghub_workflows():
     return {"workflows": items}
 
 @app.get("/api/runninghub/workflows/{workflow_id:path}")
-def get_runninghub_workflow(workflow_id: str):
+def get_runninghub_workflow(workflow_id: str, request: Request):
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
+    profile_id = str(provider.get("_api_profile_id") or "").strip().lower()
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         raise HTTPException(status_code=400, detail="workflowId 必填")
     with RUNNINGHUB_WORKFLOW_LOCK:
-        store = load_runninghub_workflow_store()
+        store = load_runninghub_workflow_store(profile_id)
     cfg = store.get(key)
-    provider_cfg = runninghub_provider_workflow_config(key)
+    provider_cfg = runninghub_provider_workflow_config(key, provider)
     cfg = runninghub_select_workflow_config(cfg, provider_cfg, key)
     if not isinstance(cfg, dict):
         raise HTTPException(status_code=404, detail="RunningHub 工作流未找到")
     return {"workflow": cfg}
 
 @app.post("/api/runninghub/workflows/fetch")
-async def fetch_runninghub_workflow(payload: RunningHubWorkflowConfig):
+async def fetch_runninghub_workflow(payload: RunningHubWorkflowConfig, request: Request):
     workflow_id = runninghub_workflow_store_key(payload.workflowId)
     if not workflow_id:
         raise HTTPException(status_code=400, detail="workflowId 必填")
-    provider = runninghub_provider()
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
     api_key = runninghub_api_key(provider)
     url = runninghub_endpoint_url(provider, "/api/openapi/getJsonApiFormat")
     body = {"apiKey": api_key, "workflowId": workflow_id}
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=180.0, write=60.0, pool=20.0)) as client:
         try:
-            response = await client.post(url, headers=runninghub_app_headers(True), json=body)
+            response = await client.post(url, headers=runninghub_app_headers(True, provider=provider), json=body)
             raw = response.json()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Failed to fetch RunningHub workflow parameters: {exc}") from exc
@@ -14522,7 +14963,9 @@ async def fetch_runninghub_workflow(payload: RunningHubWorkflowConfig):
     return {"success": True, "data": {"workflowId": workflow_id, "title": payload.title or workflow_id, "description": payload.description or "", "fields": fields, "workflowJson": workflow_json, "raw": raw}}
 
 @app.put("/api/runninghub/workflows/{workflow_id:path}")
-def save_runninghub_workflow(workflow_id: str, payload: RunningHubWorkflowConfig):
+def save_runninghub_workflow(workflow_id: str, payload: RunningHubWorkflowConfig, request: Request):
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
+    profile_id = str(provider.get("_api_profile_id") or "").strip().lower()
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         raise HTTPException(status_code=400, detail="workflowId 必填")
@@ -14541,46 +14984,48 @@ def save_runninghub_workflow(workflow_id: str, payload: RunningHubWorkflowConfig
         "updatedAt": now_ms(),
     }
     with RUNNINGHUB_WORKFLOW_LOCK:
-        store = load_runninghub_workflow_store()
+        store = load_runninghub_workflow_store(profile_id)
         store[key] = cfg
-        save_runninghub_workflow_store(store)
-    sync_runninghub_workflow_to_provider(cfg)
+        save_runninghub_workflow_store(store, profile_id)
+    sync_runninghub_workflow_to_provider(cfg, profile_id)
     return {"success": True, "workflow": cfg}
 
 @app.delete("/api/runninghub/workflows/{workflow_id:path}")
-def delete_runninghub_workflow(workflow_id: str):
+def delete_runninghub_workflow(workflow_id: str, request: Request):
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
+    profile_id = str(provider.get("_api_profile_id") or "").strip().lower()
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         raise HTTPException(status_code=400, detail="workflowId 必填")
     with RUNNINGHUB_WORKFLOW_LOCK:
-        store = load_runninghub_workflow_store()
-        provider_cfg = runninghub_provider_workflow_config(key)
+        store = load_runninghub_workflow_store(profile_id)
+        provider_cfg = runninghub_provider_workflow_config(key, provider)
         if key not in store and not provider_cfg:
             raise HTTPException(status_code=404, detail="RunningHub 工作流未找到")
         store.pop(key, None)
-        save_runninghub_workflow_store(store)
-    remove_runninghub_workflow_from_provider(key)
+        save_runninghub_workflow_store(store, profile_id)
+    remove_runninghub_workflow_from_provider(key, profile_id)
     return {"success": True}
 
 @app.get("/api/runninghub/query")
-async def runninghub_query(taskId: str = "", useWallet: bool = False):
+async def runninghub_query(request: Request, taskId: str = "", useWallet: bool = False):
     task_id = str(taskId or "").strip()
     if not task_id:
         raise HTTPException(status_code=400, detail="taskId 必填")
-    provider = runninghub_provider()
-    api_key = runninghub_api_key(provider, use_wallet=useWallet)
+    provider, effective_use_wallet = runninghub_task_provider_for_request(request, task_id, useWallet)
+    api_key = runninghub_api_key(provider, use_wallet=effective_use_wallet)
     url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=240.0, write=30.0, pool=20.0)) as client:
         try:
-            response = await client.post(url, headers=runninghub_app_headers(True, useWallet), json={"apiKey": api_key, "taskId": task_id})
+            response = await client.post(url, headers=runninghub_app_headers(True, effective_use_wallet, provider), json={"apiKey": api_key, "taskId": task_id})
             raw = response.json()
             if runninghub_should_retry_body_key_only(raw):
-                response = await client.post(url, headers=runninghub_app_headers(True, useWallet, include_authorization=False), json={"apiKey": api_key, "taskId": task_id})
+                response = await client.post(url, headers=runninghub_app_headers(True, effective_use_wallet, provider, include_authorization=False), json={"apiKey": api_key, "taskId": task_id})
                 raw = response.json()
-            if useWallet and runninghub_should_retry_body_key_only(raw):
+            if effective_use_wallet and runninghub_should_retry_body_key_only(raw):
                 response = await client.post(
                     url,
-                    headers=runninghub_app_headers(True, useWallet),
+                    headers=runninghub_app_headers(True, effective_use_wallet, provider),
                     json={"taskId": task_id},
                 )
                 raw = response.json()
@@ -14612,11 +15057,11 @@ async def runninghub_query(taskId: str = "", useWallet: bool = False):
         return {"success": True, "data": {"status": status, "urls": urls, "image_items": image_items, "failReason": runninghub_fail_reason(raw), "code": code, "raw": raw}}
 
 @app.post("/api/runninghub/upload-asset")
-async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest):
+async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest, request: Request):
     source_url = rewrite_runninghub_file_url(str(payload.url or "").strip())
     if not source_url:
         raise HTTPException(status_code=400, detail="url 必填")
-    provider = runninghub_provider()
+    provider = runninghub_provider_for_request(request, allow_admin_selection=True)
     api_key = runninghub_api_key(provider, use_wallet=payload.useWallet)
     filename = "asset.bin"
     content_type = "application/octet-stream"
@@ -14643,15 +15088,15 @@ async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest):
         files = {"file": (filename, content, content_type)}
         data = {"apiKey": api_key, "fileType": "input"}
         try:
-            response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet), data=data, files=files)
+            response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet, provider), data=data, files=files)
             raw = response.json()
             if runninghub_should_retry_body_key_only(raw):
-                response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet, include_authorization=False), data=data, files=files)
+                response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet, provider, include_authorization=False), data=data, files=files)
                 raw = response.json()
             if payload.useWallet and runninghub_should_retry_body_key_only(raw):
                 response = await client.post(
                     upload_url,
-                    headers=runninghub_app_headers(False, payload.useWallet),
+                    headers=runninghub_app_headers(False, payload.useWallet, provider),
                     data=runninghub_wallet_bearer_body(data),
                     files=files,
                 )
@@ -14804,7 +15249,13 @@ async def gemini_cli_help(payload: GeminiCliHelpRequest):
 async def jimeng_status():
     exe = jimeng_cli_executable()
     if not exe:
-        return {"installed": False, "logged_in": False, "message": "未找到 dreamina CLI"}
+        return {
+            "installed": False,
+            "logged_in": False,
+            "billing_scope": "local/shared",
+            "account_isolated": False,
+            "message": "未找到 dreamina CLI",
+        }
     version, version_text = await jimeng_cli_version()
     version_str = ".".join(str(part) for part in version) if version else None
     version_ok = version >= JIMENG_MIN_CLI_VERSION if version else None
@@ -14814,7 +15265,8 @@ async def jimeng_status():
         return {
             "installed": True,
             "logged_in": True,
-            "raw": raw,
+            "billing_scope": "local/shared",
+            "account_isolated": False,
             "cli_version": version_str,
             "version_ok": version_ok,
             "min_version": min_version_str,
@@ -14823,6 +15275,8 @@ async def jimeng_status():
         return {
             "installed": True,
             "logged_in": False,
+            "billing_scope": "local/shared",
+            "account_isolated": False,
             "message": str(exc.detail),
             "cli_version": version_str,
             "version_ok": version_ok,
@@ -14830,7 +15284,8 @@ async def jimeng_status():
         }
 
 @app.get("/api/jimeng/credit")
-async def jimeng_credit():
+async def jimeng_credit(request: Request):
+    require_admin(request)
     raw = await run_jimeng_cli(["user_credit"], timeout=30)
     return {"success": True, "raw": raw}
 
@@ -14888,7 +15343,8 @@ async def jimeng_login_start():
     }
 
 @app.get("/api/jimeng/login/status")
-async def jimeng_login_status():
+async def jimeng_login_status(request: Request):
+    require_admin(request)
     proc = JIMENG_LOGIN_SESSION.get("proc")
     text = jimeng_login_text()
     running = proc is not None and getattr(proc, "returncode", None) is None
@@ -14923,12 +15379,15 @@ async def jimeng_help(payload: JimengHelpRequest):
     return {"success": True, "command": command, "text": text, "raw": raw}
 
 @app.post("/api/jimeng/query-media")
-async def jimeng_query_media(payload: JimengQueryMediaRequest):
+async def jimeng_query_media(payload: JimengQueryMediaRequest, request: Request):
     """按 submit_id 续查即梦任务：出图返回 succeeded+urls；仍排队返回 pending+queue_info；失败返回 failed。
     供画布「排队中」卡片自动轮询与手动查询复用。"""
     submit_id = str(payload.submit_id or "").strip()
     if not submit_id:
         raise HTTPException(status_code=400, detail="缺少 submit_id")
+    upstream_task_scope_for_request(
+        request, submit_id, provider_id="jimeng", allow_unknown=False
+    )
     kind = str(payload.kind or "image").strip().lower()
     if kind not in ("image", "video", "audio"):
         kind = "image"
@@ -15230,7 +15689,7 @@ def api_key_from_payload(payload, protocol: str = ""):
         if value:
             return value
     if protocol == "volcengine":
-        return volcengine_provider_api_key("")
+        return volcengine_provider_api_key("", api_profile_id)
     return ""
 
 def upstream_models_url(base_url: str, protocol: str):
@@ -15835,7 +16294,7 @@ async def fetch_upstream_models(provider_id: str, request: Request):
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
     return await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
 
-async def build_online_image_result(payload: OnlineImageRequest, api_profile_id=""):
+async def build_online_image_result(payload: OnlineImageRequest, api_profile_id="", user_id=""):
     provider = get_api_provider(payload.provider_id, api_profile_id)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
     model = selected_model(payload.model, default_model)
@@ -15906,30 +16365,66 @@ async def build_online_image_result(payload: OnlineImageRequest, api_profile_id=
     }
     save_to_history(result)
     if GLOBAL_LOOP:
-        asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(result), GLOBAL_LOOP)
+        asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(result, user_id), GLOBAL_LOOP)
     return result
 
 @app.post("/api/online-image")
 async def online_image(payload: OnlineImageRequest, request: Request):
     event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n})
     request.state.usage_event = event
-    result = await build_online_image_result(payload, event.get("api_profile_id"))
+    result = await build_online_image_result(
+        payload, event.get("api_profile_id"), event.get("user_id")
+    )
     result["usage_event_id"] = event["id"]
     return result
 
 @app.post("/api/image-task-query")
 async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
-    profile = request_api_profile(request)
-    provider = get_api_provider(payload.provider_id, profile["id"])
     task_id = str(payload.task_id or "").strip()
+    upstream_context, _task_scope = upstream_context_for_task(
+        request,
+        task_id,
+        fallback_provider_id=payload.provider_id,
+        allow_unknown=False,
+    )
+    provider = upstream_context.provider
     if is_runninghub_provider(provider):
-        api_key = runninghub_api_key(provider)
+        task_metadata = (
+            _task_scope.get("metadata")
+            if isinstance(_task_scope.get("metadata"), dict) else {}
+        )
+        use_wallet = (
+            str(_task_scope.get("credential_kind") or "") == "runninghub_wallet"
+            or bool(task_metadata.get("use_wallet"))
+        )
+        api_key = runninghub_api_key(provider, use_wallet=use_wallet)
         url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=240.0, write=30.0, pool=20.0)) as client:
-                response = await client.post(url, headers=runninghub_app_headers(True), json={"apiKey": api_key, "taskId": task_id})
-                response.raise_for_status()
+                body = {"apiKey": api_key, "taskId": task_id}
+                response = await client.post(
+                    url,
+                    headers=runninghub_app_headers(True, use_wallet, provider),
+                    json=body,
+                )
                 raw = response.json()
+                if runninghub_should_retry_body_key_only(raw):
+                    response = await client.post(
+                        url,
+                        headers=runninghub_app_headers(
+                            True, use_wallet, provider, include_authorization=False
+                        ),
+                        json=body,
+                    )
+                    raw = response.json()
+                if use_wallet and runninghub_should_retry_body_key_only(raw):
+                    response = await client.post(
+                        url,
+                        headers=runninghub_app_headers(True, use_wallet, provider),
+                        json={"taskId": task_id},
+                    )
+                    raw = response.json()
+                response.raise_for_status()
                 code = raw.get("code") if isinstance(raw, dict) else None
                 if code in (0, "0"):
                     local_urls = []
@@ -15959,7 +16454,14 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
                     }
                     save_to_history(result)
                     if GLOBAL_LOOP:
-                        asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(result), GLOBAL_LOOP)
+                        asyncio.run_coroutine_threadsafe(
+                            manager.broadcast_new_image(
+                                result,
+                                _task_scope.get("user_id")
+                                or require_authenticated(request).get("id"),
+                            ),
+                            GLOBAL_LOOP,
+                        )
                     return result
                 if code in (805, "805"):
                     return {
@@ -16026,7 +16528,14 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
         }
         save_to_history(result)
         if GLOBAL_LOOP:
-            asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(result), GLOBAL_LOOP)
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast_new_image(
+                    result,
+                    _task_scope.get("user_id")
+                    or require_authenticated(request).get("id"),
+                ),
+                GLOBAL_LOOP,
+            )
         return result
     if status in IMAGE_TASK_FAILED_STATUSES:
         return {
@@ -16047,119 +16556,160 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
     }
 
 async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event=None, api_profile_id=""):
-    with CANVAS_TASK_LOCK:
-        if task_id in CANVAS_TASKS:
-            CANVAS_TASKS[task_id]["status"] = "running"
-            CANVAS_TASKS[task_id]["updated_at"] = time.time()
+    canvas_task_update(task_id, {"status": "running"})
+    capture_token = ACTIVE_CANVAS_TASK_ID.set(task_id)
     try:
-        result = await build_online_image_result(payload, api_profile_id)
+        result = await build_online_image_result(
+            payload, api_profile_id, (event or {}).get("user_id", "")
+        )
         if event:
             result["usage_event_id"] = event["id"]
             finish_usage_event(event, "succeeded", raw_usage=result.get("raw_usage"))
-        with CANVAS_TASK_LOCK:
-            CANVAS_TASKS[task_id].update({
-                "status": "succeeded",
-                "result": result,
-                "error": "",
-                "updated_at": time.time(),
-            })
+        canvas_task_update(task_id, {
+            "status": "succeeded",
+            "result": result,
+            "error": "",
+        })
     except JimengPendingError as exc:
         if event:
             finish_usage_event(event, "queued")
+        try:
+            context = upstream_context_for_profile_id(
+                api_profile_id,
+                payload.provider_id,
+                user_id=(event or {}).get("user_id", ""),
+            )
+            save_upstream_task_scope(
+                exc.submit_id,
+                context,
+                user_id=(event or {}).get("user_id", ""),
+                usage_event_id=(event or {}).get("id", ""),
+                metadata={"kind": f"jimeng-{exc.kind}"},
+            )
+        except Exception:
+            pass
         # 即梦云端还在排队：标记为 jimeng_pending，前端据 submit_id 持久续查（任务未丢失）
         info = jimeng_pending_payload(exc)
-        with CANVAS_TASK_LOCK:
-            CANVAS_TASKS[task_id].update({
-                "status": "jimeng_pending",
-                "jimeng_pending": True,
-                "submit_id": exc.submit_id,
-                "kind": exc.kind,
-                "queue_info": exc.queue_info,
-                "message": info["message"],
-                "error": "",
-                "updated_at": time.time(),
-            })
+        canvas_task_update(task_id, {
+            "status": "jimeng_pending",
+            "jimeng_pending": True,
+            "submit_id": exc.submit_id,
+            "kind": exc.kind,
+            "queue_info": exc.queue_info,
+            "message": info["message"],
+            "error": "",
+        })
     except Exception as exc:
         if event:
             finish_usage_event(event, "failed", getattr(exc, "detail", None) or str(exc))
         detail = getattr(exc, "detail", None) or str(exc)
         status_code = getattr(exc, "status_code", 500)
         upstream_task_id = getattr(exc, "upstream_task_id", "") or extract_task_id_from_text(detail)
-        with CANVAS_TASK_LOCK:
-            CANVAS_TASKS[task_id].update({
-                "status": "failed",
-                "error": str(detail),
-                "status_code": status_code,
-                "upstream_task_id": upstream_task_id,
-                "updated_at": time.time(),
-            })
+        if upstream_task_id:
+            try:
+                context = upstream_context_for_profile_id(
+                    api_profile_id,
+                    payload.provider_id,
+                    user_id=(event or {}).get("user_id", ""),
+                )
+                use_wallet = (
+                    context.provider_id == "runninghub"
+                    and not bool(runninghub_entry_config_from_model(context.provider, payload.model))
+                )
+                save_upstream_task_scope(
+                    upstream_task_id,
+                    context,
+                    user_id=(event or {}).get("user_id", ""),
+                    usage_event_id=(event or {}).get("id", ""),
+                    credential_kind="runninghub_wallet" if use_wallet else "api_key",
+                    metadata={
+                        "kind": "image-recovery",
+                        "model": payload.model,
+                        "use_wallet": use_wallet,
+                    },
+                )
+            except Exception:
+                pass
+        canvas_task_update(task_id, {
+            "status": "failed",
+            "error": str(detail),
+            "status_code": status_code,
+            "upstream_task_id": upstream_task_id,
+        })
+    finally:
+        ACTIVE_CANVAS_TASK_ID.reset(capture_token)
 
 @app.post("/api/canvas-image-tasks")
 async def create_canvas_image_task(payload: OnlineImageRequest, request: Request):
     event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n, "entry": "canvas"})
     request.state.usage_event = event
     request.state.usage_async = True
+    upstream_context = upstream_context_for_profile_id(
+        event.get("api_profile_id", ""),
+        payload.provider_id,
+        user_id=event.get("user_id", ""),
+        allow_default=not bool(str(payload.provider_id or "").strip()),
+    )
     task_id = f"canvas_img_{uuid.uuid4().hex}"
-    with CANVAS_TASK_LOCK:
-        CANVAS_TASKS[task_id] = {
-            "id": task_id,
-            "type": "online-image",
-            "status": "queued",
-            "created_at": time.time(),
-            "updated_at": time.time(),
-            "result": None,
-            "error": "",
-            "provider_id": payload.provider_id,
-            "api_profile_id": event.get("api_profile_id", ""),
-            "model": payload.model,
-            "user_id": event["user_id"],
-            "usage_event_id": event["id"],
-        }
+    canvas_task_create({
+        "id": task_id,
+        "type": "online-image",
+        "status": "queued",
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "result": None,
+        "error": "",
+        "provider_id": upstream_context.provider_id,
+        "api_profile_id": upstream_context.api_profile_id,
+        "model": payload.model,
+        "user_id": event["user_id"],
+        "usage_event_id": event["id"],
+    })
+    remember_upstream_task_scope(
+        request,
+        task_id,
+        upstream_context,
+        metadata={"kind": "canvas-image", "model": payload.model},
+    )
     asyncio.create_task(run_canvas_image_task(task_id, payload, event, event.get("api_profile_id", "")))
     return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
 
 @app.get("/api/canvas-image-tasks/{task_id}")
 async def get_canvas_image_task(task_id: str, request: Request):
-    with CANVAS_TASK_LOCK:
-        task = dict(CANVAS_TASKS.get(task_id) or {})
+    task = canvas_task_get(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="画布任务不存在，可能服务已重启或任务已过期")
+        raise HTTPException(status_code=404, detail="画布任务不存在或已超过保留期限")
     user = require_authenticated(request)
     if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
         raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
     return task
 
 async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest, event=None):
-    with CANVAS_TASK_LOCK:
-        if task_id in CANVAS_TASKS:
-            CANVAS_TASKS[task_id]["status"] = "running"
-            CANVAS_TASKS[task_id]["updated_at"] = time.time()
+    canvas_task_update(task_id, {"status": "running"})
     try:
-        result = await asyncio.to_thread(generate, payload)
+        result = await asyncio.to_thread(
+            generate, payload, None, str((event or {}).get("user_id") or "")
+        )
         if isinstance(result, dict) and result.get("error"):
             raise RuntimeError(str(result.get("error") or "ComfyUI 生成失败"))
         if event:
             result["usage_event_id"] = event["id"]
             finish_usage_event(event, "succeeded")
-        with CANVAS_TASK_LOCK:
-            CANVAS_TASKS[task_id].update({
-                "status": "succeeded",
-                "result": result,
-                "error": "",
-                "updated_at": time.time(),
-            })
+        canvas_task_update(task_id, {
+            "status": "succeeded",
+            "result": result,
+            "error": "",
+        })
     except Exception as exc:
         if event:
             finish_usage_event(event, "failed", getattr(exc, "detail", None) or str(exc))
         detail = getattr(exc, "detail", None) or str(exc)
         status_code = getattr(exc, "status_code", 500)
-        with CANVAS_TASK_LOCK:
-            CANVAS_TASKS[task_id].update({
-                "status": "failed",
-                "error": str(detail),
-                "status_code": status_code,
-                "updated_at": time.time(),
-            })
+        canvas_task_update(task_id, {
+            "status": "failed",
+            "error": str(detail),
+            "status_code": status_code,
+        })
 
 @app.post("/api/canvas-comfy-tasks")
 async def create_canvas_comfy_task(payload: GenerateRequest, request: Request):
@@ -16167,29 +16717,28 @@ async def create_canvas_comfy_task(payload: GenerateRequest, request: Request):
     request.state.usage_event = event
     request.state.usage_async = True
     task_id = f"canvas_comfy_{uuid.uuid4().hex}"
-    with CANVAS_TASK_LOCK:
-        CANVAS_TASKS[task_id] = {
-            "id": task_id,
-            "type": "comfy",
-            "status": "queued",
-            "created_at": time.time(),
-            "updated_at": time.time(),
-            "result": None,
-            "error": "",
-            "workflow_json": payload.workflow_json,
-            "api_profile_id": event.get("api_profile_id", ""),
-            "user_id": event["user_id"],
-            "usage_event_id": event["id"],
-        }
+    canvas_task_create({
+        "id": task_id,
+        "type": "comfy",
+        "status": "queued",
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "result": None,
+        "error": "",
+        "workflow_json": payload.workflow_json,
+        "api_profile_id": event.get("api_profile_id", ""),
+        "user_id": event["user_id"],
+        "usage_event_id": event["id"],
+        "billing_scope": "local/shared",
+    })
     asyncio.create_task(run_canvas_comfy_task(task_id, payload, event))
     return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
 
 @app.get("/api/canvas-comfy-tasks/{task_id}")
 async def get_canvas_comfy_task(task_id: str, request: Request):
-    with CANVAS_TASK_LOCK:
-        task = dict(CANVAS_TASKS.get(task_id) or {})
+    task = canvas_task_get(task_id)
     if not task:
-        raise HTTPException(status_code=404, detail="ComfyUI 任务不存在，可能服务已重启或任务已过期")
+        raise HTTPException(status_code=404, detail="ComfyUI 任务不存在或已超过保留期限")
     user = require_authenticated(request)
     if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
         raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
@@ -16454,6 +17003,7 @@ def humanize_video_task_failure(reason) -> str:
     return f"视频生成任务失败：{text}"
 
 async def wait_for_video_task(client, provider, task_id, submit_url=""):
+    capture_canvas_upstream_task(provider, task_id, metadata={"kind": "video"})
     base_url = video_api_root(provider)
     if not base_url:
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider['id']} 未配置 Base URL")
@@ -16986,6 +17536,7 @@ async def tudou_public_media_urls(items, limit):
     return out
 
 async def tudou_wait_video_task(client, provider, base_url, task_id):
+    capture_canvas_upstream_task(provider, task_id, metadata={"kind": "video"})
     task_url = f"{base_url}/v1/tasks/{urllib.parse.quote(str(task_id), safe='')}"
     headers = api_headers(json_body=True, provider=provider)
     deadline = time.monotonic() + VIDEO_POLL_TIMEOUT
@@ -17708,6 +18259,126 @@ async def _canvas_video_impl(payload: CanvasVideoRequest, api_profile_id=""):
         raise HTTPException(status_code=502, detail=f"请求上游视频接口失败：{exc}") from exc
 
 # --- Canvas LLM ---
+
+async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event=None):
+    canvas_task_update(task_id, {"status": "running"})
+    capture_token = ACTIVE_CANVAS_TASK_ID.set(task_id)
+    try:
+        result = await _canvas_video_impl(
+            payload, str((event or {}).get("api_profile_id") or "")
+        )
+        if event:
+            result["usage_event_id"] = event["id"]
+            raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+            finish_usage_event(
+                event,
+                "succeeded",
+                raw_usage=raw.get("usage") if isinstance(raw, dict) else None,
+            )
+        canvas_task_update(task_id, {
+            "status": "succeeded",
+            "result": result,
+            "error": "",
+        })
+    except JimengPendingError as exc:
+        if event:
+            finish_usage_event(event, "queued")
+        try:
+            context = upstream_context_for_profile_id(
+                (event or {}).get("api_profile_id", ""),
+                payload.provider_id,
+                user_id=(event or {}).get("user_id", ""),
+            )
+            save_upstream_task_scope(
+                exc.submit_id,
+                context,
+                user_id=(event or {}).get("user_id", ""),
+                usage_event_id=(event or {}).get("id", ""),
+                metadata={"kind": f"jimeng-{exc.kind}"},
+            )
+        except Exception:
+            pass
+        info = jimeng_pending_payload(exc)
+        canvas_task_update(task_id, {
+            "status": "jimeng_pending",
+            "jimeng_pending": True,
+            "submit_id": exc.submit_id,
+            "kind": exc.kind,
+            "queue_info": exc.queue_info,
+            "message": info["message"],
+            "error": "",
+        })
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or str(exc)
+        if event:
+            finish_usage_event(event, "failed", detail)
+        upstream_task_id = (
+            getattr(exc, "upstream_task_id", "")
+            or extract_task_id_from_text(detail)
+        )
+        canvas_task_update(task_id, {
+            "status": "failed",
+            "error": str(detail),
+            "status_code": getattr(exc, "status_code", 500),
+            "upstream_task_id": upstream_task_id,
+        })
+    finally:
+        ACTIVE_CANVAS_TASK_ID.reset(capture_token)
+
+@app.post("/api/canvas-video-tasks")
+async def create_canvas_video_task(payload: CanvasVideoRequest, request: Request):
+    event = begin_usage_event(
+        request,
+        "video",
+        payload.provider_id,
+        payload.model,
+        {
+            "duration": payload.duration,
+            "aspect_ratio": payload.aspect_ratio,
+            "resolution": payload.resolution,
+            "entry": "canvas",
+        },
+    )
+    request.state.usage_event = event
+    request.state.usage_async = True
+    upstream_context = upstream_context_for_profile_id(
+        event.get("api_profile_id", ""),
+        payload.provider_id,
+        user_id=event.get("user_id", ""),
+    )
+    task_id = f"canvas_video_{uuid.uuid4().hex}"
+    canvas_task_create({
+        "id": task_id,
+        "type": "online-video",
+        "status": "queued",
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "result": None,
+        "error": "",
+        "provider_id": upstream_context.provider_id,
+        "api_profile_id": upstream_context.api_profile_id,
+        "model": payload.model,
+        "user_id": event["user_id"],
+        "usage_event_id": event["id"],
+    })
+    remember_upstream_task_scope(
+        request,
+        task_id,
+        upstream_context,
+        metadata={"kind": "canvas-video", "model": payload.model},
+    )
+    asyncio.create_task(run_canvas_video_task(task_id, payload, event))
+    return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
+
+@app.get("/api/canvas-video-tasks/{task_id}")
+async def get_canvas_video_task(task_id: str, request: Request):
+    task = canvas_task_get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="画布视频任务不存在或已超过保留期限")
+    user = require_authenticated(request)
+    if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
+    return task
 
 @app.post("/api/canvas-video")
 async def canvas_video(payload: CanvasVideoRequest, request: Request):
@@ -19051,7 +19722,8 @@ async def delete_asset_library_category(category_id: str, library_id: str = ""):
     return {"library": lib}
 
 @app.post("/api/asset-library/items")
-async def add_asset_library_item(payload: AssetLibraryAddRequest):
+async def add_asset_library_item(payload: AssetLibraryAddRequest, request: Request):
+    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
     lib = load_asset_library()
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
     if not cat:
@@ -19063,7 +19735,10 @@ async def add_asset_library_item(payload: AssetLibraryAddRequest):
         raise HTTPException(status_code=400, detail="只支持保存本地 /assets 或 /output 媒体")
     _, item = make_asset_library_item(src, payload.name or os.path.basename(src), subdir=cat.get("dir") or "")
     if item.get("kind") == "image":
-        classification = await classify_asset_image_best_effort(output_file_from_url(item.get("url") or "") or src)
+        classification = await classify_asset_image_best_effort(
+            output_file_from_url(item.get("url") or "") or src,
+            upstream_context=upstream_context,
+        )
         if classification:
             item["classification"] = classification
     cat.setdefault("items", []).append(item)
@@ -19071,7 +19746,8 @@ async def add_asset_library_item(payload: AssetLibraryAddRequest):
     return {"library": lib, "item": item}
 
 @app.post("/api/asset-library/items/batch")
-async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest):
+async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest, request: Request):
+    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
     added = []
     lib = load_asset_library()
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
@@ -19087,7 +19763,10 @@ async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest):
             continue
         _, item = make_asset_library_item(src, entry.name or os.path.basename(src), subdir=cat.get("dir") or "")
         if item.get("kind") == "image":
-            classification = await classify_asset_image_best_effort(output_file_from_url(item.get("url") or "") or src)
+            classification = await classify_asset_image_best_effort(
+                output_file_from_url(item.get("url") or "") or src,
+                upstream_context=upstream_context,
+            )
             if classification:
                 item["classification"] = classification
         cat.setdefault("items", []).append(item)
@@ -19169,7 +19848,8 @@ async def get_shared_folder_file(folder_id: str, path: str = ""):
     return FileResponse(abs_path, media_type=content_type_for_path(abs_path))
 
 @app.post("/api/shared-folders/import")
-async def import_shared_folder_files(payload: SharedFolderImport):
+async def import_shared_folder_files(payload: SharedFolderImport, request: Request):
+    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
     entry = shared_folder_by_id(payload.folder_id)
     if not entry:
         raise HTTPException(status_code=404, detail="共享文件夹不存在")
@@ -19190,7 +19870,10 @@ async def import_shared_folder_files(payload: SharedFolderImport):
             continue
         _, item = make_asset_library_item(abs_path, os.path.basename(abs_path), subdir=cat.get("dir") or "")
         if item.get("kind") == "image":
-            classification = await classify_asset_image_best_effort(output_file_from_url(item.get("url") or "") or abs_path)
+            classification = await classify_asset_image_best_effort(
+                output_file_from_url(item.get("url") or "") or abs_path,
+                upstream_context=upstream_context,
+            )
             if classification:
                 item["classification"] = classification
         cat.setdefault("items", []).append(item)
@@ -19198,8 +19881,11 @@ async def import_shared_folder_files(payload: SharedFolderImport):
     save_asset_library(lib)
     return {"library": lib, "items": added}
 
-async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_model=""):
-    llm_provider = get_api_provider(provider_id) if provider_id not in ("modelscope",) else {}
+async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_model="", upstream_context=None):
+    if not isinstance(upstream_context, UpstreamContext):
+        raise HTTPException(status_code=500, detail="图片描述缺少上游调用上下文。")
+    provider_id = upstream_context.provider_id
+    llm_provider = upstream_context.provider
     if is_codex_provider(llm_provider):
         resolved_model = selected_model(model, (llm_provider.get("chat_models") or CODEX_DEFAULT_CHAT_MODELS)[0])
         payload = CanvasLLMRequest(
@@ -19220,7 +19906,9 @@ async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_m
         )
         text, _raw = await gemini_cli_chat_text(payload, [])
         return text, resolved_model
-    chat_base, chat_hdrs, resolved_model = resolve_chat_provider(provider_id, model, ms_model)
+    chat_base, chat_hdrs, resolved_model = resolve_chat_provider(
+        provider_id, model, ms_model, upstream_context.api_profile_id
+    )
     is_apimart = is_apimart_provider(llm_provider)
     prompt_text = (prompt or "描述图片").strip() or "描述图片"
     data_url = image_path_to_data_url(abs_path, max_size=1024)
@@ -19281,7 +19969,10 @@ def find_asset_item_in_library(lib, item_id, library_id=""):
     return None
 
 @app.post("/api/asset-library/items/classify")
-async def classify_asset_library_items(payload: AssetLibraryClassifyRequest):
+async def classify_asset_library_items(payload: AssetLibraryClassifyRequest, request: Request):
+    upstream_context = resolve_upstream_context(
+        request, payload.provider, allow_default=not bool(str(payload.provider or "").strip())
+    )
     lib = load_asset_library()
     results = []
     changed = False
@@ -19302,7 +19993,9 @@ async def classify_asset_library_items(payload: AssetLibraryClassifyRequest):
             results.append(result)
             continue
         try:
-            classification = await classify_image_with_provider(path, payload.provider, payload.model, payload.ms_model, payload.prompt)
+            classification = await classify_image_with_provider(
+                path, payload.provider, payload.model, payload.ms_model, payload.prompt, upstream_context
+            )
             item["classification"] = classification
             changed = True
             result.update({"ok": True, "classification": classification})
@@ -19314,12 +20007,13 @@ async def classify_asset_library_items(payload: AssetLibraryClassifyRequest):
     return {"library": lib, "count": sum(1 for item in results if item.get("ok")), "items": results}
 
 @app.post("/api/asset-library/items/{item_id}/register-avatar")
-async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest):
+async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest, request: Request):
     lib = load_asset_library()
     target_item = find_asset_item_in_library(lib, item_id, payload.library_id)
     if not target_item:
         raise HTTPException(status_code=404, detail="资产不存在")
-    provider = get_api_provider(payload.provider_id)
+    upstream_context = resolve_upstream_context(request, payload.provider_id, allow_default=False)
+    provider = upstream_context.provider
     platform = avatar_platform_for_provider(provider)
     if platform not in AVATAR_SUPPORTED_PLATFORMS:
         name = (provider or {}).get("name") or (provider or {}).get("id") or "该平台"
@@ -19347,6 +20041,7 @@ async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegist
         task_id = await submit_volcengine_avatar_asset(
             public_url, target_item.get("name") or "asset", kind,
             project_name=project_name, group_name=payload.group_name or "",
+            upstream_context=upstream_context,
         )
     else:
         raise HTTPException(status_code=400, detail="该平台的认证后端尚未接入。")
@@ -19355,6 +20050,8 @@ async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegist
         regs = {}
     regs[platform] = {
         "provider_id": provider["id"],
+        "api_profile_id": upstream_context.api_profile_id,
+        "user_id": upstream_context.user_id,
         "project_name": project_name,
         "task_id": task_id,
         "status": "Processing",
@@ -19368,25 +20065,42 @@ async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegist
     return {"library": lib, "item": target_item}
 
 @app.post("/api/asset-library/items/{item_id}/avatar-status")
-async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest):
+async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest, request: Request):
     lib = load_asset_library()
     target_item = find_asset_item_in_library(lib, item_id, payload.library_id)
     if not target_item:
         raise HTTPException(status_code=404, detail="资产不存在")
     regs = target_item.get("registrations") if isinstance(target_item.get("registrations"), dict) else {}
-    provider = get_api_provider(payload.provider_id or "")
-    platform = avatar_platform_for_provider(provider)
+    current_user = require_authenticated(request)
+    requested_context = resolve_upstream_context(
+        request, payload.provider_id or "", allow_default=not bool(str(payload.provider_id or "").strip())
+    )
+    platform = avatar_platform_for_provider(requested_context.provider)
     if platform not in AVATAR_SUPPORTED_PLATFORMS:
         raise HTTPException(status_code=400, detail="该平台暂不支持数字人/真人认证审核。")
     reg = regs.get(platform) if isinstance(regs.get(platform), dict) else {}
     task_id = str(reg.get("task_id") or "").strip()
     if not task_id:
         raise HTTPException(status_code=400, detail="该素材还没有提交到这个平台的认证审核。")
+    owner_id = str(reg.get("user_id") or "")
+    if owner_id and current_user.get("role") != "admin" and owner_id != str(current_user.get("id") or ""):
+        raise HTTPException(status_code=403, detail="无权查询其他用户提交的素材认证任务。")
+    profile_id = str(reg.get("api_profile_id") or "").strip().lower()
+    upstream_context = (
+        upstream_context_for_profile_id(
+            profile_id,
+            str(reg.get("provider_id") or requested_context.provider_id),
+            user_id=owner_id,
+        )
+        if profile_id else requested_context
+    )
+    provider = upstream_context.provider
     if platform == "apimart":
         result = await check_apimart_avatar_task(provider, task_id)
     elif platform == "volcengine":
         result = await check_volcengine_avatar_task(
             task_id, str(reg.get("project_name") or VOLCENGINE_DEFAULT_PROJECT_NAME).strip() or VOLCENGINE_DEFAULT_PROJECT_NAME,
+            upstream_context,
         )
     else:
         raise HTTPException(status_code=400, detail="该平台的认证后端尚未接入。")
@@ -20304,9 +21018,12 @@ async def delete_history(req: DeleteHistoryRequest):
 # --- ModelScope 角度控制 ---
 
 @app.post("/api/angle/poll_status")
-async def poll_angle_cloud(req: CloudPollRequest):
-    api_root = modelscope_image_api_root()
-    clean_token = modelscope_api_key(req.api_key)
+async def poll_angle_cloud(req: CloudPollRequest, request: Request):
+    upstream_context, _task_scope = upstream_context_for_task(
+        request, req.task_id, fallback_provider_id="modelscope", allow_unknown=False
+    )
+    api_root = modelscope_api_root(upstream_context.provider)
+    clean_token = upstream_context.api_key
     if not clean_token:
         raise HTTPException(status_code=400, detail="未提供 ModelScope API Key")
 
@@ -20350,22 +21067,22 @@ async def poll_angle_cloud(req: CloudPollRequest):
                     record = {"timestamp": time.time(), "prompt": f"Resumed {task_id}", "images": [local_path], "type": "angle"}
                     save_to_history(record)
                     if req.client_id:
-                        await manager.send_personal_message({"type": "cloud_status", "status": "SUCCEED", "task_id": task_id}, req.client_id)
+                        await manager.send_user_client_message({"type": "cloud_status", "status": "SUCCEED", "task_id": task_id}, upstream_context.user_id, req.client_id)
                     return {"url": local_path}
 
                 elif status in {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "TIMEOUT", "REVOKED"}:
                     if req.client_id:
-                        await manager.send_personal_message({"type": "cloud_status", "status": "FAILED", "task_id": task_id}, req.client_id)
+                        await manager.send_user_client_message({"type": "cloud_status", "status": "FAILED", "task_id": task_id}, upstream_context.user_id, req.client_id)
                     raise HTTPException(status_code=502, detail=f"ModelScope task failed: {data}")
 
                 if i % 5 == 0 and req.client_id:
-                    await manager.send_personal_message({
+                    await manager.send_user_client_message({
                         "type": "cloud_status", "status": f"{status} ({i}/300)",
                         "task_id": task_id, "progress": i, "total": 300
-                    }, req.client_id)
+                    }, upstream_context.user_id, req.client_id)
 
             if req.client_id:
-                await manager.send_personal_message({"type": "cloud_status", "status": "TIMEOUT", "task_id": task_id}, req.client_id)
+                await manager.send_user_client_message({"type": "cloud_status", "status": "TIMEOUT", "task_id": task_id}, upstream_context.user_id, req.client_id)
             return {"status": "timeout", "task_id": task_id, "message": "Task still pending"}
 
     except HTTPException:
@@ -20375,9 +21092,10 @@ async def poll_angle_cloud(req: CloudPollRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/angle/generate")
-async def generate_angle_cloud(req: CloudGenRequest):
-    api_root = modelscope_image_api_root()
-    clean_token = modelscope_api_key(req.api_key)
+async def generate_angle_cloud(req: CloudGenRequest, request: Request):
+    upstream_context = resolve_upstream_context(request, "modelscope")
+    api_root = modelscope_api_root(upstream_context.provider)
+    clean_token = upstream_context.api_key
     if not clean_token:
         raise HTTPException(status_code=400, detail="未提供 ModelScope API Key")
 
@@ -20386,7 +21104,9 @@ async def generate_angle_cloud(req: CloudGenRequest):
         "Content-Type": "application/json",
         "X-ModelScope-Async-Mode": "true"
     }
-    model = selected_model(req.model, "Qwen/Qwen-Image-Edit-2511")
+    model = upstream_model_for_context(
+        upstream_context, req.model, "image_models", "Qwen/Qwen-Image-Edit-2511"
+    )
     payload = {
         "model": model,
         "prompt": req.prompt.strip(),
@@ -20408,6 +21128,9 @@ async def generate_angle_cloud(req: CloudGenRequest):
                 raise HTTPException(status_code=submit_res.status_code, detail=detail)
 
             task_id = submit_res.json().get("task_id")
+            remember_upstream_task_scope(
+                request, task_id, upstream_context, metadata={"kind": "angle"}
+            )
             print(f"Angle Task submitted, ID: {task_id}")
 
             for i in range(300):
@@ -20440,24 +21163,27 @@ async def generate_angle_cloud(req: CloudGenRequest):
                     record = {"timestamp": time.time(), "prompt": req.prompt, "images": [local_path], "type": "angle"}
                     save_to_history(record)
                     if req.client_id:
-                        await manager.send_personal_message({"type": "cloud_status", "status": "SUCCEED", "task_id": task_id}, req.client_id)
+                        await manager.send_user_client_message({"type": "cloud_status", "status": "SUCCEED", "task_id": task_id}, upstream_context.user_id, req.client_id)
                     if GLOBAL_LOOP:
-                        asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(record), GLOBAL_LOOP)
+                        asyncio.run_coroutine_threadsafe(
+                            manager.broadcast_new_image(record, upstream_context.user_id),
+                            GLOBAL_LOOP,
+                        )
                     return {"url": local_path, "task_id": task_id}
 
                 elif status in {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "TIMEOUT", "REVOKED"}:
                     if req.client_id:
-                        await manager.send_personal_message({"type": "cloud_status", "status": "FAILED", "task_id": task_id}, req.client_id)
+                        await manager.send_user_client_message({"type": "cloud_status", "status": "FAILED", "task_id": task_id}, upstream_context.user_id, req.client_id)
                     raise HTTPException(status_code=502, detail=f"ModelScope task failed: {data}")
 
                 if i % 5 == 0 and req.client_id:
-                    await manager.send_personal_message({
+                    await manager.send_user_client_message({
                         "type": "cloud_status", "status": f"{status} ({i}/300)",
                         "task_id": task_id, "progress": i, "total": 300
-                    }, req.client_id)
+                    }, upstream_context.user_id, req.client_id)
 
             if req.client_id:
-                await manager.send_personal_message({"type": "cloud_status", "status": "TIMEOUT", "task_id": task_id}, req.client_id)
+                await manager.send_user_client_message({"type": "cloud_status", "status": "TIMEOUT", "task_id": task_id}, upstream_context.user_id, req.client_id)
             return {"status": "timeout", "task_id": task_id, "message": "Task still pending"}
 
     except HTTPException:
@@ -20469,9 +21195,10 @@ async def generate_angle_cloud(req: CloudGenRequest):
 # --- ModelScope Z-Image 云端生图 ---
 
 @app.post("/generate")
-async def generate_cloud(req: CloudGenRequest):
-    api_root = modelscope_image_api_root()
-    clean_token = modelscope_api_key(req.api_key)
+async def generate_cloud(req: CloudGenRequest, request: Request):
+    upstream_context = resolve_upstream_context(request, "modelscope")
+    api_root = modelscope_api_root(upstream_context.provider)
+    clean_token = upstream_context.api_key
     if not clean_token:
         raise HTTPException(status_code=400, detail="未提供 ModelScope API Key")
 
@@ -20480,7 +21207,9 @@ async def generate_cloud(req: CloudGenRequest):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "Tongyi-MAI/Z-Image-Turbo",
+        "model": upstream_model_for_context(
+            upstream_context, "Tongyi-MAI/Z-Image-Turbo", "image_models"
+        ),
         "prompt": req.prompt.strip(),
         "size": modelscope_size(req.resolution),
         "n": 1
@@ -20503,6 +21232,9 @@ async def generate_cloud(req: CloudGenRequest):
                 raise HTTPException(status_code=submit_res.status_code, detail=detail)
 
             task_id = submit_res.json().get("task_id")
+            remember_upstream_task_scope(
+                request, task_id, upstream_context, metadata={"kind": "zimage"}
+            )
             print(f"Z-Image Task submitted, ID: {task_id}")
 
             for i in range(200):
@@ -20539,7 +21271,7 @@ async def generate_cloud(req: CloudGenRequest):
                     record = {"timestamp": time.time(), "prompt": req.prompt, "images": [local_path], "type": "cloud"}
                     save_to_history(record)
                     try:
-                        await manager.broadcast_new_image(record)
+                        await manager.broadcast_new_image(record, upstream_context.user_id)
                     except Exception:
                         pass
                     return {"url": local_path}
@@ -20558,9 +21290,10 @@ async def generate_cloud(req: CloudGenRequest):
 # --- ModelScope 通用图片生成（支持图生图） ---
 
 @app.post("/api/ms/generate")
-async def ms_generate(req: MsGenerateRequest):
-    api_root = modelscope_image_api_root()
-    clean_token = modelscope_api_key(req.api_key)
+async def ms_generate(req: MsGenerateRequest, request: Request):
+    upstream_context = resolve_upstream_context(request, "modelscope")
+    api_root = modelscope_api_root(upstream_context.provider)
+    clean_token = upstream_context.api_key
     if not clean_token:
         raise HTTPException(status_code=400, detail="未配置 ModelScope API Key，请在 API 设置中填写，或重新保存 ModelScope Token。")
 
@@ -20570,7 +21303,7 @@ async def ms_generate(req: MsGenerateRequest):
         "X-ModelScope-Async-Mode": "true"
     }
     payload = {
-        "model": req.model,
+        "model": upstream_model_for_context(upstream_context, req.model, "image_models"),
         "prompt": req.prompt.strip(),
     }
     if req.width and req.height:
@@ -20599,6 +21332,9 @@ async def ms_generate(req: MsGenerateRequest):
                 raise HTTPException(status_code=submit_res.status_code, detail=detail)
 
             task_id = submit_res.json().get("task_id")
+            remember_upstream_task_scope(
+                request, task_id, upstream_context, metadata={"kind": "modelscope-image"}
+            )
             print(f"MS Generate Task submitted ({req.model}), ID: {task_id}")
 
             TERMINAL_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "CANCELED", "CANCELLED", "TIMEOUT", "REVOKED"}
@@ -20640,7 +21376,10 @@ async def ms_generate(req: MsGenerateRequest):
                         }
                         save_to_history(record)
                         if GLOBAL_LOOP:
-                            asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(record), GLOBAL_LOOP)
+                            asyncio.run_coroutine_threadsafe(
+                                manager.broadcast_new_image(record, upstream_context.user_id),
+                                GLOBAL_LOOP,
+                            )
                         return {"url": local_path, "task_id": task_id}
 
                     elif status in TERMINAL_FAILED_STATUSES:
@@ -20664,9 +21403,10 @@ async def ms_generate(req: MsGenerateRequest):
 # --- 本地 ComfyUI 生图 ---
 
 @app.post("/api/generate")
-def generate(req: GenerateRequest, request: Request = None):
+def generate(req: GenerateRequest, request: Request = None, notification_user_id: str = ""):
     if request is not None:
         request.state.usage_event = begin_usage_event(request, "image", "comfyui", req.workflow_json, {"workflow": req.workflow_json, "width": req.width, "height": req.height, "entry": "generate"})
+        notification_user_id = str(require_authenticated(request).get("id") or "")
     global NEXT_TASK_ID
     current_task = None
     target_backend = None
@@ -20870,7 +21610,9 @@ def generate(req: GenerateRequest, request: Request = None):
         }
         save_to_history(result)
         if GLOBAL_LOOP:
-            asyncio.run_coroutine_threadsafe(manager.broadcast_new_image(result), GLOBAL_LOOP)
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast_new_image(result, notification_user_id), GLOBAL_LOOP
+            )
         return result
 
     except Exception as e:
@@ -20937,25 +21679,49 @@ def is_builtin_workflow(name: str) -> bool:
 def runninghub_workflow_store_path() -> str:
     return RUNNINGHUB_WORKFLOW_STORE_FILE
 
-def load_runninghub_workflow_store():
+def load_runninghub_workflow_store(api_profile_id=LEGACY_API_PROFILE_ID):
     if not os.path.exists(RUNNINGHUB_WORKFLOW_STORE_FILE):
         return {}
     try:
         with open(RUNNINGHUB_WORKFLOW_STORE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        profile_id = str(api_profile_id or LEGACY_API_PROFILE_ID).strip().lower()
+        if data.get("version") == 2 and isinstance(data.get("profiles"), dict):
+            store = data["profiles"].get(profile_id)
+            return dict(store) if isinstance(store, dict) else {}
+        # version 1 / 旧无版本字典只属于 legacy-shared，不能向新配置组扩散。
+        return data if profile_id == LEGACY_API_PROFILE_ID else {}
     except Exception:
         return {}
 
-def save_runninghub_workflow_store(store):
+def save_runninghub_workflow_store(store, api_profile_id=LEGACY_API_PROFILE_ID):
     os.makedirs(DATA_DIR, exist_ok=True)
+    profile_id = str(api_profile_id or LEGACY_API_PROFILE_ID).strip().lower()
+    existing = {}
+    if os.path.exists(RUNNINGHUB_WORKFLOW_STORE_FILE):
+        try:
+            with open(RUNNINGHUB_WORKFLOW_STORE_FILE, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except Exception:
+            existing = {}
+    if isinstance(existing, dict) and existing.get("version") == 2 and isinstance(existing.get("profiles"), dict):
+        data = existing
+    else:
+        legacy_store = existing if isinstance(existing, dict) else {}
+        data = {"version": 2, "profiles": {}}
+        if legacy_store:
+            data["profiles"][LEGACY_API_PROFILE_ID] = legacy_store
+    data["profiles"][profile_id] = dict(store or {})
     with open(RUNNINGHUB_WORKFLOW_STORE_FILE, "w", encoding="utf-8") as f:
-        json.dump(store, f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 def prune_runninghub_workflow_store_for_provider(provider):
     if not isinstance(provider, dict) or provider.get("id") != "runninghub":
         return
-    store = load_runninghub_workflow_store()
+    profile_id = str(provider.get("_api_profile_id") or LEGACY_API_PROFILE_ID).strip().lower()
+    store = load_runninghub_workflow_store(profile_id)
     if not store:
         return
     keep_ids = {
@@ -20970,7 +21736,7 @@ def prune_runninghub_workflow_store_for_provider(provider):
             store.pop(workflow_id, None)
             removed = True
     if removed:
-        save_runninghub_workflow_store(store)
+        save_runninghub_workflow_store(store, profile_id)
 
 def runninghub_workflow_config_has_payload(cfg):
     if not isinstance(cfg, dict):
@@ -21027,30 +21793,23 @@ def runninghub_workflow_entry_from_config(cfg, fallback=None):
         "updatedAt": (cfg or {}).get("updatedAt") or fallback.get("updatedAt") or 0,
     }, "workflow")
 
-def runninghub_saved_hidden_workflow_ids():
-    if not os.path.exists(API_PROVIDERS_FILE):
-        return set()
-    try:
-        with open(API_PROVIDERS_FILE, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-    except Exception:
-        return set()
+def runninghub_saved_hidden_workflow_ids(provider=None):
     hidden = set()
-    for provider in raw if isinstance(raw, list) else []:
-        if not isinstance(provider, dict) or str(provider.get("id") or "").strip().lower() != "runninghub":
+    if not isinstance(provider, dict):
+        return hidden
+    for entry in provider.get("rh_workflows") or []:
+        if not isinstance(entry, dict) or entry.get("hidden") is not True:
             continue
-        for entry in provider.get("rh_workflows") or []:
-            if not isinstance(entry, dict) or entry.get("hidden") is not True:
-                continue
-            key = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
-            if key:
-                hidden.add(key)
+        key = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
+        if key:
+            hidden.add(key)
     return hidden
 
 def runninghub_provider_with_workflow_store(provider):
     if not isinstance(provider, dict) or provider.get("id") != "runninghub":
         return provider
-    store = load_runninghub_workflow_store()
+    profile_id = str(provider.get("_api_profile_id") or LEGACY_API_PROFILE_ID).strip().lower()
+    store = load_runninghub_workflow_store(profile_id)
     if not store:
         return provider
     merged = dict(provider)
@@ -21060,7 +21819,7 @@ def runninghub_provider_with_workflow_store(provider):
         for item in workflows
         if item.get("hidden") is True and runninghub_workflow_store_key(item.get("workflowId") or item.get("id"))
     }
-    hidden_ids.update(runninghub_saved_hidden_workflow_ids())
+    hidden_ids.update(runninghub_saved_hidden_workflow_ids(provider))
     by_id = {
         runninghub_workflow_store_key(item.get("workflowId") or item.get("id")): item
         for item in workflows
@@ -21083,15 +21842,13 @@ def runninghub_provider_with_workflow_store(provider):
     merged["rh_workflows"] = normalize_runninghub_entries(workflows, "workflow")
     return merged
 
-def runninghub_provider_workflow_config(workflow_id: str):
+def runninghub_provider_workflow_config(workflow_id: str, provider):
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         return None
-    if key in runninghub_saved_hidden_workflow_ids():
+    if key in runninghub_saved_hidden_workflow_ids(provider):
         return None
-    providers = load_api_providers()
-    provider = next((item for item in providers if item.get("id") == "runninghub"), None)
-    if not provider:
+    if not isinstance(provider, dict) or provider.get("id") != "runninghub":
         return None
     for entry in provider.get("rh_workflows") or []:
         entry_key = runninghub_workflow_store_key(entry.get("workflowId") or entry.get("id"))
@@ -21136,13 +21893,17 @@ def runninghub_select_workflow_config(local_cfg, provider_cfg, workflow_id: str 
         return static_cfg
     return None
 
-def sync_runninghub_workflow_to_provider(cfg):
+def sync_runninghub_workflow_to_provider(cfg, api_profile_id):
     if not isinstance(cfg, dict):
         return
     key = runninghub_workflow_store_key(cfg.get("workflowId"))
     if not key:
         return
-    providers = load_api_providers()
+    profile_id = str(api_profile_id or "").strip().lower()
+    profile = api_profile_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="API 配置组不存在。")
+    providers = [dict(item) for item in (profile.get("providers") or [])]
     provider = next((item for item in providers if item.get("id") == "runninghub"), None)
     if not provider:
         provider = {
@@ -21198,13 +21959,17 @@ def sync_runninghub_workflow_to_provider(cfg):
         entry["enabled"] = True
     if "thumbnail" not in entry:
         entry["thumbnail"] = ""
-    save_api_providers([normalize_provider(item) for item in providers])
+    save_profile_providers(profile_id, [normalize_provider(item) for item in providers])
 
-def remove_runninghub_workflow_from_provider(workflow_id: str):
+def remove_runninghub_workflow_from_provider(workflow_id: str, api_profile_id):
     key = runninghub_workflow_store_key(workflow_id)
     if not key:
         return
-    providers = load_api_providers()
+    profile_id = str(api_profile_id or "").strip().lower()
+    profile = api_profile_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="API 配置组不存在。")
+    providers = [dict(item) for item in (profile.get("providers") or [])]
     changed = False
     for provider in providers:
         if provider.get("id") != "runninghub":
@@ -21231,7 +21996,7 @@ def remove_runninghub_workflow_from_provider(workflow_id: str):
             provider["rh_workflows"] = kept
             changed = True
     if changed:
-        save_api_providers([normalize_provider(item) for item in providers])
+        save_profile_providers(profile_id, [normalize_provider(item) for item in providers])
 
 def runninghub_workflow_store_key(workflow_id: str) -> str:
     return str(workflow_id or "").strip()

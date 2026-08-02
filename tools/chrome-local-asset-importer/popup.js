@@ -5,6 +5,8 @@ const els = {
   provider: document.getElementById('providerSelect'),
   model: document.getElementById('modelSelect'),
   prompt: document.getElementById('promptInput'),
+  username: document.getElementById('usernameInput'),
+  password: document.getElementById('passwordInput'),
   scan: document.getElementById('scanBtn'),
   pin: document.getElementById('pinBtn'),
   github: document.getElementById('githubBtn'),
@@ -28,6 +30,7 @@ let savedSettings = {
   provider: '',
   model: '',
 };
+let authToken = '';
 let previewItem = null;
 const POPUP_PREVIEW_POPUP_WIDTH = 390;
 const POPUP_PREVIEW_GAP = 16;
@@ -36,14 +39,34 @@ const SIDEPANEL_PREVIEW_POSITION_STORAGE_KEY = 'webPreviewPositionSidePanel';
 const isSidePanelView = location.pathname.endsWith('/sidepanel.html');
 function apiBase(){
   let value = String(els.server.value || '').trim();
-  if(!value) value = '127.0.0.1:8767';
+  if(!value) value = '127.0.0.1:3000';
   if(!/^https?:\/\//i.test(value)) value = `http://${value}`;
   try {
     const parsed = new URL(value);
     return `${parsed.protocol}//${parsed.host}`;
   } catch {
-    return 'http://127.0.0.1:8767';
+    return 'http://127.0.0.1:3000';
   }
+}
+
+function authHeaders(extra = {}){
+  return {
+    ...extra,
+    'X-Client-Source': 'chrome-extension',
+    ...(authToken ? {'Authorization': `Bearer ${authToken}`} : {}),
+  };
+}
+
+async function apiFetch(path, options = {}){
+  const response = await fetch(`${apiBase()}${path}`, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+  if(response.status === 401){
+    authToken = '';
+    await chrome.storage.local.remove('authToken');
+  }
+  return response;
 }
 
 function setStatus(text){
@@ -448,30 +471,34 @@ async function saveSettings(){
 
 function getSettingsPayload(){
   return {
-    server: els.server.value || '127.0.0.1:8767',
+    server: els.server.value || '127.0.0.1:3000',
     folder: els.folder.value || '网页采集',
     classify: Boolean(els.classify.checked),
     provider: savedSettings.provider,
     model: savedSettings.model,
     prompt: els.prompt.value || '',
+    username: els.username.value || '',
+    authToken,
     settingsCollapsed,
   };
 }
 
 async function loadSettings(){
-  const data = await chrome.storage.local.get(['server', 'port', 'folder', 'classify', 'provider', 'model', 'prompt', 'settingsCollapsed']);
-  els.server.value = data.server || (data.port ? `127.0.0.1:${data.port}` : '127.0.0.1:8767');
+  const data = await chrome.storage.local.get(['server', 'port', 'folder', 'classify', 'provider', 'model', 'prompt', 'username', 'authToken', 'settingsCollapsed']);
+  els.server.value = data.server || (data.port ? `127.0.0.1:${data.port}` : '127.0.0.1:3000');
   els.folder.value = data.folder || '网页采集';
   els.classify.checked = data.classify !== false;
   savedSettings.provider = data.provider || '';
   savedSettings.model = data.model || '';
   els.prompt.value = data.prompt || '';
+  els.username.value = data.username || '';
+  authToken = data.authToken || '';
   settingsCollapsed = data.settingsCollapsed === undefined ? true : Boolean(data.settingsCollapsed);
   updateSettingsUi();
 }
 
 async function loadProviders(){
-  const res = await fetch(`${apiBase()}/api/providers`);
+  const res = await apiFetch('/api/providers');
   if(!res.ok) throw new Error(await res.text());
   const data = await res.json();
   providers = Array.isArray(data.providers) ? data.providers : [];
@@ -480,9 +507,26 @@ async function loadProviders(){
 
 async function testConnection(){
   await saveSettings();
-  setStatus('正在连接本地服务...');
+  setStatus('正在登录并连接本地服务...');
+  const username = String(els.username.value || '').trim();
+  const password = String(els.password.value || '');
+  if(username && password){
+    const login = await fetch(`${apiBase()}/api/auth/login`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Client-Source': 'chrome-extension'},
+      body: JSON.stringify({username, password}),
+    });
+    const data = await login.json().catch(() => ({}));
+    if(!login.ok || !data.access_token) throw new Error(data.detail || '登录失败');
+    authToken = data.access_token;
+    els.password.value = '';
+    await chrome.storage.local.set({username, authToken});
+  }
+  if(!authToken) throw new Error('请输入账号和密码后登录');
   await loadProviders();
-  setStatus('连接成功，可以扫描当前页面图片。');
+  const me = await apiFetch('/api/auth/me');
+  if(!me.ok) throw new Error('登录已失效，请重新输入密码');
+  setStatus('登录成功，可以扫描当前页面图片。');
 }
 
 async function openSidePanel(){
@@ -733,7 +777,7 @@ async function importSelected(){
     prompt: els.prompt.value || '',
     items: picked.map(item => ({url: item.url, name: imageName(item.url)})),
   };
-  const res = await fetch(`${apiBase()}/api/local-assets/import-urls`, {
+  const res = await apiFetch('/api/local-assets/import-urls', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
@@ -776,7 +820,7 @@ els.provider.addEventListener('change', () => {
   renderProviders();
   saveSettings();
 });
-[els.server, els.folder, els.classify, els.model, els.prompt].forEach(el => {
+[els.server, els.folder, els.classify, els.model, els.prompt, els.username].forEach(el => {
   el.addEventListener('change', () => {
     if(el === els.model) savedSettings.model = els.model.value || '';
     updateSettingsUi();
@@ -801,6 +845,10 @@ window.addEventListener('keydown', event => {
 
 (async function init(){
   await loadSettings();
-  try { await loadProviders(); setStatus('连接成功，可以扫描当前页面图片。'); }
-  catch { setStatus('请输入服务地址后点击连接，例如 192.168.1.10:3000。'); }
+  try {
+    if(!authToken) throw new Error('未登录');
+    await loadProviders();
+    setStatus('登录有效，可以扫描当前页面图片。');
+  }
+  catch { setStatus('请输入账号和密码后点击“登录并连接”。'); }
 })();
