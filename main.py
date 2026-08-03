@@ -1396,6 +1396,40 @@ def normalize_provider(item):
 API_PROFILE_SCHEMA_VERSION = 1
 LEGACY_API_PROFILE_ID = "legacy-shared"
 API_PROFILE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,62}[a-z0-9]$")
+USAGE_CATEGORIES = ("image", "video", "llm")
+PROFILE_USAGE_POLICY_DEFAULT = {
+    "concurrent": {"image": 0, "video": 0, "llm": 0},
+    "monthly_budget": {"image": 0, "video": 0, "llm": 0},
+    "budget_alert_percent": 80,
+    "hard_limit_enabled": False,
+}
+
+def usage_policy_int(value, default=0, minimum=0, maximum=None):
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        result = int(default)
+    result = max(int(minimum), result)
+    return min(int(maximum), result) if maximum is not None else result
+
+def normalize_profile_usage_policy(value):
+    raw = value if isinstance(value, dict) else {}
+    concurrent = raw.get("concurrent") if isinstance(raw.get("concurrent"), dict) else {}
+    monthly_budget = raw.get("monthly_budget") if isinstance(raw.get("monthly_budget"), dict) else {}
+    return {
+        "concurrent": {
+            key: usage_policy_int(concurrent.get(key), 0)
+            for key in USAGE_CATEGORIES
+        },
+        "monthly_budget": {
+            key: usage_policy_int(monthly_budget.get(key), 0)
+            for key in USAGE_CATEGORIES
+        },
+        "budget_alert_percent": usage_policy_int(
+            raw.get("budget_alert_percent"), 80, 1, 100
+        ),
+        "hard_limit_enabled": bool(raw.get("hard_limit_enabled", False)),
+    }
 
 def normalize_api_profile(item):
     if not isinstance(item, dict):
@@ -1418,6 +1452,7 @@ def normalize_api_profile(item):
         "id": profile_id,
         "name": name,
         "enabled": bool(item.get("enabled", True)),
+        "usage_policy": normalize_profile_usage_policy(item.get("usage_policy")),
         "providers": providers,
     }
 
@@ -1427,6 +1462,7 @@ def legacy_api_profile(providers=None):
         "id": LEGACY_API_PROFILE_ID,
         "name": "现有共用账户",
         "enabled": True,
+        "usage_policy": normalize_profile_usage_policy({}),
         "providers": [normalize_provider(item) for item in source if isinstance(item, dict)],
     }
 
@@ -1507,6 +1543,7 @@ def public_api_profile(profile, assigned_users=0):
         "provider_count": len(profile.get("providers") or []),
         "assigned_users": max(0, int(assigned_users or 0)),
         "is_legacy": profile.get("id") == LEGACY_API_PROFILE_ID,
+        "usage_policy": normalize_profile_usage_policy(profile.get("usage_policy")),
     }
 
 def ensure_legacy_api_profile_migration():
@@ -1850,6 +1887,8 @@ app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 AUTH_LOCK = Lock()
 DEPARTMENT_LOCK = Lock()
 USAGE_AUDIT_LOCK = Lock()
+USAGE_ADMISSION_LOCK = Lock()
+USAGE_ALERT_LOCK = Lock()
 PHOTOSHOP_BRIDGE_LOCK = Lock()
 USAGE_DEFAULT_POLICY = {
     "alert_thresholds": {"image": 50, "video": 10, "llm": 300},
@@ -2143,6 +2182,87 @@ def append_usage_event(event):
 def usage_category(function):
     return "video" if function == "video" else ("llm" if function == "llm" else "image")
 
+def sanitize_usage_value(value, depth=0):
+    if depth > 3:
+        return None
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:300]
+    if isinstance(value, list):
+        return [
+            sanitized
+            for item in value[:20]
+            if (sanitized := sanitize_usage_value(item, depth + 1)) is not None
+        ]
+    if isinstance(value, dict):
+        result = {}
+        blocked = ("prompt", "image", "url", "key", "token", "secret", "cookie", "authorization", "content")
+        for raw_key, raw_value in list(value.items())[:50]:
+            key = str(raw_key or "")[:80]
+            if not key or any(part in key.lower() for part in blocked):
+                continue
+            sanitized = sanitize_usage_value(raw_value, depth + 1)
+            if sanitized is not None:
+                result[key] = sanitized
+        return result
+    return str(value)[:300]
+
+def sanitize_raw_usage(value, depth=0):
+    """只保留上游 usage 中可对账的数值，不保存内容、提示词或凭据。"""
+    if depth > 3:
+        return None
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, list):
+        return [
+            sanitized
+            for item in value[:20]
+            if (sanitized := sanitize_raw_usage(item, depth + 1)) is not None
+        ]
+    if isinstance(value, dict):
+        result = {}
+        blocked = ("key", "secret", "cookie", "authorization", "content", "prompt", "image", "url")
+        for raw_key, raw_value in list(value.items())[:50]:
+            key = str(raw_key or "")[:80]
+            if not key or any(part in key.lower() for part in blocked):
+                continue
+            sanitized = sanitize_raw_usage(raw_value, depth + 1)
+            if sanitized is not None:
+                result[key] = sanitized
+        return result
+    return None
+
+def usage_provider_snapshot(profile, provider_id):
+    target = str(provider_id or "").strip().lower()
+    provider = next(
+        (
+            item for item in (profile.get("providers") or [])
+            if str(item.get("id") or "").strip().lower() == target
+        ),
+        None,
+    )
+    if provider:
+        billing_scope = str(provider.get("billing_scope") or "department").strip().lower()
+        if billing_scope not in {"department", "shared", "local", "disabled"}:
+            billing_scope = "department"
+        return {
+            "provider_id": str(provider.get("id") or target),
+            "provider_name": str(provider.get("name") or provider.get("id") or target),
+            "billing_scope": billing_scope,
+        }
+    if target in {"comfyui", "jimeng", "codex", "gemini-cli"}:
+        return {
+            "provider_id": target,
+            "provider_name": target,
+            "billing_scope": "local",
+        }
+    return {
+        "provider_id": target,
+        "provider_name": target,
+        "billing_scope": "department",
+    }
+
 def user_quota_allows(user, category):
     quota = user.get("quota") or {}
     limit = int(quota.get(f"daily_{category}") or 0)
@@ -2158,6 +2278,41 @@ def user_quota_allows(user, category):
     if concurrent and running >= concurrent:
         raise HTTPException(status_code=429, detail=f"已达到{category}并发配额（{concurrent} 个）。")
 
+def api_profile_quota_allows(profile, category):
+    policy = normalize_profile_usage_policy(profile.get("usage_policy"))
+    concurrent = int(policy["concurrent"].get(category) or 0)
+    budget = int(policy["monthly_budget"].get(category) or 0)
+    if not concurrent and not (budget and policy["hard_limit_enabled"]):
+        return
+    profile_id = str(profile.get("id") or "")
+    relevant = [
+        item for item in usage_events()
+        if item.get("api_profile_id") == profile_id
+        and item.get("category") == category
+    ]
+    if concurrent:
+        running = sum(
+            1 for item in relevant
+            if item.get("status") in {"queued", "running"}
+        )
+        if running >= concurrent:
+            raise HTTPException(
+                status_code=429,
+                detail=f"API 配置组“{profile.get('name') or profile_id}”已达到 {category} 并发限制（{concurrent} 个）。",
+            )
+    if budget and policy["hard_limit_enabled"]:
+        month = datetime.date.today().strftime("%Y-%m")
+        used = sum(
+            1 for item in relevant
+            if str(item.get("created_at_iso") or "").startswith(month)
+            and item.get("status") != "cancelled"
+        )
+        if used >= budget:
+            raise HTTPException(
+                status_code=429,
+                detail=f"API 配置组“{profile.get('name') or profile_id}”已达到本月 {category} 硬配额（{budget} 次）。",
+            )
+
 def maybe_create_usage_alert(event):
     policy = load_usage_policy()
     threshold = policy["alert_thresholds"].get(event.get("category"), 0)
@@ -2167,38 +2322,178 @@ def maybe_create_usage_alert(event):
     count = sum(1 for item in usage_events() if item.get("user_id") == event.get("user_id") and item.get("category") == event.get("category") and float(item.get("created_at") or 0) >= cutoff)
     if count < threshold:
         return
-    alerts = _read_json_file(USAGE_ALERTS_FILE, {"alerts": []})
-    rows = alerts.get("alerts") if isinstance(alerts, dict) else []
-    key = f"{event.get('user_id')}:{event.get('category')}:{int(time.time() // policy['alert_window_seconds'])}"
-    if any(item.get("key") == key for item in rows if isinstance(item, dict)):
+    with USAGE_ALERT_LOCK:
+        alerts = _read_json_file(USAGE_ALERTS_FILE, {"alerts": []})
+        rows = alerts.get("alerts") if isinstance(alerts, dict) else []
+        key = f"user:{event.get('user_id')}:{event.get('category')}:{int(time.time() // policy['alert_window_seconds'])}"
+        if any(item.get("key") == key for item in rows if isinstance(item, dict)):
+            return
+        rows.append({
+            "id": uuid.uuid4().hex,
+            "key": key,
+            "kind": "rate",
+            "scope": "user",
+            "created_at": now_ms(),
+            "acknowledged": False,
+            "user_id": event.get("user_id"),
+            "username": event.get("username"),
+            "api_profile_id": event.get("api_profile_id"),
+            "api_profile_name": event.get("api_profile_name"),
+            "billing_scope": event.get("billing_scope"),
+            "category": event.get("category"),
+            "count": count,
+            "threshold": threshold,
+        })
+        _write_json_file(USAGE_ALERTS_FILE, {"alerts": rows[-1000:]})
+
+def maybe_create_profile_budget_alert(event):
+    profile = api_profile_by_id(event.get("api_profile_id"))
+    if not profile:
         return
-    rows.append({"id": uuid.uuid4().hex, "key": key, "created_at": now_ms(), "acknowledged": False, "user_id": event.get("user_id"), "username": event.get("username"), "category": event.get("category"), "count": count, "threshold": threshold})
-    _write_json_file(USAGE_ALERTS_FILE, {"alerts": rows[-1000:]})
+    policy = normalize_profile_usage_policy(profile.get("usage_policy"))
+    category = str(event.get("category") or "")
+    budget = int(policy["monthly_budget"].get(category) or 0)
+    if not budget:
+        return
+    month = str(event.get("created_at_iso") or "")[:7]
+    count = sum(
+        1 for item in usage_events()
+        if item.get("api_profile_id") == profile.get("id")
+        and item.get("category") == category
+        and str(item.get("created_at_iso") or "").startswith(month)
+        and item.get("status") != "cancelled"
+    )
+    threshold = max(1, math.ceil(budget * policy["budget_alert_percent"] / 100))
+    if count < threshold:
+        return
+    with USAGE_ALERT_LOCK:
+        alerts = _read_json_file(USAGE_ALERTS_FILE, {"alerts": []})
+        rows = alerts.get("alerts") if isinstance(alerts, dict) else []
+        key = f"profile-budget:{profile.get('id')}:{category}:{month}"
+        if any(item.get("key") == key for item in rows if isinstance(item, dict)):
+            return
+        rows.append({
+            "id": uuid.uuid4().hex,
+            "key": key,
+            "kind": "budget",
+            "scope": "api_profile",
+            "created_at": now_ms(),
+            "acknowledged": False,
+            "api_profile_id": profile.get("id"),
+            "api_profile_name": event.get("api_profile_name") or profile.get("name"),
+            "billing_scope": event.get("billing_scope"),
+            "category": category,
+            "count": count,
+            "threshold": threshold,
+            "budget": budget,
+            "hard_limit_enabled": policy["hard_limit_enabled"],
+        })
+        _write_json_file(USAGE_ALERTS_FILE, {"alerts": rows[-1000:]})
 
 def begin_usage_event(request, function, provider="", model="", params=None):
     user = require_authenticated(request)
     profile = request_api_profile(request)
     category = usage_category(function)
-    user_quota_allows(user, category)
-    event = {
-        "id": uuid.uuid4().hex, "created_at": time.time(), "created_at_iso": datetime.datetime.now().isoformat(timespec="seconds"),
-        "completed_at": 0, "user_id": user["id"], "username": user.get("username", ""), "name": user.get("name", ""), "department": user.get("department", ""),
-        "api_profile_id": profile.get("id", ""), "api_profile_name": profile.get("name", ""),
-        "client_source": user.get("client_source", "web"), "client_ip": (request.client.host if request.client else ""),
-        "user_agent": str(request.headers.get("user-agent") or "")[:300], "function": function, "category": category,
-        "provider": str(provider or ""), "model": str(model or ""), "params": params or {}, "status": "queued", "error": "", "duration_ms": 0, "raw_usage": None,
-    }
-    append_usage_event(event)
+    provider_snapshot = usage_provider_snapshot(profile, provider)
+    with USAGE_ADMISSION_LOCK:
+        user_quota_allows(user, category)
+        api_profile_quota_allows(profile, category)
+        event = {
+            "id": uuid.uuid4().hex, "created_at": time.time(), "created_at_iso": datetime.datetime.now().isoformat(timespec="seconds"),
+            "completed_at": 0, "user_id": user["id"], "username": user.get("username", ""), "name": user.get("name", ""),
+            "department": user.get("department", ""), "department_id": str(user.get("department_id") or ""),
+            "api_profile_id": profile.get("id", ""), "api_profile_name": profile.get("name", ""),
+            "billing_scope": provider_snapshot["billing_scope"],
+            "shared_cost": provider_snapshot["billing_scope"] == "shared",
+            "client_source": user.get("client_source", "web"), "client_ip": (request.client.host if request.client else ""),
+            "user_agent": str(request.headers.get("user-agent") or "")[:300], "function": function, "category": category,
+            "provider": provider_snapshot["provider_id"], "provider_id": provider_snapshot["provider_id"],
+            "provider_name": provider_snapshot["provider_name"], "model": str(model or ""),
+            "params": sanitize_usage_value(params or {}), "status": "queued", "error": "", "duration_ms": 0,
+            "credential_kind": "api_key", "upstream_task_id": "", "raw_usage": None,
+            "api_profile_schema_version": API_PROFILE_SCHEMA_VERSION,
+        }
+        append_usage_event(event)
     maybe_create_usage_alert(event)
+    maybe_create_profile_budget_alert(event)
     return event
+
+def update_usage_event(event_or_id, **updates):
+    event_id = str(
+        event_or_id.get("id") if isinstance(event_or_id, dict) else event_or_id or ""
+    )
+    if not event_id:
+        return None
+    latest = next(
+        (item for item in usage_events() if str(item.get("id") or "") == event_id),
+        None,
+    )
+    if not latest:
+        return None
+    allowed = {
+        "status", "error", "raw_usage", "upstream_task_id", "provider",
+        "provider_id", "provider_name", "model", "billing_scope", "shared_cost",
+        "credential_kind",
+    }
+    clean = {key: value for key, value in updates.items() if key in allowed}
+    if "error" in clean:
+        clean["error"] = str(clean["error"] or "")[:500]
+    if "raw_usage" in clean:
+        clean["raw_usage"] = sanitize_raw_usage(clean["raw_usage"])
+    if "upstream_task_id" in clean:
+        clean["upstream_task_id"] = str(clean["upstream_task_id"] or "")[:300]
+    latest.update(clean)
+    append_usage_event(latest)
+    return latest
 
 def finish_usage_event(event, status="succeeded", error="", raw_usage=None):
     if not event:
         return
+    error_text = str(error or "")
+    if status == "failed":
+        lowered_error = error_text.lower()
+        if any(value in lowered_error for value in ("timed out", "timeout", "超时")):
+            status = "timed_out"
+        elif any(value in lowered_error for value in ("cancelled", "canceled", "取消", "撤销")):
+            status = "cancelled"
     done = dict(event)
-    done.update({"status": status, "error": str(error or "")[:500], "raw_usage": raw_usage, "completed_at": time.time()})
+    latest = next(
+        (
+            item for item in usage_events()
+            if str(item.get("id") or "") == str(done.get("id") or "")
+        ),
+        None,
+    )
+    if latest:
+        done.update(latest)
+    done.update({
+        "status": status,
+        "error": error_text[:500],
+        "raw_usage": sanitize_raw_usage(raw_usage),
+        "completed_at": time.time(),
+    })
     done["duration_ms"] = max(0, int((done["completed_at"] - float(done.get("created_at") or done["completed_at"])) * 1000))
     append_usage_event(done)
+
+def finish_usage_event_by_id(event_id, status="succeeded", error="", raw_usage=None):
+    target = str(event_id or "")
+    if not target:
+        return
+    event = next(
+        (item for item in usage_events() if str(item.get("id") or "") == target),
+        None,
+    )
+    if not event:
+        return
+    if event.get("status") in {"succeeded", "failed", "cancelled", "timed_out"}:
+        return
+    finish_usage_event(event, status, error, raw_usage)
+
+def finish_scoped_usage_event(scope, status="succeeded", error="", raw_usage=None):
+    if isinstance(scope, dict):
+        finish_usage_event_by_id(
+            scope.get("usage_event_id"), status, error, raw_usage
+        )
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -3309,6 +3604,7 @@ class AdminApiProfileCreateRequest(BaseModel):
 class AdminApiProfileUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=80)
     enabled: Optional[bool] = None
+    usage_policy: Optional[Dict[str, Any]] = None
 
 class AdminPasswordResetRequest(BaseModel):
     new_password: str = Field(min_length=10, max_length=200)
@@ -3528,16 +3824,19 @@ async def admin_create_api_profile(payload: AdminApiProfileCreateRequest, reques
     if api_profile_by_id(profile_id, data):
         raise HTTPException(status_code=400, detail=f"API 配置组 ID 已存在：{profile_id}")
     providers = []
+    usage_policy = {}
     copy_from = str(payload.copy_from or "").strip().lower()
     if copy_from:
         source = api_profile_by_id(copy_from, data)
         if not source:
             raise HTTPException(status_code=400, detail=f"复制来源不存在：{copy_from}")
         providers = [dict(item) for item in source.get("providers") or []]
+        usage_policy = dict(source.get("usage_policy") or {})
     profile = normalize_api_profile({
         "id": profile_id,
         "name": payload.name,
         "enabled": True,
+        "usage_policy": usage_policy,
         "providers": providers,
     })
     data["profiles"].append(profile)
@@ -3557,6 +3856,8 @@ async def admin_update_api_profile(profile_id: str, payload: AdminApiProfileUpda
         profile["name"] = re.sub(r"\s+", " ", payload.name.strip())[:80]
     if payload.enabled is not None:
         profile["enabled"] = bool(payload.enabled)
+    if payload.usage_policy is not None:
+        profile["usage_policy"] = normalize_profile_usage_policy(payload.usage_policy)
     save_api_profiles(data)
     return {"profile": public_api_profile(profile)}
 
@@ -3650,43 +3951,177 @@ async def admin_delete_user(user_id: str, request: Request):
     revoke_user_sessions(user_id)
     return {"ok": True}
 
-@app.get("/api/admin/usage")
-async def admin_usage(request: Request):
-    require_admin(request)
-    events = usage_events()
+def filter_usage_events_for_request(events, request, include_keyword=True):
+    rows = list(events or [])
     start_at = str(request.query_params.get("start_at") or "").strip()
     end_at = str(request.query_params.get("end_at") or "").strip()
     if start_at:
-        events = [item for item in events if str(item.get("created_at_iso") or "") >= start_at]
+        rows = [item for item in rows if str(item.get("created_at_iso") or "") >= start_at]
     if end_at:
-        events = [item for item in events if str(item.get("created_at_iso") or "") <= end_at]
-    filters = {key: str(request.query_params.get(key) or "").strip() for key in ("user_id", "department", "function", "provider", "model", "status", "category", "client_source")}
-    for key, value in filters.items():
+        rows = [item for item in rows if str(item.get("created_at_iso") or "") <= end_at]
+    filter_keys = (
+        "user_id", "department", "department_id", "api_profile_id",
+        "billing_scope", "function", "provider", "provider_id", "model",
+        "status", "category", "client_source",
+    )
+    for key in filter_keys:
+        value = str(request.query_params.get(key) or "").strip()
         if value:
-            events = [item for item in events if str(item.get(key) or "") == value]
-    keyword = str(request.query_params.get("q") or "").strip().lower()
-    if keyword:
-        searchable_fields = ("username", "name", "department", "function", "provider", "model", "client_source", "status")
-        events = [item for item in events if any(keyword in str(item.get(key) or "").lower() for key in searchable_fields)]
+            rows = [item for item in rows if str(item.get(key) or "") == value]
+    if include_keyword:
+        keyword = str(request.query_params.get("q") or "").strip().lower()
+        if keyword:
+            searchable_fields = (
+                "username", "name", "department", "api_profile_id",
+                "api_profile_name", "billing_scope", "function", "provider",
+                "provider_name", "model", "client_source", "status",
+                "upstream_task_id",
+            )
+            rows = [
+                item for item in rows
+                if any(
+                    keyword in str(item.get(key) or "").lower()
+                    for key in searchable_fields
+                )
+            ]
+    return rows
+
+def public_usage_export_event(item):
+    allowed = (
+        "id", "created_at_iso", "completed_at", "duration_ms", "user_id",
+        "username", "name", "department_id", "department", "api_profile_id",
+        "api_profile_name", "billing_scope", "shared_cost", "function",
+        "category", "provider_id", "provider", "provider_name", "model",
+        "credential_kind", "status", "error", "upstream_task_id",
+        "client_source", "raw_usage",
+    )
+    result = {key: item.get(key) for key in allowed}
+    result["raw_usage"] = sanitize_raw_usage(result.get("raw_usage"))
+    return result
+
+@app.get("/api/admin/usage")
+async def admin_usage(request: Request):
+    require_admin(request)
+    events = filter_usage_events_for_request(usage_events(), request)
     events.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
     total = len(events)
     offset = max(0, int(request.query_params.get("offset") or 0))
     limit = min(500, max(1, int(request.query_params.get("limit") or 100)))
     return {"events": events[offset:offset + limit], "total": total, "offset": offset, "limit": limit}
 
+@app.get("/api/admin/usage/export")
+async def admin_usage_export(request: Request):
+    require_admin(request)
+    events = filter_usage_events_for_request(usage_events(), request)
+    events.sort(key=lambda item: float(item.get("created_at") or 0))
+    payload = {
+        "version": 1,
+        "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "filters": {
+            key: str(request.query_params.get(key) or "")
+            for key in (
+                "start_at", "end_at", "user_id", "department_id",
+                "api_profile_id", "billing_scope", "provider", "model",
+                "status", "category", "client_source", "q",
+            )
+            if str(request.query_params.get(key) or "")
+        },
+        "total": len(events),
+        "events": [public_usage_export_event(item) for item in events],
+    }
+    filename = f"infinite-canvas-usage-{datetime.date.today().isoformat()}.json"
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+@app.get("/api/admin/usage/profiles")
+async def admin_usage_profiles(request: Request):
+    require_admin(request)
+    events = filter_usage_events_for_request(usage_events(), request)
+    profiles_data = load_api_profiles()
+    current_profiles = {
+        str(item.get("id") or ""): item
+        for item in profiles_data.get("profiles") or []
+    }
+    groups = {}
+    for item in events:
+        profile_id = str(item.get("api_profile_id") or "")
+        if not profile_id:
+            profile_id = "__missing__"
+        group = groups.setdefault(profile_id, {
+            "api_profile_id": profile_id,
+            "api_profile_name": str(item.get("api_profile_name") or profile_id),
+            "total": 0,
+            "statuses": {},
+            "by_category": {key: 0 for key in USAGE_CATEGORIES},
+            "by_billing_scope": {
+                "department": 0, "shared": 0, "local": 0, "disabled": 0,
+            },
+            "by_provider": {},
+            "by_model": {},
+            "by_credential_kind": {},
+            "running": 0,
+        })
+        group["total"] += 1
+        status = str(item.get("status") or "unknown")
+        group["statuses"][status] = group["statuses"].get(status, 0) + 1
+        if status in {"queued", "running"}:
+            group["running"] += 1
+        category = str(item.get("category") or "")
+        if category in group["by_category"]:
+            group["by_category"][category] += 1
+        billing_scope = str(item.get("billing_scope") or "department")
+        if billing_scope not in group["by_billing_scope"]:
+            billing_scope = "department"
+        group["by_billing_scope"][billing_scope] += 1
+        provider = str(item.get("provider_name") or item.get("provider") or "未标明平台")
+        model = str(item.get("model") or "未标明模型")
+        group["by_provider"][provider] = group["by_provider"].get(provider, 0) + 1
+        group["by_model"][model] = group["by_model"].get(model, 0) + 1
+        credential_kind = str(item.get("credential_kind") or "api_key")
+        group["by_credential_kind"][credential_kind] = (
+            group["by_credential_kind"].get(credential_kind, 0) + 1
+        )
+    for profile_id, profile in current_profiles.items():
+        group = groups.setdefault(profile_id, {
+            "api_profile_id": profile_id,
+            "api_profile_name": str(profile.get("name") or profile_id),
+            "total": 0,
+            "statuses": {},
+            "by_category": {key: 0 for key in USAGE_CATEGORIES},
+            "by_billing_scope": {
+                "department": 0, "shared": 0, "local": 0, "disabled": 0,
+            },
+            "by_provider": {},
+            "by_model": {},
+            "by_credential_kind": {},
+            "running": 0,
+        })
+        group["current_name"] = str(profile.get("name") or profile_id)
+        group["enabled"] = bool(profile.get("enabled", True))
+        group["usage_policy"] = normalize_profile_usage_policy(profile.get("usage_policy"))
+        group["budget_usage"] = {
+            key: {
+                "used": group["by_category"].get(key, 0),
+                "budget": int(group["usage_policy"]["monthly_budget"].get(key) or 0),
+            }
+            for key in USAGE_CATEGORIES
+        }
+    rows = sorted(
+        groups.values(),
+        key=lambda item: (-int(item.get("total") or 0), item.get("api_profile_id")),
+    )
+    return {"total": sum(item["total"] for item in rows), "profiles": rows}
+
 @app.get("/api/admin/usage/models")
 async def admin_usage_models(request: Request):
     require_admin(request)
-    events = usage_events()
+    events = filter_usage_events_for_request(
+        usage_events(), request, include_keyword=False
+    )
     user_id = str(request.query_params.get("user_id") or "").strip()
-    start_at = str(request.query_params.get("start_at") or "").strip()
-    end_at = str(request.query_params.get("end_at") or "").strip()
-    if user_id:
-        events = [item for item in events if str(item.get("user_id") or "") == user_id]
-    if start_at:
-        events = [item for item in events if str(item.get("created_at_iso") or "") >= start_at]
-    if end_at:
-        events = [item for item in events if str(item.get("created_at_iso") or "") <= end_at]
     by_model = {}
     for item in events:
         provider = str(item.get("provider") or "").strip()
@@ -3752,6 +4187,21 @@ def usage_analytics_provider_label(item):
     provider = str(item.get("provider") or "").strip()
     return provider or "未标明服务"
 
+def usage_analytics_profile_label(item):
+    name = str(item.get("api_profile_name") or "").strip()
+    profile_id = str(item.get("api_profile_id") or "").strip()
+    return f"{name} · {profile_id}" if name and name != profile_id else (profile_id or "未标明配置组")
+
+def usage_analytics_billing_scope_label(item):
+    labels = {
+        "department": "配置组承担",
+        "shared": "共享费用",
+        "local": "本地资源",
+        "disabled": "已停用",
+    }
+    scope = str(item.get("billing_scope") or "department").strip().lower()
+    return labels.get(scope, scope or "未标明计费性质")
+
 def usage_analytics_breakdown(events, labeler, limit=10):
     counts = {}
     for item in events:
@@ -3772,13 +4222,11 @@ def usage_analytics_breakdown(events, labeler, limit=10):
 @app.get("/api/admin/usage/analytics")
 async def admin_usage_analytics(request: Request):
     require_admin(request)
-    events = usage_events()
+    events = filter_usage_events_for_request(
+        usage_events(), request, include_keyword=False
+    )
     start_at = str(request.query_params.get("start_at") or "").strip()
     end_at = str(request.query_params.get("end_at") or "").strip()
-    if start_at:
-        events = [item for item in events if str(item.get("created_at_iso") or "") >= start_at]
-    if end_at:
-        events = [item for item in events if str(item.get("created_at_iso") or "") <= end_at]
 
     user_limit = max(3, min(25, int(request.query_params.get("user_limit") or 10)))
     model_limit = max(3, min(12, int(request.query_params.get("model_limit") or 6)))
@@ -3786,11 +4234,15 @@ async def admin_usage_analytics(request: Request):
     bucket_minutes = max(1, min(1440, int(request.query_params.get("bucket_minutes") or 10)))
     selected_user_id = str(request.query_params.get("selected_user_id") or "").strip()
 
-    summary = {"total": len(events), "succeeded": 0, "failed": 0, "queued": 0, "average_duration_ms": 0}
+    summary = {
+        "total": len(events), "succeeded": 0, "failed": 0, "queued": 0,
+        "running": 0, "cancelled": 0, "timed_out": 0,
+        "average_duration_ms": 0,
+    }
     duration_total = 0
     for item in events:
         status = str(item.get("status") or "")
-        if status in ("succeeded", "failed", "queued"):
+        if status in ("succeeded", "failed", "queued", "running", "cancelled", "timed_out"):
             summary[status] += 1
         duration_total += max(0, int(item.get("duration_ms") or 0))
     if events:
@@ -3806,8 +4258,13 @@ async def admin_usage_analytics(request: Request):
         bucket_at = created.replace(minute=minute, second=0, microsecond=0).isoformat(timespec="minutes")
         bucket = buckets.setdefault(bucket_at, {"at": bucket_at, "succeeded": 0, "failed": 0, "queued": 0})
         status = str(item.get("status") or "")
-        if status in ("succeeded", "failed", "queued"):
-            bucket[status] += 1
+        bucket_status = (
+            "failed" if status in {"failed", "cancelled", "timed_out"}
+            else "queued" if status in {"queued", "running"}
+            else status
+        )
+        if bucket_status in ("succeeded", "failed", "queued"):
+            bucket[bucket_status] += 1
 
     user_groups = {}
     for item in events:
@@ -3877,8 +4334,13 @@ async def admin_usage_analytics(request: Request):
         group = health_groups.setdefault(label, {"label": label, "total": 0, "succeeded": 0, "failed": 0, "queued": 0, "durations": []})
         group["total"] += 1
         status = str(item.get("status") or "")
-        if status in ("succeeded", "failed", "queued"):
-            group[status] += 1
+        health_status = (
+            "failed" if status in {"failed", "cancelled", "timed_out"}
+            else "queued" if status in {"queued", "running"}
+            else status
+        )
+        if health_status in ("succeeded", "failed", "queued"):
+            group[health_status] += 1
         duration = max(0, int(item.get("duration_ms") or 0))
         if duration:
             group["durations"].append(duration)
@@ -3903,6 +4365,8 @@ async def admin_usage_analytics(request: Request):
         "workflows": usage_analytics_breakdown(scoped_events, usage_analytics_workflow_label, dimension_limit),
         "applications": usage_analytics_breakdown(scoped_events, usage_analytics_application_label, dimension_limit),
         "providers": usage_analytics_breakdown(scoped_events, usage_analytics_provider_label, dimension_limit),
+        "api_profiles": usage_analytics_breakdown(scoped_events, usage_analytics_profile_label, dimension_limit),
+        "billing_scopes": usage_analytics_breakdown(scoped_events, usage_analytics_billing_scope_label, dimension_limit),
     }
     return {
         "range": {"start_at": start_at, "end_at": end_at, "bucket_minutes": bucket_minutes},
@@ -3917,8 +4381,16 @@ async def admin_usage_analytics(request: Request):
 @app.get("/api/admin/usage/summary")
 async def admin_usage_summary(request: Request):
     require_admin(request)
-    events = usage_events()
-    summary = {"total": len(events), "succeeded": 0, "failed": 0, "by_category": {"image": 0, "video": 0, "llm": 0}, "by_model": {}}
+    events = filter_usage_events_for_request(usage_events(), request)
+    summary = {
+        "total": len(events),
+        "succeeded": 0,
+        "failed": 0,
+        "by_category": {"image": 0, "video": 0, "llm": 0},
+        "by_model": {},
+        "by_api_profile": {},
+        "by_billing_scope": {},
+    }
     for item in events:
         status = item.get("status")
         if status == "succeeded": summary["succeeded"] += 1
@@ -3927,6 +4399,10 @@ async def admin_usage_summary(request: Request):
         if category in summary["by_category"]: summary["by_category"][category] += 1
         model = item.get("model") or "未标明模型"
         summary["by_model"][model] = summary["by_model"].get(model, 0) + 1
+        profile_id = item.get("api_profile_id") or "未标明配置组"
+        summary["by_api_profile"][profile_id] = summary["by_api_profile"].get(profile_id, 0) + 1
+        billing_scope = item.get("billing_scope") or "department"
+        summary["by_billing_scope"][billing_scope] = summary["by_billing_scope"].get(billing_scope, 0) + 1
     return summary
 
 @app.get("/api/admin/alerts")
@@ -11658,6 +12134,12 @@ def save_upstream_task_scope(
             for key in oldest[:len(tasks) - 10000]:
                 tasks.pop(key, None)
         _write_json_file(UPSTREAM_TASK_SCOPES_FILE, data)
+    if usage_event_id:
+        update_usage_event(
+            usage_event_id,
+            upstream_task_id=task_key,
+            credential_kind=str(credential_kind or "api_key"),
+        )
 
 def remember_upstream_task_scope(
     request, task_id, upstream_context: UpstreamContext, credential_kind="api_key", metadata=None
@@ -16453,6 +16935,11 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
                         "raw": raw,
                     }
                     save_to_history(result)
+                    finish_scoped_usage_event(
+                        _task_scope,
+                        "succeeded",
+                        raw_usage=raw.get("usage") if isinstance(raw, dict) else None,
+                    )
                     if GLOBAL_LOOP:
                         asyncio.run_coroutine_threadsafe(
                             manager.broadcast_new_image(
@@ -16464,6 +16951,9 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
                         )
                     return result
                 if code in (805, "805"):
+                    finish_scoped_usage_event(
+                        _task_scope, "failed", runninghub_fail_reason(raw)
+                    )
                     return {
                         "status": "failed",
                         "task_id": task_id,
@@ -16527,6 +17017,11 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
             "raw": raw,
         }
         save_to_history(result)
+        finish_scoped_usage_event(
+            _task_scope,
+            "succeeded",
+            raw_usage=raw.get("usage") if isinstance(raw, dict) else None,
+        )
         if GLOBAL_LOOP:
             asyncio.run_coroutine_threadsafe(
                 manager.broadcast_new_image(
@@ -16538,6 +17033,9 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
             )
         return result
     if status in IMAGE_TASK_FAILED_STATUSES:
+        finish_scoped_usage_event(
+            _task_scope, "failed", image_task_fail_reason(raw)
+        )
         return {
             "status": "failed",
             "task_id": task_id,
