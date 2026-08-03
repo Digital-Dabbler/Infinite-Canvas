@@ -310,6 +310,7 @@ AUTH_SESSIONS_FILE = os.path.join(DATA_DIR, "auth_sessions.json")
 USAGE_AUDIT_DIR = os.path.join(DATA_DIR, "usage_audit")
 USAGE_ALERTS_FILE = os.path.join(DATA_DIR, "usage_alerts.json")
 USAGE_POLICY_FILE = os.path.join(DATA_DIR, "usage_policy.json")
+SITE_ANNOUNCEMENT_FILE = os.path.join(DATA_DIR, "site_announcement.json")
 PHOTOSHOP_BRIDGE_TASKS_FILE = os.path.join(DATA_DIR, "photoshop_bridge_tasks.json")
 GLOBAL_CONFIG_FILE = os.path.join(BASE_DIR, "global_config.json")
 CANVAS_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
@@ -1889,6 +1890,7 @@ DEPARTMENT_LOCK = Lock()
 USAGE_AUDIT_LOCK = Lock()
 USAGE_ADMISSION_LOCK = Lock()
 USAGE_ALERT_LOCK = Lock()
+SITE_ANNOUNCEMENT_LOCK = Lock()
 PHOTOSHOP_BRIDGE_LOCK = Lock()
 USAGE_DEFAULT_POLICY = {
     "alert_thresholds": {"image": 50, "video": 10, "llm": 300},
@@ -1921,6 +1923,62 @@ def _write_json_file(path, value):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(value, f, ensure_ascii=False, indent=2)
+
+SITE_ANNOUNCEMENT_DEFAULT = {
+    "version": 1,
+    "id": "initial-20260803",
+    "title": "无限画布 API 经费账户分组切换通知",
+    "content": (
+        "从 2026 年 8 月 6 日起，无限画布用户将按原画、UI、动效、市场四个组彻底分开。"
+        "各组使用经费将独立计算，并通过各自不同的 API 账户扣费。\n\n"
+        "请各组组长在切换日前准备好已充值且可正常使用的 API 平台账户，并交由管理员统一配置和管理。\n"
+        "目前仍继续使用共享 API 账户；正式切换后，未准备好可用 API 账户的组将无法继续使用需要扣费的项目。\n"
+        "受影响的扣费模型包括但不限于 Nano Banana、GPT Image 2 等。\n"
+        "当前无限画布主要使用 RunningHub 海外版：https://www.runninghub.ai/\n\n"
+        "画布资源共享规则不变：大家仍可使用其他人的画布或图片素材。本次调整只涉及 API 账户与经费归属。"
+    ),
+    "enabled": True,
+    "starts_at": 1785686400000,
+    "ends_at": 1786031999000,
+    "updated_at": 1785686400000,
+    "updated_by": "system",
+}
+
+def load_site_announcement():
+    saved = _read_json_file(SITE_ANNOUNCEMENT_FILE, SITE_ANNOUNCEMENT_DEFAULT)
+    if not isinstance(saved, dict):
+        saved = SITE_ANNOUNCEMENT_DEFAULT
+    def safe_int(value):
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+    return {
+        "version": 1,
+        "id": str(saved.get("id") or ""),
+        "title": str(saved.get("title") or "")[:120],
+        "content": str(saved.get("content") or "")[:5000],
+        "enabled": bool(saved.get("enabled", False)),
+        "starts_at": safe_int(saved.get("starts_at")),
+        "ends_at": safe_int(saved.get("ends_at")),
+        "updated_at": safe_int(saved.get("updated_at")),
+        "updated_by": str(saved.get("updated_by") or "")[:80],
+    }
+
+def public_site_announcement(announcement):
+    return {
+        key: announcement.get(key)
+        for key in ("id", "title", "content", "starts_at", "ends_at", "updated_at")
+    }
+
+def site_announcement_is_active(announcement, at_ms=None):
+    current = now_ms() if at_ms is None else int(at_ms)
+    return bool(
+        announcement.get("enabled")
+        and announcement.get("title")
+        and announcement.get("content")
+        and int(announcement.get("starts_at") or 0) <= current < int(announcement.get("ends_at") or 0)
+    )
 
 def _password_hash(password, salt=None):
     salt_bytes = base64.b64decode(salt) if salt else secrets.token_bytes(16)
@@ -3616,10 +3674,17 @@ class UsagePolicyRequest(BaseModel):
 class UsageAlertUpdateRequest(BaseModel):
     acknowledged: bool = True
 
+class SiteAnnouncementRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=5000)
+    enabled: bool = True
+    starts_at: int = Field(ge=0)
+    ends_at: int = Field(ge=0)
+
 @app.post("/api/auth/register")
 async def auth_register(payload: AuthRegisterRequest):
-    username = re.sub(r"[^a-zA-Z0-9_.-]", "", payload.username.strip().lower())
-    if len(username) < 3:
+    username = payload.username.strip().lower()
+    if not re.fullmatch(r"[a-z0-9_.-]{3,40}", username):
         raise HTTPException(status_code=400, detail="账号只能使用 3-40 位字母、数字、点、下划线或连字符。")
     department = resolve_department(payload.department)
     with AUTH_LOCK:
@@ -4434,6 +4499,46 @@ async def admin_save_usage_policy(payload: UsagePolicyRequest, request: Request)
     if payload.alert_window_seconds is not None:
         update["alert_window_seconds"] = max(60, int(payload.alert_window_seconds))
     return save_usage_policy(update)
+
+@app.get("/api/announcement")
+async def site_announcement(request: Request):
+    require_authenticated(request)
+    with SITE_ANNOUNCEMENT_LOCK:
+        announcement = load_site_announcement()
+    response = JSONResponse({
+        "announcement": public_site_announcement(announcement) if site_announcement_is_active(announcement) else None,
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+@app.get("/api/admin/announcement")
+async def admin_site_announcement(request: Request):
+    require_admin(request)
+    with SITE_ANNOUNCEMENT_LOCK:
+        announcement = load_site_announcement()
+    return {"announcement": announcement, "active": site_announcement_is_active(announcement)}
+
+@app.put("/api/admin/announcement")
+async def admin_save_site_announcement(payload: SiteAnnouncementRequest, request: Request):
+    admin = require_admin(request)
+    if payload.ends_at <= payload.starts_at:
+        raise HTTPException(status_code=400, detail="公告结束时间必须晚于开始时间。")
+    announcement = {
+        "version": 1,
+        "id": uuid.uuid4().hex,
+        "title": payload.title.strip(),
+        "content": payload.content.strip(),
+        "enabled": bool(payload.enabled),
+        "starts_at": int(payload.starts_at),
+        "ends_at": int(payload.ends_at),
+        "updated_at": now_ms(),
+        "updated_by": str(admin.get("username") or admin.get("name") or "admin")[:80],
+    }
+    if not announcement["title"] or not announcement["content"]:
+        raise HTTPException(status_code=400, detail="公告标题和正文不能为空。")
+    with SITE_ANNOUNCEMENT_LOCK:
+        _write_json_file(SITE_ANNOUNCEMENT_FILE, announcement)
+    return {"announcement": announcement, "active": site_announcement_is_active(announcement)}
 
 class CloudGenRequest(BaseModel):
     prompt: str

@@ -717,6 +717,7 @@
         .side-pill { gap:0; }
         .sidebar:hover .side-pill { gap:8px; }
 
+        #api-settings-entry-btn[hidden],
         #admin-entry-btn[hidden] { display: none !important; }
 
         .project-version-badge {
@@ -1554,7 +1555,7 @@
             </nav>
 
             <div class="side-actions">
-                <button id="api-settings-entry-btn" class="side-pill" onclick="switchUI(this, 'api-settings')" type="button" title="API 设置">
+                <button id="api-settings-entry-btn" class="side-pill" onclick="switchUI(this, 'api-settings')" type="button" title="API 设置" hidden>
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M15 7h3a5 5 0 0 1 0 10h-3"></path>
                         <path d="M9 17H6A5 5 0 0 1 6 7h3"></path>
@@ -1604,6 +1605,18 @@
                             <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
                         </svg>
                         <span class="side-pill-text" data-i18n="common.language">中文</span>
+                    </button>
+                    <button class="side-pill" onclick="openSiteAnnouncement()" type="button" title="公告">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M3 11v2"></path>
+                            <path d="M6 10v4"></path>
+                            <path d="M9 9v6"></path>
+                            <path d="M12 8v8"></path>
+                            <path d="M15 6.5v11"></path>
+                            <path d="M18 5v14"></path>
+                            <path d="M21 3v18"></path>
+                        </svg>
+                        <span class="side-pill-text">公告</span>
                     </button>
                     <button class="side-pill" onclick="logoutCurrentUser()" type="button" title="退出登录">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1879,19 +1892,28 @@
         }
 
         async function loadCurrentUserNavigation() {
+            const apiSettingsEntry = document.getElementById('api-settings-entry-btn');
             const adminEntry = document.getElementById('admin-entry-btn');
+            const restrictSavedPage = () => {
+                if(['api-settings', 'comfyui-settings', 'admin'].includes(localStorage.getItem(ACTIVE_PAGE_KEY))) {
+                    localStorage.setItem(ACTIVE_PAGE_KEY, DEFAULT_PAGE_ID);
+                }
+            };
             try {
                 const response = await fetch('/api/auth/me');
-                if(!response.ok) return;
+                if(!response.ok) {
+                    restrictSavedPage();
+                    return;
+                }
                 const data = await response.json();
                 const isAdmin = data?.user?.role === 'admin';
+                if(apiSettingsEntry) apiSettingsEntry.hidden = !isAdmin;
                 if(adminEntry) adminEntry.hidden = !isAdmin;
-                if(!isAdmin && localStorage.getItem(ACTIVE_PAGE_KEY) === 'admin') {
-                    const fallback = document.querySelector("[onclick*=\"'zimage'\"]");
-                    switchUI(fallback, DEFAULT_PAGE_ID);
-                }
+                if(!isAdmin) restrictSavedPage();
             } catch(e) {
+                if(apiSettingsEntry) apiSettingsEntry.hidden = true;
                 if(adminEntry) adminEntry.hidden = true;
+                restrictSavedPage();
             }
         }
 
@@ -1994,8 +2016,7 @@
             document.documentElement.classList.remove('studio-route-booting');
         }
         document.addEventListener('DOMContentLoaded', () => {
-            restoreActivePage();
-            loadCurrentUserNavigation();
+            loadCurrentUserNavigation().finally(restoreActivePage);
         }, { once:true });
 
         async function syncStatus() {
@@ -2862,6 +2883,7 @@
             }
         }
     </script>
+    <script src="/static/js/site-announcement.js"></script>
 </body>
 
 </html>
