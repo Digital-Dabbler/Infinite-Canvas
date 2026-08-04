@@ -30,6 +30,14 @@ class DepartmentManagementTests(unittest.TestCase):
                             "enabled": True,
                         },
                         {
+                            "id": "case-mismatch-user",
+                            "username": "case-mismatch",
+                            "name": "大小写历史数据",
+                            "department": "ui",
+                            "role": "user",
+                            "enabled": True,
+                        },
+                        {
                             "id": "admin",
                             "username": "admin",
                             "name": "管理员",
@@ -63,6 +71,13 @@ class DepartmentManagementTests(unittest.TestCase):
 
         self.assertEqual([row["name"] for row in rows], ["UI"])
         self.assertTrue(rows[0]["enabled"])
+
+    def test_department_count_does_not_merge_case_mismatched_legacy_labels(self):
+        result = asyncio.run(main.admin_departments(self.request))
+
+        self.assertEqual(result["departments"][0]["name"], "UI")
+        self.assertEqual(result["departments"][0]["assigned_users"], 1)
+        self.assertEqual(result["unassigned_users"], 1)
 
     def test_registration_rejects_free_text_and_stores_stable_department_id(self):
         department = main.load_departments()["departments"][0]

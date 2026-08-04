@@ -1611,9 +1611,17 @@ def public_provider(provider, api_profile_id=""):
         except Exception:
             pass
     key = provider_env_key_value(provider["id"], api_profile_id)
+    protocol = str(provider.get("protocol") or "").strip().lower()
+    if protocol == "codex":
+        chat_configured = bool(codex_cli_executable())
+    elif protocol == "gemini-cli":
+        chat_configured = bool(gemini_cli_executable())
+    else:
+        chat_configured = bool(key)
     item = {
         **provider,
         "has_key": bool(key),
+        "chat_configured": chat_configured,
         "key_preview": mask_secret(key),
         "key_env": provider_key_env(provider["id"], api_profile_id),
     }
@@ -2068,6 +2076,33 @@ def save_departments(data):
 def department_by_id(department_id, data=None):
     target = str(department_id or "").strip().lower()
     return next((item for item in (data or load_departments()).get("departments", []) if item.get("id") == target), None)
+
+def user_department_id(user, departments_data=None):
+    """返回用户明确归属的部门。
+
+    新账号以稳定 department_id 为准；旧账号只接受与部门显示名称完全一致的值。
+    不再把 `ui` 之类大小写不一致的历史脏数据静默计入 `UI`；这类账号仍会
+    出现在全部用户列表中，等待管理员明确分配。
+    """
+    data = departments_data or load_departments()
+    stored_id = str((user or {}).get("department_id") or "").strip().lower()
+    if stored_id and department_by_id(stored_id, data):
+        return stored_id
+    legacy_name = str((user or {}).get("department") or "").strip()
+    match = next(
+        (
+            item for item in data.get("departments", [])
+            if str(item.get("name") or "").strip() == legacy_name
+        ),
+        None,
+    )
+    return str((match or {}).get("id") or "")
+
+def user_belongs_to_department(user, department, departments_data=None):
+    return bool(
+        department
+        and user_department_id(user, departments_data) == str(department.get("id") or "")
+    )
 
 def resolve_department(value, include_disabled=False):
     target = str(value or "").strip()
@@ -3666,6 +3701,10 @@ class AdminUserUpdateRequest(BaseModel):
     api_profile_id: Optional[str] = None
     department_id: Optional[str] = None
 
+class AdminBulkUserProfileRequest(BaseModel):
+    user_ids: List[str] = Field(default_factory=list)
+    api_profile_id: str = ""
+
 class AdminDepartmentCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
@@ -3807,12 +3846,17 @@ async def admin_departments(request: Request):
     data = load_departments()
     result = []
     for item in data.get("departments", []):
-        count = sum(1 for user in users if user.get("role") != "admin" and (
-            str(user.get("department_id") or "") == item["id"]
-            or (not user.get("department_id") and str(user.get("department") or "").casefold() == item["name"].casefold())
-        ))
+        count = sum(
+            1 for user in users
+            if user.get("role") != "admin"
+            and user_belongs_to_department(user, item, data)
+        )
         result.append({**item, "assigned_users": count})
-    return {"departments": result}
+    unassigned = sum(
+        1 for user in users
+        if user.get("role") != "admin" and not user_department_id(user, data)
+    )
+    return {"departments": result, "unassigned_users": unassigned}
 
 @app.post("/api/admin/departments")
 async def admin_create_department(payload: AdminDepartmentCreateRequest, request: Request):
@@ -3856,7 +3900,7 @@ async def admin_update_department(department_id: str, payload: AdminDepartmentUp
             users_data = load_auth_users()
             for user in users_data["users"]:
                 if (str(user.get("department_id") or "") == item["id"]
-                        or (not user.get("department_id") and str(user.get("department") or "").casefold() == old_name.casefold())):
+                        or (not user.get("department_id") and str(user.get("department") or "").strip() == old_name)):
                     user["department_id"] = item["id"]
                     user["department"] = item["name"]
             save_auth_users(users_data)
@@ -3871,10 +3915,10 @@ async def admin_delete_department(department_id: str, request: Request):
     if not item:
         raise HTTPException(status_code=404, detail="部门不存在。")
     users = load_auth_users().get("users", [])
-    if any(user.get("role") != "admin" and (
-           str(user.get("department_id") or "") == target
-           or (not user.get("department_id") and str(user.get("department") or "").casefold() == item["name"].casefold()))
-           for user in users):
+    if any(
+        user.get("role") != "admin" and user_belongs_to_department(user, item, data)
+        for user in users
+    ):
         raise HTTPException(status_code=409, detail="仍有用户属于此部门，请先重新分配用户。")
     with DEPARTMENT_LOCK:
         current = load_departments()
@@ -3894,6 +3938,99 @@ async def admin_api_profiles(request: Request):
     return {
         "version": data.get("version", API_PROFILE_SCHEMA_VERSION),
         "profiles": [public_api_profile(item, counts.get(item.get("id"), 0)) for item in data.get("profiles") or []],
+    }
+
+def runninghub_account_status_url(provider):
+    base_url = str((provider or {}).get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL).strip()
+    parsed = urllib.parse.urlsplit(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        parsed = urllib.parse.urlsplit(RUNNINGHUB_DEFAULT_BASE_URL)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/uc/openapi/accountStatus", "", ""))
+
+def parse_runninghub_account_status(payload):
+    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else {}
+    if not data:
+        message = str((payload or {}).get("msg") or (payload or {}).get("message") or "平台未返回余额数据")
+        raise ValueError(message)
+    return {
+        "balance": data.get("remainMoney"),
+        "currency": str(data.get("currency") or ""),
+        "coins": data.get("remainCoins"),
+        "running_tasks": max(0, int(data.get("currentTaskCounts") or 0)),
+        "api_type": str(data.get("apiType") or ""),
+    }
+
+async def query_runninghub_profile_balance(client, profile, provider):
+    profile_id = str(profile.get("id") or "")
+    key = runninghub_wallet_key_value(profile_id) or provider_env_key_value("runninghub", profile_id)
+    row = {
+        "api_profile_id": profile_id,
+        "api_profile_name": str(profile.get("name") or profile_id),
+        "provider_id": "runninghub",
+        "provider_name": str(provider.get("name") or "RunningHub"),
+        "configured": bool(key),
+        "supported": True,
+        "status": "unconfigured" if not key else "loading",
+        "message": "未配置可用密钥" if not key else "",
+    }
+    if not key:
+        return row
+    try:
+        response = await client.post(
+            runninghub_account_status_url(provider),
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"apikey": key},
+        )
+        response.raise_for_status()
+        row.update(parse_runninghub_account_status(response.json()))
+        row.update({"status": "ok", "message": ""})
+    except Exception as exc:
+        row.update({"status": "error", "message": str(exc)[:500]})
+    return row
+
+@app.get("/api/admin/provider-balances")
+async def admin_provider_balances(request: Request):
+    require_admin(request)
+    profiles = load_api_profiles().get("profiles") or []
+    rows = []
+    runninghub_jobs = []
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=8.0, read=15.0, write=10.0, pool=8.0),
+        follow_redirects=True,
+    ) as client:
+        for profile in profiles:
+            for provider in profile.get("providers") or []:
+                if not provider.get("enabled", True):
+                    continue
+                provider_id = str(provider.get("id") or "")
+                configured = bool(provider_env_key_value(provider_id, profile.get("id")))
+                if provider_id == "runninghub":
+                    runninghub_jobs.append(
+                        query_runninghub_profile_balance(client, profile, provider)
+                    )
+                    continue
+                rows.append({
+                    "api_profile_id": str(profile.get("id") or ""),
+                    "api_profile_name": str(profile.get("name") or ""),
+                    "provider_id": provider_id,
+                    "provider_name": str(provider.get("name") or provider_id),
+                    "configured": configured,
+                    "supported": False,
+                    "status": "unsupported" if configured else "unconfigured",
+                    "message": (
+                        "该平台未提供统一的余额查询接口"
+                        if configured else "未配置可用密钥"
+                    ),
+                })
+        if runninghub_jobs:
+            rows.extend(await asyncio.gather(*runninghub_jobs))
+    rows.sort(key=lambda item: (
+        str(item.get("api_profile_name") or ""),
+        str(item.get("provider_name") or ""),
+    ))
+    return {
+        "queried_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "balances": rows,
     }
 
 @app.post("/api/admin/api-profiles")
@@ -3962,6 +4099,45 @@ async def admin_delete_api_profile(profile_id: str, request: Request):
     data["profiles"] = [item for item in data.get("profiles") or [] if item.get("id") != target]
     save_api_profiles(data)
     return {"ok": True}
+
+@app.patch("/api/admin/users/bulk-profile")
+async def admin_bulk_user_profile(payload: AdminBulkUserProfileRequest, request: Request):
+    require_admin(request)
+    user_ids = list(dict.fromkeys(
+        str(item or "").strip() for item in payload.user_ids if str(item or "").strip()
+    ))
+    if not user_ids:
+        raise HTTPException(status_code=400, detail="请至少选择一位用户。")
+    if len(user_ids) > 500:
+        raise HTTPException(status_code=400, detail="单次最多调整 500 位用户。")
+    profile_id = str(payload.api_profile_id or "").strip().lower()
+    if profile_id:
+        profile = api_profile_by_id(profile_id)
+        if not profile:
+            raise HTTPException(status_code=400, detail="指定的 API 配置组不存在。")
+        if not profile.get("enabled", True):
+            raise HTTPException(status_code=400, detail="不能把用户分配到已停用的 API 配置组。")
+    requested = set(user_ids)
+    updated = []
+    skipped = []
+    with AUTH_LOCK:
+        data = load_auth_users()
+        found = set()
+        for user in data.get("users") or []:
+            user_id = str(user.get("id") or "")
+            if user_id not in requested:
+                continue
+            found.add(user_id)
+            if user.get("role") == "admin":
+                skipped.append({"id": user_id, "reason": "管理员账号未批量调整"})
+                continue
+            user["api_profile_id"] = profile_id
+            updated.append(user_id)
+        missing = requested - found
+        skipped.extend({"id": user_id, "reason": "用户不存在"} for user_id in sorted(missing))
+        if updated:
+            save_auth_users(data)
+    return {"ok": True, "updated": len(updated), "updated_user_ids": updated, "skipped": skipped}
 
 @app.patch("/api/admin/users/{user_id}")
 async def admin_update_user(user_id: str, payload: AdminUserUpdateRequest, request: Request):
@@ -4043,8 +4219,22 @@ def filter_usage_events_for_request(events, request, include_keyword=True):
         rows = [item for item in rows if str(item.get("created_at_iso") or "") >= start_at]
     if end_at:
         rows = [item for item in rows if str(item.get("created_at_iso") or "") <= end_at]
+    requested_department_id = str(request.query_params.get("department_id") or "").strip().lower()
+    if requested_department_id:
+        departments_data = load_departments()
+        users_by_id = {
+            str(user.get("id") or ""): user
+            for user in load_auth_users().get("users", [])
+        }
+        def event_department_id(item):
+            user = users_by_id.get(str(item.get("user_id") or ""))
+            if user:
+                return user_department_id(user, departments_data) or "__unassigned__"
+            stored_id = str(item.get("department_id") or "").strip().lower()
+            return stored_id or "__unassigned__"
+        rows = [item for item in rows if event_department_id(item) == requested_department_id]
     filter_keys = (
-        "user_id", "department", "department_id", "api_profile_id",
+        "user_id", "department", "api_profile_id",
         "billing_scope", "function", "provider", "provider_id", "model",
         "status", "category", "client_source",
     )
@@ -4070,6 +4260,54 @@ def filter_usage_events_for_request(events, request, include_keyword=True):
             ]
     return rows
 
+def public_usage_event_detail(event):
+    """把画布异步任务中的排障信息安全地附到管理员审计行。
+
+    只暴露站内生成结果 URL 和错误文本，不返回提示词、输入素材、密钥或上游原始响应。
+    """
+    event_id = str((event or {}).get("id") or "")
+    task = next(
+        (
+            item for item in load_canvas_tasks().values()
+            if str((item or {}).get("usage_event_id") or "") == event_id
+        ),
+        {},
+    )
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    candidates = []
+    for key in ("images", "image_urls", "videos", "video_urls"):
+        values = result.get(key)
+        if isinstance(values, list):
+            candidates.extend(values)
+        elif isinstance(values, str):
+            candidates.append(values)
+    for item in result.get("image_items") or []:
+        if isinstance(item, dict):
+            candidates.append(item.get("url") or item.get("src"))
+    outputs = []
+    seen = set()
+    for value in candidates:
+        url = str(value or "").strip()
+        parsed = urllib.parse.urlparse(url)
+        safe_path = parsed.path if parsed.scheme or parsed.netloc else url.split("?", 1)[0]
+        if not safe_path.startswith(("/assets/", "/output/")) or safe_path in seen:
+            continue
+        seen.add(safe_path)
+        ext = os.path.splitext(safe_path)[1].lower()
+        kind = "video" if ext in {".mp4", ".webm", ".mov", ".m4v"} else "image"
+        outputs.append({"url": url, "kind": kind})
+        if len(outputs) >= 8:
+            break
+    error = str(task.get("error") or (event or {}).get("error") or "").strip()
+    return {
+        "task_id": str(task.get("id") or ""),
+        "upstream_task_id": str(
+            task.get("upstream_task_id") or (event or {}).get("upstream_task_id") or ""
+        ),
+        "error": error[:12000],
+        "outputs": outputs,
+    }
+
 def public_usage_export_event(item):
     allowed = (
         "id", "created_at_iso", "completed_at", "duration_ms", "user_id",
@@ -4091,7 +4329,73 @@ async def admin_usage(request: Request):
     total = len(events)
     offset = max(0, int(request.query_params.get("offset") or 0))
     limit = min(500, max(1, int(request.query_params.get("limit") or 100)))
-    return {"events": events[offset:offset + limit], "total": total, "offset": offset, "limit": limit}
+    page = []
+    for event in events[offset:offset + limit]:
+        public_event = dict(event)
+        public_event["detail"] = public_usage_event_detail(event)
+        page.append(public_event)
+    return {"events": page, "total": total, "offset": offset, "limit": limit}
+
+@app.get("/api/admin/usage/departments")
+async def admin_usage_departments(request: Request):
+    require_admin(request)
+    events = filter_usage_events_for_request(
+        usage_events(), request, include_keyword=False
+    )
+    departments_data = load_departments()
+    users = load_auth_users().get("users", [])
+    users_by_id = {str(user.get("id") or ""): user for user in users}
+    rows_by_id = {
+        str(item.get("id") or ""): {
+            "department_id": str(item.get("id") or ""),
+            "department": str(item.get("name") or ""),
+            "enabled": bool(item.get("enabled", True)),
+            "users": sum(
+                1 for user in users
+                if user.get("role") != "admin"
+                and user_belongs_to_department(user, item, departments_data)
+            ),
+            "total": 0, "succeeded": 0, "failed": 0, "pending": 0,
+            "image": 0, "video": 0, "llm": 0,
+            "active_user_ids": set(), "duration_total": 0,
+        }
+        for item in departments_data.get("departments", [])
+    }
+    for event in events:
+        user = users_by_id.get(str(event.get("user_id") or ""))
+        department_id = (
+            user_department_id(user, departments_data) if user
+            else str(event.get("department_id") or "").strip().lower()
+        )
+        row = rows_by_id.get(department_id)
+        if not row:
+            continue
+        row["total"] += 1
+        status = str(event.get("status") or "")
+        if status == "succeeded":
+            row["succeeded"] += 1
+        elif status in {"failed", "cancelled", "timed_out"}:
+            row["failed"] += 1
+        elif status in {"queued", "running"}:
+            row["pending"] += 1
+        category = str(event.get("category") or "")
+        if category in {"image", "video", "llm"}:
+            row[category] += 1
+        if event.get("user_id"):
+            row["active_user_ids"].add(str(event.get("user_id")))
+        row["duration_total"] += max(0, int(event.get("duration_ms") or 0))
+    result = []
+    for row in rows_by_id.values():
+        total = row["total"]
+        result.append({
+            **{key: value for key, value in row.items()
+               if key not in {"active_user_ids", "duration_total"}},
+            "active_users": len(row["active_user_ids"]),
+            "success_rate": round(row["succeeded"] / total, 4) if total else 0,
+            "average_duration_ms": round(row["duration_total"] / total) if total else 0,
+        })
+    result.sort(key=lambda row: (-row["total"], row["department"]))
+    return {"departments": result, "total": sum(row["total"] for row in result)}
 
 @app.get("/api/admin/usage/export")
 async def admin_usage_export(request: Request):
@@ -12979,12 +13283,13 @@ def runninghub_is_image_to_video(value):
     compact = re.sub(r"[\s_/]+", "-", text)
     return "image-to-video" in compact or "-i2v" in compact or compact.endswith("i2v")
 
-def runninghub_apply_schema_defaults(body, params):
+def runninghub_apply_schema_defaults(body, params, skip_keys=None):
+    skipped = {str(key or "").strip() for key in (skip_keys or []) if str(key or "").strip()}
     for field in params or []:
         if not isinstance(field, dict):
             continue
         key = str(field.get("fieldKey") or "").strip()
-        if not key or key in body:
+        if not key or key in body or key in skipped:
             continue
         default = field.get("defaultValue")
         options = runninghub_schema_options(field)
@@ -13009,6 +13314,24 @@ def runninghub_apply_schema_defaults(body, params):
         else:
             body[key] = default
     return body
+
+def runninghub_apply_image_aspect(body, params, aspect_ratio="", size=""):
+    field = runninghub_schema_field(params, "aspectRatio")
+    if not field:
+        field = runninghub_schema_field(params, "ratio")
+    if not field:
+        return set()
+    key = str(field.get("fieldKey") or "").strip()
+    if not key:
+        return set()
+    requested = str(aspect_ratio or "").strip()
+    adaptive = requested.lower() in {"", "empty", "auto", "adaptive", "source", "keep_ratio"}
+    if adaptive and field.get("required") is not True:
+        body.pop(key, None)
+        return {key}
+    aspect = runninghub_aspect_from_size(size, "1:1") if adaptive else requested
+    body[key] = runninghub_schema_value(field, aspect)
+    return set()
 
 def runninghub_image_model_params(params, values):
     """只允许并转换当前 RunningHub 图片模型声明过的非媒体扩展参数。"""
@@ -13727,16 +14050,10 @@ async def generate_runninghub_provider_image(
     model_def = await runninghub_model_definition(provider, model)
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or model)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
-    aspect = str(aspect_ratio or "").strip() or runninghub_aspect_from_size(size, "1:1")
     explicit_dimensions = str(resolution or "").strip() == "__custom_dimensions__"
     requested_resolution = "" if explicit_dimensions else (str(resolution or "").strip() or runninghub_resolution_from_size(size, "2k"))
     body = {"prompt": prompt}
-    if runninghub_schema_field(params, "aspectRatio"):
-        field = runninghub_schema_field(params, "aspectRatio")
-        body["aspectRatio"] = runninghub_schema_value(field, aspect)
-    elif runninghub_schema_field(params, "ratio"):
-        field = runninghub_schema_field(params, "ratio")
-        body["ratio"] = runninghub_schema_value(field, aspect)
+    skipped_default_keys = runninghub_apply_image_aspect(body, params, aspect_ratio, size)
     if runninghub_schema_field(params, "resolution") and not explicit_dimensions:
         field = runninghub_schema_field(params, "resolution")
         body["resolution"] = runninghub_schema_value(field, requested_resolution)
@@ -13786,7 +14103,7 @@ async def generate_runninghub_provider_image(
                 body[image_key] = image_urls
             else:
                 body[image_key] = image_urls[0]
-        runninghub_apply_schema_defaults(body, params)
+        runninghub_apply_schema_defaults(body, params, skip_keys=skipped_default_keys)
         response = await client.post(endpoint, headers=runninghub_json_headers(provider), json=body)
         try:
             raw = response.json()
@@ -16008,6 +16325,7 @@ async def jimeng_query_media(payload: JimengQueryMediaRequest, request: Request)
 
 @app.get("/api/config")
 async def ai_config(request: Request):
+    current_user = require_authenticated(request)
     profile = request_api_profile(request)
     enabled = [item for item in profile.get("providers") or [] if item.get("enabled", True)]
     primary_id = get_primary_provider_id(enabled)
@@ -16039,6 +16357,7 @@ async def ai_config(request: Request):
         "ms_chat_models": next((item.get("chat_models") or [] for item in enabled if item.get("id") == "modelscope"), []),
         "has_ms_key": bool(modelscope_api_key(api_profile_id=profile["id"])),
         "api_profile": public_api_profile(profile),
+        "user_id": str(current_user.get("id") or ""),
     }
 
 @app.get("/api/video-model-capabilities")

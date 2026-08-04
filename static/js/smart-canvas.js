@@ -111,6 +111,8 @@ let portDragJustFinishedAt = 0;
 let connectionEraseState = null;
 let saveTimer = null;
 let apiProviders = [];
+let currentApiProfileId = '';
+let currentApiUserId = '';
 const imageModelCapabilityCache = new Map();
 const imageModelCapabilityRequests = new Map();
 const imageProviderCapabilityRequests = new Map();
@@ -138,6 +140,7 @@ const ASSET_SMART_CATEGORY_PREFIX = '__smart_class__::';
 const PROMPT_PRESETS_KEY = 'smart_canvas_prompt_presets_v1';
 const PROMPT_TEMPLATE_GROUPS_KEY = 'smart_canvas_prompt_template_groups_v1';
 const PROMPT_TEMPLATE_OVERRIDES_KEY = 'smart_canvas_prompt_template_overrides_v1';
+const PROMPT_LLM_RECENT_KEY = 'smart_canvas_prompt_llm_recent_v1';
 let promptPresets = [];
 let builtinPromptTemplates = [];
 let promptLibraries = [];
@@ -2668,12 +2671,38 @@ function sortRunningHubFields(fields){
     });
 }
 function chatApiProviders(){
-    return (apiProviders || []).filter(p => p.enabled !== false && (p.chat_models || []).length);
+    return (apiProviders || []).filter(p =>
+        p.enabled !== false
+        && p.chat_configured === true
+        && (p.chat_models || []).length
+    );
+}
+function recentPromptLlmSelection(){
+    try {
+        const stored = JSON.parse(localStorage.getItem(PROMPT_LLM_RECENT_KEY) || '{}');
+        const item = stored?.[`${currentApiUserId || '__user__'}::${currentApiProfileId || '__profile__'}`];
+        return item && typeof item === 'object'
+            ? {provider:String(item.provider || ''), model:String(item.model || '')}
+            : {provider:'', model:''};
+    } catch(e) {
+        return {provider:'', model:''};
+    }
+}
+function rememberPromptLlmSelection(providerId, model){
+    const provider = resolveChatProviderId(providerId);
+    const selectedModel = resolveChatModel(model, provider);
+    if(!provider || !selectedModel) return;
+    try {
+        const stored = JSON.parse(localStorage.getItem(PROMPT_LLM_RECENT_KEY) || '{}');
+        const data = stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+        data[`${currentApiUserId || '__user__'}::${currentApiProfileId || '__profile__'}`] = {provider, model:selectedModel};
+        localStorage.setItem(PROMPT_LLM_RECENT_KEY, JSON.stringify(data));
+    } catch(e) {}
 }
 function resolveChatProviderId(providerId=''){
     const providers = chatApiProviders();
     if(providers.some(p => p.id === providerId)) return providerId;
-    return providers[0]?.id || 'comfly';
+    return providers[0]?.id || '';
 }
 function providerChatModels(providerId){
     const provider = chatApiProviders().find(p => p.id === providerId);
@@ -2681,16 +2710,19 @@ function providerChatModels(providerId){
 }
 function resolveChatModel(model='', providerId=''){
     const models = providerChatModels(resolveChatProviderId(providerId));
-    return models.includes(model) ? model : (models[0] || model || 'gpt-4o-mini');
+    return models.includes(model) ? model : (models[0] || '');
 }
 function chatProviderOptions(selectedId=''){
     const selected = resolveChatProviderId(selectedId);
-    return chatApiProviders().map(provider => `<option value="${escapeHtml(provider.id)}" ${provider.id === selected ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('');
+    const providers = chatApiProviders();
+    if(!providers.length) return `<option value="">${escapeHtml(tr('smart.promptLlmNoneConfigured'))}</option>`;
+    return providers.map(provider => `<option value="${escapeHtml(provider.id)}" ${provider.id === selected ? 'selected' : ''}>${escapeHtml(provider.name || provider.id)}</option>`).join('');
 }
 function chatModelOptions(selectedModel='', providerId=''){
     const selectedProvider = resolveChatProviderId(providerId);
     const models = providerChatModels(selectedProvider);
     const selected = resolveChatModel(selectedModel, selectedProvider);
+    if(!models.length) return `<option value="">${escapeHtml(tr('smart.promptLlmNoModels'))}</option>`;
     return [...new Set([selected, ...models].filter(Boolean))].map(model => `<option value="${escapeHtml(model)}" ${model === selected ? 'selected' : ''}>${escapeHtml(model)}</option>`).join('');
 }
 function apiProviderById(providerId){
@@ -2862,12 +2894,15 @@ function imageRatioSettingValue(value){
     };
     return map[raw] || raw || 'square';
 }
+function isAdaptiveImageAspectValue(value){
+    return ['', 'empty', 'auto', 'adaptive', 'source', 'keep_ratio'].includes(String(value || '').trim().toLowerCase());
+}
 function imageAspectValueForRun(source=settings){
-    const raw = String(source?.ratio || 'square').trim();
+    const raw = source?.ratio == null ? 'square' : String(source.ratio).trim();
+    if(isAdaptiveImageAspectValue(raw)) return '';
     const map = {
         square:'1:1', portrait:'2:3', landscape:'3:2', portrait43:'3:4',
         landscape43:'4:3', story:'9:16', wide:'16:9', ultrawide:'21:9', ultratall:'9:21',
-        source:'adaptive'
     };
     return raw === 'custom' ? String(source?.customRatio || '').trim() : (map[raw] || raw);
 }
@@ -3826,10 +3861,12 @@ function renderImageInputCapabilityNote(capability){
 function renderImageCapabilityRatioControl(field){
     const options = videoCapabilityOptions(field).map(option => ({
         value:imageRatioSettingValue(option.value),
-        label:option.label
+        label:isAdaptiveImageAspectValue(option.value) ? tr('smart.ratioAdaptive') : option.label
     }));
     const current = settings.ratio || imageRatioSettingValue(field?.default);
-    const label = options.find(option => option.value === current)?.label || imageAspectValueForRun(settings) || tr('smart.ratio');
+    const label = isAdaptiveImageAspectValue(current)
+        ? tr('smart.ratioAdaptive')
+        : (options.find(option => option.value === current)?.label || imageAspectValueForRun(settings) || tr('smart.ratio'));
     return `<div class="smart-control ratio-control">
         <button class="smart-pill" type="button"><i data-lucide="scan"></i><span>${escapeHtml(label)}</span></button>
         <div class="smart-popover">
@@ -5090,6 +5127,7 @@ function smartConfigSignature(){
         id:provider.id || '',
         name:provider.name || '',
         enabled:provider.enabled !== false,
+        configured:provider.chat_configured === true,
         protocol:provider.protocol || '',
         image:(provider.image_models || []).join('|'),
         chat:(provider.chat_models || []).join('|'),
@@ -5098,7 +5136,7 @@ function smartConfigSignature(){
         rhWorkflows:(provider.rh_workflows || []).map(item => item?.workflowId || item?.id || '').join('|')
     }));
     const workflowSig = (comfyWorkflows || []).map(workflow => `${workflow.name || ''}:${workflow.title || ''}`).join('|');
-    return JSON.stringify({providers:providerSig, workflows:workflowSig, comfyInstanceCount});
+    return JSON.stringify({user:currentApiUserId, profile:currentApiProfileId, providers:providerSig, workflows:workflowSig, comfyInstanceCount});
 }
 function scheduleSmartConfigRefresh(delay=220){
     if(smartConfigRefreshTimer) clearTimeout(smartConfigRefreshTimer);
@@ -5129,6 +5167,8 @@ async function loadConfig(options={}){
     const renderDuringLoad = options.renderDuringLoad !== false;
     try {
         const cfg = await fetch('/api/config').then(r => r.json());
+        currentApiUserId = String(cfg.user_id || '').trim();
+        currentApiProfileId = String(cfg.api_profile?.id || '').trim();
         apiProviders = Array.isArray(cfg.api_providers) ? cfg.api_providers : [];
         comfyInstanceCount = Math.max(1, (Array.isArray(cfg.comfy_instances) ? cfg.comfy_instances : []).filter(Boolean).length || 1);
         // 在用户切换模型前后台批量预取 RunningHub 参数；不阻塞画布首屏。
@@ -7350,7 +7390,8 @@ function createGenerationOutputNode(sourceNode, images=[], meta=null){
 }
 function createPromptNode(x, y, options={}){
     if(!options.skipUndo) pushUndo();
-    const providerId = resolveChatProviderId();
+    const recentLlm = recentPromptLlmSelection();
+    const providerId = resolveChatProviderId(recentLlm.provider);
     const node = {
         id:uid('prompt'),
         type:'smart-prompt',
@@ -7364,7 +7405,7 @@ function createPromptNode(x, y, options={}){
         promptSplitEnabled:false,
         llmEnabled:false,
         llmProvider:providerId,
-        llmModel:resolveChatModel('', providerId),
+        llmModel:resolveChatModel(recentLlm.model, providerId),
         llmSystemEnabled:false,
         llmSystemPrompt:'You are a helpful prompt assistant.',
         llmInstruction:'',
@@ -8717,28 +8758,31 @@ function promptNodeBodyHtml(node){
     node.llmSystemEnabled = node.llmSystemEnabled === true;
     node.promptSplitEnabled = node.promptSplitEnabled === true;
     node.promptSeparator = promptNodeSeparator(node);
-    const readonly = node.llmEnabled ? 'readonly' : '';
+    const llmConfigured = chatApiProviders().length > 0;
+    const readonly = node.llmEnabled && llmConfigured ? 'readonly' : '';
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     const inputThumbs = smartNodeInputThumbsHtml(promptNodeInputImages(node));
     const templateActive = activePromptTemplateNodeId() === node.id;
     const promptItems = promptNodePromptItems(node);
     const promptSplitPreviewH = promptNodeSplitPreviewHeight(node);
     const upstreamPromptItems = promptNodeUpstreamPromptItems(node);
+    const llmDisabled = llmConfigured ? '' : 'disabled';
     const upstreamPromptHtml = upstreamPromptItems.length ? `<div class="prompt-node-upstream">
         <div class="prompt-node-section-title">上游输入</div>
         <div class="prompt-node-upstream-list">${upstreamPromptItems.map((item, index) => `<div class="prompt-node-segment"><span>${index + 1}</span><p>${escapeHtml(item)}</p></div>`).join('')}</div>
     </div>` : '';
     const llmParams = node.llmEnabled ? `
         <div class="prompt-node-llm">
-            <select class="prompt-node-control prompt-llm-provider">${chatProviderOptions(node.llmProvider)}</select>
-            <select class="prompt-node-control prompt-llm-model">${chatModelOptions(node.llmModel, node.llmProvider)}</select>
+            <select class="prompt-node-control prompt-llm-provider" ${llmDisabled}>${chatProviderOptions(node.llmProvider)}</select>
+            <select class="prompt-node-control prompt-llm-model" ${llmDisabled}>${chatModelOptions(node.llmModel, node.llmProvider)}</select>
+            ${llmConfigured ? '' : `<div class="muted-note">${escapeHtml(tr('smart.promptLlmNoneHint'))}</div>`}
             <div class="prompt-llm-instruction-wrap">
                 <textarea class="prompt-node-control prompt-llm-instruction" placeholder="${escapeHtml(tr('smart.promptLlmInstructionPlaceholder'))}" style="height:${promptLlmInstructionHeight(node)}px">${escapeHtml(node.llmInstruction || '')}</textarea>
                 <div class="prompt-llm-instruction-resize prompt-node-control" data-llm-instruction-resize="1" title="拖动调整高度"><span></span></div>
             </div>
             ${upstreamPromptHtml}
             <div class="prompt-node-llm-actions">
-                <button class="prompt-node-run prompt-node-control" type="button" ${node.running ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>
+                <button class="prompt-node-run prompt-node-control" type="button" ${node.running || !llmConfigured ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>
                 <button class="prompt-node-pill prompt-node-control prompt-system-toggle ${node.llmSystemEnabled ? 'active' : ''}" type="button"><i data-lucide="${node.llmSystemEnabled ? 'toggle-right' : 'toggle-left'}"></i><span>${escapeHtml(node.llmSystemEnabled ? tr('smart.promptLlmDisableSystem') : tr('smart.promptLlmEnableSystem'))}</span></button>
             </div>
             ${node.llmSystemEnabled ? `<textarea class="prompt-node-control prompt-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(systemPrompt || 'You are a helpful prompt assistant.')}</textarea>` : ''}
@@ -9859,11 +9903,17 @@ function bindPromptNodeControls(el, node){
         e.stopPropagation();
         node.llmProvider = resolveChatProviderId(e.target.value);
         node.llmModel = resolveChatModel('', node.llmProvider);
+        rememberPromptLlmSelection(node.llmProvider, node.llmModel);
         render();
         scheduleSave();
     };
     const modelEl = el.querySelector('.prompt-llm-model');
-    if(modelEl) modelEl.onchange = e => { e.stopPropagation(); node.llmModel = e.target.value; scheduleSave(); };
+    if(modelEl) modelEl.onchange = e => {
+        e.stopPropagation();
+        node.llmModel = resolveChatModel(e.target.value, node.llmProvider);
+        rememberPromptLlmSelection(node.llmProvider, node.llmModel);
+        scheduleSave();
+    };
     const systemToggleEl = el.querySelector('.prompt-system-toggle');
     if(systemToggleEl) systemToggleEl.onclick = e => {
         e.preventDefault();
@@ -17423,13 +17473,14 @@ async function runPromptLLMNode(nodeId){
     if(!node || node.type !== 'smart-prompt') return;
     const message = promptNodeLLMInputText(node).trim();
     if(!message){ toast(tr('smart.promptLlmNeedText')); return; }
+    const provider = resolveChatProviderId(node.llmProvider || '');
+    const model = resolveChatModel(node.llmModel || '', provider);
+    if(!provider || !model){ toast(tr('smart.promptLlmNoneHint')); return; }
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     node.llmEnabled = true;
     node.running = true;
     render();
     try {
-        const provider = resolveChatProviderId(node.llmProvider || '');
-        const model = resolveChatModel(node.llmModel || '', provider);
         const mediaRefs = promptNodeInputMediaForLLM(node);
         const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
         const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
@@ -17453,6 +17504,7 @@ async function runPromptLLMNode(nodeId){
         node.text = (result.text || '').trim();
         node.llmProvider = provider;
         node.llmModel = model;
+        rememberPromptLlmSelection(provider, model);
         scheduleSave();
     } catch(e) {
         toast((e.message || tr('smart.promptLlmFailed')).slice(0, 160));
