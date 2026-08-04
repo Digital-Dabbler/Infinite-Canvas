@@ -64,6 +64,7 @@ const boardResetViewBtn = document.getElementById('boardResetView');
 const pasteCanvasBtn = document.getElementById('pasteCanvasBtn');
 const emptyCreateCanvasBtn = document.getElementById('emptyCreateCanvasBtn');
 const statusEl = document.getElementById('boardStatus');
+const workspace = document.getElementById('workspace');
 
 /* ===== State ===== */
 let projects = [];
@@ -480,78 +481,96 @@ function openCanvas(c){
 
 /* ===== Card create flow ===== */
 let createCardEl = null;
-let createKind = 'classic';
-function closeCreateCard(){ createCardEl?.remove(); createCardEl = null; }
+function closeCreateCard(force=false){
+    if(!force && createCardEl?.dataset.busy === '1') return;
+    createCardEl?.remove();
+    createCardEl = null;
+}
 function openCreateCard(worldPt){
     closeCreateCard();
     closeCardMenu();
-    createKind = 'classic';
-    const el = document.createElement('div');
-    el.className = 'ws-create-card';
-    el.style.left = worldPt.x + 'px';
-    el.style.top = worldPt.y + 'px';
-    el.innerHTML = `
-        <div class="ws-create-title">${L('新建画布','New canvas')}</div>
-        <input class="ws-create-input" type="text" maxlength="80" placeholder="${L('画布名称（可留空）','Canvas name (optional)')}">
-        <div class="ws-create-toggle">
-            <button class="ws-create-toggle-btn active" type="button" data-kind="classic">${L('普通画布','Classic')}</button>
-            <button class="ws-create-toggle-btn" type="button" data-kind="smart">${L('智能画布','Smart')}</button>
-        </div>
-        <div class="ws-create-actions">
-            <button class="ws-create-confirm" type="button">${L('创建','Create')}</button>
-            <button class="ws-create-cancel" type="button">${L('取消','Cancel')}</button>
-        </div>`;
-    boardWorld.appendChild(el);
-    createCardEl = el;
-    el.addEventListener('mousedown', e => e.stopPropagation());
-    const input = el.querySelector('.ws-create-input');
-    input.focus();
-    el.querySelectorAll('.ws-create-toggle-btn').forEach(btn => {
-        btn.onclick = () => {
-            createKind = btn.dataset.kind;
-            el.querySelectorAll('.ws-create-toggle-btn').forEach(b => b.classList.toggle('active', b === btn));
-        };
-    });
-    const confirm = () => createCanvasOnBoard(input.value.trim(), createKind, worldPt);
-    el.querySelector('.ws-create-confirm').onclick = confirm;
-    el.querySelector('.ws-create-cancel').onclick = closeCreateCard;
-    input.onkeydown = e => {
+    const projectName = currentProject()?.name || L('默认项目', 'Default');
+    const safeProjectName = escapeHtml(projectName);
+    const overlay = document.createElement('div');
+    overlay.className = 'ws-create-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'wsCreateCanvasTitle');
+    overlay.innerHTML = `
+        <form class="ws-create-card">
+            <div class="ws-create-accent" aria-hidden="true"><i data-lucide="sparkles"></i></div>
+            <div class="ws-create-kicker">${L('保存到当前项目','Save to current project')}</div>
+            <div id="wsCreateCanvasTitle" class="ws-create-title">${L('新建智能画布','New smart canvas')}</div>
+            <div class="ws-create-sub">${L(`创建后会显示在“${safeProjectName}”中，退出画布后仍可在这里找到。`, `It will appear in “${safeProjectName}” and remain available here when you leave the canvas.`)}</div>
+            <label class="ws-create-label" for="wsCreateCanvasInput">${L('画布名称','Canvas name')}</label>
+            <input id="wsCreateCanvasInput" class="ws-create-input" type="text" maxlength="80" autocomplete="off" placeholder="${L('智能画布名称（可留空）','Smart canvas name (optional)')}">
+            <div class="ws-create-error" role="alert"></div>
+            <div class="ws-create-actions">
+                <button class="ws-create-cancel" type="button">${L('取消','Cancel')}</button>
+                <button class="ws-create-confirm" type="submit">${L('创建并打开','Create and open')}</button>
+            </div>
+        </form>`;
+    workspace.appendChild(overlay);
+    createCardEl = overlay;
+    overlay.addEventListener('mousedown', e => {
         e.stopPropagation();
-        if(e.key === 'Enter'){ e.preventDefault(); confirm(); }
-        if(e.key === 'Escape'){ e.preventDefault(); closeCreateCard(); }
-    };
+        if(e.target === overlay) closeCreateCard();
+    });
+    const form = overlay.querySelector('.ws-create-card');
+    const input = overlay.querySelector('.ws-create-input');
+    input.focus();
+    form.addEventListener('submit', e => {
+        e.preventDefault();
+        createCanvasOnBoard(input.value.trim(), worldPt, overlay);
+    });
+    overlay.querySelector('.ws-create-cancel').onclick = () => closeCreateCard();
+    refreshIcons();
 }
 
-async function createCanvasOnBoard(title, kind, worldPt){
-    const isSmart = kind === 'smart';
-    const base = isSmart ? L('智能画布','Smart canvas') : L('画布','Canvas');
+async function createCanvasOnBoard(title, worldPt, overlay=createCardEl){
+    if(!overlay || overlay.dataset.busy === '1') return;
+    const base = L('智能画布','Smart canvas');
     const name = title || `${base} ${new Date().toLocaleTimeString(langIsEn() ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
-    closeCreateCard();
+    const confirmBtn = overlay.querySelector('.ws-create-confirm');
+    const cancelBtn = overlay.querySelector('.ws-create-cancel');
+    const errorEl = overlay.querySelector('.ws-create-error');
+    overlay.dataset.busy = '1';
+    confirmBtn.disabled = true;
+    cancelBtn.disabled = true;
+    errorEl.textContent = '';
     try {
         const res = await fetch('/api/canvases', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 title: name,
-                icon: isSmart ? 'sparkles' : '🧩',
-                kind: isSmart ? 'smart' : 'classic',
+                icon: 'sparkles',
+                kind: 'smart',
                 project: currentProjectId,
                 board_x: Math.round(worldPt.x),
                 board_y: Math.round(worldPt.y)
             })
         });
-        if(!res.ok) throw new Error('create canvas failed');
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || L('创建失败','Create failed'));
         const nc = data.canvas;
-        if(nc){
-            if(nc.project == null) nc.project = currentProjectId;
-            if(nc.board_x == null) nc.board_x = Math.round(worldPt.x);
-            if(nc.board_y == null) nc.board_y = Math.round(worldPt.y);
-            canvases.push(nc);
-            renderBoard();
-            renderProjects();
-        }
-    } catch(e){ console.error(e); setStatus(L('创建失败','Create failed')); }
+        if(!nc?.id) throw new Error(L('创建失败','Create failed'));
+        if(nc.project == null) nc.project = currentProjectId;
+        if(nc.board_x == null) nc.board_x = Math.round(worldPt.x);
+        if(nc.board_y == null) nc.board_y = Math.round(worldPt.y);
+        canvases.push(nc);
+        closeCreateCard(true);
+        renderBoard();
+        renderProjects();
+        openCanvas(nc);
+    } catch(e){
+        console.error(e);
+        overlay.dataset.busy = '0';
+        confirmBtn.disabled = false;
+        cancelBtn.disabled = false;
+        errorEl.textContent = e.message || L('创建失败','Create failed');
+        input?.focus();
+    }
 }
 
 /* ===== Card context menu (rename / delete / move) ===== */

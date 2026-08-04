@@ -376,9 +376,18 @@ const logList = document.getElementById('logList');
 const errorModal = document.getElementById('errorModal');
 const errorTitle = document.getElementById('errorTitle');
 const errorMessage = document.getElementById('errorMessage');
+const classicCanvasArchiveBanner = document.getElementById('classicCanvasArchiveBanner');
+const classicCanvasArchiveModal = document.getElementById('classicCanvasArchiveModal');
+const classicCanvasArchiveIntro = document.getElementById('classicCanvasArchiveIntro');
+const classicCanvasCreateSmartBtn = document.getElementById('classicCanvasCreateSmartBtn');
+const classicCanvasCreateForm = document.getElementById('classicCanvasCreateForm');
+const classicCanvasTitleInput = document.getElementById('classicCanvasTitleInput');
+const classicCanvasCreateConfirmBtn = document.getElementById('classicCanvasCreateConfirmBtn');
+const classicCanvasCreateError = document.getElementById('classicCanvasCreateError');
 let canvases = [];
 let deletedCanvases = [];
 let canvas = null;
+let classicCanvasArchived = false;
 let nodes = [];
 let connections = [];
 let viewport = {x: -1800, y: -1000, scale: 1};
@@ -418,6 +427,119 @@ const CANVAS_COLOR_OPTIONS = ['red','orange','amber','green','teal','blue','viol
 backToManagerBtn?.addEventListener('click', () => {
     window.location.href = canvasListUrlForProject(canvas?.project || requestedCanvasListProject() || rememberedCanvasListProject());
 });
+function setClassicCanvasArchived(active){
+    classicCanvasArchived = Boolean(active);
+    document.body.classList.toggle('classic-canvas-readonly', classicCanvasArchived);
+    if(classicCanvasArchiveBanner) classicCanvasArchiveBanner.hidden = !classicCanvasArchived;
+    if(!classicCanvasArchived) classicCanvasArchiveModal?.classList.remove('open');
+    refreshIcons();
+}
+function showClassicCanvasArchivePrompt(){
+    if(!classicCanvasArchived) return;
+    showClassicCanvasArchiveIntro(false);
+    classicCanvasArchiveModal?.classList.add('open');
+    classicCanvasCreateSmartBtn?.focus();
+    refreshIcons();
+}
+function closeClassicCanvasArchivePrompt(){
+    classicCanvasArchiveModal?.classList.remove('open');
+    showClassicCanvasArchiveIntro(false);
+}
+function showClassicCanvasArchiveIntro(focusButton=true){
+    if(classicCanvasArchiveIntro) classicCanvasArchiveIntro.hidden = false;
+    if(classicCanvasCreateForm) classicCanvasCreateForm.hidden = true;
+    if(classicCanvasCreateError) classicCanvasCreateError.textContent = '';
+    classicCanvasArchiveModal?.setAttribute('aria-labelledby', 'classicCanvasArchiveTitle');
+    if(focusButton) classicCanvasCreateSmartBtn?.focus();
+}
+function createSmartCanvasFromArchive(){
+    if(!classicCanvasArchived) return;
+    if(classicCanvasArchiveIntro) classicCanvasArchiveIntro.hidden = true;
+    if(classicCanvasCreateForm) classicCanvasCreateForm.hidden = false;
+    if(classicCanvasCreateError) classicCanvasCreateError.textContent = '';
+    classicCanvasArchiveModal?.setAttribute('aria-labelledby', 'classicCanvasCreateTitle');
+    classicCanvasTitleInput?.focus();
+}
+async function submitSmartCanvasFromArchive(event){
+    event?.preventDefault();
+    if(!classicCanvasArchived || !classicCanvasCreateConfirmBtn) return;
+    const projectId = canvas?.project || requestedCanvasListProject() || rememberedCanvasListProject();
+    const customTitle = classicCanvasTitleInput?.value.trim() || '';
+    const title = customTitle || `${tr('canvas.smartCanvas')} ${new Date().toLocaleTimeString(langIsEn() ? 'en-US' : 'zh-CN', {hour:'2-digit', minute:'2-digit'})}`;
+    classicCanvasCreateConfirmBtn.disabled = true;
+    if(classicCanvasCreateError) classicCanvasCreateError.textContent = '';
+    try {
+        const res = await fetch('/api/canvases', {
+            method:'POST',
+            headers:{
+                'Content-Type':'application/json',
+                'X-Canvas-Archive-Action':'create-smart',
+            },
+            body:JSON.stringify({
+                title,
+                icon:'sparkles',
+                kind:'smart',
+                project:projectId,
+            }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok || !data.canvas?.id) throw new Error(data.detail || tr('canvas.createFailed'));
+        openSmartCanvasPage(data.canvas.id, projectId);
+    } catch(error) {
+        if(classicCanvasCreateError) classicCanvasCreateError.textContent = error.message || tr('canvas.createFailed');
+    } finally {
+        classicCanvasCreateConfirmBtn.disabled = false;
+    }
+}
+function classicCanvasReadonlyAllows(target){
+    if(!target?.closest) return true;
+    if(target.closest('#classicCanvasArchiveModal, #classicCanvasArchiveBanner, #backToManagerBtn')) return true;
+    if(target.closest('#outputLightbox')) return !target.closest('#outputRerunBtn');
+    if(target.closest('#logModal')) return !target.closest('[data-log-delete]');
+    if(target.closest('#canvasLogToggle')) return true;
+    if(target.closest('#minimap')) return !target.closest('#canvasArrangeBtn');
+    if(target.closest('.output-img-wrap img, .output-img-wrap video, .output-img-wrap audio, .output-file-card, .canvas-video-play')) return true;
+    if(target === board || target === world || target === nodesEl || target === linksEl) return true;
+    return !target.closest('#board, #quickToolbar, #canvasAssetPanel, #workflowTransferModal, #promptTemplateModal, #imageEditModal');
+}
+function blockClassicCanvasEdit(event){
+    if(!classicCanvasArchived) return;
+    const target = event.target;
+    if(target?.closest?.('#classicCanvasArchiveModal')){
+        if(event.type === 'keydown' && event.key === 'Escape') closeClassicCanvasArchivePrompt();
+        return;
+    }
+    if(event.type === 'keydown'){
+        if(classicCanvasArchiveModal?.classList.contains('open')){
+            if(event.key === 'Escape') closeClassicCanvasArchivePrompt();
+            return;
+        }
+        if(outputLightbox?.classList.contains('open') && ['Escape','ArrowLeft','ArrowRight'].includes(event.key)) return;
+        const key = String(event.key || '').toLowerCase();
+        const shortcutEdit = (event.ctrlKey || event.metaKey) && ['v','x','z','y','g','d'].includes(key);
+        const fieldEdit = isEditableTarget(target) && (key.length === 1 || ['backspace','delete','enter'].includes(key));
+        if(!shortcutEdit && !fieldEdit && !['backspace','delete'].includes(key)) return;
+    } else if(['beforeinput','input','change','paste','drop'].includes(event.type)){
+        // All of these mutate canvas content or controls.
+    } else if(
+        !(['contextmenu','dblclick'].includes(event.type) && [board, world, nodesEl, linksEl].includes(target))
+        && classicCanvasReadonlyAllows(target)
+    ){
+        return;
+    }
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    event.stopImmediatePropagation?.();
+    showClassicCanvasArchivePrompt();
+}
+['pointerdown','mousedown','click','dblclick','contextmenu','beforeinput','input','change','paste','drop','keydown'].forEach(type => {
+    document.addEventListener(type, blockClassicCanvasEdit, true);
+});
+window.showClassicCanvasArchivePrompt = showClassicCanvasArchivePrompt;
+window.closeClassicCanvasArchivePrompt = closeClassicCanvasArchivePrompt;
+window.showClassicCanvasArchiveIntro = showClassicCanvasArchiveIntro;
+window.createSmartCanvasFromArchive = createSmartCanvasFromArchive;
+classicCanvasCreateForm?.addEventListener('submit', submitSmartCanvasFromArchive);
 let localCanvasDirty = false;
 let savingCanvasNow = false;
 let saveCanvasAgain = false;
@@ -1413,7 +1535,7 @@ function refreshGeometryAfterLayout(){
     });
 }
 function scheduleSave(){
-    if(!canvas || applyingRemoteCanvas) return;
+    if(!canvas || applyingRemoteCanvas || classicCanvasArchived) return;
     localCanvasDirty = true;
     setStatus('Saving...');
     clearTimeout(saveTimer);
@@ -1465,7 +1587,7 @@ function serializableCanvasNodes(list=nodes){
     return (list || []).map(serializableCanvasNode);
 }
 async function saveCanvas(){
-    if(!canvas || applyingRemoteCanvas) return;
+    if(!canvas || applyingRemoteCanvas || classicCanvasArchived) return;
     if(savingCanvasNow){
         saveCanvasAgain = true;
         return;
@@ -1952,9 +2074,10 @@ async function createCanvas(){
 async function createSmartCanvas(){
     setCreateMode(true, 'smart');
 }
-function openSmartCanvasPage(id){
+function openSmartCanvasPage(id, projectId=''){
     if(!id) return;
-    window.location.href = `/static/smart-canvas.html?id=${encodeURIComponent(id)}&v=2026.05.22.1`;
+    const project = projectId || canvas?.project || requestedCanvasListProject() || rememberedCanvasListProject();
+    window.location.href = `/static/smart-canvas.html?id=${encodeURIComponent(id)}&project=${encodeURIComponent(project)}&v=2026.05.22.1`;
 }
 function toggleEmojiPicker(id, event){
     event?.preventDefault();
@@ -2071,7 +2194,9 @@ async function openCanvas(id){
         resetCascadeRuntimeState();
         canvas = data.canvas;
         rememberCanvasListProject(canvas.project || 'default');
-        const touched = await touchCanvasOpened(canvas.id);
+        const isClassicCanvas = (canvas.kind || 'classic') !== 'smart';
+        setClassicCanvasArchived(isClassicCanvas);
+        const touched = isClassicCanvas ? null : await touchCanvasOpened(canvas.id);
         if(touched?.updated_at) canvas.updated_at = Number(touched.updated_at);
         if((canvas.kind || 'classic') === 'smart'){
             openSmartCanvasPage(canvas.id);
@@ -2092,7 +2217,7 @@ async function openCanvas(id){
         setCanvasMode(true);
         renderCanvasList();
         render();
-        resumeCanvasImageTasks();
+        if(!classicCanvasArchived) resumeCanvasImageTasks();
         startCanvasRemotePolling();
         setStatus('Ready');
     } catch(e) {
@@ -2129,7 +2254,7 @@ function applyRemoteCanvasData(remote){
         selected = new Set([...localSelectedIds].filter(id => nodes.some(node => node.id === id)));
         renderCanvasList();
         render();
-        resumeCanvasImageTasks();
+        if(!classicCanvasArchived) resumeCanvasImageTasks();
         if(currentCanvasTitle) currentCanvasTitle.textContent = canvas.title || tr('canvas.untitled');
         if(currentCanvasTime) currentCanvasTime.textContent = formatCanvasTime(canvas.updated_at || canvas.created_at);
         setStatus('Synced');

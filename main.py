@@ -2553,6 +2553,15 @@ def finish_scoped_usage_event(scope, status="succeeded", error="", raw_usage=Non
             scope.get("usage_event_id"), status, error, raw_usage
         )
 
+def is_classic_canvas_page_request(request: Request) -> bool:
+    referer = str(request.headers.get("referer") or "")
+    if not referer:
+        return False
+    try:
+        return urllib.parse.urlparse(referer).path.rstrip("/") == "/static/canvas.html"
+    except Exception:
+        return False
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
@@ -2564,6 +2573,16 @@ async def auth_middleware(request: Request, call_next):
             return RedirectResponse("/static/login.html", status_code=307)
         return JSONResponse(status_code=401, content={"detail": "请先登录后再使用本系统。"})
     request.state.user = user
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and is_classic_canvas_page_request(request):
+        allowed_archive_action = (
+            path == "/api/canvases"
+            and request.headers.get("x-canvas-archive-action") == "create-smart"
+        )
+        if not allowed_archive_action:
+            return JSONResponse(
+                status_code=410,
+                content={"detail": "普通画布已冻结，仅支持查看。请前往智能画布继续创作。"},
+            )
     if path.startswith("/api/admin/") or (
         request.method in {"POST", "PUT", "PATCH", "DELETE"} and any(path.startswith(prefix) for prefix in ADMIN_WRITE_PREFIXES)
     ):
@@ -4880,7 +4899,7 @@ class ConversationCreateRequest(BaseModel):
 class CanvasCreateRequest(BaseModel):
     title: str = "未命名画布"
     icon: str = "🧩"
-    kind: str = "classic"
+    kind: str = "smart"
     project: Optional[str] = None
     board_x: Optional[float] = None
     board_y: Optional[float] = None
@@ -19456,6 +19475,8 @@ async def import_photoshop_image_to_canvas(canvas_id: str, payload: PhotoshopBri
     def import_image():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            if normalize_canvas_kind(canvas.get("kind")) != "smart":
+                raise HTTPException(status_code=410, detail="普通画布已冻结，仅支持查看。")
             node = create_photoshop_upload_node(
                 canvas,
                 item,
@@ -19600,6 +19621,8 @@ async def trashed_canvases():
 
 @app.post("/api/canvases")
 async def create_canvas(payload: CanvasCreateRequest):
+    if normalize_canvas_kind(payload.kind) != "smart":
+        raise HTTPException(status_code=410, detail="普通画布已停止新建，请使用智能画布。")
     return {"canvas": new_canvas(payload.title, payload.icon, payload.kind, payload.project, payload.board_x, payload.board_y)}
 
 @app.get("/api/canvases/{canvas_id}/meta")
@@ -20853,6 +20876,8 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     def mutate_canvas():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            if normalize_canvas_kind(canvas.get("kind")) != "smart":
+                raise HTTPException(status_code=410, detail="普通画布已冻结，仅支持查看。")
             current_updated_at = int(canvas.get("updated_at") or 0)
             if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
                 raise HTTPException(status_code=409, detail={
