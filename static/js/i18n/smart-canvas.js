@@ -334,6 +334,8 @@
         "smart.refUserNeed": { zh: "用户需求：", en: "User request:" },
         "smart.runPromptPrefix": { zh: "提示词：", en: "Prompt: " },
         "smart.assetLibrary": { zh: "资产库", en: "Assets" },
+        "smart.assetFull": { zh: "完整资产库", en: "Full library" },
+        "smart.assetOpenFull": { zh: "打开完整资产库", en: "Open full asset library" },
         "smart.assetImages": { zh: "图片资产", en: "Images" },
         "smart.assetWorkflows": { zh: "工作流", en: "Workflows" },
         "smart.assetNewFolder": { zh: "新建文件夹", en: "New folder" },

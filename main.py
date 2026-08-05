@@ -162,6 +162,26 @@ class ConnectionManager:
                 print(f"Broadcast asset library error: {e}")
                 self.active_connections.remove(connection)
 
+    async def broadcast_asset_ai_task_updated(self, task: dict):
+        owner_id = str((task or {}).get("owner_id") or "")
+        data = json.dumps({
+            "type": "asset_ai_task_updated",
+            "task": {
+                key: (task or {}).get(key)
+                for key in ("id", "kind", "status", "progress", "error", "created_at", "updated_at")
+            },
+        })
+        for connection in self.active_connections[:]:
+            client_id = str(self.connection_clients.get(connection) or "")
+            if owner_id and not (client_id == owner_id or client_id.startswith(f"{owner_id}:")):
+                continue
+            try:
+                await connection.send_text(data)
+            except Exception as exc:
+                print(f"Broadcast asset AI task error: {exc}")
+                if connection in self.active_connections:
+                    self.active_connections.remove(connection)
+
     async def send_personal_message(self, message: dict, client_id: str):
         ws = self.user_connections.get(client_id)
         if ws:
@@ -203,6 +223,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 GLOBAL_LOOP = None
+ASSET_AI_RUNNING = set()
 APP_VERSION = "2026.06.03"
 GITHUB_REPO_URL = "https://github.com/hero8152/Infinite-Canvas"
 GITHUB_VERSION_URL = "https://raw.githubusercontent.com/hero8152/Infinite-Canvas/main/VERSION"
@@ -235,6 +256,14 @@ async def startup_event():
         recover_canvas_tasks_after_restart()
     except Exception as exc:
         print(f"恢复画布任务状态失败: {exc}")
+    try:
+        ensure_all_user_asset_spaces()
+        recover_asset_ai_tasks_after_restart()
+        await asyncio.to_thread(cleanup_expired_asset_trash)
+        asyncio.create_task(asset_ai_dispatch_loop())
+        asyncio.create_task(asset_trash_cleanup_loop())
+    except Exception as exc:
+        print(f"初始化资产库用户空间或 AI 队列失败: {exc}")
     sync_static_html_versions()
     # 启动时整理资产库：给所有图片分组（含默认角色/场景）建好文件夹，并把根目录里的旧素材归整进去。
     try:
@@ -289,6 +318,7 @@ OUTPUT_INPUT_DIR = os.path.join(ASSETS_DIR, "input")
 OUTPUT_OUTPUT_DIR = os.path.join(ASSETS_DIR, "output")
 ASSET_LIBRARY_DIR = os.path.join(ASSETS_DIR, "library")
 LOCAL_UPLOAD_DIR = os.path.join(ASSETS_DIR, "uploads")
+CANVAS_COVER_DIR = os.path.join(ASSETS_DIR, "canvas-covers")
 HISTORY_FILE = os.path.join(BASE_DIR, "history.json")
 API_ENV_FILE = os.path.join(BASE_DIR, "API", ".env")
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -298,6 +328,11 @@ MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
+ASSET_TRASH_PATH = os.path.join(DATA_DIR, "asset_trash.json")
+ASSET_AI_SETTINGS_PATH = os.path.join(DATA_DIR, "asset_ai_settings.json")
+ASSET_AI_TASKS_PATH = os.path.join(DATA_DIR, "asset_ai_tasks.json")
+LOCAL_ASSET_OWNERSHIP_PATH = os.path.join(DATA_DIR, "local_asset_ownership.json")
+ASSET_STORAGE_POLICY_PATH = os.path.join(DATA_DIR, "asset_storage_policy.json")
 API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 API_PROFILES_FILE = os.path.join(DATA_DIR, "api_profiles.json")
 DEPARTMENTS_FILE = os.path.join(DATA_DIR, "departments.json")
@@ -374,6 +409,8 @@ HISTORY_LOCK = Lock()
 GLOBAL_CONFIG_LOCK = Lock()
 CONVERSATION_LOCK = Lock()
 CANVAS_LOCK = RLock()
+ASSET_GOVERNANCE_LOCK = RLock()
+ASSET_AI_TASK_LOCK = RLock()
 LOAD_LOCK = Lock()
 RUNNINGHUB_WORKFLOW_LOCK = Lock()
 UPSTREAM_TASK_SCOPE_LOCK = Lock()
@@ -1881,6 +1918,7 @@ os.makedirs(ASSETS_DIR, exist_ok=True)
 os.makedirs(OUTPUT_INPUT_DIR, exist_ok=True)
 os.makedirs(OUTPUT_OUTPUT_DIR, exist_ok=True)
 os.makedirs(ASSET_LIBRARY_DIR, exist_ok=True)
+os.makedirs(CANVAS_COVER_DIR, exist_ok=True)
 os.makedirs(LOCAL_UPLOAD_DIR, exist_ok=True)
 os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(WORKFLOW_DIR, exist_ok=True)
@@ -3753,6 +3791,7 @@ async def auth_register(payload: AuthRegisterRequest):
         user = {"id": uuid.uuid4().hex, "username": username, "name": payload.name.strip(), "department": department["name"], "department_id": department["id"], "api_profile_id": "", "role": "user", "enabled": True, "password_salt": salt, "password_hash": digest, "must_change_password": False, "quota": {}, "created_at": now_ms()}
         data["users"].append(user)
         save_auth_users(data)
+    ensure_user_asset_spaces(user)
     return {"user": public_user(user), "message": "注册成功，请登录。"}
 
 @app.post("/api/auth/login")
@@ -3806,7 +3845,11 @@ async def auth_logout(request: Request):
 
 @app.get("/api/auth/me")
 async def auth_me(request: Request):
-    return {"user": public_user(require_authenticated(request))}
+    user = require_authenticated(request)
+    public = public_user(user)
+    profile = api_profile_by_id(str(user.get("api_profile_id") or ""))
+    public["api_profile_name"] = str((profile or {}).get("name") or "")
+    return {"user": public}
 
 @app.post("/api/auth/password")
 async def auth_change_password(payload: AuthPasswordRequest, request: Request):
@@ -4033,6 +4076,75 @@ async def admin_provider_balances(request: Request):
         "balances": rows,
     }
 
+PROVIDER_BALANCE_CACHE: Dict[str, Dict[str, Any]] = {}
+PROVIDER_BALANCE_CACHE_LOCK = RLock()
+PROVIDER_BALANCE_CACHE_TTL_SECONDS = 60
+
+def provider_balance_totals(rows):
+    totals = {}
+    for row in rows:
+        if row.get("status") != "ok" or row.get("balance") in (None, ""):
+            continue
+        try:
+            amount = float(row.get("balance"))
+        except (TypeError, ValueError):
+            continue
+        currency = str(row.get("currency") or "CNY").strip().upper() or "CNY"
+        totals[currency] = totals.get(currency, 0.0) + amount
+    return [
+        {"currency": currency, "amount": round(amount, 4)}
+        for currency, amount in sorted(totals.items())
+    ]
+
+@app.get("/api/provider-balances")
+async def provider_balances(request: Request, refresh: bool = False):
+    user = require_authenticated(request)
+    profile = request_api_profile(request)
+    profile_id = str(profile.get("id") or user.get("api_profile_id") or "default")
+    now = time.time()
+    if not refresh:
+        with PROVIDER_BALANCE_CACHE_LOCK:
+            cached = PROVIDER_BALANCE_CACHE.get(profile_id)
+            if cached and now - float(cached.get("_cached_at") or 0) < PROVIDER_BALANCE_CACHE_TTL_SECONDS:
+                return {key: value for key, value in cached.items() if key != "_cached_at"}
+
+    rows = []
+    runninghub_jobs = []
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(connect=8.0, read=15.0, write=10.0, pool=8.0),
+        follow_redirects=True,
+    ) as client:
+        for provider in profile.get("providers") or []:
+            if not provider.get("enabled", True):
+                continue
+            provider_id = str(provider.get("id") or "")
+            configured = bool(provider_env_key_value(provider_id, profile_id))
+            if provider_id == "runninghub":
+                runninghub_jobs.append(query_runninghub_profile_balance(client, profile, provider))
+                continue
+            rows.append({
+                "api_profile_id": profile_id,
+                "api_profile_name": str(profile.get("name") or ""),
+                "provider_id": provider_id,
+                "provider_name": str(provider.get("name") or provider_id),
+                "configured": configured,
+                "supported": False,
+                "status": "unsupported" if configured else "unconfigured",
+                "message": "该平台未提供统一的余额查询接口" if configured else "未配置可用密钥",
+            })
+        if runninghub_jobs:
+            rows.extend(await asyncio.gather(*runninghub_jobs))
+    rows.sort(key=lambda item: str(item.get("provider_name") or ""))
+    result = {
+        "queried_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "api_profile": {"id": profile_id, "name": str(profile.get("name") or "")},
+        "totals": provider_balance_totals(rows),
+        "balances": rows,
+    }
+    with PROVIDER_BALANCE_CACHE_LOCK:
+        PROVIDER_BALANCE_CACHE[profile_id] = {**result, "_cached_at": now}
+    return result
+
 @app.post("/api/admin/api-profiles")
 async def admin_create_api_profile(payload: AdminApiProfileCreateRequest, request: Request):
     require_admin(request)
@@ -4206,6 +4318,51 @@ async def admin_delete_user(user_id: str, request: Request):
             raise HTTPException(status_code=404, detail="用户不存在。")
         if user.get("role") == "admin" and sum(1 for item in data["users"] if item.get("role") == "admin") <= 1:
             raise HTTPException(status_code=400, detail="不能删除系统中的最后一个管理员。")
+        # 删除账号前把个人内容原地转为系统所有，资源 URL 与画布引用保持不变。
+        with ASSET_GOVERNANCE_LOCK:
+            assets = load_asset_library()
+            for library in assets.get("libraries", []):
+                if library.get("owner_id") == user_id:
+                    library.update({"owner_type": "system", "owner_id": "", "personal": False, "fixed": False})
+                for category in library.get("categories", []):
+                    if category.get("owner_id") == user_id:
+                        category.update({"owner_type": "system", "owner_id": ""})
+                    for item in category.get("items", []):
+                        if item.get("owner_id") == user_id:
+                            item.update({"owner_type": "system", "owner_id": ""})
+            save_asset_library(assets)
+            prompts = load_prompt_libraries()
+            for library in prompts.get("libraries", []):
+                if library.get("owner_id") == user_id:
+                    library.update({"owner_type": "system", "owner_id": "", "personal": False, "fixed": False})
+                for item in library.get("items", []):
+                    if item.get("owner_id") == user_id:
+                        item.update({"owner_type": "system", "owner_id": ""})
+            save_prompt_libraries(prompts)
+            urls = load_asset_url_library()
+            for item in urls.get("items", []):
+                if item.get("owner_id") == user_id:
+                    item.update({"owner_type": "system", "owner_id": ""})
+            save_asset_url_library(urls)
+            trash = load_asset_trash()
+            for entry in trash.get("items", []):
+                if entry.get("owner_id") == user_id:
+                    entry.update({"owner_type": "system", "owner_id": ""})
+                    if isinstance(entry.get("record"), dict):
+                        entry["record"].update({"owner_type": "system", "owner_id": ""})
+            save_asset_trash(trash)
+            ownership = load_local_asset_ownership()
+            for section in ("items", "folders"):
+                for owner in ownership.get(section, {}).values():
+                    if owner.get("owner_id") == user_id:
+                        owner.update({"owner_type": "system", "owner_id": ""})
+            save_local_asset_ownership(ownership)
+            tasks = load_asset_ai_tasks()
+            for task in tasks.get("tasks", []):
+                if task.get("owner_id") == user_id and task.get("status") == "queued":
+                    task.update({"status": "cancelled", "error": "账号已删除", "updated_at": now_ms()})
+                    finish_usage_event_by_id(task.get("usage_event_id"), "cancelled", "账号已删除")
+            save_asset_ai_tasks(tasks)
         data["users"] = [item for item in data["users"] if item.get("id") != user_id]
         save_auth_users(data)
     revoke_user_sessions(user_id)
@@ -5160,6 +5317,7 @@ class ApiProviderPayload(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation_id: str = ""
+    canvas_id: str = ""
     message: str = Field(min_length=1, max_length=LLM_MESSAGE_MAX_LENGTH)
     system_prompt: str = ""
     model: str = ""
@@ -5169,6 +5327,7 @@ class ChatRequest(BaseModel):
     size: str = "1024x1024"
     quality: str = "auto"
     reference_images: List[AIReference] = []
+    reference_videos: List[AIReference] = []
     provider: str = "comfly"
     ms_model: str = ""
 
@@ -5199,6 +5358,13 @@ class CanvasLLMRequest(BaseModel):
 
 class ConversationCreateRequest(BaseModel):
     title: str = "新对话"
+    canvas_id: str = ""
+
+class CanvasCoverRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=4000)
+    source_node_id: str = ""
+    source_kind: str = "image"
+    frame_time: float = Field(default=0, ge=0, le=36000)
 
 class CanvasCreateRequest(BaseModel):
     title: str = "未命名画布"
@@ -5267,6 +5433,7 @@ class AssetUrlLibraryItemRequest(BaseModel):
     name: str = ""
     kind: str = "image"
     note: str = ""
+    group_id: str = ""
 
 class CanvasAssetCheckRequest(BaseModel):
     urls: List[str] = []
@@ -5715,11 +5882,15 @@ def save_conversation(user_id, conversation):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(conversation, f, ensure_ascii=False, indent=2)
 
-def new_conversation(user_id, title="新对话"):
+def normalize_canvas_scope_id(value):
+    return re.sub(r"[^a-zA-Z0-9_-]", "", str(value or ""))[:80]
+
+def new_conversation(user_id, title="新对话", canvas_id=""):
     timestamp = now_ms()
     conversation = {
         "id": uuid.uuid4().hex,
         "title": (title or "新对话")[:80],
+        "canvas_id": normalize_canvas_scope_id(canvas_id),
         "created_at": timestamp,
         "updated_at": timestamp,
         "messages": [],
@@ -5734,7 +5905,8 @@ def load_conversation(user_id, conversation_id):
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-def list_conversations(user_id):
+def list_conversations(user_id, canvas_id=None):
+    scoped_canvas_id = None if canvas_id is None else normalize_canvas_scope_id(canvas_id)
     records = []
     for filename in os.listdir(user_dir(user_id)):
         if not filename.endswith(".json"):
@@ -5745,16 +5917,48 @@ def list_conversations(user_id):
                 data = json.load(f)
         except Exception:
             continue
+        record_canvas_id = normalize_canvas_scope_id(data.get("canvas_id"))
+        if scoped_canvas_id is None:
+            if record_canvas_id:
+                continue
+        elif record_canvas_id != scoped_canvas_id:
+            continue
         messages = data.get("messages", [])
         last_message = next((m for m in reversed(messages) if m.get("role") != "system"), None)
         records.append({
             "id": data.get("id"),
             "title": data.get("title", "新对话"),
+            "canvas_id": record_canvas_id,
             "created_at": data.get("created_at", 0),
             "updated_at": data.get("updated_at", 0),
             "last_message": (last_message or {}).get("content", ""),
         })
     return sorted(records, key=lambda item: item["updated_at"], reverse=True)
+
+def delete_canvas_conversations(canvas_id):
+    target = normalize_canvas_scope_id(canvas_id)
+    if not target or not os.path.isdir(CONVERSATION_DIR):
+        return 0
+    removed = 0
+    with CONVERSATION_LOCK:
+        for user_name in os.listdir(CONVERSATION_DIR):
+            user_path = os.path.join(CONVERSATION_DIR, user_name)
+            if not os.path.isdir(user_path):
+                continue
+            for filename in os.listdir(user_path):
+                if not filename.endswith(".json"):
+                    continue
+                path = os.path.join(user_path, filename)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if normalize_canvas_scope_id(data.get("canvas_id")) != target:
+                        continue
+                    os.remove(path)
+                    removed += 1
+                except Exception:
+                    continue
+    return removed
 
 def canvas_path(canvas_id):
     cleaned = re.sub(r"[^a-zA-Z0-9_-]", "", canvas_id or "")
@@ -5846,6 +6050,11 @@ def new_canvas(title="未命名画布", icon="layers", kind="classic", project=N
         "owner": "",
         "color": "",
         "pinned": False,
+        "cover_url": "",
+        "cover_mode": "auto",
+        "cover_source_node_id": "",
+        "cover_source_kind": "",
+        "cover_set_at": 0,
         "project": str(project or "").strip() or DEFAULT_PROJECT_ID,
         "created_at": timestamp,
         "updated_at": timestamp,
@@ -5883,6 +6092,128 @@ def normalize_canvas_color(value):
     color = str(value or "").strip().lower()
     return color if color in CANVAS_COLORS else ""
 
+def canvas_media_url(value):
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return str(value.get("url") or value.get("path") or value.get("src") or value.get("uri") or "").strip()
+    return ""
+
+def canvas_media_kind(value, fallback=""):
+    if isinstance(value, dict):
+        kind = str(value.get("kind") or value.get("type") or value.get("mediaKind") or "").strip().lower()
+        if kind:
+            return kind
+    url = canvas_media_url(value).split("?", 1)[0].lower()
+    if url.endswith((".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv")):
+        return "video"
+    if url.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")) or url.startswith("data:image/"):
+        return "image"
+    return fallback
+
+def canvas_media_entries(canvas):
+    entries = []
+    for node in canvas.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or "")
+        created = int(node.get("created_at") or node.get("createdAt") or 0)
+        for item in node.get("images") or []:
+            url = canvas_media_url(item)
+            if url:
+                entries.append({
+                    "url": url,
+                    "kind": canvas_media_kind(item),
+                    "node_id": node_id,
+                    "created_at": created,
+                    "generated": bool(isinstance(item, dict) and item.get("generatedResult")),
+                })
+    return entries
+
+def canvas_auto_cover_candidate(canvas):
+    logs = [item for item in (canvas.get("logs") or []) if isinstance(item, dict) and item.get("status") == "success"]
+    logs.sort(key=lambda item: int(item.get("createdAt") or item.get("created_at") or 0))
+    for log in logs:
+        for output in log.get("outputs") or []:
+            url = canvas_media_url(output)
+            if url and canvas_media_kind(output, "image") == "image":
+                source_id = str(log.get("nodeId") or "")
+                source_exists = bool(source_id and any(str((node or {}).get("id") or "") == source_id for node in (canvas.get("nodes") or [])))
+                if source_id and (not source_exists or not canvas_node_contains_media(canvas, url, source_id)):
+                    continue
+                return {
+                    "url": url,
+                    "node_id": source_id,
+                    "kind": "image",
+                }
+    generated = [item for item in canvas_media_entries(canvas) if item["kind"] == "image" and item["generated"]]
+    generated.sort(key=lambda item: item["created_at"])
+    return generated[0] if generated else None
+
+def canvas_contains_media(canvas, url, source_node_id=""):
+    target = str(url or "").strip()
+    source_id = str(source_node_id or "").strip()
+    if not target:
+        return False
+    for item in canvas_media_entries(canvas):
+        if item["url"] == target and (not source_id or item["node_id"] == source_id):
+            return True
+    for log in canvas.get("logs") or []:
+        if source_id and str((log or {}).get("nodeId") or "") != source_id:
+            continue
+        if any(canvas_media_url(output) == target for output in ((log or {}).get("outputs") or [])):
+            return True
+    return False
+
+def canvas_node_contains_media(canvas, url, source_node_id=""):
+    target = str(url or "").strip()
+    source_id = str(source_node_id or "").strip()
+    if not target:
+        return False
+    return any(
+        item["url"] == target and (not source_id or item["node_id"] == source_id)
+        for item in canvas_media_entries(canvas)
+    )
+
+def canvas_cover_file(canvas_id):
+    clean = normalize_canvas_scope_id(canvas_id)
+    return os.path.join(CANVAS_COVER_DIR, f"{clean}.jpg") if clean else ""
+
+def clear_canvas_cover_file(canvas_id):
+    path = canvas_cover_file(canvas_id)
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+def ensure_canvas_cover(canvas, force=False):
+    mode = str(canvas.get("cover_mode") or "auto").lower()
+    current = str(canvas.get("cover_url") or "").strip()
+    source_id = str(canvas.get("cover_source_node_id") or "").strip()
+    source_exists = not source_id or any(
+        str((node or {}).get("id") or "") == source_id for node in (canvas.get("nodes") or [])
+    )
+    if not force and current:
+        if mode == "manual":
+            if source_exists and (canvas_node_contains_media(canvas, current, source_id) or current.startswith("/assets/canvas-covers/")):
+                return False
+        elif source_exists and canvas_node_contains_media(canvas, current, source_id):
+            return False
+    candidate = canvas_auto_cover_candidate(canvas)
+    next_url = str((candidate or {}).get("url") or "")
+    changed = (
+        current != next_url
+        or mode != "auto"
+        or str(canvas.get("cover_source_node_id") or "") != str((candidate or {}).get("node_id") or "")
+    )
+    canvas["cover_url"] = next_url
+    canvas["cover_mode"] = "auto"
+    canvas["cover_source_node_id"] = str((candidate or {}).get("node_id") or "")
+    canvas["cover_source_kind"] = str((candidate or {}).get("kind") or ("image" if next_url else ""))
+    canvas["cover_set_at"] = now_ms() if next_url else 0
+    return changed
+
 def canvas_record(data):
     return {
         "id": data.get("id"),
@@ -5892,6 +6223,8 @@ def canvas_record(data):
         "owner": str(data.get("owner") or "")[:40],
         "color": normalize_canvas_color(data.get("color")),
         "pinned": bool(data.get("pinned") or False),
+        "cover_url": str(data.get("cover_url") or ""),
+        "cover_mode": str(data.get("cover_mode") or "auto"),
         "project": str(data.get("project") or "").strip() or DEFAULT_PROJECT_ID,
         "board_x": data.get("board_x"),
         "board_y": data.get("board_y"),
@@ -5913,7 +6246,10 @@ def cleanup_expired_canvas_trash():
                     data = json.load(f)
                 deleted_at = int(data.get("deleted_at") or 0)
                 if deleted_at and deleted_at < cutoff:
+                    canvas_id = str(data.get("id") or os.path.splitext(filename)[0])
                     os.remove(path)
+                    clear_canvas_cover_file(canvas_id)
+                    delete_canvas_conversations(canvas_id)
             except Exception:
                 continue
 
@@ -5924,13 +6260,18 @@ def iter_canvas_records(include_deleted=False):
         if not filename.endswith(".json"):
             continue
         try:
-            with open(os.path.join(CANVAS_DIR, filename), 'r', encoding='utf-8') as f:
+            path = os.path.join(CANVAS_DIR, filename)
+            with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
         except Exception:
             continue
         is_deleted = bool(data.get("deleted_at"))
         if include_deleted != is_deleted:
             continue
+        if ensure_canvas_cover(data):
+            with CANVAS_LOCK:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
         records.append(canvas_record(data))
     return records
 
@@ -9333,18 +9674,25 @@ async def delete_storage_files(payload: Dict[str, Any]):
     return {"removed": removed}
 
 @app.get("/api/asset-classification-prompt")
-async def get_asset_classification_prompt():
+async def get_asset_classification_prompt(request: Request):
+    require_admin(request)
     current = load_asset_classification_prompt()
     return {
         "prompt": current,
         "default_prompt": ASSET_CLASSIFICATION_PROMPT,
         "custom": current.strip() != ASSET_CLASSIFICATION_PROMPT.strip(),
+        "readonly": True,
+        "deprecated": True,
+        "message": "旧版浏览器配置仅供参考，请在完整资产库的 AI 功能设置中重新配置。",
     }
 
 @app.patch("/api/asset-classification-prompt")
-async def update_asset_classification_prompt(payload: Dict[str, str]):
-    prompt = save_asset_classification_prompt((payload or {}).get("prompt") or "")
-    return {"prompt": prompt, "custom": True}
+async def update_asset_classification_prompt(payload: Dict[str, str], request: Request):
+    require_admin(request)
+    raise HTTPException(
+        status_code=409,
+        detail="旧版分类提示词已设为只读，请在完整资产库的 AI 功能设置中配置。",
+    )
 
 def media_preview_cache_paths(path: str, width: int):
     stat = os.stat(path)
@@ -9644,6 +9992,85 @@ def import_local_image_file(path):
         raise HTTPException(status_code=500, detail="导入本地图片失败")
     return {"url": output_url_for(filename, "input"), "name": os.path.basename(path) or filename, "kind": "image"}
 
+def asset_owner_fields(raw=None, default_owner="system"):
+    raw = raw if isinstance(raw, dict) else {}
+    owner_type = str(raw.get("owner_type") or ("system" if not raw.get("owner_id") else "user")).lower()
+    if owner_type not in {"system", "user"}:
+        owner_type = "system"
+    owner_id = str(raw.get("owner_id") or "").strip() if owner_type == "user" else ""
+    if owner_type == "user" and not owner_id:
+        owner_type = "system"
+    if default_owner != "system" and not raw.get("owner_type") and not raw.get("owner_id"):
+        owner_type, owner_id = "user", str(default_owner)
+    return {
+        "owner_type": owner_type,
+        "owner_id": owner_id,
+        "created_by": str(raw.get("created_by") or owner_id or "system"),
+    }
+
+def asset_owner_for_user(user):
+    return {
+        "owner_type": "user",
+        "owner_id": str((user or {}).get("id") or ""),
+        "created_by": str((user or {}).get("id") or ""),
+    }
+
+def asset_is_admin(user):
+    return str((user or {}).get("role") or "") == "admin"
+
+def asset_owned_by(record, user):
+    if asset_is_admin(user):
+        return True
+    owner = asset_owner_fields(record)
+    return owner["owner_type"] == "user" and owner["owner_id"] == str((user or {}).get("id") or "")
+
+def require_asset_manage(record, user, detail="无权管理该内容"):
+    if not asset_owned_by(record, user):
+        raise HTTPException(status_code=403, detail=detail)
+
+def append_asset_admin_audit(user, action, details=None):
+    if not asset_is_admin(user):
+        return
+    created = time.time()
+    append_usage_event({
+        "id": uuid.uuid4().hex,
+        "created_at": created,
+        "created_at_iso": datetime.datetime.now().isoformat(timespec="seconds"),
+        "completed_at": created,
+        "user_id": str(user.get("id") or ""),
+        "username": str(user.get("username") or ""),
+        "name": str(user.get("name") or ""),
+        "department": str(user.get("department") or ""),
+        "function": "asset_admin",
+        "category": "admin",
+        "provider": "",
+        "model": "",
+        "params": sanitize_usage_value({"action": action, **(details or {})}),
+        "status": "succeeded",
+        "error": "",
+        "duration_ms": 0,
+        "raw_usage": None,
+    })
+
+def apply_asset_metadata(record, user=None, source=None, system=False):
+    if not isinstance(record, dict):
+        return record
+    owner = {"owner_type": "system", "owner_id": "", "created_by": str((user or {}).get("id") or "system")} if system else asset_owner_for_user(user)
+    record.update(owner)
+    record["created_at"] = int(record.get("created_at") or now_ms())
+    record["updated_at"] = int(record.get("updated_at") or record["created_at"])
+    if isinstance(source, dict):
+        root_id = str(source.get("source_root_id") or source.get("id") or "")
+        record["source_root_id"] = root_id
+        record["source_direct_id"] = str(source.get("id") or "")
+        record["source_author_id"] = str(
+            source.get("source_author_id")
+            or source.get("owner_id")
+            or source.get("created_by")
+            or "system"
+        )
+    return record
+
 def default_asset_library():
     categories = [
         {"id": "characters", "name": "角色", "type": "image", "items": []},
@@ -9652,7 +10079,11 @@ def default_asset_library():
     ]
     return {
         "active_library_id": "default",
-        "libraries": [{"id": "default", "name": "默认资产库", "type": "asset", "categories": categories}],
+        "libraries": [{
+            "id": "default", "name": "系统资产库", "type": "asset", "system": True,
+            "fixed": True, "owner_type": "system", "owner_id": "", "created_by": "system",
+            "categories": categories,
+        }],
         "categories": categories,
         "updated_at": now_ms(),
     }
@@ -9665,19 +10096,27 @@ def normalize_asset_library(lib):
     if not libraries:
         libraries = [{
             "id": "default",
-            "name": "默认资产库",
+            "name": "系统资产库",
             "type": "asset",
             "categories": legacy_categories or default_asset_library()["categories"],
         }]
     for library in libraries:
         library["id"] = re.sub(r"[^A-Za-z0-9_-]+", "_", str(library.get("id") or f"lib_{uuid.uuid4().hex[:8]}"))[:40]
         library["name"] = sanitize_asset_name(library.get("name") or "资产库", "资产库")
+        library.update(asset_owner_fields(library))
+        library["system"] = bool(library.get("system") or library.get("id") == "default" or library["owner_type"] == "system")
+        library["fixed"] = bool(library.get("fixed") or library.get("id") == "default" or library.get("personal"))
         cats = library.get("categories") if isinstance(library.get("categories"), list) else []
         if library.get("id") == "default" and not any(c.get("type") == "workflow" for c in cats):
             cats.append({"id": "workflows", "name": "工作流", "type": "workflow", "items": []})
         for cat in cats:
+            cat.update(asset_owner_fields(cat, library.get("owner_id") or "system"))
+            cat["library_id"] = library["id"]
             for item in (cat.get("items") or []):
                 migrate_asset_item_registrations(item)
+                item.update(asset_owner_fields(item, library.get("owner_id") or "system"))
+                item["library_id"] = library["id"]
+                item["category_id"] = cat.get("id") or ""
         library["categories"] = cats
     active = str(lib.get("active_library_id") or libraries[0].get("id") or "default")
     if not any(item.get("id") == active for item in libraries):
@@ -9981,7 +10420,10 @@ def _write_local_upload_classification(filename, classification):
         json.dump(normalize_asset_classification(classification), f, ensure_ascii=False, indent=2)
 
 def asset_classification_prompt(extra_prompt=""):
-    base = load_asset_classification_prompt()
+    # The legacy browser-local prompt is retained only as a read-only
+    # reference. Runtime tasks must use the server-side configuration
+    # snapshot supplied as extra_prompt.
+    base = ASSET_CLASSIFICATION_PROMPT
     extra = str(extra_prompt or "").strip()
     if not extra:
         return base
@@ -10137,7 +10579,7 @@ def normalize_asset_url_library(data):
         note = str(raw.get("note") or "").strip()[:1000]
         created_at = int(raw.get("created_at") or now_ms())
         updated_at = int(raw.get("updated_at") or created_at)
-        items.append({
+        item = {
             "id": str(raw.get("id") or f"url_{uuid.uuid4().hex[:12]}"),
             "url": url,
             "name": name or ("视频 URL" if kind == "video" else "音频 URL" if kind == "audio" else "图片 URL"),
@@ -10145,10 +10587,32 @@ def normalize_asset_url_library(data):
             "note": note,
             "created_at": created_at,
             "updated_at": updated_at,
-        })
+            "group_id": str(raw.get("group_id") or ""),
+            "source_root_id": str(raw.get("source_root_id") or ""),
+            "source_direct_id": str(raw.get("source_direct_id") or ""),
+            "source_author_id": str(raw.get("source_author_id") or ""),
+        }
+        item.update(asset_owner_fields(raw))
+        items.append(item)
     items.sort(key=lambda item: int(item.get("created_at") or 0), reverse=True)
+    groups = []
+    seen_groups = set()
+    for raw in ((data or {}).get("groups") or []) if isinstance(data, dict) else []:
+        if not isinstance(raw, dict):
+            continue
+        group_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw.get("id") or f"urlg_{uuid.uuid4().hex[:10]}"))[:60]
+        if not group_id or group_id in seen_groups:
+            continue
+        seen_groups.add(group_id)
+        group = {
+            "id": group_id,
+            "name": sanitize_asset_name(raw.get("name") or "URL 分组", "URL 分组"),
+            **asset_owner_fields(raw),
+        }
+        groups.append(group)
     return {
         "items": items,
+        "groups": groups,
         "updated_at": int((data or {}).get("updated_at") or now_ms()) if isinstance(data, dict) else now_ms(),
     }
 
@@ -10165,9 +10629,7 @@ def save_asset_url_library(data, broadcast=True):
     with CANVAS_LOCK:
         lib = normalize_asset_url_library(data)
         lib["updated_at"] = now_ms()
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(ASSET_URL_LIBRARY_PATH, "w", encoding="utf-8") as f:
-            json.dump(lib, f, ensure_ascii=False, indent=2)
+        _write_json_atomic(ASSET_URL_LIBRARY_PATH, lib)
     if broadcast and GLOBAL_LOOP:
         asyncio.run_coroutine_threadsafe(manager.broadcast_asset_library_updated(int(lib["updated_at"])), GLOBAL_LOOP)
     return lib
@@ -10177,9 +10639,7 @@ def save_asset_library(lib):
         lib = normalize_asset_library(lib)
         sort_asset_library_items(lib)
         lib["updated_at"] = now_ms()
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(ASSET_LIBRARY_PATH, "w", encoding="utf-8") as f:
-            json.dump(lib, f, ensure_ascii=False, indent=2)
+        _write_json_atomic(ASSET_LIBRARY_PATH, lib)
     if GLOBAL_LOOP:
         asyncio.run_coroutine_threadsafe(manager.broadcast_asset_library_updated(int(lib["updated_at"])), GLOBAL_LOOP)
 
@@ -10376,7 +10836,7 @@ def normalize_prompt_library_item(item):
         item = {}
     name = sanitize_asset_name(item.get("name") or "提示词", "提示词")
     positive = str(item.get("positive") or item.get("text") or "").strip()
-    return {
+    normalized = {
         "id": re.sub(r"[^A-Za-z0-9_-]+", "_", str(item.get("id") or item.get("item_id") or f"tpl_{uuid.uuid4().hex[:12]}"))[:60],
         "name": name,
         "category": normalize_prompt_category_id(item.get("category") or "custom"),
@@ -10386,7 +10846,12 @@ def normalize_prompt_library_item(item):
         "params": item.get("params") if isinstance(item.get("params"), dict) else {},
         "created_at": int(item.get("created_at") or now_ms()),
         "updated_at": int(item.get("updated_at") or item.get("created_at") or now_ms()),
+        "source_root_id": str(item.get("source_root_id") or ""),
+        "source_direct_id": str(item.get("source_direct_id") or ""),
+        "source_author_id": str(item.get("source_author_id") or ""),
     }
+    normalized.update(asset_owner_fields(item))
+    return normalized
 
 def seed_system_prompt_library():
     return {
@@ -10479,11 +10944,17 @@ def normalize_prompt_libraries(data):
             "id": lib_id,
             "name": sanitize_asset_name(raw.get("name") or default_name, default_name),
             "type": "prompt",
-            "readonly": False,
+            "readonly": bool(raw.get("readonly") or is_system),
             "system": is_system,
+            "fixed": bool(raw.get("fixed") or is_system or raw.get("personal")),
+            "personal": bool(raw.get("personal")),
+            **asset_owner_fields(raw),
             "categories": normalize_prompt_template_categories(raw_categories, include_defaults=is_system),
             "items": items,
         })
+        for item in items:
+            if item.get("owner_type") == "system" and not is_system and libraries[-1].get("owner_id"):
+                item.update(asset_owner_fields({}, libraries[-1]["owner_id"]))
     active = str(data.get("active_library_id") or "system")
     if not any(lib["id"] == active for lib in libraries):
         active = "system" if any(lib["id"] == "system" for lib in libraries) else (libraries[0]["id"] if libraries else "system")
@@ -10506,11 +10977,10 @@ def load_prompt_libraries():
     return normalized
 
 def save_prompt_libraries(data):
-    data = normalize_prompt_libraries(data)
-    data["updated_at"] = now_ms()
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(PROMPT_LIBRARY_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    with CANVAS_LOCK:
+        data = normalize_prompt_libraries(data)
+        data["updated_at"] = now_ms()
+        _write_json_atomic(PROMPT_LIBRARY_PATH, data)
     return data
 
 def public_prompt_libraries(data=None):
@@ -10527,6 +10997,405 @@ def find_prompt_library(data, library_id=""):
     libraries = data.get("libraries") if isinstance(data.get("libraries"), list) else []
     library_id = str(library_id or data.get("active_library_id") or "").strip()
     return next((item for item in libraries if item.get("id") == library_id), None) or (libraries[0] if libraries else None)
+
+def _write_json_atomic(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    temp_path = f"{path}.{uuid.uuid4().hex}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(value, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, path)
+
+def personal_asset_library_id(user_id):
+    # Asset library IDs are normalized to 40 characters. Keep the generated ID
+    # within that boundary so startup provisioning remains idempotent.
+    return f"personal_{re.sub(r'[^A-Za-z0-9_-]+', '_', str(user_id or 'user'))[:31]}"
+
+def personal_prompt_library_id(user_id):
+    return f"prompt_{re.sub(r'[^A-Za-z0-9_-]+', '_', str(user_id or 'user'))[:36]}"
+
+def ensure_user_asset_spaces(user):
+    user_id = str((user or {}).get("id") or "").strip()
+    if not user_id:
+        return
+    display_name = str((user or {}).get("name") or (user or {}).get("username") or "个人").strip()
+    with ASSET_GOVERNANCE_LOCK:
+        assets = load_asset_library()
+        asset_id = personal_asset_library_id(user_id)
+        if not any(item.get("id") == asset_id for item in assets.get("libraries", [])):
+            owner = asset_owner_for_user(user)
+            assets.setdefault("libraries", []).append({
+                "id": asset_id,
+                "name": f"{display_name}的资产库",
+                "type": "asset",
+                "personal": True,
+                "fixed": True,
+                **owner,
+                "categories": [
+                    {"id": f"cat_{uuid.uuid4().hex[:12]}", "name": "素材", "type": "image", "items": [], **owner},
+                    {"id": f"wf_{uuid.uuid4().hex[:12]}", "name": "工作流", "type": "workflow", "items": [], **owner},
+                ],
+            })
+            save_asset_library(assets)
+        prompts = load_prompt_libraries()
+        prompt_id = personal_prompt_library_id(user_id)
+        if not any(item.get("id") == prompt_id for item in prompts.get("libraries", [])):
+            prompts.setdefault("libraries", []).append({
+                "id": prompt_id,
+                "name": f"{display_name}的提示词库",
+                "type": "prompt",
+                "personal": True,
+                "fixed": True,
+                **asset_owner_for_user(user),
+                "categories": [],
+                "items": [],
+            })
+            save_prompt_libraries(prompts)
+
+def ensure_all_user_asset_spaces():
+    for user in load_auth_users().get("users", []):
+        ensure_user_asset_spaces(user)
+
+def public_asset_library_for_user(lib, user):
+    public = json.loads(json.dumps(normalize_asset_library(lib), ensure_ascii=False))
+    user_id = str((user or {}).get("id") or "")
+    admin = asset_is_admin(user)
+    user_names = {str(row.get("id") or ""): str(row.get("name") or row.get("username") or "") for row in load_auth_users().get("users", [])}
+    for library in public.get("libraries", []):
+        library["can_manage"] = admin or (
+            library.get("owner_type") == "user" and library.get("owner_id") == user_id
+        )
+        library["scope"] = "system" if library.get("owner_type") == "system" else (
+            "mine" if library.get("owner_id") == user_id else "all"
+        )
+        for category in library.get("categories", []):
+            category["can_manage"] = library["can_manage"]
+            for item in category.get("items", []):
+                item["can_manage"] = admin or (
+                    item.get("owner_type") == "user" and item.get("owner_id") == user_id
+                )
+                item["owner_name"] = "系统" if item.get("owner_type") == "system" else user_names.get(item.get("owner_id"), "未知用户")
+                if item.get("source_author_id"):
+                    item["source_author_name"] = user_names.get(item.get("source_author_id"), "系统")
+    public["viewer"] = {"user_id": user_id, "is_admin": admin}
+    personal_id = personal_asset_library_id(user_id)
+    if any(item.get("id") == personal_id for item in public.get("libraries", [])):
+        public["active_library_id"] = personal_id
+        active = next(item for item in public["libraries"] if item.get("id") == personal_id)
+        public["categories"] = active.get("categories") or []
+    return public
+
+def public_prompt_libraries_for_user(data, user):
+    public = json.loads(json.dumps(public_prompt_libraries(data), ensure_ascii=False))
+    user_id = str((user or {}).get("id") or "")
+    admin = asset_is_admin(user)
+    user_names = {str(row.get("id") or ""): str(row.get("name") or row.get("username") or "") for row in load_auth_users().get("users", [])}
+    for library in public.get("libraries", []):
+        library["can_manage"] = admin or (
+            library.get("owner_type") == "user" and library.get("owner_id") == user_id
+        )
+        library["scope"] = "system" if library.get("owner_type") == "system" else (
+            "mine" if library.get("owner_id") == user_id else "all"
+        )
+        for item in library.get("items", []):
+            item["can_manage"] = admin or (
+                item.get("owner_type") == "user" and item.get("owner_id") == user_id
+            )
+            item["owner_name"] = "系统" if item.get("owner_type") == "system" else user_names.get(item.get("owner_id"), "未知用户")
+            if item.get("source_author_id"):
+                item["source_author_name"] = user_names.get(item.get("source_author_id"), "系统")
+    public["viewer"] = {"user_id": user_id, "is_admin": admin}
+    personal_id = personal_prompt_library_id(user_id)
+    if any(item.get("id") == personal_id for item in public.get("libraries", [])):
+        public["active_library_id"] = personal_id
+    return public
+
+def default_asset_trash():
+    return {"version": 1, "items": [], "updated_at": now_ms()}
+
+def load_asset_trash():
+    data = _read_json_file(ASSET_TRASH_PATH, default_asset_trash())
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        data = default_asset_trash()
+    return data
+
+def save_asset_trash(data):
+    with ASSET_GOVERNANCE_LOCK:
+        clean = {
+            "version": 1,
+            "items": [item for item in (data.get("items") or []) if isinstance(item, dict)],
+            "updated_at": now_ms(),
+        }
+        _write_json_atomic(ASSET_TRASH_PATH, clean)
+        return clean
+
+def asset_trash_entry(kind, record, location, user):
+    return {
+        "trash_id": f"trash_{uuid.uuid4().hex[:12]}",
+        "kind": kind,
+        "record": record,
+        "location": location,
+        "owner_type": record.get("owner_type") or "system",
+        "owner_id": record.get("owner_id") or "",
+        "deleted_by": str((user or {}).get("id") or ""),
+        "deleted_at": now_ms(),
+        "expires_at": now_ms() + 30 * 24 * 60 * 60 * 1000,
+    }
+
+def cancel_queued_asset_tasks_for_target(target_id):
+    changed = False
+    with ASSET_AI_TASK_LOCK:
+        data = load_asset_ai_tasks()
+        for task in data.get("tasks", []):
+            if str(task.get("target_id") or "") == str(target_id) and task.get("status") == "queued":
+                task["status"] = "cancelled"
+                task["error"] = "关联内容已进入回收站"
+                task["updated_at"] = now_ms()
+                changed = True
+        if changed:
+            save_asset_ai_tasks(data)
+
+def asset_reference_summary(record):
+    needles = {
+        str(record.get("url") or "").strip(),
+        str(record.get("id") or "").strip(),
+    }
+    needles.discard("")
+    result = {"blocking": [], "history": 0}
+    if not needles:
+        return result
+    scan_targets = []
+    for root, label in ((CANVAS_DIR, "canvas"), (CONVERSATION_DIR, "conversation"), (WORKFLOW_DIR, "workflow")):
+        if not os.path.isdir(root):
+            continue
+        for path in glob.glob(os.path.join(root, "**", "*.json"), recursive=True):
+            scan_targets.append((path, label))
+    for path, label in scan_targets:
+        try:
+            text = open(path, "r", encoding="utf-8").read()
+            if any(needle in text for needle in needles):
+                result["blocking"].append({"kind": label, "name": os.path.basename(path)})
+        except Exception:
+            continue
+    try:
+        for path in glob.glob(os.path.join(ASSET_LIBRARY_DIR, "**", "*.zip"), recursive=True):
+            if os.path.getsize(path) > 256 * 1024 * 1024:
+                continue
+            with zipfile.ZipFile(path, "r") as archive:
+                for member in archive.infolist():
+                    if member.file_size > 10 * 1024 * 1024 or not member.filename.lower().endswith((".json", ".txt")):
+                        continue
+                    text = archive.read(member).decode("utf-8", errors="ignore")
+                    if any(needle in text for needle in needles):
+                        result["blocking"].append({"kind": "workflow", "name": os.path.basename(path)})
+                        break
+    except Exception:
+        pass
+    try:
+        history_text = open(HISTORY_FILE, "r", encoding="utf-8").read()
+        result["history"] = sum(1 for needle in needles if needle in history_text)
+    except Exception:
+        pass
+    return result
+
+def cleanup_expired_asset_trash():
+    trash = load_asset_trash()
+    before = len(trash.get("items", []))
+    kept = []
+    changed = False
+    current = now_ms()
+    for entry in trash.get("items", []):
+        if int(entry.get("expires_at") or 0) > current:
+            kept.append(entry)
+            continue
+        record = entry.get("record") or {}
+        if asset_reference_summary(record)["blocking"]:
+            kept.append(entry)
+            continue
+        if entry.get("kind") in {"asset", "workflow"}:
+            remove_asset_library_file(record)
+        elif entry.get("kind") == "local":
+            for path in [record.get("trash_path"), *(record.get("sidecars") or [])]:
+                try:
+                    if path and os.path.isfile(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+        changed = True
+    if changed:
+        trash["items"] = kept
+        save_asset_trash(trash)
+    return before - len(kept) if changed else 0
+
+def default_asset_storage_policy():
+    return {"default_warning_bytes": 10 * 1024 ** 3, "user_overrides": {}, "updated_at": now_ms()}
+
+def load_asset_storage_policy():
+    data = _read_json_file(ASSET_STORAGE_POLICY_PATH, default_asset_storage_policy())
+    if not isinstance(data, dict):
+        data = default_asset_storage_policy()
+    data["default_warning_bytes"] = max(1024 ** 2, int(data.get("default_warning_bytes") or 10 * 1024 ** 3))
+    data["user_overrides"] = data.get("user_overrides") if isinstance(data.get("user_overrides"), dict) else {}
+    return data
+
+def asset_storage_stats():
+    owners = {}
+    seen = set()
+    def add_record(record, trashed=False):
+        owner = asset_owner_fields(record)
+        owner_key = owner["owner_id"] if owner["owner_type"] == "user" else "system"
+        bucket = owners.setdefault(owner_key, {"owner_id": owner_key, "bytes": 0, "files": 0, "trash_bytes": 0})
+        path = output_file_from_url(str(record.get("url") or ""))
+        if not path or not os.path.isfile(path):
+            return
+        identity = (owner_key, os.path.normcase(os.path.abspath(path)))
+        if identity in seen:
+            return
+        seen.add(identity)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            return
+        bucket["bytes"] += size
+        bucket["files"] += 1
+        if trashed:
+            bucket["trash_bytes"] += size
+    lib = load_asset_library()
+    for library in lib.get("libraries", []):
+        for category in library.get("categories", []):
+            for item in category.get("items", []):
+                add_record(item)
+    for entry in load_asset_trash().get("items", []):
+        add_record(entry.get("record") or {}, True)
+    ownership = load_local_asset_ownership()
+    for rel, owner in ownership.get("items", {}).items():
+        try:
+            _safe_rel, path = _local_upload_safe_path(rel)
+        except HTTPException:
+            continue
+        if os.path.isfile(path):
+            add_record({
+                **owner,
+                "url": f"/api/storage-files/local/{urllib.parse.quote(rel, safe='/')}",
+            })
+    policy = load_asset_storage_policy()
+    users = {str(user.get("id") or ""): public_user(user) for user in load_auth_users().get("users", [])}
+    for key, bucket in owners.items():
+        limit = int(policy["user_overrides"].get(key) or policy["default_warning_bytes"])
+        bucket["warning_bytes"] = limit
+        bucket["warning"] = bucket["bytes"] >= limit
+        bucket["user"] = users.get(key) or ({"id": "system", "name": "系统"} if key == "system" else {"id": key})
+    return {"owners": list(owners.values()), "policy": policy}
+
+ASSET_AI_DEFAULT_FUNCTIONS = {
+    "reverse_prompt": {"enabled": False, "provider_id": "", "model": "", "prompt": "描述图片", "concurrency": 1},
+    "manual_classification": {"enabled": False, "provider_id": "", "model": "", "prompt": "", "concurrency": 1},
+    "auto_classification": {"enabled": False, "provider_id": "", "model": "", "prompt": "", "concurrency": 1},
+}
+
+def load_asset_ai_settings():
+    data = _read_json_file(ASSET_AI_SETTINGS_PATH, {"version": 1, "profiles": {}, "updated_at": now_ms()})
+    if not isinstance(data, dict):
+        data = {"version": 1, "profiles": {}}
+    profiles = data.get("profiles") if isinstance(data.get("profiles"), dict) else {}
+    clean_profiles = {}
+    for profile_id, raw in profiles.items():
+        raw = raw if isinstance(raw, dict) else {}
+        functions = {}
+        for key, defaults in ASSET_AI_DEFAULT_FUNCTIONS.items():
+            item = {**defaults, **(raw.get(key) if isinstance(raw.get(key), dict) else {})}
+            item["enabled"] = bool(item.get("enabled"))
+            item["concurrency"] = min(5, max(1, int(item.get("concurrency") or 1)))
+            item["provider_id"] = str(item.get("provider_id") or "")
+            item["model"] = str(item.get("model") or "")
+            item["prompt"] = str(item.get("prompt") or "")[:10000]
+            functions[key] = item
+        clean_profiles[str(profile_id)] = functions
+    return {"version": 1, "profiles": clean_profiles, "updated_at": int(data.get("updated_at") or now_ms())}
+
+def save_asset_ai_settings(data):
+    clean = load_asset_ai_settings() if not isinstance(data, dict) else data
+    clean["updated_at"] = now_ms()
+    _write_json_atomic(ASSET_AI_SETTINGS_PATH, clean)
+    return load_asset_ai_settings()
+
+def load_asset_ai_tasks():
+    data = _read_json_file(ASSET_AI_TASKS_PATH, {"version": 1, "tasks": [], "updated_at": now_ms()})
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+        data = {"version": 1, "tasks": []}
+    return data
+
+def save_asset_ai_tasks(data):
+    clean = {"version": 1, "tasks": data.get("tasks") or [], "updated_at": now_ms()}
+    _write_json_atomic(ASSET_AI_TASKS_PATH, clean)
+    return clean
+
+def recover_asset_ai_tasks_after_restart():
+    with ASSET_AI_TASK_LOCK:
+        data = load_asset_ai_tasks()
+        changed = False
+        for task in data.get("tasks", []):
+            if task.get("status") == "running":
+                task["status"] = "unknown"
+                task["error"] = "服务重启时任务已提交，上游结果未知；手动重试可能重复计费。"
+                task["updated_at"] = now_ms()
+                update_usage_event(task.get("usage_event_id"), status="unknown", error=task["error"])
+                changed = True
+        if changed:
+            save_asset_ai_tasks(data)
+
+def enqueue_asset_ai_tasks(user, kind, targets, config):
+    tasks = []
+    profile_id = str((config or {}).get("api_profile_id") or (user or {}).get("api_profile_id") or "")
+    with ASSET_AI_TASK_LOCK:
+        data = load_asset_ai_tasks()
+        for target in targets:
+            target = target if isinstance(target, dict) else {}
+            task = {
+                "id": f"aitask_{uuid.uuid4().hex[:16]}",
+                "kind": kind,
+                "status": "queued",
+                "progress": 0,
+                "owner_id": str((user or {}).get("id") or ""),
+                "api_profile_id": profile_id,
+                "target_type": str(target.get("target_type") or ""),
+                "target_id": str(target.get("target_id") or ""),
+                "target_name": str(target.get("target_name") or ""),
+                "config": {
+                    "provider_id": str((config or {}).get("provider_id") or ""),
+                    "model": str((config or {}).get("model") or ""),
+                    "prompt": str((config or {}).get("prompt") or "")[:10000],
+                    "api_profile_id": profile_id,
+                },
+                "attempts": 0,
+                "created_at": now_ms(),
+                "updated_at": now_ms(),
+                "error": "",
+            }
+            data.setdefault("tasks", []).append(task)
+            tasks.append(task)
+        save_asset_ai_tasks(data)
+    return tasks
+
+def enqueue_asset_ai_tasks_for_request(request, kind, targets, config):
+    user = require_authenticated(request)
+    tasks = enqueue_asset_ai_tasks(user, kind, targets, config)
+    with ASSET_AI_TASK_LOCK:
+        data = load_asset_ai_tasks()
+        task_map = {task.get("id"): task for task in data.get("tasks", [])}
+        for task in tasks:
+            event = begin_usage_event(
+                request,
+                "llm",
+                (config or {}).get("provider_id") or "",
+                (config or {}).get("model") or "",
+                {"entry": "asset-library", "asset_ai_kind": kind, "target_id": task.get("target_id") or ""},
+            )
+            stored = task_map.get(task["id"])
+            if stored is not None:
+                stored["usage_event_id"] = event["id"]
+            task["usage_event_id"] = event["id"]
+        save_asset_ai_tasks(data)
+    return tasks
 
 def sanitize_asset_name(name, fallback="asset"):
     name = re.sub(r'[\\/:*?"<>|]+', "_", str(name or fallback)).strip()
@@ -15110,6 +15979,30 @@ def _read_local_upload_caption(filename):
         return "", ""
     return text, os.path.basename(caption_path)
 
+def load_local_asset_ownership():
+    data = _read_json_file(LOCAL_ASSET_OWNERSHIP_PATH, {"version": 1, "items": {}, "folders": {}})
+    if not isinstance(data, dict):
+        data = {}
+    return {
+        "version": 1,
+        "items": data.get("items") if isinstance(data.get("items"), dict) else {},
+        "folders": data.get("folders") if isinstance(data.get("folders"), dict) else {},
+    }
+
+def save_local_asset_ownership(data):
+    _write_json_atomic(LOCAL_ASSET_OWNERSHIP_PATH, data)
+
+def set_local_asset_owner(path, user, folder=False):
+    rel = _local_upload_rel_path(path)
+    with ASSET_GOVERNANCE_LOCK:
+        data = load_local_asset_ownership()
+        data["folders" if folder else "items"][rel] = asset_owner_for_user(user)
+        save_local_asset_ownership(data)
+
+def local_asset_owner(path, folder=False):
+    data = load_local_asset_ownership()
+    return asset_owner_fields(data["folders" if folder else "items"].get(_local_upload_rel_path(path)))
+
 def _local_upload_item(filename):
     path = os.path.join(LOCAL_UPLOAD_DIR, filename)
     rel = _local_upload_rel_path(filename)
@@ -15130,6 +16023,7 @@ def _local_upload_item(filename):
         "size": size,
         "created_at": created_at,
         "folder": os.path.dirname(rel).replace("\\", "/"),
+        **local_asset_owner(rel),
     }
     if kind == "image":
         try:
@@ -15295,9 +16189,11 @@ def migrate_mislabeled_image_extensions():
 
 @app.post("/api/local-assets/upload")
 async def upload_local_assets(request: Request, files: List[UploadFile] = File(...), folder: str = Form("")):
-    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
+    user = require_authenticated(request)
     uploaded = []
     folder_rel, folder_abs = _local_upload_safe_folder(folder)
+    if folder_rel:
+        require_asset_manage(local_asset_owner(folder_rel, folder=True), user, "只能上传到自己的本地文件夹")
     os.makedirs(folder_abs, exist_ok=True)
     for file in files:
         content = await file.read()
@@ -15314,22 +16210,24 @@ async def upload_local_assets(request: Request, files: List[UploadFile] = File(.
         path = os.path.join(folder_abs, filename)
         with open(path, "wb") as f:
             f.write(content)
-        if kind == "image":
-            classification = await classify_asset_image_best_effort(path, upstream_context=upstream_context)
-            if classification:
-                _write_local_upload_classification(rel_name, classification)
+        set_local_asset_owner(rel_name, user)
         uploaded.append(_local_upload_item(rel_name))
-    return {"files": uploaded}
+    function = asset_ai_profile_function(user.get("api_profile_id"), "auto_classification")
+    targets = [{"target_type": "local", "target_id": item["id"], "target_name": item["file"]} for item in uploaded if item.get("kind") == "image"]
+    tasks = enqueue_asset_ai_tasks_for_request(
+        request, "auto_classification", targets,
+        {**function, "api_profile_id": user.get("api_profile_id")},
+    ) if targets and function.get("enabled") else []
+    return {"files": uploaded, "tasks": tasks}
 
 @app.post("/api/local-assets/import-urls")
 async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest, request: Request):
-    upstream_context = (
-        resolve_upstream_context(request, payload.provider, allow_default=not bool(str(payload.provider or "").strip()))
-        if payload.classify else None
-    )
+    user = require_authenticated(request)
     uploaded = []
     results = []
     folder_rel, folder_abs = _local_upload_safe_folder(payload.folder)
+    if folder_rel:
+        require_asset_manage(local_asset_owner(folder_rel, folder=True), user, "只能导入到自己的本地文件夹")
     os.makedirs(folder_abs, exist_ok=True)
     timeout = httpx.Timeout(connect=20.0, read=120.0, write=30.0, pool=20.0)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers={"User-Agent": "Infinite-Canvas-Asset-Importer/1.0"}) as client:
@@ -15386,12 +16284,7 @@ async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest, req
                 path = os.path.join(folder_abs, filename)
                 with open(path, "wb") as f:
                     f.write(content)
-                if payload.classify and kind == "image":
-                    classification = await classify_asset_image_best_effort(
-                        path, payload.provider, payload.model, payload.ms_model, payload.prompt, upstream_context
-                    )
-                    if classification:
-                        _write_local_upload_classification(rel_name, classification)
+                set_local_asset_owner(rel_name, user)
                 item = _local_upload_item(rel_name)
                 uploaded.append(item)
                 result.update({"ok": True, "file": rel_name, "item": item})
@@ -15400,11 +16293,25 @@ async def import_local_assets_from_urls(payload: LocalAssetUrlImportRequest, req
             except Exception as exc:
                 result["error"] = str(exc) or "导入失败"
             results.append(result)
-    return {"ok": True, "count": len(uploaded), "files": uploaded, "items": results}
+    function_key = "manual_classification" if payload.classify else "auto_classification"
+    function = asset_ai_profile_function(user.get("api_profile_id"), function_key)
+    targets = [{"target_type": "local", "target_id": item["id"], "target_name": item["file"]} for item in uploaded if item.get("kind") == "image"]
+    tasks = enqueue_asset_ai_tasks_for_request(
+        request, function_key, targets,
+        {**function, "api_profile_id": user.get("api_profile_id")},
+    ) if targets and function.get("enabled") else []
+    return {"ok": True, "count": len(uploaded), "files": uploaded, "items": results, "tasks": tasks}
 
 @app.get("/api/local-assets")
-async def list_local_assets():
+async def list_local_assets(request: Request):
+    user = require_authenticated(request)
     tree, items = _local_upload_tree_and_items()
+    user_id = str(user.get("id") or "")
+    for item in items:
+        item["can_manage"] = asset_is_admin(user) or item.get("owner_id") == user_id
+        item["scope"] = "system" if item.get("owner_type") == "system" else (
+            "mine" if item.get("owner_id") == user_id else "all"
+        )
     return {"items": items, "tree": tree}
 
 @app.post("/api/local-assets/folders")
@@ -15413,23 +16320,28 @@ async def create_local_asset_folder(payload: LocalAssetFolderRequest, request: R
     parent_rel, parent_abs = _local_upload_safe_folder(payload.parent)
     if not os.path.isdir(parent_abs):
         raise HTTPException(status_code=404, detail="父文件夹不存在")
+    if parent_rel:
+        require_asset_manage(local_asset_owner(parent_rel, folder=True), require_authenticated(request))
     name = _local_upload_safe_folder_name(payload.name)
     rel = f"{parent_rel}/{name}".lstrip("/")
     _, abs_path = _local_upload_safe_folder(rel)
     if os.path.exists(abs_path):
         raise HTTPException(status_code=400, detail="同名文件夹已存在")
     os.makedirs(abs_path, exist_ok=False)
+    set_local_asset_owner(rel, require_authenticated(request), folder=True)
     tree, items = _local_upload_tree_and_items()
     return {"ok": True, "folder": {"path": rel, "name": name}, "tree": tree, "items": items}
 
 @app.patch("/api/local-assets/folders")
 async def rename_local_asset_folder(payload: LocalAssetFolderRequest, request: Request):
     ensure_same_origin_request(request)
+    user = require_authenticated(request)
     rel, abs_path = _local_upload_safe_folder(payload.path)
     if not rel:
         raise HTTPException(status_code=400, detail="根目录不能重命名")
     if not os.path.isdir(abs_path):
         raise HTTPException(status_code=404, detail="文件夹不存在")
+    require_asset_manage(local_asset_owner(rel, folder=True), user)
     name = _local_upload_safe_folder_name(payload.name)
     parent = os.path.dirname(rel).replace("\\", "/")
     new_rel = f"{parent}/{name}".lstrip("/")
@@ -15437,15 +16349,29 @@ async def rename_local_asset_folder(payload: LocalAssetFolderRequest, request: R
     if os.path.exists(new_abs):
         raise HTTPException(status_code=400, detail="同名文件夹已存在")
     os.rename(abs_path, new_abs)
+    with ASSET_GOVERNANCE_LOCK:
+        ownership = load_local_asset_ownership()
+        owner = ownership["folders"].pop(rel, asset_owner_for_user(user))
+        next_folders = {}
+        next_items = {}
+        for key, value in ownership["folders"].items():
+            next_folders[new_rel + key[len(rel):] if key == rel or key.startswith(rel + "/") else key] = value
+        next_folders[new_rel] = owner
+        for key, value in ownership["items"].items():
+            next_items[new_rel + key[len(rel):] if key.startswith(rel + "/") else key] = value
+        ownership["folders"], ownership["items"] = next_folders, next_items
+        save_local_asset_ownership(ownership)
     tree, items = _local_upload_tree_and_items()
     return {"ok": True, "folder": {"path": new_rel, "name": name}, "tree": tree, "items": items}
 
 @app.patch("/api/local-assets/items")
 async def rename_local_asset_item(payload: LocalAssetRenameRequest, request: Request):
     ensure_same_origin_request(request)
+    user = require_authenticated(request)
     rel, abs_path = _local_upload_safe_path(payload.path)
     if not os.path.isfile(abs_path):
         raise HTTPException(status_code=404, detail="本地素材不存在")
+    require_asset_manage(local_asset_owner(rel), user)
     kind, ext = _local_upload_kind_ext(rel, "")
     if kind is None:
         raise HTTPException(status_code=400, detail="不支持的素材类型")
@@ -15468,16 +16394,23 @@ async def rename_local_asset_item(payload: LocalAssetRenameRequest, request: Req
     new_classification = _local_upload_classification_path(new_rel)
     if os.path.isfile(old_classification) and not os.path.exists(new_classification):
         os.rename(old_classification, new_classification)
+    with ASSET_GOVERNANCE_LOCK:
+        ownership = load_local_asset_ownership()
+        owner = ownership["items"].pop(rel, asset_owner_for_user(user))
+        ownership["items"][new_rel] = owner
+        save_local_asset_ownership(ownership)
     tree, items = _local_upload_tree_and_items()
     return {"ok": True, "item": _local_upload_item(new_rel), "old_path": rel, "tree": tree, "items": items}
 
 @app.post("/api/local-assets/delete")
 async def delete_local_assets(payload: dict, request: Request):
     ensure_same_origin_request(request)
+    user = require_authenticated(request)
     names = payload.get("names") if isinstance(payload, dict) else None
     if not isinstance(names, list):
         names = []
     deleted = []
+    trash = load_asset_trash()
     for name in names:
         try:
             rel, path = _local_upload_safe_path(name)
@@ -15485,22 +16418,39 @@ async def delete_local_assets(payload: dict, request: Request):
             continue
         if os.path.isfile(path):
             try:
-                os.remove(path)
-                txt_path = _local_upload_caption_path(rel)
-                if os.path.isfile(txt_path):
-                    os.remove(txt_path)
-                cls_path = _local_upload_classification_path(rel)
-                if os.path.isfile(cls_path):
-                    os.remove(cls_path)
+                owner = local_asset_owner(rel)
+                require_asset_manage(owner, user)
+                trash_id = f"trash_{uuid.uuid4().hex[:12]}"
+                trash_dir = os.path.join(LOCAL_UPLOAD_DIR, ".trash", trash_id)
+                os.makedirs(trash_dir, exist_ok=True)
+                trash_path = os.path.join(trash_dir, os.path.basename(rel))
+                shutil.move(path, trash_path)
+                sidecars = []
+                for sidecar in (_local_upload_caption_path(rel), _local_upload_classification_path(rel)):
+                    if os.path.isfile(sidecar):
+                        dest = os.path.join(trash_dir, os.path.basename(sidecar))
+                        shutil.move(sidecar, dest)
+                        sidecars.append(dest)
+                record = {
+                    "id": rel, "name": _local_upload_display_name(rel), "file": rel,
+                    "url": f"/api/storage-files/local/{urllib.parse.quote(rel, safe='/')}",
+                    "trash_path": trash_path, "sidecars": sidecars, **owner,
+                }
+                entry = asset_trash_entry("local", record, {"path": rel}, user)
+                entry["trash_id"] = trash_id
+                trash.setdefault("items", []).append(entry)
+                cancel_queued_asset_tasks_for_target(rel)
                 deleted.append(rel)
             except OSError:
                 pass
-    return {"deleted": deleted}
+    save_asset_trash(trash)
+    return {"deleted": deleted, "trashed": True}
 
 @app.post("/api/local-assets/move")
 async def move_local_assets(payload: dict, request: Request):
     """把选中的本地素材移动到目标文件夹（folder 为空表示根目录）；连同 .txt / .classification.json 兄弟文件一起搬。"""
     ensure_same_origin_request(request)
+    user = require_authenticated(request)
     names = payload.get("names") if isinstance(payload, dict) else None
     if not isinstance(names, list) or not names:
         raise HTTPException(status_code=400, detail="没有选择素材")
@@ -15508,6 +16458,8 @@ async def move_local_assets(payload: dict, request: Request):
     target_rel, target_abs = _local_upload_safe_folder(folder_value)
     if target_rel and not os.path.isdir(target_abs):
         raise HTTPException(status_code=404, detail="目标文件夹不存在")
+    if target_rel:
+        require_asset_manage(local_asset_owner(target_rel, folder=True), user, "只能移动到自己的本地文件夹")
     moved = 0
     for name in names:
         try:
@@ -15516,6 +16468,7 @@ async def move_local_assets(payload: dict, request: Request):
             continue
         if not os.path.isfile(abs_path):
             continue
+        require_asset_manage(local_asset_owner(rel), user)
         base = os.path.basename(rel)
         new_rel = f"{target_rel}/{base}".lstrip("/") if target_rel else base
         if new_rel == rel:
@@ -15537,6 +16490,11 @@ async def move_local_assets(payload: dict, request: Request):
                 if os.path.isfile(src_sib) and not os.path.exists(dst_sib):
                     os.rename(src_sib, dst_sib)
             moved += 1
+            with ASSET_GOVERNANCE_LOCK:
+                ownership = load_local_asset_ownership()
+                owner = ownership["items"].pop(rel, asset_owner_for_user(user))
+                ownership["items"][new_rel] = owner
+                save_local_asset_ownership(ownership)
         except OSError:
             continue
     tree, items = _local_upload_tree_and_items()
@@ -15544,92 +16502,55 @@ async def move_local_assets(payload: dict, request: Request):
 
 @app.post("/api/local-assets/caption")
 async def caption_local_assets(payload: LocalAssetCaptionRequest, request: Request):
-    upstream_context = resolve_upstream_context(
-        request, payload.provider, allow_default=not bool(str(payload.provider or "").strip())
-    )
-    prompt = (payload.prompt or "描述图片").strip() or "描述图片"
-    items = []
-    ok_count = 0
+    user = require_authenticated(request)
+    function = asset_ai_profile_function(user.get("api_profile_id"), "reverse_prompt")
+    if not function.get("enabled"):
+        raise HTTPException(status_code=409, detail="当前 API 配置组未启用提示词反推")
+    targets = []
     for name in (payload.names or [])[:100]:
-        item = {"name": name, "ok": False, "caption": "", "caption_file": "", "error": ""}
-        try:
-            filename, path = _local_upload_safe_path(name)
-            if not os.path.isfile(path):
-                raise HTTPException(status_code=404, detail="文件不存在")
-            kind, _ = _local_upload_kind_ext(filename, "")
-            if kind != "image":
-                raise HTTPException(status_code=400, detail="仅支持图片素材反推提示词")
-            caption, resolved_model = await caption_image_with_provider(
-                path,
-                prompt,
-                payload.provider,
-                payload.model,
-                payload.ms_model,
-                upstream_context,
-            )
-            txt_path = _local_upload_caption_path(filename)
-            with open(txt_path, "w", encoding="utf-8", newline="") as f:
-                f.write(caption)
-            item.update({
-                "ok": True,
-                "name": filename,
-                "caption": caption,
-                "caption_file": os.path.basename(txt_path),
-                "model": resolved_model,
-            })
-            ok_count += 1
-        except HTTPException as exc:
-            item["error"] = str(exc.detail or "反推失败")
-        except Exception as exc:
-            item["error"] = str(exc) or "反推失败"
-        items.append(item)
-    return {"ok": True, "count": ok_count, "items": items}
+        filename, path = _local_upload_safe_path(name)
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        require_asset_manage(local_asset_owner(filename), user, "只能处理自己的本地素材")
+        kind, _ = _local_upload_kind_ext(filename, "")
+        if kind != "image":
+            raise HTTPException(status_code=400, detail="仅支持图片素材反推提示词")
+        targets.append({"target_type": "local", "target_id": filename, "target_name": filename})
+    tasks = enqueue_asset_ai_tasks_for_request(
+        request, "reverse_prompt", targets,
+        {**function, "api_profile_id": user.get("api_profile_id")},
+    )
+    return {"ok": True, "queued": len(tasks), "tasks": tasks, "items": []}
 
 @app.post("/api/local-assets/classify")
 async def classify_local_assets(payload: LocalAssetClassifyRequest, request: Request):
-    upstream_context = resolve_upstream_context(
-        request, payload.provider, allow_default=not bool(str(payload.provider or "").strip())
-    )
-    items = []
-    ok_count = 0
+    user = require_authenticated(request)
+    function = asset_ai_profile_function(user.get("api_profile_id"), "manual_classification")
+    if not function.get("enabled"):
+        raise HTTPException(status_code=409, detail="当前 API 配置组未启用资产智能分类")
+    targets = []
     for name in (payload.names or [])[:80]:
-        item = {"name": name, "ok": False, "classification": None, "classification_file": "", "error": ""}
-        try:
-            filename, path = _local_upload_safe_path(name)
-            if not os.path.isfile(path):
-                raise HTTPException(status_code=404, detail="文件不存在")
-            kind, _ = _local_upload_kind_ext(filename, "")
-            if kind != "image":
-                raise HTTPException(status_code=400, detail="仅支持图片素材智能分类")
-            classification = await classify_image_with_provider(
-                path,
-                payload.provider,
-                payload.model,
-                payload.ms_model,
-                payload.prompt,
-                upstream_context,
-            )
-            _write_local_upload_classification(filename, classification)
-            item.update({
-                "ok": True,
-                "name": filename,
-                "classification": classification,
-                "classification_file": os.path.basename(_local_upload_classification_path(filename)),
-                "model": classification.get("model") or "",
-            })
-            ok_count += 1
-        except HTTPException as exc:
-            item["error"] = str(exc.detail or "智能分类失败")
-        except Exception as exc:
-            item["error"] = str(exc) or "智能分类失败"
-        items.append(item)
-    return {"ok": True, "count": ok_count, "items": items}
+        filename, path = _local_upload_safe_path(name)
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        require_asset_manage(local_asset_owner(filename), user, "只能处理自己的本地素材")
+        kind, _ = _local_upload_kind_ext(filename, "")
+        if kind != "image":
+            raise HTTPException(status_code=400, detail="仅支持图片素材智能分类")
+        targets.append({"target_type": "local", "target_id": filename, "target_name": filename})
+    tasks = enqueue_asset_ai_tasks_for_request(
+        request, "manual_classification", targets,
+        {**function, "api_profile_id": user.get("api_profile_id")},
+    )
+    return {"ok": True, "queued": len(tasks), "tasks": tasks, "items": []}
 
 @app.patch("/api/local-assets/caption")
-async def save_local_asset_caption(payload: LocalAssetCaptionSaveRequest):
+async def save_local_asset_caption(payload: LocalAssetCaptionSaveRequest, request: Request):
+    user = require_authenticated(request)
     filename, path = _local_upload_safe_path(payload.name)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail="文件不存在")
+    require_asset_manage(local_asset_owner(filename), user)
     kind, _ = _local_upload_kind_ext(filename, "")
     if kind != "image":
         raise HTTPException(status_code=400, detail="仅支持图片素材保存提示词")
@@ -19439,14 +20360,21 @@ async def canvas_llm(payload: CanvasLLMRequest, request: Request):
 # --- 对话管理 ---
 
 @app.get("/api/conversations")
-async def conversations(request: Request, x_user_id: str = Header(default="")):
+async def conversations(request: Request, canvas_id: Optional[str] = None, x_user_id: str = Header(default="")):
     user_id = safe_user_id(x_user_id, request)
-    return {"user_id": user_id, "conversations": list_conversations(user_id)}
+    if canvas_id:
+        canvas = load_canvas(canvas_id)
+        if canvas.get("deleted_at"):
+            raise HTTPException(status_code=404, detail="画布已在回收站")
+    return {"user_id": user_id, "canvas_id": canvas_id or "", "conversations": list_conversations(user_id, canvas_id)}
 
 @app.post("/api/conversations")
 async def create_conversation(payload: ConversationCreateRequest, request: Request, x_user_id: str = Header(default="")):
     user_id = safe_user_id(x_user_id, request)
-    return {"conversation": new_conversation(user_id, payload.title)}
+    canvas_id = normalize_canvas_scope_id(payload.canvas_id)
+    if canvas_id:
+        load_canvas(canvas_id)
+    return {"conversation": new_conversation(user_id, payload.title, canvas_id)}
 
 @app.get("/api/conversations/{conversation_id}")
 async def get_conversation(conversation_id: str, request: Request, x_user_id: str = Header(default="")):
@@ -19985,6 +20913,82 @@ async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate):
     canvas = await asyncio.to_thread(mutate_meta)
     return {"canvas": canvas_record(canvas)}
 
+def extract_canvas_cover_frame(video_path, target_path, frame_time=0):
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(status_code=503, detail="未找到 ffmpeg，无法从视频设置封面。")
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    tmp_path = f"{target_path}.{uuid.uuid4().hex}.tmp.jpg"
+    cmd = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", f"{max(0.0, float(frame_time or 0)):.3f}",
+        "-i", video_path,
+        "-frames:v", "1",
+        "-vf", "scale='min(1600,iw)':-2",
+        "-q:v", "3",
+        tmp_path,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    if proc.returncode != 0 or not os.path.exists(tmp_path) or os.path.getsize(tmp_path) <= 0:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail=(proc.stderr or "视频当前帧提取失败。").strip()[:300])
+    os.replace(tmp_path, target_path)
+
+@app.post("/api/canvases/{canvas_id}/cover")
+async def set_canvas_cover(canvas_id: str, payload: CanvasCoverRequest):
+    def mutate_cover():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            kind = str(payload.source_kind or "image").strip().lower()
+            if kind not in {"image", "video"}:
+                raise HTTPException(status_code=400, detail="封面来源只支持图片或视频。")
+            if not canvas_contains_media(canvas, payload.url, payload.source_node_id):
+                raise HTTPException(status_code=400, detail="封面来源不属于当前画布。")
+            cover_url = payload.url
+            if kind == "video":
+                source_path = output_file_from_url(payload.url)
+                if not source_path or not os.path.isfile(source_path):
+                    raise HTTPException(status_code=400, detail="远程视频暂不支持提取封面，请先保存为本地素材。")
+                target_path = canvas_cover_file(canvas_id)
+                extract_canvas_cover_frame(source_path, target_path, payload.frame_time)
+                cover_url = f"/assets/canvas-covers/{urllib.parse.quote(os.path.basename(target_path))}?v={now_ms()}"
+            else:
+                clear_canvas_cover_file(canvas_id)
+            canvas["cover_url"] = cover_url
+            canvas["cover_mode"] = "manual"
+            canvas["cover_source_node_id"] = str(payload.source_node_id or "")
+            canvas["cover_source_kind"] = kind
+            canvas["cover_set_at"] = now_ms()
+            with open(canvas_path(canvas_id), "w", encoding="utf-8") as f:
+                json.dump(canvas, f, ensure_ascii=False, indent=2)
+            return canvas
+
+    canvas = await asyncio.to_thread(mutate_cover)
+    return {"canvas": canvas_record(canvas)}
+
+@app.delete("/api/canvases/{canvas_id}/cover")
+async def reset_canvas_cover(canvas_id: str):
+    def mutate_cover():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            clear_canvas_cover_file(canvas_id)
+            canvas["cover_url"] = ""
+            canvas["cover_mode"] = "auto"
+            canvas["cover_source_node_id"] = ""
+            canvas["cover_source_kind"] = ""
+            canvas["cover_set_at"] = 0
+            ensure_canvas_cover(canvas, force=True)
+            with open(canvas_path(canvas_id), "w", encoding="utf-8") as f:
+                json.dump(canvas, f, ensure_ascii=False, indent=2)
+            return canvas
+
+    canvas = await asyncio.to_thread(mutate_cover)
+    return {"canvas": canvas_record(canvas)}
+
 @app.get("/api/canvases/{canvas_id}")
 async def get_canvas(canvas_id: str):
     return {"canvas": load_canvas(canvas_id)}
@@ -20177,14 +21181,18 @@ async def export_canvas_workflow(payload: CanvasWorkflowExportRequest):
     return Response(archive, media_type="application/zip", headers=headers)
 
 @app.post("/api/canvas-workflows/export-to-library")
-async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest):
+async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest, request: Request):
+    user = require_authenticated(request)
     archive, meta = build_canvas_workflow_archive(payload)
     filename = sanitize_export_filename(payload.filename or "canvas-workflow.zip", "canvas-workflow.zip")
     if not filename.lower().endswith(".zip"):
         filename += ".zip"
     lib = load_asset_library()
-    _, cat = asset_library_workflow_category(lib, payload.library_id, payload.category_id)
+    library, cat = asset_library_workflow_category(lib, payload.library_id, payload.category_id)
+    require_asset_manage(library, user, "只能保存到自己的工作流库")
     item = make_workflow_library_item_from_bytes(archive, filename, payload.name or os.path.splitext(filename)[0])
+    apply_asset_metadata(item, user)
+    item["library_id"], item["category_id"] = library.get("id"), cat.get("id")
     item["node_count"] = meta.get("node_count") or len(payload.nodes or [])
     item["connection_count"] = meta.get("connection_count") or len(payload.connections or [])
     item["resource_count"] = len(meta.get("resources") or [])
@@ -20194,12 +21202,15 @@ async def export_canvas_workflow_to_library(payload: CanvasWorkflowExportRequest
 
 @app.post("/api/asset-library/workflows/upload")
 async def upload_asset_library_workflows(
+    request: Request,
     files: List[UploadFile] = File(...),
     library_id: str = Form(""),
     category_id: str = Form(""),
 ):
+    user = require_authenticated(request)
     lib = load_asset_library()
-    _, cat = asset_library_workflow_category(lib, library_id, category_id)
+    library, cat = asset_library_workflow_category(lib, library_id, category_id)
+    require_asset_manage(library, user, "只能上传到自己的工作流库")
     added = []
     for file in files[:100]:
         raw = await file.read()
@@ -20208,6 +21219,8 @@ async def upload_asset_library_workflows(
         if not (lower.endswith(".json") or lower.endswith(".zip") or raw[:2] == b"PK"):
             continue
         item = make_workflow_library_item_from_bytes(raw, filename, os.path.splitext(filename)[0])
+        apply_asset_metadata(item, user)
+        item["library_id"], item["category_id"] = library.get("id"), cat.get("id")
         cat.setdefault("items", []).append(item)
         added.append(item)
     if not added:
@@ -20341,15 +21354,41 @@ async def export_smart_canvas_group(payload: SmartCanvasGroupExportRequest):
     return {"ok": True, "folder": target_dir, "count": count}
 
 @app.get("/api/asset-library")
-async def get_asset_library():
-    return {"library": load_asset_library()}
+async def get_asset_library(request: Request):
+    user = require_authenticated(request)
+    ensure_user_asset_spaces(user)
+    return {"library": public_asset_library_for_user(load_asset_library(), user)}
 
 @app.get("/api/asset-url-library")
-async def get_asset_url_library():
-    return {"library": load_asset_url_library()}
+async def get_asset_url_library(request: Request):
+    user = require_authenticated(request)
+    lib = load_asset_url_library()
+    public = json.loads(json.dumps(lib, ensure_ascii=False))
+    user_id = str(user.get("id") or "")
+    user_names = {str(row.get("id") or ""): str(row.get("name") or row.get("username") or "") for row in load_auth_users().get("users", [])}
+    for item in public.get("items", []):
+        item["can_manage"] = asset_is_admin(user) or (
+            item.get("owner_type") == "user" and item.get("owner_id") == user_id
+        )
+        item["scope"] = "system" if item.get("owner_type") == "system" else (
+            "mine" if item.get("owner_id") == user_id else "all"
+        )
+        item["owner_name"] = "系统" if item.get("owner_type") == "system" else user_names.get(item.get("owner_id"), "未知用户")
+        if item.get("source_author_id"):
+            item["source_author_name"] = user_names.get(item.get("source_author_id"), "系统")
+    for group in public.get("groups", []):
+        group["can_manage"] = asset_is_admin(user) or (
+            group.get("owner_type") == "user" and group.get("owner_id") == user_id
+        )
+        group["scope"] = "system" if group.get("owner_type") == "system" else (
+            "mine" if group.get("owner_id") == user_id else "all"
+        )
+    public["viewer"] = {"user_id": user_id, "is_admin": asset_is_admin(user)}
+    return {"library": public}
 
 @app.post("/api/asset-url-library/items")
-async def add_asset_url_library_item(payload: AssetUrlLibraryItemRequest):
+async def add_asset_url_library_item(payload: AssetUrlLibraryItemRequest, request: Request):
+    user = require_authenticated(request)
     url = str(payload.url or "").strip()
     if not url or not url.startswith(("http://", "https://", "asset://")):
         raise HTTPException(status_code=400, detail="URL 只支持 http(s) 或 asset://")
@@ -20361,19 +21400,23 @@ async def add_asset_url_library_item(payload: AssetUrlLibraryItemRequest):
         "name": re.sub(r"\s+", " ", str(payload.name or filename_from_media_url(url, "") or url).strip())[:160],
         "kind": kind,
         "note": str(payload.note or "").strip()[:1000],
+        "group_id": str(payload.group_id or ""),
         "created_at": now_ms(),
         "updated_at": now_ms(),
     }
+    apply_asset_metadata(item, user)
     lib.setdefault("items", []).insert(0, item)
     lib = save_asset_url_library(lib)
     return {"library": lib, "item": item}
 
 @app.patch("/api/asset-url-library/items/{item_id}")
-async def update_asset_url_library_item(item_id: str, payload: AssetUrlLibraryItemRequest):
+async def update_asset_url_library_item(item_id: str, payload: AssetUrlLibraryItemRequest, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_url_library()
     item = next((entry for entry in lib.get("items", []) if entry.get("id") == item_id), None)
     if not item:
         raise HTTPException(status_code=404, detail="URL 素材不存在")
+    require_asset_manage(item, user)
     url = str(payload.url or item.get("url") or "").strip()
     if not url or not url.startswith(("http://", "https://", "asset://")):
         raise HTTPException(status_code=400, detail="URL 只支持 http(s) 或 asset://")
@@ -20381,55 +21424,123 @@ async def update_asset_url_library_item(item_id: str, payload: AssetUrlLibraryIt
     item["kind"] = infer_asset_url_kind(url, payload.kind or item.get("kind") or "image")
     item["name"] = re.sub(r"\s+", " ", str(payload.name or item.get("name") or filename_from_media_url(url, "") or url).strip())[:160]
     item["note"] = str(payload.note or "").strip()[:1000]
+    item["group_id"] = str(payload.group_id or item.get("group_id") or "")
     item["updated_at"] = now_ms()
     lib = save_asset_url_library(lib)
     return {"library": lib, "item": item}
 
 @app.delete("/api/asset-url-library/items/{item_id}")
-async def delete_asset_url_library_item(item_id: str):
+async def delete_asset_url_library_item(item_id: str, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_url_library()
+    target = next((item for item in (lib.get("items", []) or []) if item.get("id") == item_id), None)
+    if target:
+        require_asset_manage(target, user)
     before = len(lib.get("items", []) or [])
     lib["items"] = [item for item in (lib.get("items", []) or []) if item.get("id") != item_id]
     if len(lib["items"]) == before:
         raise HTTPException(status_code=404, detail="URL 素材不存在")
     lib = save_asset_url_library(lib)
-    return {"library": lib, "deleted": item_id}
+    trash = load_asset_trash()
+    trash.setdefault("items", []).append(asset_trash_entry("url", target, {}, user))
+    save_asset_trash(trash)
+    cancel_queued_asset_tasks_for_target(item_id)
+    return {"library": lib, "deleted": item_id, "trashed": True}
+
+@app.post("/api/asset-url-library/groups")
+async def create_asset_url_group(payload: Dict[str, Any], request: Request):
+    user = require_authenticated(request)
+    name = sanitize_asset_name(payload.get("name") or "URL 分组", "URL 分组")
+    lib = load_asset_url_library()
+    if any(
+        group.get("owner_id") == user.get("id") and str(group.get("name") or "").casefold() == name.casefold()
+        for group in lib.get("groups", [])
+    ):
+        raise HTTPException(status_code=409, detail="已存在同名 URL 分组")
+    group = {"id": f"urlg_{uuid.uuid4().hex[:10]}", "name": name, **asset_owner_for_user(user)}
+    lib.setdefault("groups", []).append(group)
+    save_asset_url_library(lib)
+    return {"group": group, "library": lib}
+
+@app.patch("/api/asset-url-library/groups/{group_id}")
+async def rename_asset_url_group(group_id: str, payload: Dict[str, Any], request: Request):
+    user = require_authenticated(request)
+    lib = load_asset_url_library()
+    group = next((item for item in lib.get("groups", []) if item.get("id") == group_id), None)
+    if not group:
+        raise HTTPException(status_code=404, detail="URL 分组不存在")
+    require_asset_manage(group, user)
+    group["name"] = sanitize_asset_name(payload.get("name") or group.get("name"), "URL 分组")
+    save_asset_url_library(lib)
+    return {"group": group, "library": lib}
+
+@app.delete("/api/asset-url-library/groups/{group_id}")
+async def delete_asset_url_group(group_id: str, request: Request, mode: str = ""):
+    user = require_authenticated(request)
+    if mode not in {"structure", "contents"}:
+        raise HTTPException(status_code=400, detail="请选择仅删除结构或连同内容删除")
+    lib = load_asset_url_library()
+    group = next((item for item in lib.get("groups", []) if item.get("id") == group_id), None)
+    if not group:
+        raise HTTPException(status_code=404, detail="URL 分组不存在")
+    require_asset_manage(group, user)
+    grouped = [item for item in lib.get("items", []) if item.get("group_id") == group_id]
+    if mode == "structure":
+        for item in grouped:
+            item["group_id"] = ""
+    else:
+        trash = load_asset_trash()
+        for item in grouped:
+            require_asset_manage(item, user)
+            trash.setdefault("items", []).append(asset_trash_entry("url", item, {"group_id": group_id}, user))
+        save_asset_trash(trash)
+        ids = {item.get("id") for item in grouped}
+        lib["items"] = [item for item in lib.get("items", []) if item.get("id") not in ids]
+    lib["groups"] = [item for item in lib.get("groups", []) if item.get("id") != group_id]
+    save_asset_url_library(lib)
+    return {"library": lib}
 
 @app.get("/api/prompt-libraries")
-async def get_prompt_libraries():
-    return {"library": public_prompt_libraries()}
+async def get_prompt_libraries(request: Request):
+    user = require_authenticated(request)
+    ensure_user_asset_spaces(user)
+    return {"library": public_prompt_libraries_for_user(load_prompt_libraries(), user)}
 
 @app.post("/api/prompt-libraries")
-async def create_prompt_library(payload: PromptLibraryRequest):
+async def create_prompt_library(payload: PromptLibraryRequest, request: Request):
+    user = require_authenticated(request)
+    ensure_user_asset_spaces(user)
     data = load_prompt_libraries()
-    library = {
-        "id": f"lib_{uuid.uuid4().hex[:12]}",
-        "name": sanitize_asset_name(payload.name, "提示词库"),
-        "type": "prompt",
-        "categories": [],
-        "items": [],
-    }
-    data.setdefault("libraries", []).append(library)
-    data["active_library_id"] = library["id"]
-    data = save_prompt_libraries(data)
-    new_lib = next((lib for lib in data.get("libraries", []) if lib.get("id") == library["id"]), library)
-    return {"library": public_prompt_libraries(data), "prompt_library": new_lib}
+    library = find_prompt_library(data, personal_prompt_library_id(user.get("id")))
+    if not library:
+        raise HTTPException(status_code=500, detail="个人提示词库初始化失败")
+    if payload.name:
+        library["name"] = sanitize_asset_name(payload.name, library.get("name") or "个人提示词库")
+        data = save_prompt_libraries(data)
+    return {"library": public_prompt_libraries_for_user(data, user), "prompt_library": library}
 
 @app.patch("/api/prompt-libraries/{library_id}")
-async def rename_prompt_library(library_id: str, payload: PromptLibraryRequest):
+async def rename_prompt_library(library_id: str, payload: PromptLibraryRequest, request: Request):
+    user = require_authenticated(request)
     data = load_prompt_libraries()
     library = find_prompt_library(data, library_id)
     if not library or library.get("id") != library_id:
         raise HTTPException(status_code=404, detail="提示词库不存在")
+    require_asset_manage(library, user, "无权重命名该提示词库")
     library["name"] = sanitize_asset_name(payload.name, library.get("name") or "提示词库")
     data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "prompt_library": library}
+    return {"library": public_prompt_libraries_for_user(data, user), "prompt_library": library}
 
 @app.delete("/api/prompt-libraries/{library_id}")
-async def delete_prompt_library(library_id: str):
-    if library_id == "system":
-        raise HTTPException(status_code=400, detail="系统提示词库不能删除，可以删除其中的提示词")
+async def delete_prompt_library(library_id: str, request: Request):
+    user = require_authenticated(request)
     data = load_prompt_libraries()
+    library = next((item for item in data.get("libraries", []) if item.get("id") == library_id), None)
+    if not library:
+        raise HTTPException(status_code=404, detail="提示词库不存在")
+    if library.get("fixed") or library.get("system") or library.get("personal"):
+        raise HTTPException(status_code=400, detail="固定提示词库不能删除，可清空内容或重建分组")
+    require_asset_manage(library, user)
     libraries = data.get("libraries", []) or []
     kept = [lib for lib in libraries if lib.get("id") != library_id]
     if len(kept) == len(libraries):
@@ -20441,11 +21552,13 @@ async def delete_prompt_library(library_id: str):
     return {"library": public_prompt_libraries(data)}
 
 @app.post("/api/prompt-libraries/items")
-async def add_prompt_library_item(payload: PromptLibraryItemRequest):
+async def add_prompt_library_item(payload: PromptLibraryItemRequest, request: Request):
+    user = require_authenticated(request)
     data = load_prompt_libraries()
     library = find_prompt_library(data, payload.library_id)
     if not library:
         raise HTTPException(status_code=404, detail="提示词库不存在")
+    require_asset_manage(library, user, "无权向该提示词库添加内容")
     if not str(payload.positive or "").strip():
         raise HTTPException(status_code=400, detail="提示词内容不能为空")
     item = normalize_prompt_library_item({
@@ -20457,20 +21570,23 @@ async def add_prompt_library_item(payload: PromptLibraryItemRequest):
         "scene": payload.scene,
         "created_at": now_ms(),
         "updated_at": now_ms(),
+        **asset_owner_for_user(user),
     })
     library.setdefault("items", []).insert(0, item)
     data["active_library_id"] = library.get("id") or data.get("active_library_id")
     data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "item": item}
+    return {"library": public_prompt_libraries_for_user(data, user), "item": item}
 
 @app.patch("/api/prompt-libraries/items/{item_id}")
-async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemRequest):
+async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemRequest, request: Request):
+    user = require_authenticated(request)
     data = load_prompt_libraries()
     for library in data.get("libraries", []) or []:
         if payload.library_id and library.get("id") != payload.library_id:
             continue
         for index, item in enumerate(library.get("items", []) or []):
             if item.get("id") == item_id:
+                require_asset_manage(item, user)
                 next_item = normalize_prompt_library_item({
                     **item,
                     "name": payload.name or item.get("name"),
@@ -20486,13 +21602,15 @@ async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemReq
     raise HTTPException(status_code=404, detail="提示词不存在")
 
 @app.delete("/api/prompt-libraries/items/{item_id}")
-async def delete_prompt_library_item(item_id: str):
+async def delete_prompt_library_item(item_id: str, request: Request):
+    user = require_authenticated(request)
     data = load_prompt_libraries()
     removed = None
     for library in data.get("libraries", []) or []:
         keep = []
         for item in library.get("items", []) or []:
             if item.get("id") == item_id:
+                require_asset_manage(item, user)
                 removed = item
             else:
                 keep.append(item)
@@ -20500,35 +21618,52 @@ async def delete_prompt_library_item(item_id: str):
     if not removed:
         raise HTTPException(status_code=404, detail="提示词不存在")
     data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "removed": 1}
+    trash = load_asset_trash()
+    trash.setdefault("items", []).append(asset_trash_entry("prompt", removed, {}, user))
+    save_asset_trash(trash)
+    cancel_queued_asset_tasks_for_target(item_id)
+    return {"library": public_prompt_libraries_for_user(data, user), "removed": 1, "trashed": True}
 
 @app.post("/api/prompt-libraries/items/delete")
-async def batch_delete_prompt_library_items(payload: PromptLibraryBatchDeleteRequest):
+async def batch_delete_prompt_library_items(payload: PromptLibraryBatchDeleteRequest, request: Request):
+    user = require_authenticated(request)
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择提示词")
     data = load_prompt_libraries()
     removed = 0
+    removed_items = []
     for library in data.get("libraries", []) or []:
         keep = []
         for item in library.get("items", []) or []:
             if item.get("id") in ids:
+                require_asset_manage(item, user)
                 removed += 1
+                removed_items.append(item)
             else:
                 keep.append(item)
         library["items"] = keep
     data = save_prompt_libraries(data)
-    return {"library": public_prompt_libraries(data), "removed": removed}
+    trash = load_asset_trash()
+    trash.setdefault("items", []).extend(asset_trash_entry("prompt", item, {}, user) for item in removed_items)
+    save_asset_trash(trash)
+    for item in removed_items:
+        cancel_queued_asset_tasks_for_target(item.get("id"))
+    return {"library": public_prompt_libraries_for_user(data, user), "removed": removed, "trashed": True}
 
 PROMPT_BUILTIN_CATEGORY_IDS = {"view", "storyboard", "character", "product", "lighting", "custom"}
 
 @app.post("/api/prompt-libraries/categories")
-async def add_prompt_library_category(payload: PromptLibraryCategoryRequest):
+async def add_prompt_library_category(payload: PromptLibraryCategoryRequest, request: Request):
+    user = require_authenticated(request)
     data = load_prompt_libraries()
     library = find_prompt_library(data, payload.library_id) or find_prompt_library(data, "system")
     if not library:
         raise HTTPException(status_code=404, detail="提示词库不存在")
+    require_asset_manage(library, user)
     name = sanitize_asset_name(payload.name, "新分组")
+    if any(str(cat.get("name") or "").casefold() == name.casefold() for cat in library.get("categories", [])):
+        raise HTTPException(status_code=409, detail="当前提示词库已存在同名分组")
     existing = {str(c.get("id")) for c in (library.get("categories") or []) if isinstance(c, dict)} | PROMPT_BUILTIN_CATEGORY_IDS
     cat_id = f"pcat_{uuid.uuid4().hex[:10]}"
     while cat_id in existing:
@@ -20539,7 +21674,8 @@ async def add_prompt_library_category(payload: PromptLibraryCategoryRequest):
     return {"library": public_prompt_libraries(data), "category": category}
 
 @app.patch("/api/prompt-libraries/categories/{category_id}")
-async def rename_prompt_library_category(category_id: str, payload: PromptLibraryCategoryRequest):
+async def rename_prompt_library_category(category_id: str, payload: PromptLibraryCategoryRequest, request: Request):
+    user = require_authenticated(request)
     # 系统库（内置）分组也允许重命名：分组的 id 不变，只改显示名，
     # 这样画布与素材库管理共用同一份分组数据，重命名两端实时同步。
     name = sanitize_asset_name(payload.name, "")
@@ -20550,6 +21686,12 @@ async def rename_prompt_library_category(category_id: str, payload: PromptLibrar
     for library in data.get("libraries", []) or []:
         for cat in library.get("categories") or []:
             if isinstance(cat, dict) and cat.get("id") == category_id:
+                require_asset_manage(library, user)
+                if any(
+                    other.get("id") != category_id and str(other.get("name") or "").casefold() == name.casefold()
+                    for other in library.get("categories", []) if isinstance(other, dict)
+                ):
+                    raise HTTPException(status_code=409, detail="当前提示词库已存在同名分组")
                 cat["name"] = name
                 updated = True
     if not updated:
@@ -20558,7 +21700,10 @@ async def rename_prompt_library_category(category_id: str, payload: PromptLibrar
     return {"library": public_prompt_libraries(data)}
 
 @app.delete("/api/prompt-libraries/categories/{category_id}")
-async def delete_prompt_library_category(category_id: str):
+async def delete_prompt_library_category(category_id: str, request: Request, mode: str = ""):
+    user = require_authenticated(request)
+    if mode not in {"structure", "contents"}:
+        raise HTTPException(status_code=400, detail="请选择仅删除结构或连同内容删除")
     # 系统库（内置）分组也允许删除，与素材库管理/画布保持一致。
     data = load_prompt_libraries()
     found = False
@@ -20566,47 +21711,64 @@ async def delete_prompt_library_category(category_id: str):
         cats = library.get("categories") or []
         kept = [c for c in cats if not (isinstance(c, dict) and c.get("id") == category_id)]
         if len(kept) != len(cats):
+            require_asset_manage(library, user)
             found = True
             library["categories"] = kept
             # 被删分组下的条目改挂到剩余的第一个分组；若已无分组则归到“未分类”。
             fallback = next((str(c.get("id")) for c in kept if isinstance(c, dict) and c.get("id")), "")
-            for item in library.get("items", []) or []:
+            for item in list(library.get("items", []) or []):
                 if isinstance(item, dict) and item.get("category") == category_id:
-                    item["category"] = fallback
+                    if mode == "structure":
+                        item["category"] = fallback
+                    else:
+                        library["items"].remove(item)
+                        trash = load_asset_trash()
+                        trash.setdefault("items", []).append(asset_trash_entry("prompt", item, {"category_id": category_id}, user))
+                        save_asset_trash(trash)
     if not found:
         raise HTTPException(status_code=404, detail="分组不存在")
     data = save_prompt_libraries(data)
     return {"library": public_prompt_libraries(data)}
 
 @app.post("/api/asset-library/libraries")
-async def create_asset_library(payload: AssetLibraryRequest):
+async def create_asset_library(payload: AssetLibraryRequest, request: Request):
+    user = require_authenticated(request)
+    ensure_user_asset_spaces(user)
     lib = load_asset_library()
-    library = {"id": f"lib_{uuid.uuid4().hex[:12]}", "name": sanitize_asset_name(payload.name, "资产库"), "type": "asset", "categories": []}
-    library["categories"].append({"id": f"cat_{uuid.uuid4().hex[:12]}", "name": "默认分组", "type": "image", "items": []})
-    library["categories"].append({"id": f"wf_{uuid.uuid4().hex[:12]}", "name": "工作流", "type": "workflow", "items": []})
-    lib.setdefault("libraries", []).append(library)
+    library = find_asset_library(lib, personal_asset_library_id(user.get("id")))
+    if not library:
+        raise HTTPException(status_code=500, detail="个人资产库初始化失败")
+    if payload.name:
+        library["name"] = sanitize_asset_name(payload.name, library.get("name") or "个人资产库")
     lib["active_library_id"] = library["id"]
     save_asset_library(lib)
-    return {"library": lib, "asset_library": library}
+    return {"library": public_asset_library_for_user(lib, user), "asset_library": library}
 
 @app.patch("/api/asset-library/libraries/{library_id}")
-async def rename_asset_library(library_id: str, payload: AssetLibraryRenameRequest):
+async def rename_asset_library(library_id: str, payload: AssetLibraryRenameRequest, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_library()
     library = find_asset_library(lib, library_id)
     if not library or library.get("id") != library_id:
         raise HTTPException(status_code=404, detail="资产库不存在")
+    require_asset_manage(library, user)
     library["name"] = sanitize_asset_name(payload.name, library.get("name") or "资产库")
     save_asset_library(lib)
     return {"library": lib, "asset_library": library}
 
 @app.delete("/api/asset-library/libraries/{library_id}")
-async def delete_asset_library(library_id: str):
+async def delete_asset_library(library_id: str, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_library()
     libraries = lib.get("libraries") or []
     if len(libraries) <= 1:
         raise HTTPException(status_code=400, detail="至少保留一个资产库")
     if not any(item.get("id") == library_id for item in libraries):
         raise HTTPException(status_code=404, detail="资产库不存在")
+    target = next(item for item in libraries if item.get("id") == library_id)
+    if target.get("fixed") or target.get("personal") or target.get("system"):
+        raise HTTPException(status_code=400, detail="固定资产库不能删除，可清空内容或重建分组")
+    require_asset_manage(target, user)
     lib["libraries"] = [item for item in libraries if item.get("id") != library_id]
     if lib.get("active_library_id") == library_id:
         lib["active_library_id"] = lib["libraries"][0].get("id")
@@ -20614,13 +21776,21 @@ async def delete_asset_library(library_id: str):
     return {"library": lib}
 
 @app.post("/api/asset-library/categories")
-async def create_asset_library_category(payload: AssetLibraryCategoryRequest):
+async def create_asset_library_category(payload: AssetLibraryCategoryRequest, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_library()
     library = find_asset_library(lib, payload.library_id)
     if not library:
         raise HTTPException(status_code=404, detail="资产库不存在")
+    require_asset_manage(library, user)
     cat_type = "workflow" if str(payload.type or "").lower() == "workflow" else "image"
-    category = {"id": f"cat_{uuid.uuid4().hex[:12]}", "name": sanitize_asset_name(payload.name, "新文件夹"), "type": cat_type, "items": []}
+    name = sanitize_asset_name(payload.name, "新文件夹")
+    if any(str(cat.get("name") or "").casefold() == name.casefold() for cat in library.get("categories", [])):
+        raise HTTPException(status_code=409, detail="当前资产库已存在同名分组")
+    category = {
+        "id": f"cat_{uuid.uuid4().hex[:12]}", "name": name, "type": cat_type, "items": [],
+        **asset_owner_for_user(user),
+    }
     if cat_type == "image":
         # 图片分组在 library/ 下建一个真实文件夹，之后该分组的资产都存进这个文件夹，便于在磁盘上管理。
         category["dir"] = unique_asset_category_dir(library, payload.name)
@@ -20634,72 +21804,97 @@ async def create_asset_library_category(payload: AssetLibraryCategoryRequest):
     return {"library": lib, "category": category}
 
 @app.patch("/api/asset-library/categories/{category_id}")
-async def rename_asset_library_category(category_id: str, payload: AssetLibraryRenameRequest):
+async def rename_asset_library_category(category_id: str, payload: AssetLibraryRenameRequest, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_library()
     _, cat = find_asset_category_with_library(lib, category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
-    cat["name"] = sanitize_asset_name(payload.name, cat.get("name") or "新文件夹")
+    require_asset_manage(cat, user)
+    next_name = sanitize_asset_name(payload.name, cat.get("name") or "新文件夹")
+    library, _ = find_asset_category_with_library(lib, category_id, payload.library_id)
+    if any(other.get("id") != category_id and str(other.get("name") or "").casefold() == next_name.casefold() for other in library.get("categories", [])):
+        raise HTTPException(status_code=409, detail="当前资产库已存在同名分组")
+    cat["name"] = next_name
     save_asset_library(lib)
     return {"library": lib, "category": cat}
 
 @app.delete("/api/asset-library/categories/{category_id}")
-async def delete_asset_library_category(category_id: str, library_id: str = ""):
+async def delete_asset_library_category(category_id: str, request: Request, library_id: str = "", mode: str = ""):
+    user = require_authenticated(request)
     lib = load_asset_library()
     library, cat = find_asset_category_with_library(lib, category_id, library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
+    require_asset_manage(cat, user)
+    if mode not in {"structure", "contents"}:
+        raise HTTPException(status_code=400, detail="请选择仅删除结构或连同内容删除")
     if cat.get("type") == "workflow" and category_id == "workflows" and (library.get("id") or "") == "default":
         raise HTTPException(status_code=400, detail="默认工作流分类不能删除")
-    # 删除分组时一并清理该分组下的本地文件 + 分组文件夹，避免磁盘残留。
-    for item in (cat.get("items") or []):
-        remove_asset_library_file(item)
-    cat_dir = str(cat.get("dir") or "").strip("/").strip()
-    if cat_dir:
-        try:
-            target = os.path.join(ASSET_LIBRARY_DIR, cat_dir)
-            if os.path.isdir(target) and os.path.abspath(target).startswith(os.path.abspath(ASSET_LIBRARY_DIR) + os.sep):
-                shutil.rmtree(target, ignore_errors=True)
-        except Exception as exc:
-            print(f"删除分组文件夹失败: {exc}")
+    items = list(cat.get("items") or [])
+    if mode == "structure":
+        fallback = next((candidate for candidate in library.get("categories", []) if candidate.get("id") != category_id and candidate.get("type") == cat.get("type")), None)
+        if not fallback:
+            fallback = {
+                "id": f"cat_{uuid.uuid4().hex[:12]}", "name": "已迁移内容",
+                "type": cat.get("type") or "image", "items": [], **asset_owner_fields(library),
+            }
+            library.setdefault("categories", []).append(fallback)
+        fallback.setdefault("items", []).extend(items)
+    else:
+        trash = load_asset_trash()
+        for item in items:
+            trash.setdefault("items", []).append(asset_trash_entry(
+                "workflow" if cat.get("type") == "workflow" else "asset",
+                item, {"library_id": library.get("id"), "category_id": category_id}, user,
+            ))
+            cancel_queued_asset_tasks_for_target(item.get("id"))
+        save_asset_trash(trash)
     library["categories"] = [c for c in library.get("categories", []) if c.get("id") != category_id]
     save_asset_library(lib)
     return {"library": lib}
 
 @app.post("/api/asset-library/items")
 async def add_asset_library_item(payload: AssetLibraryAddRequest, request: Request):
-    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
+    user = require_authenticated(request)
     lib = load_asset_library()
+    library = find_asset_library(lib, payload.library_id)
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
+    require_asset_manage(library, user, "只能保存到自己的资产库")
     if cat.get("type") != "image":
         raise HTTPException(status_code=400, detail="该分类暂不支持添加媒体")
     src = output_file_from_url(payload.url)
     if not src:
         raise HTTPException(status_code=400, detail="只支持保存本地 /assets 或 /output 媒体")
     _, item = make_asset_library_item(src, payload.name or os.path.basename(src), subdir=cat.get("dir") or "")
-    if item.get("kind") == "image":
-        classification = await classify_asset_image_best_effort(
-            output_file_from_url(item.get("url") or "") or src,
-            upstream_context=upstream_context,
-        )
-        if classification:
-            item["classification"] = classification
+    apply_asset_metadata(item, user)
+    item["library_id"] = library.get("id")
+    item["category_id"] = cat.get("id")
     cat.setdefault("items", []).append(item)
     save_asset_library(lib)
-    return {"library": lib, "item": item}
+    tasks = []
+    function = asset_ai_profile_function(user.get("api_profile_id"), "auto_classification")
+    if item.get("kind") == "image" and function.get("enabled"):
+        config = {**function, "api_profile_id": user.get("api_profile_id")}
+        tasks = enqueue_asset_ai_tasks_for_request(request, "auto_classification", [{
+            "target_type": "asset", "target_id": item["id"], "target_name": item["name"],
+        }], config)
+    return {"library": public_asset_library_for_user(lib, user), "item": item, "tasks": tasks}
 
 @app.post("/api/asset-library/items/batch")
 async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest, request: Request):
-    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
+    user = require_authenticated(request)
     added = []
     lib = load_asset_library()
+    library = find_asset_library(lib, payload.library_id)
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
     if cat.get("type") != "image":
         raise HTTPException(status_code=400, detail="该分类暂不支持添加媒体")
+    require_asset_manage(library, user, "只能保存到自己的资产库")
     for entry in (payload.items or [])[:200]:
         entry.category_id = payload.category_id
         entry.library_id = payload.library_id
@@ -20707,17 +21902,21 @@ async def batch_add_asset_library_items(payload: AssetLibraryBatchAddRequest, re
         if not src:
             continue
         _, item = make_asset_library_item(src, entry.name or os.path.basename(src), subdir=cat.get("dir") or "")
-        if item.get("kind") == "image":
-            classification = await classify_asset_image_best_effort(
-                output_file_from_url(item.get("url") or "") or src,
-                upstream_context=upstream_context,
-            )
-            if classification:
-                item["classification"] = classification
+        apply_asset_metadata(item, user)
+        item["library_id"] = library.get("id")
+        item["category_id"] = cat.get("id")
         cat.setdefault("items", []).append(item)
         added.append(item)
     save_asset_library(lib)
-    return {"library": lib, "items": added}
+    function = asset_ai_profile_function(user.get("api_profile_id"), "auto_classification")
+    tasks = []
+    targets = [{"target_type": "asset", "target_id": item["id"], "target_name": item["name"]} for item in added if item.get("kind") == "image"]
+    if targets and function.get("enabled"):
+        tasks = enqueue_asset_ai_tasks_for_request(
+            request, "auto_classification", targets,
+            {**function, "api_profile_id": user.get("api_profile_id")},
+        )
+    return {"library": public_asset_library_for_user(lib, user), "items": added, "tasks": tasks}
 
 @app.get("/api/shared-folders")
 async def list_shared_folders():
@@ -20794,17 +21993,19 @@ async def get_shared_folder_file(folder_id: str, path: str = ""):
 
 @app.post("/api/shared-folders/import")
 async def import_shared_folder_files(payload: SharedFolderImport, request: Request):
-    upstream_context = optional_upstream_context_for_request(request, allow_default=True)
+    user = require_authenticated(request)
     entry = shared_folder_by_id(payload.folder_id)
     if not entry:
         raise HTTPException(status_code=404, detail="共享文件夹不存在")
     folder_abs = shared_folder_abs(entry)
     lib = load_asset_library()
+    library = find_asset_library(lib, payload.library_id)
     cat = find_asset_category_in_library(lib, payload.category_id, payload.library_id)
     if not cat:
         raise HTTPException(status_code=404, detail="分类不存在")
     if cat.get("type") != "image":
         raise HTTPException(status_code=400, detail="该分类暂不支持添加媒体")
+    require_asset_manage(library, user, "只能导入到自己的资产库")
     added = []
     for rel in (payload.paths or [])[:200]:
         abs_path = shared_child_abs(folder_abs, rel)
@@ -20814,17 +22015,18 @@ async def import_shared_folder_files(payload: SharedFolderImport, request: Reque
         if ext not in SHARED_MEDIA_EXTS:
             continue
         _, item = make_asset_library_item(abs_path, os.path.basename(abs_path), subdir=cat.get("dir") or "")
-        if item.get("kind") == "image":
-            classification = await classify_asset_image_best_effort(
-                output_file_from_url(item.get("url") or "") or abs_path,
-                upstream_context=upstream_context,
-            )
-            if classification:
-                item["classification"] = classification
+        apply_asset_metadata(item, user)
+        item["library_id"], item["category_id"] = library.get("id"), cat.get("id")
         cat.setdefault("items", []).append(item)
         added.append(item)
     save_asset_library(lib)
-    return {"library": lib, "items": added}
+    function = asset_ai_profile_function(user.get("api_profile_id"), "auto_classification")
+    targets = [{"target_type": "asset", "target_id": item["id"], "target_name": item["name"]} for item in added if item.get("kind") == "image"]
+    tasks = enqueue_asset_ai_tasks_for_request(
+        request, "auto_classification", targets,
+        {**function, "api_profile_id": user.get("api_profile_id")},
+    ) if targets and function.get("enabled") else []
+    return {"library": public_asset_library_for_user(lib, user), "items": added, "tasks": tasks}
 
 async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_model="", upstream_context=None):
     if not isinstance(upstream_context, UpstreamContext):
@@ -20891,13 +22093,179 @@ async def caption_image_with_provider(abs_path, prompt, provider_id, model, ms_m
     text = text_from_chat_response(raw).strip() if isinstance(raw, dict) else ""
     return text or "接口返回了空回复。", resolved_model
 
+def asset_ai_function_key(kind):
+    return {
+        "reverse_prompt": "reverse_prompt",
+        "manual_classification": "manual_classification",
+        "auto_classification": "auto_classification",
+    }.get(str(kind or ""), "manual_classification")
+
+def asset_ai_profile_function(profile_id, kind):
+    settings = load_asset_ai_settings()
+    profile = settings.get("profiles", {}).get(str(profile_id), {})
+    return {
+        **ASSET_AI_DEFAULT_FUNCTIONS[asset_ai_function_key(kind)],
+        **(profile.get(asset_ai_function_key(kind)) if isinstance(profile.get(asset_ai_function_key(kind)), dict) else {}),
+    }
+
+def update_asset_ai_task(task_id, **updates):
+    updated = None
+    with ASSET_AI_TASK_LOCK:
+        data = load_asset_ai_tasks()
+        for task in data.get("tasks", []):
+            if task.get("id") == task_id:
+                task.update(updates)
+                task["updated_at"] = now_ms()
+                updated = dict(task)
+                break
+        if updated:
+            save_asset_ai_tasks(data)
+    if updated and GLOBAL_LOOP:
+        asyncio.run_coroutine_threadsafe(manager.broadcast_asset_ai_task_updated(updated), GLOBAL_LOOP)
+    return updated
+
+def asset_ai_transient_error(exc):
+    status = int(getattr(exc, "status_code", 0) or 0)
+    if status == 429 or status >= 500:
+        return True
+    return isinstance(exc, (httpx.TimeoutException, httpx.NetworkError, TimeoutError, ConnectionError))
+
+async def execute_asset_ai_task(task):
+    config = task.get("config") if isinstance(task.get("config"), dict) else {}
+    context = upstream_context_for_profile_id(
+        task.get("api_profile_id"),
+        config.get("provider_id") or "",
+        user_id=task.get("owner_id") or "",
+        allow_default=not bool(config.get("provider_id")),
+    )
+    target_type = str(task.get("target_type") or "")
+    kind = str(task.get("kind") or "")
+    if target_type == "local":
+        filename, path = _local_upload_safe_path(task.get("target_name") or "")
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="素材文件不存在")
+        media_kind, _ = _local_upload_kind_ext(filename, "")
+        if media_kind != "image":
+            raise HTTPException(status_code=400, detail="资产 AI 仅支持图片")
+        if kind == "reverse_prompt":
+            caption, resolved_model = await caption_image_with_provider(
+                path, config.get("prompt") or "描述图片", context.provider_id,
+                config.get("model") or "", "", context,
+            )
+            with open(_local_upload_caption_path(filename), "w", encoding="utf-8", newline="") as f:
+                f.write(caption)
+            return {"caption": caption, "model": resolved_model}
+        classification = await classify_image_with_provider(
+            path, context.provider_id, config.get("model") or "", "",
+            config.get("prompt") or "", context,
+        )
+        _write_local_upload_classification(filename, classification)
+        return {"classification": classification, "model": classification.get("model") or ""}
+    if target_type == "asset":
+        lib = load_asset_library()
+        item = find_asset_item_in_library(lib, task.get("target_id") or "")
+        if not item:
+            trash_item = next(
+                (entry for entry in load_asset_trash().get("items", [])
+                 if str((entry.get("record") or {}).get("id") or "") == str(task.get("target_id") or "")),
+                None,
+            )
+            item = (trash_item or {}).get("record")
+        else:
+            trash_item = None
+        if not item:
+            raise HTTPException(status_code=404, detail="资产不存在")
+        path = output_file_from_url(item.get("url") or "")
+        if not path or not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="资产文件不存在")
+        classification = await classify_image_with_provider(
+            path, context.provider_id, config.get("model") or "", "",
+            config.get("prompt") or "", context,
+        )
+        item["classification"] = classification
+        item["updated_at"] = now_ms()
+        if trash_item:
+            trash = load_asset_trash()
+            for entry in trash.get("items", []):
+                if entry.get("trash_id") == trash_item.get("trash_id"):
+                    entry["record"] = item
+                    break
+            save_asset_trash(trash)
+        else:
+            save_asset_library(lib)
+        return {"classification": classification, "model": classification.get("model") or ""}
+    raise HTTPException(status_code=400, detail="不支持的资产 AI 目标")
+
+async def run_asset_ai_task(task_id):
+    task = update_asset_ai_task(task_id, status="running", progress=5, error="")
+    if not task:
+        return
+    usage_event_id = str(task.get("usage_event_id") or "")
+    if usage_event_id:
+        update_usage_event(usage_event_id, status="running")
+    try:
+        result = await execute_asset_ai_task(task)
+        update_asset_ai_task(task_id, status="succeeded", progress=100, result=result, error="")
+        if usage_event_id:
+            finish_usage_event_by_id(usage_event_id, "succeeded")
+    except Exception as exc:
+        message = str(getattr(exc, "detail", "") or exc)[:1000]
+        attempts = int(task.get("attempts") or 0)
+        if asset_ai_transient_error(exc) and attempts < 2:
+            update_asset_ai_task(task_id, status="queued", progress=0, attempts=attempts + 1, error=message)
+            if usage_event_id:
+                update_usage_event(usage_event_id, status="queued", error=message)
+        else:
+            update_asset_ai_task(task_id, status="failed", progress=100, attempts=attempts + 1, error=message)
+            if usage_event_id:
+                finish_usage_event_by_id(usage_event_id, "failed", message)
+
+async def asset_ai_dispatch_loop():
+    while True:
+        try:
+            data = load_asset_ai_tasks()
+            running_tasks = [task for task in data.get("tasks", []) if task.get("id") in ASSET_AI_RUNNING]
+            running_counts = {}
+            for task in running_tasks:
+                key = (str(task.get("api_profile_id") or ""), asset_ai_function_key(task.get("kind")))
+                running_counts[key] = running_counts.get(key, 0) + 1
+            for task in data.get("tasks", []):
+                if task.get("status") != "queued" or task.get("id") in ASSET_AI_RUNNING:
+                    continue
+                profile_id = str(task.get("api_profile_id") or "")
+                function_key = asset_ai_function_key(task.get("kind"))
+                live = asset_ai_profile_function(profile_id, function_key)
+                if not live.get("enabled", False):
+                    continue
+                key = (profile_id, function_key)
+                limit = min(5, max(1, int(live.get("concurrency") or 1)))
+                if running_counts.get(key, 0) >= limit or len(ASSET_AI_RUNNING) >= 8:
+                    continue
+                ASSET_AI_RUNNING.add(task["id"])
+                running_counts[key] = running_counts.get(key, 0) + 1
+                future = asyncio.create_task(run_asset_ai_task(task["id"]))
+                future.add_done_callback(lambda _future, tid=task["id"]: ASSET_AI_RUNNING.discard(tid))
+        except Exception as exc:
+            print(f"资产 AI 队列调度失败: {exc}")
+        await asyncio.sleep(0.75)
+
+async def asset_trash_cleanup_loop():
+    while True:
+        await asyncio.sleep(6 * 60 * 60)
+        try:
+            await asyncio.to_thread(cleanup_expired_asset_trash)
+        except Exception as exc:
+            print(f"资产回收站自动清理失败: {exc}")
+
 @app.patch("/api/asset-library/items/{item_id}")
-async def rename_asset_library_item(item_id: str, payload: AssetLibraryRenameRequest):
+async def rename_asset_library_item(item_id: str, payload: AssetLibraryRenameRequest, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_library()
     for library in lib.get("libraries", []):
         for cat in library.get("categories", []):
             for item in cat.get("items", []):
                 if item.get("id") == item_id:
+                    require_asset_manage(item, user)
                     item["name"] = sanitize_asset_name(payload.name, item.get("name") or "asset")
                     save_asset_library(lib)
                     return {"library": lib, "item": item}
@@ -20915,41 +22283,26 @@ def find_asset_item_in_library(lib, item_id, library_id=""):
 
 @app.post("/api/asset-library/items/classify")
 async def classify_asset_library_items(payload: AssetLibraryClassifyRequest, request: Request):
-    upstream_context = resolve_upstream_context(
-        request, payload.provider, allow_default=not bool(str(payload.provider or "").strip())
-    )
+    user = require_authenticated(request)
+    function = asset_ai_profile_function(user.get("api_profile_id"), "manual_classification")
+    if not function.get("enabled"):
+        raise HTTPException(status_code=409, detail="当前 API 配置组未启用资产智能分类")
     lib = load_asset_library()
-    results = []
-    changed = False
+    targets = []
     for item_id in (payload.ids or [])[:80]:
         item = find_asset_item_in_library(lib, item_id, payload.library_id)
-        result = {"id": item_id, "ok": False, "classification": None, "error": ""}
         if not item:
-            result["error"] = "资产不存在"
-            results.append(result)
-            continue
+            raise HTTPException(status_code=404, detail=f"资产不存在：{item_id}")
+        require_asset_manage(item, user, "只能为自己的资产执行智能分类")
         if asset_library_media_kind(item.get("url") or "") != "image" and item.get("kind") != "image":
-            result["error"] = "仅支持图片素材智能分类"
-            results.append(result)
-            continue
+            raise HTTPException(status_code=400, detail="仅支持图片素材智能分类")
         path = output_file_from_url(item.get("url") or "")
         if not path or not os.path.isfile(path):
-            result["error"] = "文件不存在"
-            results.append(result)
-            continue
-        try:
-            classification = await classify_image_with_provider(
-                path, payload.provider, payload.model, payload.ms_model, payload.prompt, upstream_context
-            )
-            item["classification"] = classification
-            changed = True
-            result.update({"ok": True, "classification": classification})
-        except Exception as exc:
-            result["error"] = str(getattr(exc, "detail", "") or exc)
-        results.append(result)
-    if changed:
-        save_asset_library(lib)
-    return {"library": lib, "count": sum(1 for item in results if item.get("ok")), "items": results}
+            raise HTTPException(status_code=404, detail="资产文件不存在")
+        targets.append({"target_type": "asset", "target_id": item_id, "target_name": item.get("name") or ""})
+    config = {**function, "api_profile_id": user.get("api_profile_id")}
+    tasks = enqueue_asset_ai_tasks_for_request(request, "manual_classification", targets, config)
+    return {"queued": len(tasks), "tasks": tasks, "library": public_asset_library_for_user(lib, user)}
 
 @app.post("/api/asset-library/items/{item_id}/register-avatar")
 async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterRequest, request: Request):
@@ -20957,6 +22310,7 @@ async def register_asset_library_avatar(item_id: str, payload: AssetAvatarRegist
     target_item = find_asset_item_in_library(lib, item_id, payload.library_id)
     if not target_item:
         raise HTTPException(status_code=404, detail="资产不存在")
+    require_asset_manage(target_item, require_authenticated(request), "请先复制到个人资产库，再提交平台认证")
     upstream_context = resolve_upstream_context(request, payload.provider_id, allow_default=False)
     provider = upstream_context.provider
     platform = avatar_platform_for_provider(provider)
@@ -21060,7 +22414,8 @@ async def check_asset_library_avatar(item_id: str, payload: AssetAvatarRegisterR
     return {"library": lib, "item": target_item}
 
 @app.delete("/api/asset-library/items/{item_id}")
-async def delete_asset_library_item(item_id: str):
+async def delete_asset_library_item(item_id: str, request: Request):
+    user = require_authenticated(request)
     lib = load_asset_library()
     removed = None
     for library in lib.get("libraries", []):
@@ -21068,18 +22423,28 @@ async def delete_asset_library_item(item_id: str):
             keep = []
             for item in cat.get("items", []):
                 if item.get("id") == item_id:
+                    require_asset_manage(item, user)
                     removed = item
                 else:
                     keep.append(item)
             cat["items"] = keep
     if not removed:
         raise HTTPException(status_code=404, detail="资产不存在")
-    remove_asset_library_file(removed)  # 同时删除本地文件，避免磁盘上堆积
     save_asset_library(lib)
-    return {"library": lib}
+    trash = load_asset_trash()
+    trash.setdefault("items", []).append(asset_trash_entry(
+        "workflow" if removed.get("kind") == "workflow" else "asset",
+        removed,
+        {"library_id": removed.get("library_id") or "", "category_id": removed.get("category_id") or ""},
+        user,
+    ))
+    save_asset_trash(trash)
+    cancel_queued_asset_tasks_for_target(item_id)
+    return {"library": public_asset_library_for_user(lib, user), "trashed": True}
 
 @app.post("/api/asset-library/items/delete")
-async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteRequest):
+async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteRequest, request: Request):
+    user = require_authenticated(request)
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")
@@ -21093,18 +22458,28 @@ async def batch_delete_asset_library_items(payload: AssetLibraryBatchDeleteReque
             keep = []
             for item in cat.get("items", []):
                 if item.get("id") in ids:
+                    require_asset_manage(item, user)
                     removed += 1
                     removed_items.append(item)
                 else:
                     keep.append(item)
             cat["items"] = keep
-    for item in removed_items:  # 批量删除同时清理本地文件
-        remove_asset_library_file(item)
     save_asset_library(lib)
-    return {"library": lib, "removed": removed}
+    trash = load_asset_trash()
+    for item in removed_items:
+        trash.setdefault("items", []).append(asset_trash_entry(
+            "workflow" if item.get("kind") == "workflow" else "asset",
+            item,
+            {"library_id": item.get("library_id") or "", "category_id": item.get("category_id") or ""},
+            user,
+        ))
+        cancel_queued_asset_tasks_for_target(item.get("id"))
+    save_asset_trash(trash)
+    return {"library": public_asset_library_for_user(lib, user), "removed": removed, "trashed": True}
 
 @app.post("/api/asset-library/items/move")
-async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
+async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest, request: Request):
+    user = require_authenticated(request)
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")
@@ -21112,6 +22487,7 @@ async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
     target_cat = find_asset_category_in_library(lib, payload.target_category_id, payload.target_library_id)
     if not target_cat:
         raise HTTPException(status_code=404, detail="目标分组不存在")
+    require_asset_manage(target_cat, user, "只能移动到自己的分组")
     target_type = target_cat.get("type") or "image"
     moved = []
     for library in lib.get("libraries", []):
@@ -21123,6 +22499,7 @@ async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
             keep = []
             for item in cat.get("items", []):
                 if item.get("id") in ids:
+                    require_asset_manage(item, user)
                     moved.append(item)
                 else:
                     keep.append(item)
@@ -21136,7 +22513,8 @@ async def batch_move_asset_library_items(payload: AssetLibraryBatchMoveRequest):
     return {"library": lib, "moved": len(moved)}
 
 @app.post("/api/asset-library/items/crop")
-async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
+async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest, request: Request):
+    user = require_authenticated(request)
     ids = {str(item) for item in (payload.ids or []) if str(item)}
     if not ids:
         raise HTTPException(status_code=400, detail="没有选择资产")
@@ -21148,6 +22526,7 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
             raise HTTPException(status_code=404, detail="目标分组不存在")
         if target_cat.get("type") != "image":
             raise HTTPException(status_code=400, detail="目标分组不支持媒体")
+        require_asset_manage(target_cat, user)
     added = []
     for library in lib.get("libraries", []):
         if payload.library_id and library.get("id") != payload.library_id:
@@ -21157,6 +22536,7 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
                 continue
             source_items = [item for item in (cat.get("items", []) or []) if item.get("id") in ids]
             for item in source_items:
+                require_asset_manage(item, user)
                 src = output_file_from_url(item.get("url") or "")
                 if not src or not os.path.isfile(src):
                     continue
@@ -21178,6 +22558,7 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
                             base_name = os.path.splitext(item.get("name") or "asset")[0] + "_crop.png"
                             dest_cat = target_cat or cat
                             _, next_item = make_asset_library_item(tmp_path, base_name, subdir=dest_cat.get("dir") or "")
+                            apply_asset_metadata(next_item, user, source=item)
                             dest_cat.setdefault("items", []).append(next_item)
                             added.append(next_item)
                         finally:
@@ -21188,7 +22569,560 @@ async def batch_crop_asset_library_items(payload: AssetLibraryBatchCropRequest):
                 except Exception:
                     continue
     save_asset_library(lib)
-    return {"library": lib, "added": len(added), "items": added}
+    return {"library": public_asset_library_for_user(lib, user), "added": len(added), "items": added}
+
+def asset_cursor_encode(created_at, item_id):
+    raw = f"{int(created_at or 0)}|{str(item_id or '')}".encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+def asset_cursor_decode(cursor):
+    if not cursor:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(str(cursor) + "=" * (-len(str(cursor)) % 4)).decode("utf-8")
+        created, item_id = raw.split("|", 1)
+        return int(float(created or 0)), item_id
+    except Exception:
+        raise HTTPException(status_code=400, detail="分页游标无效")
+
+@app.get("/api/asset-library/items")
+async def list_complete_asset_items(
+    request: Request,
+    scope: str = "mine",
+    kind: str = "",
+    query: str = "",
+    library_id: str = "",
+    category_id: str = "",
+    cursor: str = "",
+    limit: int = 60,
+):
+    user = require_authenticated(request)
+    ensure_user_asset_spaces(user)
+    user_id = str(user.get("id") or "")
+    rows = []
+    lib = load_asset_library()
+    for library in lib.get("libraries", []):
+        if library_id and library.get("id") != library_id:
+            continue
+        for category in library.get("categories", []):
+            if category_id and category.get("id") != category_id:
+                continue
+            for item in category.get("items", []):
+                rows.append({
+                    **item,
+                    "record_type": "workflow" if category.get("type") == "workflow" else "asset",
+                    "library_id": library.get("id"),
+                    "library_name": library.get("name"),
+                    "category_id": category.get("id"),
+                    "category_name": category.get("name"),
+                })
+    for item in load_asset_url_library().get("items", []):
+        rows.append({**item, "record_type": "url", "library_name": "URL 资产"})
+    prompts = load_prompt_libraries()
+    for library in prompts.get("libraries", []):
+        for item in library.get("items", []):
+            rows.append({
+                **item, "record_type": "prompt", "library_id": library.get("id"),
+                "library_name": library.get("name"),
+            })
+    normalized_scope = str(scope or "mine").lower()
+    if normalized_scope == "mine":
+        rows = [item for item in rows if item.get("owner_type") == "user" and item.get("owner_id") == user_id]
+    elif normalized_scope == "system":
+        rows = [item for item in rows if item.get("owner_type") == "system"]
+    elif normalized_scope != "all":
+        raise HTTPException(status_code=400, detail="资产范围只支持 mine、all 或 system")
+    normalized_kind = str(kind or "").lower()
+    if normalized_kind:
+        rows = [item for item in rows if str(item.get("record_type") or item.get("kind") or "").lower() == normalized_kind]
+    text = str(query or "").strip().casefold()
+    if text:
+        rows = [
+            item for item in rows
+            if text in " ".join(str(item.get(key) or "") for key in (
+                "name", "note", "positive", "negative", "scene", "category_name", "library_name"
+            )).casefold()
+        ]
+    rows.sort(key=lambda item: (int(float(item.get("created_at") or 0)), str(item.get("id") or "")), reverse=True)
+    total = len(rows)
+    decoded = asset_cursor_decode(cursor)
+    if decoded:
+        rows = [
+            item for item in rows
+            if (int(float(item.get("created_at") or 0)), str(item.get("id") or "")) < decoded
+        ]
+    page_size = min(200, max(1, int(limit or 60)))
+    page = rows[:page_size]
+    for item in page:
+        item["can_manage"] = asset_is_admin(user) or (
+            item.get("owner_type") == "user" and item.get("owner_id") == user_id
+        )
+    next_cursor = (
+        asset_cursor_encode(page[-1].get("created_at"), page[-1].get("id"))
+        if len(rows) > len(page) and page else ""
+    )
+    return {"items": page, "total": total, "next_cursor": next_cursor, "scope": normalized_scope}
+
+def find_complete_asset_record(record_type, record_id):
+    record_type = str(record_type or "")
+    record_id = str(record_id or "")
+    if record_type in {"asset", "workflow"}:
+        lib = load_asset_library()
+        for library in lib.get("libraries", []):
+            for category in library.get("categories", []):
+                for item in category.get("items", []):
+                    if item.get("id") == record_id:
+                        return lib, item, {"library": library, "category": category}
+    if record_type == "url":
+        lib = load_asset_url_library()
+        item = next((item for item in lib.get("items", []) if item.get("id") == record_id), None)
+        return lib, item, {}
+    if record_type == "prompt":
+        data = load_prompt_libraries()
+        for library in data.get("libraries", []):
+            item = next((item for item in library.get("items", []) if item.get("id") == record_id), None)
+            if item:
+                return data, item, {"library": library}
+    return None, None, {}
+
+def personal_asset_target(lib, user, record_type="asset"):
+    library = find_asset_library(lib, personal_asset_library_id(user.get("id")))
+    if not library:
+        ensure_user_asset_spaces(user)
+        lib = load_asset_library()
+        library = find_asset_library(lib, personal_asset_library_id(user.get("id")))
+    cat_type = "workflow" if record_type == "workflow" else "image"
+    category = next((cat for cat in library.get("categories", []) if cat.get("type") == cat_type), None)
+    if not category:
+        category = {
+            "id": f"cat_{uuid.uuid4().hex[:12]}",
+            "name": "工作流" if cat_type == "workflow" else "素材",
+            "type": cat_type, "items": [], **asset_owner_for_user(user),
+        }
+        library.setdefault("categories", []).append(category)
+    return lib, library, category
+
+@app.post("/api/asset-library/items/{record_type}/{record_id}/copy")
+async def copy_complete_asset(record_type: str, record_id: str, request: Request):
+    user = require_authenticated(request)
+    data, source, context = find_complete_asset_record(record_type, record_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="内容不存在")
+    if record_type in {"asset", "workflow"}:
+        lib, library, category = personal_asset_target(load_asset_library(), user, record_type)
+        path = output_file_from_url(source.get("url") or "")
+        if not path or not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="来源文件不存在")
+        if record_type == "workflow":
+            with open(path, "rb") as f:
+                copied = make_workflow_library_item_from_bytes(f.read(), os.path.basename(path), source.get("name") or "")
+        else:
+            _, copied = make_asset_library_item(path, source.get("name") or os.path.basename(path), category.get("dir") or "")
+        apply_asset_metadata(copied, user, source=source)
+        copied["library_id"], copied["category_id"] = library.get("id"), category.get("id")
+        category.setdefault("items", []).append(copied)
+        save_asset_library(lib)
+    elif record_type == "url":
+        copied = {key: value for key, value in source.items() if key not in {"id", "owner_id", "owner_type", "created_by"}}
+        copied["id"] = f"url_{uuid.uuid4().hex[:12]}"
+        copied["group_id"] = ""
+        apply_asset_metadata(copied, user, source=source)
+        url_data = load_asset_url_library()
+        url_data.setdefault("items", []).insert(0, copied)
+        save_asset_url_library(url_data)
+    elif record_type == "prompt":
+        prompts = load_prompt_libraries()
+        library = find_prompt_library(prompts, personal_prompt_library_id(user.get("id")))
+        copied = normalize_prompt_library_item({
+            **source, "id": f"tpl_{uuid.uuid4().hex[:12]}", **asset_owner_for_user(user),
+            "source_root_id": source.get("source_root_id") or source.get("id"),
+            "source_direct_id": source.get("id"),
+            "source_author_id": source.get("source_author_id") or source.get("owner_id") or "system",
+        })
+        library.setdefault("items", []).insert(0, copied)
+        save_prompt_libraries(prompts)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的内容类型")
+    return {"ok": True, "item": copied}
+
+@app.post("/api/admin/asset-library/items/{record_type}/{record_id}/publish")
+async def publish_complete_asset(record_type: str, record_id: str, request: Request):
+    admin = require_admin(request)
+    _, source, _context = find_complete_asset_record(record_type, record_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="内容不存在")
+    if record_type in {"asset", "workflow"}:
+        lib = load_asset_library()
+        system_library = find_asset_library(lib, "default")
+        cat_type = "workflow" if record_type == "workflow" else "image"
+        category = next((cat for cat in system_library.get("categories", []) if cat.get("type") == cat_type), None)
+        path = output_file_from_url(source.get("url") or "")
+        if not path or not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail="来源文件不存在")
+        if record_type == "workflow":
+            with open(path, "rb") as f:
+                copied = make_workflow_library_item_from_bytes(f.read(), os.path.basename(path), source.get("name") or "")
+        else:
+            _, copied = make_asset_library_item(path, source.get("name") or os.path.basename(path), category.get("dir") or "")
+        apply_asset_metadata(copied, admin, source=source, system=True)
+        category.setdefault("items", []).append(copied)
+        save_asset_library(lib)
+    elif record_type == "url":
+        copied = {key: value for key, value in source.items() if key not in {"id", "owner_id", "owner_type", "created_by"}}
+        copied["id"] = f"url_{uuid.uuid4().hex[:12]}"
+        copied["group_id"] = ""
+        apply_asset_metadata(copied, admin, source=source, system=True)
+        urls = load_asset_url_library()
+        urls.setdefault("items", []).insert(0, copied)
+        save_asset_url_library(urls)
+    elif record_type == "prompt":
+        prompts = load_prompt_libraries()
+        library = find_prompt_library(prompts, "system")
+        copied = normalize_prompt_library_item({
+            **source, "id": f"tpl_{uuid.uuid4().hex[:12]}",
+            "owner_type": "system", "owner_id": "", "created_by": admin.get("id"),
+            "source_root_id": source.get("source_root_id") or source.get("id"),
+            "source_direct_id": source.get("id"),
+            "source_author_id": source.get("source_author_id") or source.get("owner_id") or "system",
+        })
+        library.setdefault("items", []).insert(0, copied)
+        save_prompt_libraries(prompts)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的内容类型")
+    append_asset_admin_audit(admin, "publish_system_copy", {"record_type": record_type, "source_id": record_id, "new_id": copied.get("id")})
+    return {"ok": True, "item": copied}
+
+@app.post("/api/admin/asset-library/items/{record_type}/{record_id}/transfer")
+async def transfer_complete_asset(record_type: str, record_id: str, payload: Dict[str, Any], request: Request):
+    admin = require_admin(request)
+    target_user_id = str(payload.get("user_id") or "")
+    target_user = next((user for user in load_auth_users().get("users", []) if str(user.get("id") or "") == target_user_id and user.get("enabled", True)), None)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="接收用户不存在或已停用")
+    data, item, context = find_complete_asset_record(record_type, record_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="内容不存在")
+    item.update(asset_owner_for_user(target_user))
+    item["updated_at"] = now_ms()
+    if record_type in {"asset", "workflow"}:
+        source_category = context.get("category")
+        source_category["items"] = [entry for entry in source_category.get("items", []) if entry.get("id") != record_id]
+        data, target_library, target_category = personal_asset_target(data, target_user, record_type)
+        requested_category_id = str(payload.get("target_category_id") or "")
+        if requested_category_id:
+            requested_category = next(
+                (category for category in target_library.get("categories", []) if category.get("id") == requested_category_id),
+                None,
+            )
+            expected_type = "workflow" if record_type == "workflow" else "image"
+            if not requested_category or requested_category.get("type") != expected_type:
+                raise HTTPException(status_code=400, detail="目标分组不属于接收用户或类型不匹配")
+            target_category = requested_category
+        target_category.setdefault("items", []).append(item)
+        item["library_id"], item["category_id"] = target_library.get("id"), target_category.get("id")
+        save_asset_library(data)
+    elif record_type == "prompt":
+        context["library"]["items"] = [entry for entry in context["library"].get("items", []) if entry.get("id") != record_id]
+        target_library = find_prompt_library(data, personal_prompt_library_id(target_user_id))
+        target_category_id = str(payload.get("target_category_id") or "")
+        if target_category_id and not any(cat.get("id") == target_category_id for cat in target_library.get("categories", [])):
+            raise HTTPException(status_code=400, detail="目标分组不属于接收用户")
+        if target_category_id:
+            item["category"] = target_category_id
+        else:
+            item["category"] = ""
+        target_library.setdefault("items", []).append(item)
+        save_prompt_libraries(data)
+    elif record_type == "url":
+        target_group_id = str(payload.get("target_category_id") or "")
+        if target_group_id and not any(group.get("id") == target_group_id and group.get("owner_id") == target_user_id for group in data.get("groups", [])):
+            raise HTTPException(status_code=400, detail="目标 URL 分组不属于接收用户")
+        item["group_id"] = target_group_id
+        save_asset_url_library(data)
+    append_asset_admin_audit(admin, "transfer_ownership", {"record_type": record_type, "record_id": record_id, "target_user_id": target_user_id})
+    return {"ok": True, "item": item}
+
+@app.get("/api/asset-library/trash")
+async def list_asset_trash(request: Request):
+    user = require_authenticated(request)
+    rows = []
+    for entry in load_asset_trash().get("items", []):
+        if asset_is_admin(user) or (
+            entry.get("owner_type") == "user" and entry.get("owner_id") == str(user.get("id") or "")
+        ):
+            summary = asset_reference_summary(entry.get("record") or {})
+            rows.append({**entry, "references": summary, "can_purge": not bool(summary["blocking"])})
+    rows.sort(key=lambda item: int(item.get("deleted_at") or 0), reverse=True)
+    return {"items": rows}
+
+@app.post("/api/asset-library/trash/{trash_id}/restore")
+async def restore_asset_trash(trash_id: str, request: Request):
+    user = require_authenticated(request)
+    trash = load_asset_trash()
+    entry = next((item for item in trash.get("items", []) if item.get("trash_id") == trash_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="回收站内容不存在")
+    require_asset_manage(entry, user)
+    record = entry.get("record") or {}
+    kind = entry.get("kind")
+    if kind in {"asset", "workflow"}:
+        lib = load_asset_library()
+        owner_user = next((row for row in load_auth_users().get("users", []) if row.get("id") == record.get("owner_id")), None)
+        if record.get("owner_type") == "system":
+            library = find_asset_library(lib, "default")
+        else:
+            owner_user = owner_user or user
+            ensure_user_asset_spaces(owner_user)
+            lib = load_asset_library()
+            library = find_asset_library(lib, personal_asset_library_id(owner_user.get("id")))
+        cat_type = "workflow" if kind == "workflow" else "image"
+        recovery_name = "已恢复工作流" if kind == "workflow" else "已恢复素材"
+        category = next((cat for cat in library.get("categories", []) if cat.get("name") == recovery_name and cat.get("type") == cat_type), None)
+        if not category:
+            category = {"id": f"cat_{uuid.uuid4().hex[:12]}", "name": recovery_name, "type": cat_type, "items": [], **asset_owner_fields(library)}
+            library.setdefault("categories", []).append(category)
+        category.setdefault("items", []).append(record)
+        record["library_id"], record["category_id"] = library.get("id"), category.get("id")
+        save_asset_library(lib)
+    elif kind == "url":
+        data = load_asset_url_library()
+        data.setdefault("items", []).insert(0, record)
+        save_asset_url_library(data)
+    elif kind == "prompt":
+        data = load_prompt_libraries()
+        library = find_prompt_library(data, "system" if record.get("owner_type") == "system" else personal_prompt_library_id(record.get("owner_id")))
+        if not library:
+            library = find_prompt_library(data, "system")
+        recovery = next((cat for cat in library.get("categories", []) if cat.get("name") == "已恢复提示词"), None)
+        if not recovery:
+            recovery = {"id": f"pcat_{uuid.uuid4().hex[:10]}", "name": "已恢复提示词"}
+            library.setdefault("categories", []).append(recovery)
+        record["category"] = recovery["id"]
+        library.setdefault("items", []).insert(0, record)
+        save_prompt_libraries(data)
+    elif kind == "local":
+        original_rel = str((entry.get("location") or {}).get("path") or record.get("file") or "")
+        _, target_path = _local_upload_abs(original_rel)
+        source_path = str(record.get("trash_path") or "")
+        if not source_path or not os.path.isfile(source_path):
+            raise HTTPException(status_code=404, detail="回收站文件已经不存在")
+        if os.path.exists(target_path):
+            stem, ext = os.path.splitext(original_rel)
+            original_rel = f"{stem}_restored_{uuid.uuid4().hex[:6]}{ext}"
+            _, target_path = _local_upload_abs(original_rel)
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        shutil.move(source_path, target_path)
+        for sidecar in record.get("sidecars") or []:
+            if os.path.isfile(sidecar):
+                shutil.move(sidecar, os.path.join(os.path.dirname(target_path), os.path.basename(sidecar)))
+        set_local_asset_owner(original_rel, {"id": record.get("owner_id") or user.get("id")})
+        record["file"] = original_rel
+        record["url"] = f"/api/storage-files/local/{urllib.parse.quote(original_rel, safe='/')}"
+    trash["items"] = [item for item in trash.get("items", []) if item.get("trash_id") != trash_id]
+    save_asset_trash(trash)
+    return {"ok": True, "item": record}
+
+@app.delete("/api/asset-library/trash/{trash_id}")
+async def purge_asset_trash(trash_id: str, request: Request, force: bool = False):
+    user = require_authenticated(request)
+    trash = load_asset_trash()
+    entry = next((item for item in trash.get("items", []) if item.get("trash_id") == trash_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="回收站内容不存在")
+    require_asset_manage(entry, user)
+    refs = asset_reference_summary(entry.get("record") or {})
+    if refs["blocking"] and not (force and asset_is_admin(user)):
+        raise HTTPException(status_code=409, detail={"message": "内容仍被创作数据引用", "references": refs})
+    if refs["blocking"] and force and not asset_is_admin(user):
+        raise HTTPException(status_code=403, detail="只有管理员可以强制删除被引用内容")
+    if entry.get("kind") in {"asset", "workflow"}:
+        remove_asset_library_file(entry.get("record") or {})
+    elif entry.get("kind") == "local":
+        record = entry.get("record") or {}
+        for path in [record.get("trash_path"), *(record.get("sidecars") or [])]:
+            try:
+                if path and os.path.isfile(path):
+                    os.remove(path)
+            except OSError:
+                pass
+    trash["items"] = [item for item in trash.get("items", []) if item.get("trash_id") != trash_id]
+    save_asset_trash(trash)
+    if force:
+        append_asset_admin_audit(user, "force_purge_referenced_asset", {"trash_id": trash_id, "references": len(refs["blocking"])})
+    return {"ok": True, "references": refs}
+
+@app.post("/api/asset-library/trash/purge-batch")
+async def purge_asset_trash_batch(payload: Dict[str, Any], request: Request):
+    user = require_authenticated(request)
+    ids = {str(item) for item in (payload.get("ids") or []) if str(item)}
+    if not ids:
+        raise HTTPException(status_code=400, detail="没有选择回收站内容")
+    trash = load_asset_trash()
+    removed = 0
+    kept = []
+    for entry in trash.get("items", []):
+        if entry.get("trash_id") not in ids:
+            kept.append(entry)
+            continue
+        require_asset_manage(entry, user)
+        if asset_reference_summary(entry.get("record") or {})["blocking"]:
+            kept.append(entry)
+            continue
+        if entry.get("kind") in {"asset", "workflow"}:
+            remove_asset_library_file(entry.get("record") or {})
+        elif entry.get("kind") == "local":
+            record = entry.get("record") or {}
+            for path in [record.get("trash_path"), *(record.get("sidecars") or [])]:
+                try:
+                    if path and os.path.isfile(path):
+                        os.remove(path)
+                except OSError:
+                    pass
+        removed += 1
+    trash["items"] = kept
+    save_asset_trash(trash)
+    return {"ok": True, "removed": removed, "skipped": len(ids) - removed}
+
+@app.get("/api/asset-library/storage")
+async def get_asset_storage_stats(request: Request):
+    user = require_authenticated(request)
+    data = asset_storage_stats()
+    if not asset_is_admin(user):
+        user_id = str(user.get("id") or "")
+        data["owners"] = [row for row in data["owners"] if row.get("owner_id") == user_id]
+        data["policy"] = {
+            "default_warning_bytes": data["policy"]["default_warning_bytes"],
+            "user_warning_bytes": int(data["policy"]["user_overrides"].get(user_id) or data["policy"]["default_warning_bytes"]),
+        }
+    return data
+
+@app.patch("/api/admin/asset-library/storage-policy")
+async def update_asset_storage_policy(payload: Dict[str, Any], request: Request):
+    admin = require_admin(request)
+    policy = load_asset_storage_policy()
+    if "default_warning_bytes" in payload:
+        policy["default_warning_bytes"] = max(1024 ** 2, int(payload.get("default_warning_bytes") or 0))
+    if isinstance(payload.get("user_overrides"), dict):
+        policy["user_overrides"] = {
+            str(key): max(1024 ** 2, int(value))
+            for key, value in payload["user_overrides"].items() if int(value or 0) > 0
+        }
+    policy["updated_at"] = now_ms()
+    _write_json_atomic(ASSET_STORAGE_POLICY_PATH, policy)
+    append_asset_admin_audit(admin, "update_storage_policy", {"override_count": len(policy.get("user_overrides") or {})})
+    return policy
+
+@app.get("/api/admin/asset-ai/settings")
+async def get_admin_asset_ai_settings(request: Request):
+    require_admin(request)
+    profiles = load_api_profiles().get("profiles") or []
+    settings = load_asset_ai_settings()
+    return {
+        "profiles": [{
+            **public_api_profile(profile),
+            "providers": [{
+                "id": provider.get("id"), "name": provider.get("name") or provider.get("id"),
+                "models": provider.get("chat_models") or [],
+                "enabled": bool(provider.get("enabled", True)),
+            } for provider in profile.get("providers") or []],
+            "asset_ai": settings.get("profiles", {}).get(profile.get("id"), {
+                key: dict(value) for key, value in ASSET_AI_DEFAULT_FUNCTIONS.items()
+            }),
+        } for profile in profiles],
+        "updated_at": settings.get("updated_at"),
+    }
+
+@app.patch("/api/admin/asset-ai/settings/{profile_id}")
+async def update_admin_asset_ai_settings(profile_id: str, payload: Dict[str, Any], request: Request):
+    admin = require_admin(request)
+    profile = api_profile_by_id(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="API 配置组不存在")
+    current = load_asset_ai_settings()
+    profile_settings = current.setdefault("profiles", {}).setdefault(profile_id, {
+        key: dict(value) for key, value in ASSET_AI_DEFAULT_FUNCTIONS.items()
+    })
+    providers = {str(provider.get("id") or ""): provider for provider in profile.get("providers") or []}
+    disabled_keys = []
+    for key in ASSET_AI_DEFAULT_FUNCTIONS:
+        if key not in payload:
+            continue
+        raw = payload.get(key) if isinstance(payload.get(key), dict) else {}
+        next_item = {**ASSET_AI_DEFAULT_FUNCTIONS[key], **profile_settings.get(key, {}), **raw}
+        next_item["enabled"] = bool(next_item.get("enabled"))
+        next_item["concurrency"] = min(5, max(1, int(next_item.get("concurrency") or 1)))
+        next_item["provider_id"] = str(next_item.get("provider_id") or "")
+        next_item["model"] = str(next_item.get("model") or "")
+        next_item["prompt"] = str(next_item.get("prompt") or "")[:10000]
+        provider = providers.get(next_item["provider_id"])
+        if next_item["enabled"]:
+            if not provider or not provider.get("enabled", True):
+                raise HTTPException(status_code=400, detail=f"{key} 选择的平台不可用")
+            if next_item["model"] not in (provider.get("chat_models") or []):
+                raise HTTPException(status_code=400, detail=f"{key} 选择的模型不属于当前 API 配置组")
+        if profile_settings.get(key, {}).get("enabled") and not next_item["enabled"]:
+            disabled_keys.append(key)
+        profile_settings[key] = next_item
+    _write_json_atomic(ASSET_AI_SETTINGS_PATH, {**current, "updated_at": now_ms()})
+    if disabled_keys:
+        with ASSET_AI_TASK_LOCK:
+            tasks = load_asset_ai_tasks()
+            for task in tasks.get("tasks", []):
+                if (
+                    task.get("api_profile_id") == profile_id
+                    and task.get("status") == "queued"
+                    and asset_ai_function_key(task.get("kind")) in disabled_keys
+                ):
+                    task["status"] = "cancelled"
+                    task["error"] = "管理员已停用该资产 AI 功能"
+                    task["updated_at"] = now_ms()
+                    finish_usage_event_by_id(task.get("usage_event_id"), "cancelled", task["error"])
+            save_asset_ai_tasks(tasks)
+    append_asset_admin_audit(admin, "update_asset_ai_settings", {"api_profile_id": profile_id, "disabled": disabled_keys})
+    return {"profile_id": profile_id, "asset_ai": profile_settings}
+
+@app.get("/api/asset-ai/tasks")
+async def list_asset_ai_tasks(request: Request, status: str = "", limit: int = 100):
+    user = require_authenticated(request)
+    rows = list(load_asset_ai_tasks().get("tasks", []))
+    if not asset_is_admin(user):
+        rows = [task for task in rows if task.get("owner_id") == str(user.get("id") or "")]
+    if status:
+        rows = [task for task in rows if task.get("status") == status]
+    rows.sort(key=lambda task: int(task.get("created_at") or 0), reverse=True)
+    return {"tasks": rows[:min(500, max(1, int(limit or 100)))]}
+
+@app.post("/api/asset-ai/tasks/{task_id}/cancel")
+async def cancel_asset_ai_task(task_id: str, request: Request):
+    user = require_authenticated(request)
+    task = next((task for task in load_asset_ai_tasks().get("tasks", []) if task.get("id") == task_id), None)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if not asset_is_admin(user) and task.get("owner_id") != str(user.get("id") or ""):
+        raise HTTPException(status_code=403, detail="无权取消该任务")
+    if task.get("status") != "queued":
+        raise HTTPException(status_code=409, detail="只有尚未提交的任务可以取消")
+    updated = update_asset_ai_task(task_id, status="cancelled", error="用户取消")
+    finish_usage_event_by_id(task.get("usage_event_id"), "cancelled", "用户取消")
+    return {"task": updated}
+
+@app.post("/api/asset-ai/tasks/{task_id}/retry")
+async def retry_asset_ai_task(task_id: str, request: Request):
+    user = require_authenticated(request)
+    source = next((task for task in load_asset_ai_tasks().get("tasks", []) if task.get("id") == task_id), None)
+    if not source:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if not asset_is_admin(user) and source.get("owner_id") != str(user.get("id") or ""):
+        raise HTTPException(status_code=403, detail="无权重试该任务")
+    if source.get("status") not in {"failed", "unknown", "cancelled"}:
+        raise HTTPException(status_code=409, detail="当前任务状态不能重试")
+    config = source.get("config") or {}
+    tasks = enqueue_asset_ai_tasks_for_request(request, source.get("kind"), [{
+        "target_type": source.get("target_type"), "target_id": source.get("target_id"),
+        "target_name": source.get("target_name"),
+    }], config)
+    retried = update_asset_ai_task(tasks[0]["id"], retry_of=task_id) or tasks[0]
+    return {"task": retried, "warning": "原任务可能已产生费用，请在管理员用量记录中核对。"}
 
 @app.put("/api/canvases/{canvas_id}")
 async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
@@ -21227,6 +23161,7 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
                 canvas["viewport"] = canvas.get("viewport") or {"x": 0, "y": 0, "scale": 1}
             canvas["logs"] = payload.logs[-500:]
             canvas["settings"] = payload.settings or {}
+            ensure_canvas_cover(canvas)
             save_canvas(canvas)
             return canvas
 
@@ -21344,33 +23279,67 @@ async def purge_canvas(canvas_id: str):
             path = canvas_path(canvas_id)
             if os.path.exists(path):
                 os.remove(path)
+            clear_canvas_cover_file(canvas_id)
+            delete_canvas_conversations(canvas_id)
 
     await asyncio.to_thread(purge)
     return {"ok": True}
 
 # --- GPT 对话 ---
 
+async def chat_reference_payloads(payload):
+    image_refs = [ref.dict() for ref in (payload.reference_images or []) if ref.url]
+    attachments = list(image_refs)
+    for video in list(payload.reference_videos or [])[:4]:
+        if not video.url:
+            continue
+        video_item = video.dict()
+        video_item["kind"] = "video"
+        attachments.append(video_item)
+        frames = await video_reference_to_frame_data_urls(video.url, max_frames=4, max_size=768)
+        if not frames:
+            raise HTTPException(status_code=400, detail=f"无法从视频“{video.name or '视频'}”提取参考帧。")
+        for index, frame_url in enumerate(frames):
+            frame = {
+                "url": frame_url,
+                "name": f"{video.name or 'video'} · frame {index + 1}",
+                "kind": "image",
+                "role": "reference_image",
+                "original_url": video.url,
+            }
+            image_refs.append(frame)
+            attachments.append(frame)
+    return image_refs, attachments
+
+def chat_conversation_for_payload(user_id, payload):
+    canvas_id = normalize_canvas_scope_id(getattr(payload, "canvas_id", ""))
+    if payload.conversation_id:
+        conversation = load_conversation(user_id, payload.conversation_id)
+        stored_canvas_id = normalize_canvas_scope_id(conversation.get("canvas_id"))
+        if canvas_id and stored_canvas_id != canvas_id:
+            raise HTTPException(status_code=409, detail="该对话不属于当前画布。")
+        return conversation
+    if canvas_id:
+        load_canvas(canvas_id)
+    return new_conversation(user_id, display_title(payload.message), canvas_id)
+
 @app.post("/api/chat")
 async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(default="")):
     request.state.usage_event = begin_usage_event(request, "image" if payload.mode == "image" else "llm", payload.image_provider if payload.mode == "image" else payload.provider, payload.image_model if payload.mode == "image" else payload.model, {"entry": "chat", "mode": payload.mode, "size": payload.size})
     api_profile_id = request.state.usage_event.get("api_profile_id", "")
     user_id = safe_user_id(x_user_id, request)
-    conversation = (
-        load_conversation(user_id, payload.conversation_id)
-        if payload.conversation_id
-        else new_conversation(user_id, display_title(payload.message))
-    )
+    conversation = chat_conversation_for_payload(user_id, payload)
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs, stored_attachments = await chat_reference_payloads(payload)
     image_refs = image_references(refs)
     user_message = {
         "id": uuid.uuid4().hex,
         "role": "user",
         "content": payload.message,
         "created_at": now_ms(),
-        "attachments": refs,
+        "attachments": stored_attachments,
         "mode": payload.mode,
     }
     conversation["messages"].append(user_message)
@@ -21487,22 +23456,18 @@ async def chat_agent(payload: ChatRequest, request: Request, x_user_id: str = He
     request.state.usage_event = begin_usage_event(request, "llm", payload.provider, payload.model, {"entry": "chat-agent", "mode": "agent"})
     api_profile_id = request.state.usage_event.get("api_profile_id", "")
     user_id = safe_user_id(x_user_id, request)
-    conversation = (
-        load_conversation(user_id, payload.conversation_id)
-        if payload.conversation_id
-        else new_conversation(user_id, display_title(payload.message))
-    )
+    conversation = chat_conversation_for_payload(user_id, payload)
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs, stored_attachments = await chat_reference_payloads(payload)
     image_refs = image_references(refs)
     user_message = {
         "id": uuid.uuid4().hex,
         "role": "user",
         "content": payload.message,
         "created_at": now_ms(),
-        "attachments": refs,
+        "attachments": stored_attachments,
         "mode": "agent",
     }
     conversation["messages"].append(user_message)
@@ -21575,22 +23540,18 @@ async def chat_agent_stream(payload: ChatRequest, request: Request, x_user_id: s
     request.state.usage_event = begin_usage_event(request, "llm", payload.provider, payload.model, {"entry": "chat-agent-stream", "mode": "agent"})
     api_profile_id = request.state.usage_event.get("api_profile_id", "")
     user_id = safe_user_id(x_user_id, request)
-    conversation = (
-        load_conversation(user_id, payload.conversation_id)
-        if payload.conversation_id
-        else new_conversation(user_id, display_title(payload.message))
-    )
+    conversation = chat_conversation_for_payload(user_id, payload)
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs, stored_attachments = await chat_reference_payloads(payload)
     image_refs = image_references(refs)
     user_message = {
         "id": uuid.uuid4().hex,
         "role": "user",
         "content": payload.message,
         "created_at": now_ms(),
-        "attachments": refs,
+        "attachments": stored_attachments,
         "mode": "agent",
     }
     conversation["messages"].append(user_message)
@@ -21746,21 +23707,17 @@ async def chat_stream(payload: ChatRequest, request: Request, x_user_id: str = H
     api_profile_id = request.state.usage_event.get("api_profile_id", "")
 
     user_id = safe_user_id(x_user_id, request)
-    conversation = (
-        load_conversation(user_id, payload.conversation_id)
-        if payload.conversation_id
-        else new_conversation(user_id, display_title(payload.message))
-    )
+    conversation = chat_conversation_for_payload(user_id, payload)
     if not conversation.get("messages"):
         conversation["title"] = display_title(payload.message)
 
-    refs = [ref.dict() for ref in payload.reference_images if ref.url]
+    refs, stored_attachments = await chat_reference_payloads(payload)
     user_message = {
         "id": uuid.uuid4().hex,
         "role": "user",
         "content": payload.message,
         "created_at": now_ms(),
-        "attachments": refs,
+        "attachments": stored_attachments,
         "mode": payload.mode,
     }
     conversation["messages"].append(user_message)

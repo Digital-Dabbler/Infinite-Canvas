@@ -8,7 +8,7 @@
     <script>
         (function(){
             try {
-                var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light';
+                var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark';
                 if(theme === 'dark') {
                     document.documentElement.classList.add('theme-dark');
                     document.documentElement.classList.add('studio-theme-dark');
@@ -20,7 +20,8 @@
     <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1785607755"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785643821">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785903129">
+    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1785873335">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -60,6 +61,50 @@
         </div>
         <button class="smart-back" type="button" onclick="backToCanvasList()"><i data-lucide="arrow-left"></i><span data-i18n="canvas.backToList">返回画布列表</span></button>
         <div id="smartTitle" class="smart-title" data-i18n="smart.title">智能画布</div>
+        <header class="rh-canvas-header">
+            <div class="rh-header-left">
+                <button class="rh-brand" type="button" onclick="backToCanvasList()" title="返回项目工作台"><img src="/static/images/logo.png" alt=""><span>Infinite Canvas</span></button>
+                <span class="rh-header-divider"></span>
+                <button id="rhCanvasTitle" class="rh-canvas-title" type="button" title="点击重命名">Untitled</button>
+            </div>
+            <div class="rh-header-right">
+                <button id="rhAnnouncementBtn" class="rh-head-btn" type="button" title="公告"><i data-lucide="megaphone"></i></button>
+                <button id="rhBalanceBtn" class="rh-balance" type="button"><i data-lucide="wallet-cards"></i><span id="rhBalanceText">余额加载中</span></button>
+                <button id="rhAccountBtn" class="rh-account" type="button"><span id="rhAccountInitial">IC</span></button>
+            </div>
+        </header>
+        <nav class="rh-tool-rail" aria-label="画布工具">
+            <button type="button" data-rh-action="create"><span class="rh-tool-primary"><i data-lucide="plus"></i></span><em>新建</em></button>
+            <button type="button" data-rh-action="assets"><i data-lucide="archive"></i><em>资产</em></button>
+            <button type="button" data-rh-action="workflow"><i data-lucide="workflow"></i><em>工作流</em></button>
+            <button type="button" data-rh-action="history"><i data-lucide="history"></i><em>生成历史</em></button>
+            <button type="button" data-rh-action="outline"><i data-lucide="list-tree"></i><em>画布目录</em></button>
+            <button type="button" data-rh-action="edit"><i data-lucide="scissors"></i><em>编辑</em></button>
+        </nav>
+        <div class="rh-view-controls">
+            <button id="rhMinimapToggle" type="button" title="小地图"><i data-lucide="map"></i></button>
+            <button id="rhSnapToggle" type="button" title="20px 网格吸附"><i data-lucide="grip"></i></button>
+            <button id="rhFitAll" type="button" title="适配全部节点"><i data-lucide="scan"></i></button>
+            <span class="rh-view-divider"></span>
+            <button id="rhZoomOut" type="button" title="缩小"><i data-lucide="minus"></i></button>
+            <button id="rhZoomLabel" class="rh-zoom-label" type="button">100%</button>
+            <button id="rhZoomIn" type="button" title="放大"><i data-lucide="plus"></i></button>
+            <span class="rh-view-divider"></span>
+            <button id="rhShortcut" type="button" title="快捷键"><i data-lucide="circle-help"></i></button>
+        </div>
+        <button id="rhAgentToggle" class="rh-agent-toggle" type="button" title="AI 对话"><span class="rh-agent-face"><i data-lucide="sparkles"></i></span></button>
+        <aside id="rhAgentPanel" class="rh-agent-panel">
+            <header><div><strong>Canvas AI</strong><span>基于当前画布协作</span></div><button id="rhAgentClose" type="button"><i data-lucide="x"></i></button></header>
+            <iframe id="rhAgentFrame" title="画布 AI 对话"></iframe>
+        </aside>
+        <section id="rhAccountPopover" class="rh-account-popover">
+            <div class="rh-account-profile"><span id="rhAccountLarge">IC</span><div><strong id="rhAccountName">用户</strong><small id="rhAccountUsername">@user</small></div></div>
+            <dl><div><dt>部门</dt><dd id="rhAccountDepartment">—</dd></div><div><dt>角色</dt><dd id="rhAccountRole">—</dd></div><div><dt>API 配置组</dt><dd id="rhAccountProfile">—</dd></div></dl>
+        </section>
+        <section id="rhBalancePopover" class="rh-balance-popover">
+            <header><strong>平台余额</strong><button id="rhBalanceRefresh" type="button"><i data-lucide="refresh-cw"></i></button></header>
+            <div id="rhBalanceDetails" class="rh-balance-details">正在加载…</div>
+        </section>
         <div id="imageActionToolbar" class="image-action-toolbar" aria-label="媒体工具">
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="edit" title="图片编辑"><i data-lucide="sparkles"></i><span>图片编辑</span></button>
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="crop" title="裁剪"><i data-lucide="crop"></i><span>裁剪</span></button>
@@ -73,6 +118,7 @@
             <span class="image-action-divider"></span>
             <button type="button" data-image-toolbar-action="preview" title="预览"><i data-lucide="eye"></i><span>预览</span></button>
             <button type="button" data-image-toolbar-action="download" title="下载"><i data-lucide="download"></i><span>下载</span></button>
+            <button type="button" data-image-toolbar-action="cover" title="设为封面"><i data-lucide="panel-top"></i><span>设为封面</span></button>
             <button type="button" class="image-toolbar-delete" data-image-toolbar-action="delete" title="删除当前结果"><i data-lucide="trash-2"></i><span>删除</span></button>
         </div>
         <div id="photoshopContextMenu" class="photoshop-context-menu" role="menu" aria-hidden="true"></div>
@@ -231,7 +277,10 @@
         <aside id="assetPanel" class="asset-panel">
             <div class="asset-head">
                 <div class="asset-title"><i data-lucide="library"></i><span data-i18n="smart.assetLibrary">资产库</span></div>
-                <button id="assetCloseBtn" class="asset-mini-btn" type="button" title="收起" data-i18n-title="common.close"><i data-lucide="chevron-right"></i></button>
+                <div class="asset-head-actions">
+                    <button id="assetOpenManagerBtn" class="asset-mini-btn asset-open-manager" type="button" title="打开完整资产库" data-i18n-title="smart.assetOpenFull"><i data-lucide="panel-top-open"></i><span data-i18n="smart.assetFull">完整资产库</span></button>
+                    <button id="assetCloseBtn" class="asset-mini-btn" type="button" title="收起" data-i18n-title="common.close"><i data-lucide="chevron-right"></i></button>
+                </div>
             </div>
             <div class="asset-tabs">
                 <button class="asset-tab active" type="button" data-asset-tab="image" data-i18n="smart.assetImages">图片资产</button>
@@ -519,6 +568,7 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785643784"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785903129"></script>
+    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1785872720"></script>
 </body>
 </html>

@@ -458,6 +458,26 @@
         #messageInput::-webkit-scrollbar-thumb {
             background:transparent !important;
         }
+        html.canvas-embed,html.canvas-embed body { background:#0d1118; }
+        html.canvas-embed .chat-shell { height:100vh; }
+        html.canvas-embed .topbar { min-height:54px; padding:0 14px; background:#111720; border-bottom:1px solid #263243; }
+        html.canvas-embed .topbar-inner { gap:8px; }
+        html.canvas-embed .title-block h1 { font-size:14px; }
+        html.canvas-embed .action-btn { min-width:34px; height:34px; padding:0 9px; }
+        html.canvas-embed .action-btn span { display:none; }
+        html.canvas-embed .messages { width:calc(100% - 24px); padding:14px 0; gap:11px; }
+        html.canvas-embed .bubble { max-width:88%; padding:11px 12px; border-radius:14px; font-size:12px; }
+        html.canvas-embed .composer-wrap { padding:8px 10px 11px; background:#0d1118; }
+        html.canvas-embed .composer { width:100%; border-radius:15px; background:#141923; }
+        html.canvas-embed #messageInput { font-size:12px; }
+        html.canvas-embed .model-picker { width:150px; min-width:130px; flex-basis:150px; }
+        .canvas-context-btn { height:34px; padding:0 9px; display:none; align-items:center; gap:5px; border:1px solid var(--chat-line); border-radius:11px; background:var(--chat-panel); color:var(--chat-muted); font-size:10px; font-weight:800; white-space:nowrap; }
+        .canvas-context-btn:hover { color:var(--chat-text); background:var(--chat-soft); }
+        .canvas-context-btn svg { width:14px; height:14px; }
+        html.canvas-embed .canvas-context-btn { display:flex; }
+        .canvas-insert-actions { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
+        .canvas-insert-actions button { height:28px; padding:0 8px; border:1px solid var(--chat-line); border-radius:9px; background:var(--chat-soft); color:var(--chat-muted); font-size:9.5px; font-weight:800; }
+        .canvas-insert-actions button:hover { color:var(--chat-text); border-color:var(--chat-line-2); }
     </style>
 </head>
 <body>
@@ -511,6 +531,9 @@
                                     <input id="attachmentInput" class="file-input" type="file" multiple onchange="uploadFiles(this.files); this.value='';">
                                     <button type="button" class="upload-btn" onclick="document.getElementById('attachmentInput')?.click()" title="上传附件" aria-label="上传附件">
                                         <i data-lucide="paperclip"></i>
+                                    </button>
+                                    <button id="canvasContextBtn" type="button" class="canvas-context-btn" onclick="requestCanvasContext()" title="添加当前选中的画布素材">
+                                        <i data-lucide="scan-search"></i><span>添加当前所选</span>
                                     </button>
                                     <div id="modelPicker" class="model-picker">
                                         <button id="modelPickerBtn" class="model-picker-button" onclick="event.stopPropagation();toggleModelPicker()" title="选择平台和模型">
@@ -606,6 +629,10 @@
 
     <script>
         lucide.createIcons();
+        const chatQuery = new URLSearchParams(location.search);
+        const canvasEmbed = chatQuery.get('embed') === 'canvas';
+        const canvasId = canvasEmbed ? String(chatQuery.get('canvas_id') || '') : '';
+        if(canvasEmbed) document.documentElement.classList.add('canvas-embed');
         function tr(key){ return window.StudioI18n ? StudioI18n.t(key) : key; }
         function defaultTitle(){ return tr('chat.newConversation'); }
         function setChatTitle(title){
@@ -618,7 +645,17 @@
             renderThreads();
         }
         window.addEventListener('message', event => {
+            if(event.origin !== location.origin) return;
             if(event.data?.type === 'studio-lang') applyLanguage(event.data.lang);
+            if(event.data?.type === 'canvas-chat-context' && event.data.canvas_id === canvasId){
+                const incoming = [...(event.data.images || []),...(event.data.videos || [])];
+                incoming.forEach(ref => {
+                    if(!ref?.url || refs.some(item => item.url === ref.url)) return;
+                    refs.push({url:ref.url,name:ref.name || 'canvas media',kind:ref.kind || 'image',source_node_id:ref.source_node_id || ''});
+                });
+                refs = refs.slice(0,CHAT_ATTACHMENT_MAX);
+                renderRefs();
+            }
         });
         window.addEventListener('studio-lang-change', () => {
             document.title = tr('chat.title');
@@ -636,7 +673,7 @@
 
         const USER_KEY = 'gpt_chat_browser_user';
         const CHAT_SETTINGS_KEY = 'gpt_chat_settings_v1';
-        const CHAT_LAST_CONVERSATION_KEY = 'gpt_chat_last_conversation_v1';
+        const CHAT_LAST_CONVERSATION_KEY = canvasEmbed && canvasId ? `gpt_chat_last_conversation_canvas_${canvasId}` : 'gpt_chat_last_conversation_v1';
         const CHAT_ATTACHMENT_MAX = 20;
         const CHAT_SIZE_MODE_VERSION = 2;
         const userId = localStorage.getItem(USER_KEY) || uuid();
@@ -677,6 +714,11 @@
         let resolutionPickerHome = null;
         let refs = [];
         let config = { chat_model: 'gpt-5.5', image_model: 'gpt-image-2', ms_chat_models: [] };
+
+        function requestCanvasContext(){
+            if(!canvasEmbed || !canvasId) return;
+            parent.postMessage({type:'canvas-chat-request-context',canvas_id:canvasId},location.origin);
+        }
 
         const SIZE_OPTIONS = {
             square: [['1024x1024','1k'], ['1536x1536','2k'], ['2048x2048','4k']],
@@ -1035,7 +1077,8 @@
         }
 
         async function loadConversations(){
-            const data = await fetch('/api/conversations', {headers:{'X-User-ID':userId}}).then(r=>r.json());
+            const scope = canvasEmbed && canvasId ? `?canvas_id=${encodeURIComponent(canvasId)}` : '';
+            const data = await fetch(`/api/conversations${scope}`, {headers:{'X-User-ID':userId}}).then(r=>r.json());
             conversations = data.conversations || [];
             renderThreads();
             if(!currentConversation) {
@@ -1073,7 +1116,7 @@
         }
 
         async function newConversation(){
-            const data = await fetch('/api/conversations', {method:'POST', headers:headers(), body:JSON.stringify({title:'新对话'})}).then(r=>r.json());
+            const data = await fetch('/api/conversations', {method:'POST', headers:headers(), body:JSON.stringify({title:'新对话',canvas_id:canvasId || ''})}).then(r=>r.json());
             currentConversation = data.conversation;
             rememberConversation(currentConversation.id);
             setChatTitle(currentConversation.title);
@@ -1361,6 +1404,28 @@
                 });
                 bubble.appendChild(grid);
             }
+            if(canvasEmbed && msg.role === 'assistant'){
+                const actions = document.createElement('div');
+                actions.className = 'canvas-insert-actions';
+                imageUrls.forEach((url,index) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.textContent = imageUrls.length > 1 ? `放入画布 ${index + 1}` : '放入画布';
+                    button.onclick = () => postCanvasInsert('canvas-chat-insert-image',{url,prompt:msg.agent_reply || msg.content || '',message_id:msg.id || ''});
+                    actions.appendChild(button);
+                });
+                const content = String(msg.content || msg.agent_reply || '').trim();
+                if(content){
+                    const promptButton = document.createElement('button');
+                    promptButton.type = 'button'; promptButton.textContent = '作为提示词';
+                    promptButton.onclick = () => postCanvasInsert('canvas-chat-insert-prompt',{text:content,message_id:msg.id || ''});
+                    const noteButton = document.createElement('button');
+                    noteButton.type = 'button'; noteButton.textContent = '作为便签';
+                    noteButton.onclick = () => postCanvasInsert('canvas-chat-insert-note',{text:content,message_id:msg.id || ''});
+                    actions.append(promptButton,noteButton);
+                }
+                if(actions.childElementCount) bubble.appendChild(actions);
+            }
             // Show model badge for assistant messages
             if(msg.role === 'assistant' && msg.model){
                 const badge = document.createElement('div');
@@ -1374,6 +1439,11 @@
             box.appendChild(row);
             lucide.createIcons();
             return {row, bubble, text};
+        }
+
+        function postCanvasInsert(type,payload){
+            if(!canvasEmbed || !canvasId) return;
+            parent.postMessage({type,canvas_id:canvasId,conversation_id:currentConversation?.id || '',...payload},location.origin);
         }
 
         function openImagePreview(url){
@@ -1517,13 +1587,14 @@
                         headers:headers(),
                         body:JSON.stringify({
                             conversation_id: currentConversation.id || '',
+                            canvas_id: canvasId || '',
                             message,
                             system_prompt: currentSystemPrompt(),
                             mode,
                             size: requestedSize,
                             model: activeChatModel || config.chat_model,
                             image_model: activeImageModel || config.image_model,
-                            reference_images: pendingRefs,
+                            ...chatReferencePayload(pendingRefs),
                             provider: activeImageProvider,
                         })
                     }).then(async r => { if(!r.ok) throw new Error((await r.json()).detail || tr('chat.requestFailed')); return r.json(); });
@@ -1541,6 +1612,14 @@
             }
         }
 
+        function chatReferencePayload(items){
+            const list = Array.isArray(items) ? items : [];
+            return {
+                reference_images:list.filter(item => String(item?.kind || '').toLowerCase() !== 'video'),
+                reference_videos:list.filter(item => String(item?.kind || '').toLowerCase() === 'video')
+            };
+        }
+
         async function streamChatMessage(message, pendingRefs, assistantBubble){
             const currentProvider = provider;
             const currentMsModel = provider === 'modelscope' ? (msModel || activeChatModel || (config.ms_chat_models?.[0] || '')) : '';
@@ -1551,13 +1630,14 @@
                 headers:headers(),
                 body:JSON.stringify({
                     conversation_id: currentConversation.id || '',
+                    canvas_id: canvasId || '',
                     message,
                     system_prompt: currentSystemPrompt(),
                     mode:'chat',
                     model: currentProvider === 'modelscope' ? currentMsModel : currentChatModel,
                     ms_model: currentProvider === 'modelscope' ? currentMsModel : '',
                     provider: currentProvider,
-                    reference_images: pendingRefs
+                    ...chatReferencePayload(pendingRefs)
                 })
             });
             if(!res.ok) throw new Error((await res.json()).detail || tr('chat.requestFailed'));
@@ -1573,6 +1653,7 @@
                 headers:headers(),
                 body:JSON.stringify({
                     conversation_id: currentConversation.id || '',
+                    canvas_id: canvasId || '',
                     message,
                     system_prompt: currentSystemPrompt(),
                     mode:'agent',
@@ -1580,7 +1661,7 @@
                     model: currentProvider === 'modelscope' ? currentMsModel : currentChatModel,
                     ms_model: currentProvider === 'modelscope' ? currentMsModel : '',
                     image_model: activeImageModel || config.image_model,
-                    reference_images: pendingRefs,
+                    ...chatReferencePayload(pendingRefs),
                     provider: currentProvider,
                     image_provider: activeImageProvider,
                 })

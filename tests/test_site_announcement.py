@@ -18,6 +18,7 @@ import main
 INDEX_HTML = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
 ADMIN_HTML = (ROOT / "static" / "admin.html").read_text(encoding="utf-8")
 ANNOUNCEMENT_JS = (ROOT / "static" / "js" / "site-announcement.js").read_text(encoding="utf-8")
+STUDIO_SHELL_JS = (ROOT / "static" / "js" / "studio-shell.js").read_text(encoding="utf-8")
 MAIN_SOURCE = (ROOT / "main.py").read_text(encoding="utf-8")
 
 
@@ -37,18 +38,20 @@ class SiteAnnouncementTests(unittest.TestCase):
 
     def test_main_page_loads_announcement_and_sidebar_can_reopen_it(self):
         self.assertIn('src="/static/js/site-announcement.js', INDEX_HTML)
-        self.assertIn('onclick="openSiteAnnouncement()"', INDEX_HTML)
-        self.assertIn('<span class="side-pill-text">公告</span>', INDEX_HTML)
+        self.assertIn('data-action="announcement"', INDEX_HTML)
+        self.assertIn("window.openSiteAnnouncement?.()", STUDIO_SHELL_JS)
         self.assertNotIn('data-i18n="common.announcement"', INDEX_HTML)
         self.assertIn("window.openSiteAnnouncement = function ()", ANNOUNCEMENT_JS)
         self.assertIn("openAnnouncement(true)", ANNOUNCEMENT_JS)
 
     def test_api_settings_navigation_is_only_shown_to_admins(self):
-        self.assertIn('id="api-settings-entry-btn"', INDEX_HTML)
-        self.assertIn('title="API 设置" hidden', INDEX_HTML)
-        self.assertIn("apiSettingsEntry.hidden = !isAdmin", INDEX_HTML)
-        self.assertIn("['api-settings', 'comfyui-settings', 'admin']", INDEX_HTML)
-        self.assertIn("loadCurrentUserNavigation().finally(restoreActivePage)", INDEX_HTML)
+        self.assertIn('id="apiSettingsEntry" data-action="api-settings" hidden', INDEX_HTML)
+        self.assertIn(
+            "document.getElementById('apiSettingsEntry').hidden = currentUser.role !== 'admin'",
+            STUDIO_SHELL_JS,
+        )
+        self.assertIn("'api-settings':'/static/api-settings.html'", STUDIO_SHELL_JS)
+        self.assertIn("if(initialPanel) openPanel(initialPanel,false)", STUDIO_SHELL_JS)
 
     def test_default_announcement_contains_requested_content(self):
         for expected in (

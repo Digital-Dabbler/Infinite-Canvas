@@ -45,7 +45,7 @@ class ClassicCanvasArchiveTests(unittest.TestCase):
         self.assertNotIn('data-kind="classic"', self.canvas_list_js)
         self.assertNotIn("kind: isSmart ? 'smart' : 'classic'", self.canvas_list_js)
         self.assertIn("kind: 'smart'", self.canvas_list_js)
-        self.assertIn("新建智能画布", self.canvas_list_html)
+        self.assertIn("新建智能画布", self.canvas_list_js)
 
     def test_project_workspace_creation_is_a_centered_modal(self):
         self.assertIn("overlay.className = 'ws-create-overlay'", self.canvas_list_js)

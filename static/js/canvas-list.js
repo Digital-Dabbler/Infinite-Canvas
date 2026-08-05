@@ -35,6 +35,18 @@ function formatCanvasTime(value){
     return date.toLocaleString(langIsEn() ? 'en-US' : 'zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
 }
 
+function formatRelativeTime(value){
+    if(!value) return L('刚刚','Just now');
+    const raw = Number(value);
+    const stamp = raw < 10000000000 ? raw * 1000 : raw;
+    const seconds = Math.max(0, Math.floor((Date.now() - stamp) / 1000));
+    if(seconds < 60) return L('刚刚','Just now');
+    if(seconds < 3600) return L(`${Math.floor(seconds / 60)} 分钟前`,`${Math.floor(seconds / 60)}m ago`);
+    if(seconds < 86400) return L(`${Math.floor(seconds / 3600)} 小时前`,`${Math.floor(seconds / 3600)}h ago`);
+    if(seconds < 86400 * 30) return L(`${Math.floor(seconds / 86400)} 天前`,`${Math.floor(seconds / 86400)}d ago`);
+    return formatCanvasTime(value);
+}
+
 function renderCanvasIcon(icon, size = 16){
     if(!icon || icon === '🧩') return `<i data-lucide="layers" style="width:${size}px;height:${size}px"></i>`;
     if(/[^\x00-\x7F]/.test(icon)) return escapeHtml(icon);
@@ -65,6 +77,12 @@ const pasteCanvasBtn = document.getElementById('pasteCanvasBtn');
 const emptyCreateCanvasBtn = document.getElementById('emptyCreateCanvasBtn');
 const statusEl = document.getElementById('boardStatus');
 const workspace = document.getElementById('workspace');
+const canvasSearchWrap = document.getElementById('canvasSearchWrap');
+const canvasSearchToggle = document.getElementById('canvasSearchToggle');
+const canvasSearchInput = document.getElementById('canvasSearchInput');
+const studioSettingsBtn = document.getElementById('studioSettingsBtn');
+const mobileProjectToggle = document.getElementById('mobileProjectToggle');
+const mobileSidebarClose = document.getElementById('mobileSidebarClose');
 
 /* ===== State ===== */
 let projects = [];
@@ -74,6 +92,7 @@ let currentProjectId = rememberedProjectId();
 let pendingDeleteProjectId = null;
 let statusTimer = null;
 let clipboardCanvasId = null;   // 剪切的画布（切到别的项目后粘贴）
+let canvasSearchQuery = '';
 
 // board viewport (mirrors smart-canvas math)
 const viewport = { x: 0, y: 0, scale: 1 };
@@ -200,7 +219,6 @@ async function loadAll(){
         rememberProjectId(currentProjectId);
         renderProjects();
         renderBoard();
-        resetView();
         refreshTrashCount();
     } catch(e){
         console.error(e);
@@ -266,7 +284,8 @@ function selectProject(pid){
     closeTrashView();
     renderProjects();
     renderBoard();
-    resetView();
+    canvasSearchQuery = '';
+    if(canvasSearchInput) canvasSearchInput.value = '';
 }
 
 function startProjectRename(pid, row){
@@ -360,56 +379,76 @@ async function deleteProject(pid){
 function updateBoardHeader(){
     const p = currentProject();
     boardProjectName.textContent = p ? p.name : L('默认项目','Default');
-    boardCanvasCount.textContent = String(canvasesInProject(currentProjectId).length);
-}
-
-function autoLayoutNulls(items){
-    // grid layout for cards with null board position; persist each once.
-    const X0 = 40, Y0 = 40, XSTRIDE = 276, YSTRIDE = 176, COLS = 4;
-    const positioned = items.filter(c => c.board_x != null && c.board_y != null);
-    const nulls = items.filter(c => c.board_x == null || c.board_y == null);
-    // start index after existing positioned grid slots to reduce overlap
-    let i = positioned.length;
-    nulls.forEach(c => {
-        const col = i % COLS, rowIdx = Math.floor(i / COLS);
-        c.board_x = X0 + col * XSTRIDE;
-        c.board_y = Y0 + rowIdx * YSTRIDE;
-        i++;
-        persistMeta(c.id, { board_x: c.board_x, board_y: c.board_y });
-    });
+    const live = canvasesInProject(currentProjectId).filter(c => (c.kind || 'classic') === 'smart');
+    boardCanvasCount.textContent = String(live.length);
 }
 
 function renderBoard(){
     updateBoardHeader();
-    const items = canvasesInProject(currentProjectId);
-    autoLayoutNulls(items);
+    const query = canvasSearchQuery.trim().toLocaleLowerCase();
+    const filtered = canvasesInProject(currentProjectId).filter(c => !query || String(c.title || '').toLocaleLowerCase().includes(query));
+    const sorted = items => items.slice().sort((a, b) => {
+        const pinned = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
+        return pinned || Number(b.updated_at || b.created_at || 0) - Number(a.updated_at || a.created_at || 0);
+    });
+    const smartItems = sorted(filtered.filter(c => (c.kind || 'classic') === 'smart'));
+    const legacyItems = sorted(filtered.filter(c => (c.kind || 'classic') !== 'smart'));
     boardWorld.innerHTML = '';
-    items.forEach(c => boardWorld.appendChild(buildCard(c)));
-    boardEmptyHint.classList.toggle('hidden', items.length > 0);
+    const grid = document.createElement('section');
+    grid.className = 'ws-cover-grid';
+    const create = document.createElement('button');
+    create.className = 'ws-new-canvas-tile';
+    create.type = 'button';
+    create.innerHTML = `<span class="ws-new-canvas-icon"><i data-lucide="plus"></i></span><strong>${L('新建画布','New canvas')}</strong><span>${L('从空白智能画布开始','Start from a blank smart canvas')}</span>`;
+    create.onclick = () => openCreateCard();
+    grid.appendChild(create);
+    smartItems.forEach(c => grid.appendChild(buildCard(c)));
+    boardWorld.appendChild(grid);
+    if(legacyItems.length){
+        const legacy = document.createElement('details');
+        legacy.className = 'ws-legacy-section';
+        legacy.innerHTML = `<summary><span><i data-lucide="archive"></i>${L('旧版画布（只读）','Legacy canvases (read-only)')}</span><b>${legacyItems.length}</b><i data-lucide="chevron-down"></i></summary>`;
+        const legacyGrid = document.createElement('div');
+        legacyGrid.className = 'ws-cover-grid ws-legacy-grid';
+        legacyItems.forEach(c => legacyGrid.appendChild(buildCard(c, true)));
+        legacy.appendChild(legacyGrid);
+        boardWorld.appendChild(legacy);
+    }
+    if(query && !smartItems.length && !legacyItems.length){
+        const empty = document.createElement('div');
+        empty.className = 'ws-filter-empty';
+        empty.innerHTML = `<i data-lucide="search-x"></i><span>${L('没有匹配的画布','No matching canvases')}</span>`;
+        boardWorld.appendChild(empty);
+    }
+    boardEmptyHint.classList.add('hidden');
     updatePasteBtn();
     refreshIcons();
 }
 
-function buildCard(c){
+function buildCard(c, readOnly=false){
     const isSmart = (c.kind || 'classic') === 'smart';
-    const card = document.createElement('div');
+    const card = document.createElement('article');
     card.className = 'ws-card'
         + (String(c.color || '').trim() ? ' cc-marked' : '')
-        + (clipboardCanvasId === c.id ? ' cut' : '');
+        + (clipboardCanvasId === c.id ? ' cut' : '')
+        + (readOnly ? ' is-readonly' : '');
     card.dataset.canvasId = c.id;
-    card.style.left = (c.board_x || 0) + 'px';
-    card.style.top = (c.board_y || 0) + 'px';
-    // 卡片布局：顶部=类型标签+更多按钮；中部=标题；底部=节点数·时间。已移除图标。
+    const cover = String(c.cover_url || '').trim();
     card.innerHTML = `
-        <div class="ws-card-top">
-            <span class="ws-card-kind ${isSmart ? 'smart' : 'classic'}">${isSmart ? compactLabel('智能画布','智能','Smart') : compactLabel('普通画布','普通','Classic')}</span>
-            <button class="ws-card-menu" type="button" title="${L('更多','More')}" aria-label="${L('更多','More')}"><i data-lucide="more-horizontal" class="w-4 h-4"></i></button>
+        <div class="ws-card-cover ${cover ? 'has-cover' : ''}">
+            ${cover ? `<img src="${escapeAttr(cover)}" alt="" loading="lazy">` : ''}
+            <div class="ws-card-cover-empty"><i data-lucide="${isSmart ? 'wand-sparkles' : 'archive'}"></i></div>
+            ${c.pinned ? `<span class="ws-card-pin"><i data-lucide="pin"></i></span>` : ''}
+            ${readOnly ? `<span class="ws-readonly-badge"><i data-lucide="lock"></i>${L('只读','Read only')}</span>` : ''}
         </div>
-        <div class="ws-card-title">${escapeHtml(c.title)}</div>
-        <div class="ws-card-meta">
-            <span class="ws-card-nodes">${(c.node_count != null ? c.node_count : 0)} ${L('节点','nodes')}</span>
-            <span class="ws-card-meta-dot"></span>
-            <span class="ws-card-time">${formatCanvasTime(c.updated_at || c.created_at)}</span>
+        <div class="ws-card-body">
+            <div class="ws-card-title">${escapeHtml(c.title)}</div>
+            ${readOnly ? '' : `<button class="ws-card-menu" type="button" title="${L('更多','More')}" aria-label="${L('更多','More')}"><i data-lucide="more-horizontal"></i></button>`}
+            <div class="ws-card-meta">
+                <span class="ws-card-nodes">${(c.node_count != null ? c.node_count : 0)} ${L('节点','nodes')}</span>
+                <span class="ws-card-meta-dot"></span>
+                <span class="ws-card-time">${formatRelativeTime(c.updated_at || c.created_at)}</span>
+            </div>
         </div>
         <div class="ws-card-delete-confirm">
             <div class="ws-card-delete-title">${L('移入回收站？','Move to trash?')}</div>
@@ -418,10 +457,19 @@ function buildCard(c){
                 <button class="ws-card-delete-no" type="button">${L('取消','Cancel')}</button>
             </div>
         </div>`;
-    attachCardDrag(card, c);
+    card.onclick = e => {
+        if(e.target.closest('button,.ws-card-delete-confirm,.ws-card-title-input')) return;
+        openCanvas(c, readOnly);
+    };
     const menuBtn = card.querySelector('.ws-card-menu');
-    menuBtn.onmousedown = e => e.stopPropagation();
-    menuBtn.onclick = e => { e.stopPropagation(); openCardMenu(c.id, menuBtn); };
+    if(menuBtn){
+        menuBtn.onmousedown = e => e.stopPropagation();
+        menuBtn.onclick = e => { e.stopPropagation(); openCardMenu(c.id, menuBtn); };
+    }
+    card.querySelector('img')?.addEventListener('error', event => {
+        event.currentTarget.remove();
+        card.querySelector('.ws-card-cover')?.classList.remove('has-cover');
+    });
     card.querySelector('.ws-card-delete-confirm').onmousedown = e => e.stopPropagation();
     card.querySelector('.ws-card-delete-yes').onclick = e => { e.stopPropagation(); deleteCanvas(c.id); };
     card.querySelector('.ws-card-delete-no').onclick = e => { e.stopPropagation(); card.classList.remove('confirming-delete'); };
@@ -467,7 +515,7 @@ function attachCardDrag(card, c){
     });
 }
 
-function openCanvas(c){
+function openCanvas(c, readOnly=false){
     const enc = encodeURIComponent(c.id);
     const project = encodeURIComponent(c.project || currentProjectId || 'default');
     // 同一套画布代码复用同一版本缓存；只有相关 HTML/JS/CSS/词条变化时，
@@ -476,7 +524,7 @@ function openCanvas(c){
     rememberProjectId(c.project || currentProjectId || 'default');
     window.location.href = (c.kind === 'smart')
         ? `/static/smart-canvas.html?id=${enc}&project=${project}&v=${cacheVersion}`
-        : `/static/canvas.html?id=${enc}&project=${project}&v=${cacheVersion}`;
+        : `/static/canvas.html?id=${enc}&project=${project}&readonly=${readOnly ? '1' : '0'}&v=${cacheVersion}`;
 }
 
 /* ===== Card create flow ===== */
@@ -486,7 +534,7 @@ function closeCreateCard(force=false){
     createCardEl?.remove();
     createCardEl = null;
 }
-function openCreateCard(worldPt){
+function openCreateCard(){
     closeCreateCard();
     closeCardMenu();
     const projectName = currentProject()?.name || L('默认项目', 'Default');
@@ -521,13 +569,13 @@ function openCreateCard(worldPt){
     input.focus();
     form.addEventListener('submit', e => {
         e.preventDefault();
-        createCanvasOnBoard(input.value.trim(), worldPt, overlay);
+        createCanvasOnBoard(input.value.trim(), overlay);
     });
     overlay.querySelector('.ws-create-cancel').onclick = () => closeCreateCard();
     refreshIcons();
 }
 
-async function createCanvasOnBoard(title, worldPt, overlay=createCardEl){
+async function createCanvasOnBoard(title, overlay=createCardEl){
     if(!overlay || overlay.dataset.busy === '1') return;
     const base = L('智能画布','Smart canvas');
     const name = title || `${base} ${new Date().toLocaleTimeString(langIsEn() ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
@@ -546,9 +594,7 @@ async function createCanvasOnBoard(title, worldPt, overlay=createCardEl){
                 title: name,
                 icon: 'sparkles',
                 kind: 'smart',
-                project: currentProjectId,
-                board_x: Math.round(worldPt.x),
-                board_y: Math.round(worldPt.y)
+                project: currentProjectId
             })
         });
         const data = await res.json().catch(() => ({}));
@@ -556,8 +602,6 @@ async function createCanvasOnBoard(title, worldPt, overlay=createCardEl){
         const nc = data.canvas;
         if(!nc?.id) throw new Error(L('创建失败','Create failed'));
         if(nc.project == null) nc.project = currentProjectId;
-        if(nc.board_x == null) nc.board_x = Math.round(worldPt.x);
-        if(nc.board_y == null) nc.board_y = Math.round(worldPt.y);
         canvases.push(nc);
         closeCreateCard(true);
         renderBoard();
@@ -582,6 +626,7 @@ function openCardMenu(canvasId, anchorBtn){
     const pop = document.createElement('div');
     pop.className = 'ws-card-pop';
     pop.innerHTML = `
+        <button class="ws-pop-item" data-act="pin"><i data-lucide="${c.pinned ? 'pin-off' : 'pin'}" class="w-4 h-4"></i><span>${c.pinned ? L('取消置顶','Unpin') : L('置顶','Pin')}</span></button>
         <button class="ws-pop-item" data-act="rename"><i data-lucide="pencil" class="w-4 h-4"></i><span>${L('重命名','Rename')}</span></button>
         <button class="ws-pop-item" data-act="export"><i data-lucide="download" class="w-4 h-4"></i><span>${L('导出画布','Export canvas')}</span></button>
         <button class="ws-pop-item" data-act="export-assets"><i data-lucide="archive" class="w-4 h-4"></i><span>${L('导出画布 + 资源','Export with assets')}</span></button>
@@ -596,12 +641,20 @@ function openCardMenu(canvasId, anchorBtn){
     if(top + h > window.innerHeight - 12) top = r.top - h - 6;
     pop.style.left = Math.round(Math.max(12, left)) + 'px';
     pop.style.top = Math.round(Math.max(12, top)) + 'px';
+    pop.querySelector('[data-act="pin"]').onclick = () => { closeCardMenu(); setCanvasPinned(canvasId, !c.pinned); };
     pop.querySelector('[data-act="rename"]').onclick = () => { closeCardMenu(); startCardRename(canvasId); };
     pop.querySelector('[data-act="export"]').onclick = () => { closeCardMenu(); exportCanvas(canvasId); };
     pop.querySelector('[data-act="export-assets"]').onclick = () => { closeCardMenu(); exportCanvasWithResources(canvasId); };
     pop.querySelector('[data-act="cut"]').onclick = () => { closeCardMenu(); cutCanvas(canvasId); };
     pop.querySelector('[data-act="delete"]').onclick = () => { closeCardMenu(); showCardDeleteConfirm(canvasId); };
     refreshIcons();
+}
+
+async function setCanvasPinned(id, pinned){
+    const c = canvases.find(x => x.id === id);
+    if(c) c.pinned = Boolean(pinned);
+    renderBoard();
+    await persistMeta(id, { pinned: Boolean(pinned) });
 }
 
 function showCardDeleteConfirm(canvasId){
@@ -1006,24 +1059,26 @@ async function purgeCanvas(id){
 }
 
 /* ===== Event bindings ===== */
-board.addEventListener('mousedown', onBoardPanStart);
-document.addEventListener('mousemove', onBoardPanMove);
-document.addEventListener('mouseup', onBoardPanEnd);
-board.addEventListener('wheel', onBoardWheel, { passive: false });
-board.addEventListener('dblclick', e => {
-    if(e.target.closest('.ws-card') || e.target.closest('.ws-create-card')) return;
-    openCreateCard(screenToWorld(e.clientX, e.clientY));
-});
-
-newCanvasBtn.addEventListener('click', () => openCreateCard(boardCenterWorld()));
-emptyCreateCanvasBtn?.addEventListener('mousedown', e => e.stopPropagation());
-emptyCreateCanvasBtn?.addEventListener('click', e => {
-    e.stopPropagation();
-    openCreateCard(boardCenterWorld());
-});
 boardRefreshBtn.addEventListener('click', loadAll);
-boardResetViewBtn.addEventListener('click', resetView);
 pasteCanvasBtn?.addEventListener('click', pasteCanvas);
+canvasSearchToggle?.addEventListener('click', () => {
+    canvasSearchWrap.classList.toggle('expanded');
+    if(canvasSearchWrap.classList.contains('expanded')) canvasSearchInput?.focus();
+    else {
+        canvasSearchQuery = '';
+        if(canvasSearchInput) canvasSearchInput.value = '';
+        renderBoard();
+    }
+});
+canvasSearchInput?.addEventListener('input', () => {
+    canvasSearchQuery = canvasSearchInput.value || '';
+    renderBoard();
+});
+studioSettingsBtn?.addEventListener('click', () => {
+    window.parent.postMessage({ type:'studio:toggle-settings' }, '*');
+});
+mobileProjectToggle?.addEventListener('click', () => workspace.classList.add('sidebar-open'));
+mobileSidebarClose?.addEventListener('click', () => workspace.classList.remove('sidebar-open'));
 
 newProjectBtn.addEventListener('click', openNewProject);
 newProjectConfirm.addEventListener('click', createProject);
@@ -1072,6 +1127,5 @@ window.addEventListener('message', event => {
 
 /* ===== Boot ===== */
 window.StudioI18n?.apply?.();
-applyViewport();
 loadAll();
 refreshIcons();

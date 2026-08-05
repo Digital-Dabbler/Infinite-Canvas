@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" href="/static/images/logo.png" type="image/png">
-    <title>素材库管理</title>
+    <title>资产库</title>
     <script>
         (function(){
             try {
@@ -19,14 +19,14 @@
     <script src="/static/vendor/js/lucide.js?v=2026.07.29.1784512371"></script>
     <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1784512371">
-    <link rel="stylesheet" href="/static/css/asset-manager.css?v=2026.07.29.1784512402">
+    <link rel="stylesheet" href="/static/css/asset-manager.css?v=2026.07.29.1785906498">
 </head>
 <body>
     <div class="asset-page">
         <header class="asset-page-head">
             <div>
-                <div class="asset-title">素材库管理</div>
-                <div class="asset-sub">按库、分组、内容和预览管理素材与提示词。</div>
+                <div class="asset-title">完整资产库</div>
+                <div class="asset-sub">集中管理素材、工作流、URL、提示词与本地文件。</div>
             </div>
             <div class="asset-head-actions">
                 <div id="assetStatus" class="asset-status">准备就绪</div>
@@ -39,14 +39,28 @@
             <button id="assetTabAssets" class="active" type="button" data-tab="assets"><i data-lucide="image"></i><span>图片资产</span></button>
             <button id="assetTabWorkflows" type="button" data-tab="workflows"><i data-lucide="workflow"></i><span>工作流管理</span></button>
             <button id="assetTabPrompts" type="button" data-tab="prompts"><i data-lucide="text-cursor-input"></i><span>提示词库</span></button>
+            <button id="assetTabUrls" type="button" data-tab="urls"><i data-lucide="globe-2"></i><span>URL 资产</span></button>
             <button id="assetTabCanvasAssets" type="button" data-tab="canvas-assets"><i data-lucide="layout-dashboard"></i><span>画布资产</span></button>
             <button id="assetTabLocal" type="button" data-tab="local"><i data-lucide="folder-open"></i><span>本地素材</span></button>
+            <button id="assetTabTrash" type="button" data-tab="trash"><i data-lucide="trash-2"></i><span>回收站</span></button>
+            <button id="assetTabTasks" type="button" data-tab="tasks"><i data-lucide="list-checks"></i><span>AI 任务</span></button>
+            <button id="assetTabAdmin" type="button" data-tab="admin-ai" hidden><i data-lucide="shield-check"></i><span>AI 与存储</span></button>
+        </div>
+
+        <div class="asset-scope-bar" aria-label="资产范围">
+            <span>查看范围</span>
+            <div class="asset-scope-switch">
+                <button class="active" type="button" data-scope="mine">我的</button>
+                <button type="button" data-scope="all">全部</button>
+                <button type="button" data-scope="system">系统</button>
+            </div>
+            <small id="assetScopeHint">只显示我拥有的内容</small>
         </div>
 
         <main id="assetManagerRoot" class="asset-manager-root"></main>
     </div>
 
     <input id="assetUploadInput" type="file" accept="image/*,video/*,audio/*,.json,.zip,application/json,application/zip" multiple hidden>
-    <script src="/static/js/asset-manager.js?v=2026.07.29.1784512402"></script>
+    <script src="/static/js/asset-manager.js?v=2026.07.29.1785906550"></script>
 </body>
 </html>

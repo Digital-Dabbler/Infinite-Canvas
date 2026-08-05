@@ -1,51 +1,28 @@
-**Comparison target**
+# Design QA — RunningHub 对标改版
 
-- Source visual truth: `C:\Users\admin\AppData\Local\Temp\codex-clipboard-51a2feb4-74a7-4485-b17d-bcf92011570b.png`
-- Implementation screenshot: `C:\AI\Infinite-Canvas\design-qa-implementation.png`
-- Combined comparison: `C:\AI\Infinite-Canvas\design-qa-comparison.png`
-- Viewport: 1280 × 720 CSS px, device scale factor 1
-- Source pixels: 1517 × 907
-- Implementation pixels: 1280 × 720
-- Normalization: both images were proportionally fit to a shared 720 px-high comparison canvas.
-- State: dark theme, generated image preview open, generation source and prompt present, reproduction enabled.
+最终结果：**passed**
 
-**Full-view comparison evidence**
+## 对照基准
 
-- The new information area sits directly below the preview image and above the existing footer, matching the annotated placement.
-- The source, prompt, and primary reproduction action preserve the intended left-to-right hierarchy.
-- The implementation intentionally uses the application's existing compact sizing, tokens, radii, and Lucide icons instead of reproducing the red annotation marks.
+- RunningHub 无限画布参考：`codex-clipboard-0c3076aa-0fa1-43de-9f99-9170b298968e.png`
+- 项目工作台参考：`codex-clipboard-a8264a9c-67c1-494c-affa-f9961b9ab0d3.png`
+- 封面网格参考：`codex-clipboard-8c29cb89-87ca-4693-a3b9-54bce5f63bc1.png`
+- 画布标注参考：`codex-clipboard-8caa9934-734e-48ad-8162-b33e7cef1711.png`
 
-**Focused region comparison evidence**
+## 已验证
 
-- Focused inspection of the lower preview region confirms that the source text truncates safely, the prompt remains readable, and the primary button stays visually distinct.
-- At 1280 × 720, the panel measured 929.45 × 59.31 CSS px and remained fully visible without hiding the footer controls.
+- 根页面只显示项目工作台；项目侧栏、固定封面网格、首格新建、搜索和旧版折叠区结构正确。
+- 设置中心可从工作台左下打开；API 设置覆盖层可通过 `?panel=api-settings` 打开并保留工作台。
+- 390×844 视口下项目侧栏切换为抽屉，封面网格为单列，设置中心保持可操作。
+- 智能画布具备顶部账户区、六项左栏、底部视图控制、纵向新建菜单和右侧 Canvas AI 面板。
+- 新建菜单仅保留上传、图片生成、视频生成、工作流分组、便签、提示词和循环。
+- Canvas AI 紧凑模式显示“添加当前所选”，消息回写入口已接入图片、提示词和便签。
+- 深浅主题变量、点阵背景、边线、圆角、层级和品牌绿交互态已统一。
+- 页面 DOM、关键交互和控制台均完成浏览器检查；付费生成、真实平台余额与视频抽帧未发起外部调用。
 
-**Required fidelity surfaces**
+## 视觉修正记录
 
-- Fonts and typography: existing application font stack and optical weights are preserved; labels, values, and action hierarchy are clear.
-- Spacing and layout rhythm: the three requested areas align on one row at desktop width and collapse responsively at 860 px and 620 px.
-- Colors and visual tokens: all surfaces use the existing `--card`, `--soft`, `--line`, `--text`, `--muted`, and `--strong` tokens.
-- Image quality and asset fidelity: existing preview rendering is unchanged; no visible asset was replaced or approximated.
-- Copy and content: bilingual strings cover generation source, prompt, empty metadata, unavailable reproduction, and success feedback.
-
-**Findings**
-
-- No actionable P0, P1, or P2 visual mismatch remains.
-
-**Interaction verification**
-
-- Generation source resolved to the recorded provider and model.
-- The full recorded prompt rendered in the prompt area.
-- Reproduction was enabled when `runSettings` existed.
-- Browser console errors checked: none.
-- The destructive/persistent reproduction click was not executed against the user's existing canvas data; its graph construction path was verified statically.
-
-**Comparison history**
-
-- Initial pass: no P0/P1/P2 issue found, so no visual fix loop was required.
-
-**Follow-up polish**
-
-- P3: a future iteration could add an optional copy-prompt icon if prompt reuse without workflow recreation becomes common.
-
-final result: passed
+- 移除根外壳的自动 UI 缩放，避免工作台在小屏被二次缩小。
+- 将项目卡片从绝对定位画板改为响应式 16:9 封面网格。
+- 将新建菜单限制为可滚动的纵向列表，避免小视口溢出。
+- 账户、余额、设置和对话均使用浮层，不挤压或重排画布世界坐标。

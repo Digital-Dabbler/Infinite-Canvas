@@ -50,6 +50,7 @@ const selectionBox = document.getElementById('selectionBox');
 const assetToggle = document.getElementById('assetToggle');
 const assetPanel = document.getElementById('assetPanel');
 const assetCloseBtn = document.getElementById('assetCloseBtn');
+const assetOpenManagerBtn = document.getElementById('assetOpenManagerBtn');
 const assetLibrarySelect = document.getElementById('assetLibrarySelect');
 const assetCategorySelect = document.getElementById('assetCategorySelect');
 const assetGrid = document.getElementById('assetGrid');
@@ -9303,6 +9304,10 @@ function runImageToolbarAction(action){
     if(!target) return;
     const {node, index, item, kind} = target;
     selectedImage = {nodeId:node.id, index};
+    if(action === 'cover'){
+        setSmartCanvasCover(node, index, item, kind);
+        return;
+    }
     if(kind === 'video'){
         if(action === 'preview'){
             openImagePreview(node.id, index);
@@ -11940,6 +11945,32 @@ function previewCompareSources(){
         }
     }
     return dedup;
+}
+
+async function setSmartCanvasCover(node, index, item, kind){
+    if(!canvasId || !item?.url) return;
+    let frameTime = 0;
+    if(kind === 'video'){
+        const nodeEl = document.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+        frameTime = Number(nodeEl?.querySelector('video')?.currentTime || 0);
+    }
+    try {
+        const response = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/cover`, {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                url:item.url,
+                source_node_id:node.id,
+                source_kind:kind,
+                frame_time:frameTime
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok) throw new Error(data.detail || '设置封面失败');
+        toast(kind === 'video' ? '已将当前帧设为封面' : '已设为画布封面');
+    } catch(error){
+        toast(error.message || '设置封面失败');
+    }
 }
 function previewGenerationSourceLabel(node){
     const source = node?.runSettings || {};
@@ -18877,8 +18908,11 @@ window.onmousemove = e => {
     (dragState.group || [{id:dragState.id, ox:dragState.ox, oy:dragState.oy}]).forEach(item => {
         const n = nodes.find(x => x.id === item.id);
         if(!n) return;
-        n.x = item.ox + moveDx;
-        n.y = item.oy + moveDy;
+        const nextX = item.ox + moveDx;
+        const nextY = item.oy + moveDy;
+        const snap = window.isSmartCanvasSnapEnabled?.() !== false;
+        n.x = snap ? Math.round(nextX / 20) * 20 : nextX;
+        n.y = snap ? Math.round(nextY / 20) * 20 : nextY;
     });
     if(assetLibraryOpen){
         const hit = document.elementFromPoint(e.clientX, e.clientY);
@@ -19296,6 +19330,13 @@ fileInput.onchange = () => {
 };
 if(assetToggle) assetToggle.onclick = () => toggleAssetLibrary();
 if(assetCloseBtn) assetCloseBtn.onclick = () => toggleAssetLibrary(false);
+if(assetOpenManagerBtn) assetOpenManagerBtn.onclick = () => {
+    if(window.parent && window.parent !== window) {
+        window.parent.postMessage({type:'studio:open-panel', panel:'assets'}, location.origin);
+    } else {
+        window.location.href = '/static/asset-manager.html';
+    }
+};
 if(smartWorkflowToggle) smartWorkflowToggle.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
