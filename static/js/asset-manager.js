@@ -122,6 +122,7 @@ let searchCompositionActive = false;
 let searchRenderTimer = null;
 let lastSearchCompositionEndAt = 0;
 let storageSettingsState = {open:false, tab:'prefs', editor:'', dirs:{}, defaults:{}, kind:'generated', items:[], selected:new Set(), loading:false, loadingMore:false, offset:0, total:0, hasMore:false, pageSize:80, restoreScrollTop:null, classificationPrompt:'', defaultClassificationPrompt:''};
+const loadedDataKeys = new Set();
 
 const LOCAL_MEDIA_EXTS = /\.(png|jpe?g|webp|gif|bmp|avif|svg|mp4|webm|mov|m4v|mp3|wav|flac|ogg|m4a|aac)(\?|#|$)/i;
 const SEARCH_INPUT_IDS = new Set(['assetSearch','workflowSearch','promptSearch','localSearch','localUploadSearch','canvasAssetSearch','urlAssetSearch']);
@@ -399,13 +400,13 @@ function renderStorageSettingsModal(){
         <div class="storage-file-grid" data-storage-file-grid>${cards}</div>
     `;
     overlay.innerHTML = `
-        <div class="storage-settings-modal">
+        <div class="storage-settings-modal" role="dialog" aria-modal="true" aria-labelledby="storageSettingsTitle">
             <div class="storage-settings-head">
                 <div>
-                    <strong>偏好设置</strong>
+                    <strong id="storageSettingsTitle">偏好设置</strong>
                     <span>分开管理默认反推设置和素材目录文件。</span>
                 </div>
-                <button type="button" data-storage-close><i data-lucide="x"></i></button>
+                <button type="button" data-storage-close aria-label="关闭偏好设置"><i data-lucide="x"></i></button>
             </div>
             <div class="asset-pref-tabs">
                 <button class="${activePrefTab === 'prefs' ? 'active' : ''}" type="button" data-pref-tab="prefs"><i data-lucide="sliders-horizontal"></i><span>偏好设置</span></button>
@@ -1312,53 +1313,98 @@ async function refreshCanvasAssets(){
         setStatus(err.message || '刷新画布资产失败');
     }
 }
-async function loadAll(){
+async function loadAll(options={}){
+    const force = options.force !== false;
     setStatus('加载中...');
-    const sessionData = await apiJson('/api/auth/me');
-    currentUser = sessionData.user || {};
-    const [assetData, promptData, providerData, canvasAssetData, urlData, trashData, taskData, storageData, adminAiData, legacyAiData] = await Promise.all([
-        apiJson('/api/asset-library'),
-        apiJson('/api/prompt-libraries'),
-        apiJson('/api/providers').catch(() => ({providers:[]})),
-        apiJson('/api/canvas-assets').catch(() => ({categories:[], canvases:[], items:[]})),
-        apiJson('/api/asset-url-library').catch(() => ({library:{items:[]}})),
-        apiJson('/api/asset-library/trash').catch(() => ({items:[]})),
-        apiJson('/api/asset-ai/tasks').catch(() => ({tasks:[]})),
-        apiJson('/api/asset-library/storage').catch(() => ({owners:[],policy:{}})),
-        currentUser.role === 'admin' ? apiJson('/api/admin/asset-ai/settings').catch(() => ({profiles:[]})) : Promise.resolve({profiles:[]}),
-        currentUser.role === 'admin' ? apiJson('/api/asset-classification-prompt').catch(() => ({})) : Promise.resolve({}),
-        loadSharedFolders(),
-        loadLocalAssets()
-    ]);
-    assetLibrary = assetData.library || {libraries:[], categories:[]};
-    promptLibrary = promptData.library || {libraries:[]};
-    apiProviders = Array.isArray(providerData.providers) ? providerData.providers : [];
-    urlLibrary = urlData.library || {items:[]};
-    assetTrash = Array.isArray(trashData.items) ? trashData.items : [];
-    assetAiTasks = Array.isArray(taskData.tasks) ? taskData.tasks : [];
-    assetStorage = storageData || {owners:[],policy:{}};
-    assetAiAdmin = adminAiData || {profiles:[]};
-    legacyAssetAiReference = legacyAiData || {};
+    if(force || !currentUser){
+        const sessionData = await apiJson('/api/auth/me');
+        currentUser = sessionData.user || {};
+    }
+    const shouldLoad = key => force || !loadedDataKeys.has(key);
+    const loadKey = (key, task) => {
+        if(!shouldLoad(key)) return Promise.resolve();
+        return Promise.resolve().then(task).then(() => loadedDataKeys.add(key));
+    };
+    const tasks = [];
+    if(['assets','workflows'].includes(activeTab)){
+        tasks.push(loadKey('asset-library', async () => {
+            const data = await apiJson('/api/asset-library');
+            assetLibrary = data.library || {libraries:[], categories:[]};
+        }));
+    }
+    if(activeTab === 'prompts'){
+        tasks.push(loadKey('prompt-libraries', async () => {
+            const data = await apiJson('/api/prompt-libraries');
+            promptLibrary = data.library || {libraries:[]};
+        }));
+    }
+    if(['assets','workflows','local','admin-ai'].includes(activeTab)){
+        tasks.push(loadKey('providers', async () => {
+            const data = await apiJson('/api/providers').catch(() => ({providers:[]}));
+            apiProviders = Array.isArray(data.providers) ? data.providers : [];
+        }));
+    }
+    if(activeTab === 'canvas-assets'){
+        tasks.push(loadKey('canvas-assets', async () => {
+            const data = await apiJson('/api/canvas-assets').catch(() => ({categories:[], canvases:[], items:[]}));
+            canvasAssetsData = {
+                categories:Array.isArray(data.categories) ? data.categories : [],
+                canvases:Array.isArray(data.canvases) ? data.canvases : [],
+                items:Array.isArray(data.items) ? data.items : []
+            };
+        }));
+    }
+    if(activeTab === 'urls'){
+        tasks.push(loadKey('url-library', async () => {
+            const data = await apiJson('/api/asset-url-library').catch(() => ({library:{items:[]}}));
+            urlLibrary = data.library || {items:[]};
+        }));
+    }
+    if(activeTab === 'trash'){
+        tasks.push(loadKey('asset-trash', async () => {
+            const data = await apiJson('/api/asset-library/trash').catch(() => ({items:[]}));
+            assetTrash = Array.isArray(data.items) ? data.items : [];
+        }));
+    }
+    if(activeTab === 'tasks'){
+        tasks.push(loadKey('asset-ai-tasks', async () => {
+            const data = await apiJson('/api/asset-ai/tasks').catch(() => ({tasks:[]}));
+            assetAiTasks = Array.isArray(data.tasks) ? data.tasks : [];
+        }));
+    }
+    if(activeTab === 'admin-ai'){
+        tasks.push(loadKey('asset-storage', async () => {
+            assetStorage = await apiJson('/api/asset-library/storage').catch(() => ({owners:[],policy:{}}));
+        }));
+        if(currentUser.role === 'admin'){
+            tasks.push(loadKey('asset-ai-admin', async () => {
+                assetAiAdmin = await apiJson('/api/admin/asset-ai/settings').catch(() => ({profiles:[]}));
+            }));
+            tasks.push(loadKey('legacy-asset-ai', async () => {
+                legacyAssetAiReference = await apiJson('/api/asset-classification-prompt').catch(() => ({}));
+            }));
+        }
+    }
+    if(activeTab === 'local'){
+        tasks.push(loadKey('shared-folders', loadSharedFolders));
+        tasks.push(loadKey('local-assets', loadLocalAssets));
+    }
+    await Promise.all(tasks);
     selectedAiProfileId = selectedAiProfileId || assetAiAdmin.profiles?.[0]?.id || '';
     document.getElementById('assetTabAdmin').hidden = currentUser.role !== 'admin';
     if(storageSettingsBtn) storageSettingsBtn.hidden = true;
-    canvasAssetsData = {
-        categories:Array.isArray(canvasAssetData.categories) ? canvasAssetData.categories : [],
-        canvases:Array.isArray(canvasAssetData.canvases) ? canvasAssetData.canvases : [],
-        items:Array.isArray(canvasAssetData.items) ? canvasAssetData.items : []
-    };
-    // 刷新时默认回到「默认资产库」
+    // 当前标签首次加载或刷新时补齐默认选中项，不触碰尚未请求的其他标签数据。
     const libs = assetLibraries();
-    activeAssetLibraryId = (libs.find(lib => lib.scope === 'mine') || libs[0])?.id || '';
-    activeWorkflowLibraryId = (libs.find(lib => lib.scope === 'mine') || libs[0])?.id || '';
-    activeAssetCategoryId = '';
-    activeWorkflowCategoryId = '';
-    selectedAssetId = '';
-    selectedWorkflowId = '';
-    selectedAssetIds.clear();
-    selectedWorkflowIds.clear();
-    selectedPromptIds.clear();
-    selectedCanvasAssetIds.clear();
+    if(['assets','workflows'].includes(activeTab)){
+        activeAssetLibraryId = activeAssetLibraryId || (libs.find(lib => lib.scope === 'mine') || libs[0])?.id || '';
+        activeWorkflowLibraryId = activeWorkflowLibraryId || (libs.find(lib => lib.scope === 'mine') || libs[0])?.id || '';
+    }
+    if(force){
+        if(activeTab === 'assets'){ activeAssetCategoryId = ''; selectedAssetId = ''; selectedAssetIds.clear(); }
+        if(activeTab === 'workflows'){ activeWorkflowCategoryId = ''; selectedWorkflowId = ''; selectedWorkflowIds.clear(); }
+        if(activeTab === 'prompts') selectedPromptIds.clear();
+        if(activeTab === 'canvas-assets') selectedCanvasAssetIds.clear();
+    }
     render();
     setStatus('准备就绪');
 }
@@ -4914,7 +4960,10 @@ document.addEventListener('click', event => {
     if(event.target.closest?.('.asset-lightbox') && !event.target.closest?.('.asset-lightbox-image,.asset-lightbox-video')) closeDetailPreview();
 });
 document.addEventListener('keydown', event => {
-    if(event.key === 'Escape') closeDetailPreview();
+    if(event.key === 'Escape'){
+        closeDetailPreview();
+        if(storageSettingsState.open) closeStorageSettings();
+    }
     if(event.target?.id === 'assetTreeEditInput'){
         if(event.key === 'Enter'){ event.preventDefault(); saveAssetTreeEdit().catch(err => setStatus(err.message || '保存失败')); }
         if(event.key === 'Escape'){ event.preventDefault(); assetTreeEdit = null; render(); }
@@ -5083,7 +5132,7 @@ uploadInput?.addEventListener('change', event => {
     event.target.value = '';
 });
 document.querySelectorAll('[data-tab]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
         activeTab = btn.dataset.tab || 'assets';
         selectedAssetIds.clear();
         selectedWorkflowIds.clear();
@@ -5091,7 +5140,7 @@ document.querySelectorAll('[data-tab]').forEach(btn => {
         selectedLocalIds.clear();
         selectedLocalUploadIds.clear();
         selectedCanvasAssetIds.clear();
-        render();
+        await loadAll({force:false}).catch(err => setStatus(err.message || '加载失败'));
     });
 });
 document.querySelectorAll('[data-scope]').forEach(btn => {
@@ -5112,9 +5161,9 @@ document.querySelectorAll('[data-scope]').forEach(btn => {
         render();
     });
 });
-refreshBtn?.addEventListener('click', () => loadAll().catch(err => setStatus(err.message || '加载失败')));
+refreshBtn?.addEventListener('click', () => loadAll({force:true}).catch(err => setStatus(err.message || '加载失败')));
 storageSettingsBtn?.addEventListener('click', () => openStorageSettings().catch(err => setStatus(err.message || '打开偏好设置失败')));
 window.addEventListener('message', event => {
     if(event.data?.type === 'studio-theme') window.StudioTheme?.apply?.(event.data.theme);
 });
-document.addEventListener('DOMContentLoaded', () => loadAll().catch(err => setStatus(err.message || '加载失败')));
+document.addEventListener('DOMContentLoaded', () => loadAll({force:false}).catch(err => setStatus(err.message || '加载失败')));

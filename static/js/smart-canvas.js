@@ -483,6 +483,51 @@ async function copyTextToClipboard(text){
     } catch(_) {}
     return false;
 }
+function smartTextCopyButtonHtml(target, extraClass=''){
+    const label = escapeHtml(tr('smart.copyText'));
+    return `<button class="smart-text-copy-btn ${escapeHtml(extraClass)}" type="button" data-copy-text-target="${escapeHtml(target)}" title="${label}" aria-label="${label}"><i data-lucide="copy"></i></button>`;
+}
+function smartTextCopyTarget(button){
+    const selector = button?.dataset?.copyTextTarget || '';
+    if(!selector) return null;
+    if(selector.startsWith('#')) return document.querySelector(selector);
+    return button.closest('.image-node, .prompt-row')?.querySelector(selector) || null;
+}
+function smartTextCopyValue(target){
+    if(!target) return '';
+    if(target === promptInput) return promptPlainText();
+    if(target.classList?.contains('loop-smart-text')) return smartLoopEditorText(target);
+    if(target.matches?.('input, textarea')) return target.value || '';
+    return target.innerText || target.textContent || '';
+}
+function setSmartTextCopyButtonState(button, copied){
+    clearTimeout(button._copyResetTimer);
+    const label = tr(copied ? 'smart.copied' : 'smart.copyText');
+    button.classList.toggle('is-copied', copied);
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.innerHTML = `<i data-lucide="${copied ? 'check' : 'copy'}"></i>`;
+    refreshIcons();
+    if(copied){
+        button._copyResetTimer = setTimeout(() => setSmartTextCopyButtonState(button, false), 1400);
+    }
+}
+async function handleSmartTextCopy(button){
+    const value = smartTextCopyValue(smartTextCopyTarget(button));
+    if(!value.trim()){
+        toast(tr('smart.copyEmpty'));
+        return;
+    }
+    if(await copyTextToClipboard(value)) setSmartTextCopyButtonState(button, true);
+    else toast(tr('smart.copyFailed'));
+}
+document.addEventListener('click', event => {
+    const button = event.target.closest?.('[data-copy-text-target]');
+    if(!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    handleSmartTextCopy(button);
+}, true);
 function refreshIcons(){ if(window.lucide) lucide.createIcons(); }
 function uid(prefix){ return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-4)}`; }
 function escapeHtml(str){ return String(str == null ? '' : str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s])); }
@@ -513,7 +558,9 @@ function smartMediaPreviewUrl(itemOrUrl, size=512){
 function smartPreviewImgHtml(itemOrUrl, size=512, attrs=''){
     const original = smartOriginalMediaUrl(itemOrUrl);
     const preview = smartMediaPreviewUrl(itemOrUrl, size);
-    return `<img src="${escapeHtml(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}"${attrs ? ` ${attrs}` : ''}>`;
+    const loadingAttr = /\bloading\s*=/.test(attrs) ? '' : ' loading="lazy"';
+    const decodingAttr = /\bdecoding\s*=/.test(attrs) ? '' : ' decoding="async"';
+    return `<img src="${escapeHtml(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}"${loadingAttr}${decodingAttr}${attrs ? ` ${attrs}` : ''}>`;
 }
 function loadSmartOriginalImageDimensions(url){
     const src = displayMediaUrl({url:smartOriginalMediaUrl(url)});
@@ -596,34 +643,7 @@ function bindSmartPreviewImageFallbacks(root=document){
         });
     });
 }
-const SMART_SELECTED_HIGH_RES_DELAY = 320;
-const SMART_HIGH_RES_ZOOM_THRESHOLD = 0.86;
-let smartSelectedHighResTimer = 0;
-let smartSelectedHighResSeq = 0;
-let smartSelectedHighResNodeIds = new Set();
 let smartImageResolutionSyncTimer = 0;
-const smartSelectedHighResLoaded = new Set();
-const smartSelectedHighResLoading = new Map();
-function smartImageEditorIsOpen(){
-    return Boolean(imageEditModal?.classList?.contains('open'));
-}
-function preloadSmartSelectedHighRes(src){
-    if(!src || smartSelectedHighResLoaded.has(src)) return Promise.resolve(true);
-    if(smartSelectedHighResLoading.has(src)) return smartSelectedHighResLoading.get(src);
-    const task = new Promise(resolve => {
-        const img = new Image();
-        img.decoding = 'async';
-        img.onload = async () => {
-            try { if(img.decode) await img.decode(); } catch(e) {}
-            smartSelectedHighResLoaded.add(src);
-            resolve(true);
-        };
-        img.onerror = () => resolve(false);
-        img.src = src;
-    }).finally(() => smartSelectedHighResLoading.delete(src));
-    smartSelectedHighResLoading.set(src, task);
-    return task;
-}
 function smartNodeElementsByIds(ids){
     const wanted = ids instanceof Set ? ids : new Set(ids || []);
     const elements = [];
@@ -638,57 +658,17 @@ function smartNodeElementsForHighResSync(root){
     if(root && root !== world) return [root];
     return [world];
 }
-function smartViewportWantsHighRes(){
-    return Number(viewport?.scale || 1) >= SMART_HIGH_RES_ZOOM_THRESHOLD;
-}
-function smartImageNearViewport(img){
-    if(!img?.isConnected || !shell) return false;
-    const shellRect = shell.getBoundingClientRect();
-    const rect = img.getBoundingClientRect();
-    const margin = 220;
-    return rect.right >= shellRect.left - margin
-        && rect.left <= shellRect.right + margin
-        && rect.bottom >= shellRect.top - margin
-        && rect.top <= shellRect.bottom + margin;
-}
 function syncSmartSelectedImageResolution(root=null){
-    const selectedImages = [];
-    const wantHighRes = smartViewportWantsHighRes();
+    // 画布只使用尺寸受控的预览图。原图仅在预览器、编辑器和下载流程中按需加载，
+    // 避免高缩放时把视口附近的全部 4K/5K 图片解码进浏览器内存。
     smartNodeElementsForHighResSync(root).forEach(scope => {
         scope.querySelectorAll?.('img[data-preview-src][data-original-src]').forEach(img => {
             if(img.dataset.previewKind === 'video') return;
             const preview = img.dataset.previewSrc || '';
-            const original = img.dataset.originalSrc || '';
-            if(!wantHighRes || !smartImageNearViewport(img)){
-                delete img.dataset.selectedHighResTarget;
-                if(preview && img.getAttribute('src') !== preview) img.src = preview;
-                return;
-            }
-            const target = displayMediaUrl({url:smartOriginalMediaUrl(original)});
-            if(!target) return;
-            img.dataset.selectedHighResTarget = target;
-            if(smartSelectedHighResLoaded.has(target)){
-                if(img.getAttribute('src') !== target) img.src = target;
-                return;
-            }
+            delete img.dataset.selectedHighResTarget;
             if(preview && img.getAttribute('src') !== preview) img.src = preview;
-            selectedImages.push({img, target});
         });
     });
-    if(smartSelectedHighResTimer) clearTimeout(smartSelectedHighResTimer);
-    const seq = ++smartSelectedHighResSeq;
-    if(!selectedImages.length || smartImageEditorIsOpen()) return;
-    smartSelectedHighResTimer = setTimeout(async () => {
-        smartSelectedHighResTimer = 0;
-        if(seq !== smartSelectedHighResSeq || smartImageEditorIsOpen()) return;
-        await Promise.all(selectedImages.map(item => preloadSmartSelectedHighRes(item.target)));
-        if(seq !== smartSelectedHighResSeq || smartImageEditorIsOpen()) return;
-        selectedImages.forEach(({img, target}) => {
-            if(!img.isConnected || img.dataset.selectedHighResTarget !== target) return;
-            if(!smartViewportWantsHighRes() || !smartImageNearViewport(img)) return;
-            if(smartSelectedHighResLoaded.has(target) && img.getAttribute('src') !== target) img.src = target;
-        });
-    }, SMART_SELECTED_HIGH_RES_DELAY);
 }
 function scheduleSmartImageResolutionSync(root=world, delay=120){
     if(smartImageResolutionSyncTimer) clearTimeout(smartImageResolutionSyncTimer);
@@ -7936,25 +7916,30 @@ function scheduleConnectionLayerRefresh(){
     connectionLayerRaf = requestAnimationFrame(refreshConnectionLayer);
 }
 let interactionLayerRaf = 0;
+let interactionLayerLastRefreshAt = 0;
 // 拖动/缩放节点时，每个 mousemove 都全量重建连线 SVG + 小地图会掉帧；
 // 用 requestAnimationFrame 把它们合并成每帧最多刷新一次（节点本身的位移仍是即时的）。
 function scheduleInteractionLayerRefresh(){
     if(interactionLayerRaf) return;
     interactionLayerRaf = requestAnimationFrame(() => {
         interactionLayerRaf = 0;
+        const now = performance.now();
+        if(now - interactionLayerLastRefreshAt < 30) return;
+        interactionLayerLastRefreshAt = now;
         refreshConnectionLayer();
-        renderMinimap();
     });
 }
 function moveNodeElementsDuringDrag(){
     if(!dragState) return;
-    const groupItems = dragState.group || [{id:dragState.id}];
+    const groupItems = dragState.group || [{id:dragState.id, ox:dragState.ox, oy:dragState.oy}];
     groupItems.map(item => item.id).forEach(id => {
         const n = nodes.find(x => x.id === id);
+        const origin = groupItems.find(item => item.id === id);
         const el = world.querySelector(`.image-node[data-id="${CSS.escape(id)}"]`);
-        if(n && el){
-            el.style.left = `${n.x || 0}px`;
-            el.style.top = `${n.y || 0}px`;
+        if(n && origin && el){
+            const dx = (Number(n.x) || 0) - (Number(origin.ox) || 0);
+            const dy = (Number(n.y) || 0) - (Number(origin.oy) || 0);
+            el.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
         }
     });
     const active = selectedNode();
@@ -7962,6 +7947,17 @@ function moveNodeElementsDuringDrag(){
         positionComposerForNode(active);
     }
     scheduleInteractionLayerRefresh();
+}
+function commitDraggedNodeElementPositions(){
+    if(!dragState) return;
+    (dragState.group || [{id:dragState.id}]).forEach(item => {
+        const node = nodes.find(candidate => candidate.id === item.id);
+        const el = world.querySelector(`.image-node[data-id="${CSS.escape(item.id)}"]`);
+        if(!node || !el) return;
+        el.style.left = `${Number(node.x) || 0}px`;
+        el.style.top = `${Number(node.y) || 0}px`;
+        el.style.transform = '';
+    });
 }
 function updateNodeElementDuringResize(node){
     if(!node) return;
@@ -8779,6 +8775,7 @@ function promptNodeBodyHtml(node){
             ${llmConfigured ? '' : `<div class="muted-note">${escapeHtml(tr('smart.promptLlmNoneHint'))}</div>`}
             <div class="prompt-llm-instruction-wrap">
                 <textarea class="prompt-node-control prompt-llm-instruction" placeholder="${escapeHtml(tr('smart.promptLlmInstructionPlaceholder'))}" style="height:${promptLlmInstructionHeight(node)}px">${escapeHtml(node.llmInstruction || '')}</textarea>
+                ${smartTextCopyButtonHtml('.prompt-llm-instruction', 'prompt-node-control')}
                 <div class="prompt-llm-instruction-resize prompt-node-control" data-llm-instruction-resize="1" title="拖动调整高度"><span></span></div>
             </div>
             ${upstreamPromptHtml}
@@ -8786,10 +8783,10 @@ function promptNodeBodyHtml(node){
                 <button class="prompt-node-run prompt-node-control" type="button" ${node.running || !llmConfigured ? 'disabled' : ''}><i data-lucide="${node.running ? 'loader-2' : 'play'}"></i><span>${node.running ? escapeHtml(tr('common.running')) : escapeHtml(tr('common.run'))}</span></button>
                 <button class="prompt-node-pill prompt-node-control prompt-system-toggle ${node.llmSystemEnabled ? 'active' : ''}" type="button"><i data-lucide="${node.llmSystemEnabled ? 'toggle-right' : 'toggle-left'}"></i><span>${escapeHtml(node.llmSystemEnabled ? tr('smart.promptLlmDisableSystem') : tr('smart.promptLlmEnableSystem'))}</span></button>
             </div>
-            ${node.llmSystemEnabled ? `<textarea class="prompt-node-control prompt-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(systemPrompt || 'You are a helpful prompt assistant.')}</textarea>` : ''}
+            ${node.llmSystemEnabled ? `<div class="prompt-llm-system-wrap"><textarea class="prompt-node-control prompt-llm-system" placeholder="${escapeHtml(tr('smart.promptLlmSystemPlaceholder'))}">${escapeHtml(systemPrompt || 'You are a helpful prompt assistant.')}</textarea>${smartTextCopyButtonHtml('.prompt-llm-system', 'prompt-node-control')}</div>` : ''}
         </div>` : '';
     return `<div class="prompt-node-card">
-        <textarea class="prompt-node-text prompt-node-control" ${readonly} placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>
+        <div class="prompt-node-text-wrap"><textarea class="prompt-node-text prompt-node-control" ${readonly} placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>${smartTextCopyButtonHtml('.prompt-node-text', 'prompt-node-control')}</div>
         <div class="prompt-node-tools">
             <button class="prompt-node-pill prompt-node-control prompt-preset-edit ${templateActive ? 'active' : ''}" type="button"><i data-lucide="library"></i><span>模板库</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
@@ -8925,6 +8922,7 @@ function smartLoopBodyHtml(node){
                     return `<div class="loop-smart-prompt-item">
                     <div class="loop-smart-prompt-index">${index + 1}</div>
                     <div class="loop-smart-control loop-smart-text" contenteditable="true" data-loop-prompt-index="${index}" data-placeholder="${escapeHtml(tr('canvas.loopVariablePlaceholder'))}">${smartLoopVariableHtml(displayValue || (index === 0 && !promptFields.length && !promptItems.length ? defaultPrompt : ''))}</div>
+                    ${smartTextCopyButtonHtml(`.loop-smart-text[data-loop-prompt-index="${index}"]`, 'loop-smart-control loop-smart-copy-btn')}
                     <button class="loop-smart-control loop-smart-icon-btn" type="button" data-loop-prompt-delete="${index}" ${visiblePromptFields.length <= 1 ? 'disabled' : ''} title="${escapeHtml(tr('common.delete'))}" aria-label="${escapeHtml(tr('common.delete'))}">×</button>
                 </div>`;
                 }).join('')}
@@ -9014,7 +9012,12 @@ function nodeBodyHtml(node, layout){
         const isAppending = Boolean(node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length);
         const stack = Math.min(3, Math.max(0, imgs.length - 1));
         const mediaHeight = Number(layout.mediaHeight) || layout.height;
-        const thumbHtml = imgs.map((img, index) => `<button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img)}</button>`).join('');
+        const thumbStart = Math.max(0, Math.min(activeIndex - 4, imgs.length - 9));
+        const thumbEnd = Math.min(imgs.length, thumbStart + 9);
+        const thumbHtml = imgs.slice(thumbStart, thumbEnd).map((img, offset) => {
+            const index = thumbStart + offset;
+            return `<button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img)}</button>`;
+        }).join('');
         return `<div class="generation-result-card" data-generation-results="1">
             <div class="generation-result-stack" style="--result-stack:${stack}">
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer layer-${index + 1}"></span>`).join('')}
@@ -9572,7 +9575,7 @@ function canvasOrganizerHtml(node){
     const color = organizerColor(node);
     if(isSmartNoteNode(node)){
         return `<div class="image-node smart-note-node ${isNodeSelected(node.id) ? 'selected' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${node.w || 240}px;height:${node.h || 180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px">
-            <div class="smart-note-toolbar">${organizerColorButtons(node)}<button class="organizer-edit node-delete" type="button" title="删除便签"><i data-lucide="trash-2"></i></button></div>
+            <div class="smart-note-toolbar">${organizerColorButtons(node)}${smartTextCopyButtonHtml('.smart-note-text')}<button class="organizer-edit node-delete" type="button" title="删除便签"><i data-lucide="trash-2"></i></button></div>
             <textarea class="smart-note-text" aria-label="便签内容">${escapeHtml(node.text || '')}</textarea><div class="node-resize-handle" data-resize="1"></div></div>`;
     }
     delete node.titleFontSize;
@@ -9580,7 +9583,7 @@ function canvasOrganizerHtml(node){
     const organizerTitleChars = Math.max(8, Math.min(64, Array.from(organizerTitle).length));
     return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id) ? 'selected' : ''}" data-id="${escapeHtml(node.id)}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${node.w || 520}px;height:${node.h || 320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}">
         <div class="workflow-organizer-head">
-        <div class="organizer-title-control" style="--organizer-title-ch:${organizerTitleChars}"><input class="workflow-organizer-title" value="${escapeAttr(organizerTitle)}" title="${escapeAttr(organizerTitle)}" aria-label="分组名称"></div>
+        <div class="organizer-title-control" style="--organizer-title-ch:${organizerTitleChars}"><input class="workflow-organizer-title" value="${escapeAttr(organizerTitle)}" title="${escapeAttr(organizerTitle)}" aria-label="分组名称">${smartTextCopyButtonHtml('.workflow-organizer-title')}</div>
         <div class="organizer-color-row">${organizerColorButtons(node)}</div><button class="organizer-edit node-delete" type="button" title="删除分组"><i data-lucide="trash-2"></i></button></div>
         <div class="node-resize-handle" data-resize="1"></div></div>`;
 }
@@ -18500,13 +18503,22 @@ function openCreateMenu(event, options={}){
     if(!createMenu) return;
     createMenuPoint = screenToWorld(event);
     createMenuGroupId = options.groupId || '';
-    const w = 500;
-    const h = 230;
-    const left = Math.max(14, Math.min(window.innerWidth - w - 14, event.clientX + 8));
-    const top = Math.max(14, Math.min(window.innerHeight - h - 14, event.clientY + 8));
-    createMenu.style.left = `${left}px`;
-    createMenu.style.top = `${top}px`;
+    const viewport = window.visualViewport;
+    const viewportWidth = viewport?.width || window.innerWidth;
+    const viewportHeight = viewport?.height || window.innerHeight;
+    const viewportLeft = viewport?.offsetLeft || 0;
+    const viewportTop = viewport?.offsetTop || 0;
+    const gap = 12;
+    createMenu.style.left = `${viewportLeft + gap}px`;
+    createMenu.style.top = `${viewportTop + gap}px`;
     createMenu.classList.add('open');
+    const rect = createMenu.getBoundingClientRect();
+    const preferredLeft = event.clientX + 8;
+    const preferredTop = event.clientY + 8;
+    const left = Math.max(viewportLeft + gap, Math.min(viewportLeft + viewportWidth - rect.width - gap, preferredLeft));
+    const top = Math.max(viewportTop + gap, Math.min(viewportTop + viewportHeight - rect.height - gap, preferredTop));
+    createMenu.style.left = `${Math.round(left)}px`;
+    createMenu.style.top = `${Math.round(top)}px`;
     refreshIcons();
 }
 function addCreatedNodeToMenuGroup(node){
@@ -18933,8 +18945,7 @@ window.onmousemove = e => {
     const target = isSmartGroupNode(rawTarget) ? null : rawTarget;
     setDropHighlight(target?.id || '');
     moveNodeElementsDuringDrag();
-    positionImageActionToolbar();
-    updateLoopInsertPreview();
+    if(dragState.ctrlGroup && node.type === 'smart-loop') updateLoopInsertPreview();
     if(target) setDropHighlight(target.id);
 };
 window.onmouseup = e => {
@@ -19018,6 +19029,7 @@ window.onmouseup = e => {
         smartMinimapDrag = false;
     }
     if(dragState){
+        commitDraggedNodeElementPositions();
         const draggedNode = nodes.find(n => n.id === dragState.id);
         let stateChanged = false;
         const hit = document.elementFromPoint(e.clientX, e.clientY);
@@ -19127,6 +19139,8 @@ window.onmouseup = e => {
         if(active) positionComposerForNode(active);
         scheduleSave();
         scheduleConnectionLayerRefresh();
+        renderMinimap();
+        requestAnimationFrame(() => positionImageActionToolbar());
     }
 };
 shell.addEventListener('wheel', e => {
@@ -19164,6 +19178,8 @@ shell.ondrop = async e => {
     await handleSmartImageDropPayload(payload, '', {point:p, forceNew:true});
 };
 window.addEventListener('paste', e => {
+    // 输入框、可编辑区域或提示词框内只保留原生粘贴行为，不要把图片/节点当成画布粘贴。
+    if(isEditableTarget(e.target)) return;
     const files = [...(e.clipboardData?.files || [])].filter(isSupportedUploadFile);
     if(files.length){
         lastImagePasteAt = Date.now();
@@ -19171,17 +19187,17 @@ window.addEventListener('paste', e => {
         return;
     }
     const nodeClipboardText = e.clipboardData?.getData('text/plain') || '';
-    if(!isEditableTarget(e.target) && acceptSmartNodeClipboardText(nodeClipboardText)){
+    if(acceptSmartNodeClipboardText(nodeClipboardText)){
         e.preventDefault();
         pasteNodes();
         return;
     }
     // 素材库管理页「复制到画布」过来的素材：Ctrl+V 批量粘贴成图片节点
-    if(!isEditableTarget(e.target) && pasteAssetsFromInbox()){
+    if(pasteAssetsFromInbox()){
         e.preventDefault();
         return;
     }
-    if(readSmartNodeClipboard()?.nodes?.length && !isEditableTarget(e.target)){
+    if(readSmartNodeClipboard()?.nodes?.length){
         e.preventDefault();
         pasteNodes();
     }
@@ -19776,6 +19792,14 @@ promptInput.addEventListener('mouseup', saveMentionRange);
 promptInput.addEventListener('focus', saveMentionRange);
 promptInput.addEventListener('keydown', event => {
     if(event.key === 'Escape') closeMentionPicker();
+});
+promptInput.addEventListener('paste', event => {
+    // 文本框只接受纯文本，阻止图片/文件粘贴进 contenteditable 提示词框
+    const hasFiles = [...(event.clipboardData?.items || [])].some(item => item.kind === 'file');
+    if(hasFiles){
+        event.preventDefault();
+        event.stopPropagation();
+    }
 });
 promptInput.addEventListener('mouseover', event => {
     const token = event.target.closest?.('.mention-image-token');

@@ -7,8 +7,11 @@
     const panelTitle = document.getElementById('panelTitle');
     const accountCard = document.getElementById('accountCard');
     const themeAction = document.getElementById('themeAction');
-    const themeActionLabel = document.getElementById('themeActionLabel');
-    const languageActionLabel = document.getElementById('languageActionLabel');
+    const themeCurrentMode = document.getElementById('themeCurrentMode');
+    const themeOtherMode = document.getElementById('themeOtherMode');
+    const languageAction = document.getElementById('languageAction');
+    const languageCurrentMode = document.getElementById('languageCurrentMode');
+    const languageOtherMode = document.getElementById('languageOtherMode');
     let currentUser = null;
 
     function initials(user){
@@ -18,6 +21,7 @@
     function setOpen(element, open){ element?.classList.toggle('open', Boolean(open)); }
     function closeFloating(){
         setOpen(popover, false); setOpen(backdrop, false); setOpen(accountCard, false);
+        backdrop?.classList.remove('modal');
     }
     function toggleSettings(){
         const open = !popover.classList.contains('open');
@@ -64,6 +68,7 @@
         document.getElementById('accountDepartment').textContent = user.department || '—';
         document.getElementById('accountRole').textContent = user.role === 'admin' ? '管理员' : '普通用户';
         document.getElementById('accountProfile').textContent = user.api_profile_name || '默认配置';
+        backdrop?.classList.add('modal');
         setOpen(accountCard, true); setOpen(backdrop, true);
     }
     async function loadSession(){
@@ -104,14 +109,27 @@
     }
     function updatePreferenceLabels(theme){
         const english = currentLanguage().startsWith('en');
-        const nextIsLight = theme === 'dark';
+        const dark = theme === 'dark';
+        const currentMode = english ? (dark ? 'Dark' : 'Light') : (dark ? '深色' : '浅色');
+        const otherMode = english ? (dark ? 'Light' : 'Dark') : (dark ? '浅色' : '深色');
         const themeLabel = english
-            ? (nextIsLight ? 'Light mode' : 'Dark mode')
-            : (nextIsLight ? '浅色模式' : '深色模式');
-        themeActionLabel.textContent = themeLabel;
+            ? `Current mode: ${currentMode}. Switch to ${otherMode} mode`
+            : `当前为${currentMode}模式，点击切换为${otherMode}模式`;
+        themeCurrentMode.textContent = currentMode;
+        themeOtherMode.textContent = otherMode;
         themeAction.setAttribute('aria-label', themeLabel);
+        themeAction.setAttribute('aria-pressed', String(dark));
         themeAction.title = themeLabel;
-        languageActionLabel.textContent = english ? '中文' : 'English';
+        const currentLanguageLabel = english ? 'English' : '中文';
+        const otherLanguageLabel = english ? '中文' : 'English';
+        const languageLabel = english
+            ? 'Current language: English. Switch to Chinese'
+            : '当前语言为中文，点击切换为英文';
+        languageCurrentMode.textContent = currentLanguageLabel;
+        languageOtherMode.textContent = otherLanguageLabel;
+        languageAction.setAttribute('aria-label', languageLabel);
+        languageAction.setAttribute('aria-pressed', String(english));
+        languageAction.title = languageLabel;
     }
     function applyTheme(theme, persist=false){
         const next = theme === 'dark' ? 'dark' : 'light';
@@ -137,7 +155,11 @@
     function toggleLanguage(){
         const current = currentLanguage();
         const next = current.startsWith('zh') ? 'en' : 'zh';
-        window.StudioI18n?.set?.(next);
+        if(window.StudioI18n?.set) window.StudioI18n.set(next);
+        else {
+            try { localStorage.setItem('studio_lang', next); } catch(e){}
+            document.documentElement.setAttribute('lang', next === 'en' ? 'en' : 'zh-CN');
+        }
         updatePreferenceLabels(document.documentElement.classList.contains('theme-dark') ? 'dark' : 'light');
         notifyFrames('studio-lang',{lang:next});
     }

@@ -6,7 +6,7 @@
     <title>Infinite Canvas</title>
     <link rel="icon" href="/static/images/logo.png" type="image/png">
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1784512371">
-    <link rel="stylesheet" href="/static/css/studio-shell.css?v=2026.07.29.1785894161">
+    <link rel="stylesheet" href="/static/css/studio-shell.css?v=2026.07.29.1785988048">
     <script>
         try {
             if((localStorage.getItem('studio_theme') || 'dark') === 'dark') document.documentElement.classList.add('theme-dark','studio-theme-dark');
@@ -18,10 +18,10 @@
 </head>
 <body>
     <main id="studioShell" class="studio-shell">
-        <iframe id="workbenchFrame" class="studio-workbench" src="/static/canvas-list.html?v=2026.07.29.1785894734" title="项目工作台"></iframe>
+        <iframe id="workbenchFrame" class="studio-workbench" src="/static/canvas-list.html?v=2026.07.29.1785949281" title="项目工作台"></iframe>
 
         <div id="settingsBackdrop" class="studio-popover-backdrop"></div>
-        <section id="settingsPopover" class="studio-settings-popover" aria-label="设置中心">
+        <section id="settingsPopover" class="studio-settings-popover" role="dialog" aria-label="设置中心">
             <header>
                 <div>
                     <strong id="settingsUserName">Infinite Canvas</strong>
@@ -35,11 +35,22 @@
                 <button id="apiSettingsEntry" data-action="api-settings" hidden><i data-lucide="link-2"></i><span>模型与 API</span></button>
                 <button id="adminEntry" data-action="admin" hidden><i data-lucide="shield-check"></i><span>系统管理</span></button>
                 <button id="themeAction" data-action="theme">
-                    <i class="studio-theme-icon studio-theme-icon-moon" data-lucide="moon"></i>
-                    <i class="studio-theme-icon studio-theme-icon-sun" data-lucide="sun"></i>
-                    <span id="themeActionLabel">浅色模式</span>
+                    <i class="studio-theme-icon studio-theme-icon-moon" data-lucide="moon" aria-hidden="true"></i>
+                    <i class="studio-theme-icon studio-theme-icon-sun" data-lucide="sun" aria-hidden="true"></i>
+                    <span id="themeActionLabel" class="studio-preference-pair">
+                        <span id="themeCurrentMode" class="is-active">深色</span>
+                        <span class="studio-preference-separator" aria-hidden="true">/</span>
+                        <span id="themeOtherMode">浅色</span>
+                    </span>
                 </button>
-                <button data-action="language"><i data-lucide="languages"></i><span id="languageActionLabel">English</span></button>
+                <button id="languageAction" data-action="language">
+                    <i data-lucide="languages"></i>
+                    <span class="studio-preference-pair">
+                        <span id="languageCurrentMode" class="is-active">中文</span>
+                        <span class="studio-preference-separator" aria-hidden="true">/</span>
+                        <span id="languageOtherMode">English</span>
+                    </span>
+                </button>
                 <button data-action="announcement"><i data-lucide="megaphone"></i><span>系统公告</span></button>
                 <button data-action="github"><i data-lucide="github"></i><span>GitHub 仓库</span></button>
             </div>
@@ -50,7 +61,7 @@
             <button class="studio-logout" data-action="logout"><i data-lucide="log-out"></i><span>退出登录</span></button>
         </section>
 
-        <section id="accountCard" class="studio-account-card" aria-label="账户信息">
+        <section id="accountCard" class="studio-account-card" role="dialog" aria-modal="true" aria-label="账户信息">
             <button id="accountClose" type="button" aria-label="关闭"><i data-lucide="x"></i></button>
             <div id="accountAvatar" class="studio-avatar large">IC</div>
             <h2 id="accountName">用户</h2>
@@ -71,6 +82,6 @@
             <iframe id="panelFrame" title="设置面板"></iframe>
         </section>
     </main>
-    <script src="/static/js/studio-shell.js?v=2026.07.29.1785903097"></script>
+    <script src="/static/js/studio-shell.js?v=2026.07.29.1785988047"></script>
 </body>
 </html>

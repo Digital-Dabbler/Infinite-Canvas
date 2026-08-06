@@ -6049,3 +6049,71 @@ html.studio-theme-dark body .recommend-tag.recommend-free-tag svg {
         display:none !important;
     }
 }
+
+/* ===== Infinite Canvas UI system: responsive safety and consistent interaction ===== */
+:root {
+    --studio-brand:#168a55;
+    --studio-focus:#168a55;
+    --studio-radius-sm:8px;
+    --studio-radius-md:12px;
+    --studio-radius-lg:16px;
+}
+body.studio-theme-dark,
+html.studio-theme-dark body {
+    --studio-brand:#65f3a4;
+    --studio-focus:#65f3a4;
+}
+
+body { overflow-x:hidden; }
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+    outline:2px solid var(--studio-focus);
+    outline-offset:2px;
+}
+.picker-overlay,
+.rh-workflow-editor-overlay { overscroll-behavior:contain; }
+.picker-modal,
+.rh-node-popover { max-width:calc(100vw - 24px); }
+.content-actions,
+.models-toolbar-actions,
+.block-actions,
+.key-actions { flex-wrap:wrap; }
+
+@media (max-width:860px) {
+    .page { padding:20px 14px 52px; }
+    .page-head { align-items:flex-start; gap:12px; padding-bottom:18px; }
+    .page-head .title { font-size:24px; }
+    .api-profile-bar { margin:0 0 18px; align-items:stretch; flex-direction:column; gap:10px; }
+    .api-profile-bar select { width:100%; min-width:0; min-height:44px; }
+    .layout { gap:16px; }
+    .sidebar { max-height:none; padding:12px; }
+    .content { gap:14px; }
+    .content-head,.block { padding:16px; border-radius:var(--studio-radius-lg); }
+    .content-head { align-items:flex-start; }
+    .content-actions { width:100%; }
+    .content-actions > * { min-height:40px; }
+    .provider-card,.local-service-btn,.cli-quick-btn { min-height:44px; }
+}
+
+@media (max-width:520px) {
+    .page { padding:14px 10px 44px; }
+    .page-head .title { font-size:22px; }
+    .content-head,.block { padding:14px 12px; border-radius:14px; }
+    .content-head .editor-title { font-size:18px; }
+    .form,.recommend-group,.recommend-actions,.onboarding-actions,.onboarding-ms-flow,.onboarding-key-entry:has(.onboarding-key-field + .onboarding-key-field) { grid-template-columns:1fr !important; }
+    .recommend-flow-arrow,.onboarding-flow-arrow { display:none !important; }
+    .action-btn,.save-btn,.ghost-btn,.danger-btn { min-height:42px; }
+    .rh-node-popover { left:12px !important; right:12px !important; width:auto !important; max-height:calc(100dvh - 24px); }
+}
+
+@media (prefers-reduced-motion:reduce) {
+    *,*::before,*::after {
+        scroll-behavior:auto !important;
+        animation-duration:.01ms !important;
+        animation-iteration-count:1 !important;
+        transition-duration:.01ms !important;
+    }
+}

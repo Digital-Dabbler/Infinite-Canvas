@@ -324,6 +324,7 @@ API_ENV_FILE = os.path.join(BASE_DIR, "API", ".env")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
+CANVAS_ASSET_INDEX_CACHE_PATH = os.path.join(DATA_DIR, "canvas_asset_index_cache.json")
 MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
@@ -409,6 +410,7 @@ HISTORY_LOCK = Lock()
 GLOBAL_CONFIG_LOCK = Lock()
 CONVERSATION_LOCK = Lock()
 CANVAS_LOCK = RLock()
+CANVAS_ASSET_INDEX_LOCK = RLock()
 ASSET_GOVERNANCE_LOCK = RLock()
 ASSET_AI_TASK_LOCK = RLock()
 LOAD_LOCK = Lock()
@@ -6393,32 +6395,82 @@ def extract_canvas_assets(canvas):
             items.append(item)
     return items
 
+def load_canvas_asset_index_cache():
+    try:
+        with open(CANVAS_ASSET_INDEX_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("version") == 1 and isinstance(data.get("entries"), dict):
+            return data
+    except Exception:
+        pass
+    return {"version": 1, "entries": {}}
+
 def canvas_assets_index():
     canvases = []
     items = []
     canvas_counts = {"all": 0, "smart": 0, "classic": 0}
     item_counts = {"all": 0, "smart": 0, "classic": 0}
     cleanup_expired_canvas_trash()
-    for filename in os.listdir(CANVAS_DIR):
-        if not filename.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(CANVAS_DIR, filename), "r", encoding="utf-8") as f:
-                canvas = json.load(f)
-        except Exception:
-            continue
-        if canvas.get("deleted_at"):
-            continue
-        record = canvas_record(canvas)
-        canvas_items = extract_canvas_assets(canvas)
-        record["asset_count"] = len(canvas_items)
-        canvases.append(record)
-        items.extend(canvas_items)
-        kind = record.get("kind") or "classic"
-        canvas_counts["all"] += 1
-        canvas_counts[kind] = canvas_counts.get(kind, 0) + 1
-        item_counts["all"] += len(canvas_items)
-        item_counts[kind] = item_counts.get(kind, 0) + len(canvas_items)
+    with CANVAS_ASSET_INDEX_LOCK:
+        cache = load_canvas_asset_index_cache()
+        cached_entries = cache.get("entries") or {}
+        next_entries = {}
+        changed = False
+        filenames = sorted(
+            filename for filename in os.listdir(CANVAS_DIR)
+            if filename.endswith(".json")
+        )
+        for filename in filenames:
+            path = os.path.join(CANVAS_DIR, filename)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            signature = {"mtime_ns": int(stat.st_mtime_ns), "size": int(stat.st_size)}
+            entry = cached_entries.get(filename)
+            if not (
+                isinstance(entry, dict)
+                and entry.get("mtime_ns") == signature["mtime_ns"]
+                and entry.get("size") == signature["size"]
+                and isinstance(entry.get("items"), list)
+            ):
+                try:
+                    with CANVAS_LOCK:
+                        with open(path, "r", encoding="utf-8") as f:
+                            canvas = json.load(f)
+                    deleted = bool(canvas.get("deleted_at"))
+                    record = canvas_record(canvas)
+                    canvas_items = [] if deleted else extract_canvas_assets(canvas)
+                    if not deleted:
+                        record["asset_count"] = len(canvas_items)
+                    entry = {
+                        **signature,
+                        "deleted": deleted,
+                        "record": record,
+                        "items": canvas_items,
+                    }
+                    changed = True
+                except Exception:
+                    continue
+            next_entries[filename] = entry
+            if entry.get("deleted"):
+                continue
+            record = entry.get("record") or {}
+            canvas_items = entry.get("items") or []
+            canvases.append(record)
+            items.extend(canvas_items)
+            kind = record.get("kind") or "classic"
+            canvas_counts["all"] += 1
+            canvas_counts[kind] = canvas_counts.get(kind, 0) + 1
+            item_counts["all"] += len(canvas_items)
+            item_counts[kind] = item_counts.get(kind, 0) + len(canvas_items)
+        if set(next_entries) != set(cached_entries):
+            changed = True
+        if changed:
+            _write_json_atomic(
+                CANVAS_ASSET_INDEX_CACHE_PATH,
+                {"version": 1, "entries": next_entries, "updated_at": now_ms()},
+            )
     canvases.sort(key=lambda item: (0 if item.get("pinned") else 1, -int(item.get("updated_at") or item.get("created_at") or 0)))
     items.sort(key=lambda item: int(item.get("canvas_updated_at") or item.get("created_at") or 0), reverse=True)
     categories = [

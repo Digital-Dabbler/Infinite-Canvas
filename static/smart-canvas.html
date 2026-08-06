@@ -20,8 +20,8 @@
     <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1785607755"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785903129">
-    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1785873335">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785987423">
+    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1785945069">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -46,6 +46,9 @@
                         <button id="composerTemplateBtn" class="composer-template-btn" type="button" title="模板库" aria-label="模板库" data-i18n-title="smart.promptTemplateLibrary">
                             <i data-lucide="library"></i><span data-i18n="smart.promptTemplateLibrary">模板库</span>
                         </button>
+                        <button class="smart-text-copy-btn smart-text-copy-composer" type="button" data-copy-text-target="#promptInput" title="复制文本" aria-label="复制文本" data-i18n-title="smart.copyText" data-i18n-label="smart.copyText">
+                            <i data-lucide="copy"></i>
+                        </button>
                         <div id="mentionPicker" class="mention-picker"></div>
                         <div id="promptResize" class="prompt-resize" data-i18n-title="smart.promptResize" title="拖拽调整文本框高度"></div>
                     </div>
@@ -68,9 +71,9 @@
                 <button id="rhCanvasTitle" class="rh-canvas-title" type="button" title="点击重命名">Untitled</button>
             </div>
             <div class="rh-header-right">
-                <button id="rhAnnouncementBtn" class="rh-head-btn" type="button" title="公告"><i data-lucide="megaphone"></i></button>
+                <button id="rhAnnouncementBtn" class="rh-head-btn" type="button" title="公告" aria-label="公告"><i data-lucide="megaphone"></i></button>
                 <button id="rhBalanceBtn" class="rh-balance" type="button"><i data-lucide="wallet-cards"></i><span id="rhBalanceText">余额加载中</span></button>
-                <button id="rhAccountBtn" class="rh-account" type="button"><span id="rhAccountInitial">IC</span></button>
+                <button id="rhAccountBtn" class="rh-account" type="button" aria-label="账户菜单"><span id="rhAccountInitial">IC</span></button>
             </div>
         </header>
         <nav class="rh-tool-rail" aria-label="画布工具">
@@ -82,19 +85,19 @@
             <button type="button" data-rh-action="edit"><i data-lucide="scissors"></i><em>编辑</em></button>
         </nav>
         <div class="rh-view-controls">
-            <button id="rhMinimapToggle" type="button" title="小地图"><i data-lucide="map"></i></button>
-            <button id="rhSnapToggle" type="button" title="20px 网格吸附"><i data-lucide="grip"></i></button>
-            <button id="rhFitAll" type="button" title="适配全部节点"><i data-lucide="scan"></i></button>
+            <button id="rhMinimapToggle" type="button" title="小地图" aria-label="小地图"><i data-lucide="map"></i></button>
+            <button id="rhSnapToggle" type="button" title="20px 网格吸附" aria-label="20px 网格吸附"><i data-lucide="grip"></i></button>
+            <button id="rhFitAll" type="button" title="适配全部节点" aria-label="适配全部节点"><i data-lucide="scan"></i></button>
             <span class="rh-view-divider"></span>
-            <button id="rhZoomOut" type="button" title="缩小"><i data-lucide="minus"></i></button>
-            <button id="rhZoomLabel" class="rh-zoom-label" type="button">100%</button>
-            <button id="rhZoomIn" type="button" title="放大"><i data-lucide="plus"></i></button>
+            <button id="rhZoomOut" type="button" title="缩小" aria-label="缩小"><i data-lucide="minus"></i></button>
+            <button id="rhZoomLabel" class="rh-zoom-label" type="button" aria-label="重置缩放">100%</button>
+            <button id="rhZoomIn" type="button" title="放大" aria-label="放大"><i data-lucide="plus"></i></button>
             <span class="rh-view-divider"></span>
-            <button id="rhShortcut" type="button" title="快捷键"><i data-lucide="circle-help"></i></button>
+            <button id="rhShortcut" type="button" title="快捷键" aria-label="快捷键"><i data-lucide="circle-help"></i></button>
         </div>
-        <button id="rhAgentToggle" class="rh-agent-toggle" type="button" title="AI 对话"><span class="rh-agent-face"><i data-lucide="sparkles"></i></span></button>
+        <button id="rhAgentToggle" class="rh-agent-toggle" type="button" title="AI 对话" aria-label="打开 AI 对话"><span class="rh-agent-face"><i data-lucide="sparkles"></i></span></button>
         <aside id="rhAgentPanel" class="rh-agent-panel">
-            <header><div><strong>Canvas AI</strong><span>基于当前画布协作</span></div><button id="rhAgentClose" type="button"><i data-lucide="x"></i></button></header>
+            <header><div><strong>Canvas AI</strong><span>基于当前画布协作</span></div><button id="rhAgentClose" type="button" aria-label="关闭 AI 对话"><i data-lucide="x"></i></button></header>
             <iframe id="rhAgentFrame" title="画布 AI 对话"></iframe>
         </aside>
         <section id="rhAccountPopover" class="rh-account-popover">
@@ -102,7 +105,7 @@
             <dl><div><dt>部门</dt><dd id="rhAccountDepartment">—</dd></div><div><dt>角色</dt><dd id="rhAccountRole">—</dd></div><div><dt>API 配置组</dt><dd id="rhAccountProfile">—</dd></div></dl>
         </section>
         <section id="rhBalancePopover" class="rh-balance-popover">
-            <header><strong>平台余额</strong><button id="rhBalanceRefresh" type="button"><i data-lucide="refresh-cw"></i></button></header>
+            <header><strong>平台余额</strong><button id="rhBalanceRefresh" type="button" aria-label="刷新平台余额"><i data-lucide="refresh-cw"></i></button></header>
             <div id="rhBalanceDetails" class="rh-balance-details">正在加载…</div>
         </section>
         <div id="imageActionToolbar" class="image-action-toolbar" aria-label="媒体工具">
@@ -142,7 +145,7 @@
             </div>
         </div>
         <div id="portConnectMenu" class="port-connect-menu" hidden aria-label="节点连接选择"></div>
-        <div id="createMenu" class="create-menu">
+        <div id="createMenu" class="create-menu" role="menu" aria-label="新建节点">
             <div class="create-menu-grid">
                 <button class="create-card" type="button" data-create-type="image">
                     <span class="create-card-icon"><i data-lucide="upload-cloud"></i></span>
@@ -568,7 +571,7 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785903129"></script>
-    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1785872720"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785987448"></script>
+    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1785911227"></script>
 </body>
 </html>

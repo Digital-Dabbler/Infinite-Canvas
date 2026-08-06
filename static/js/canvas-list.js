@@ -83,6 +83,7 @@ const canvasSearchInput = document.getElementById('canvasSearchInput');
 const studioSettingsBtn = document.getElementById('studioSettingsBtn');
 const mobileProjectToggle = document.getElementById('mobileProjectToggle');
 const mobileSidebarClose = document.getElementById('mobileSidebarClose');
+const mobileSidebarBackdrop = document.getElementById('mobileSidebarBackdrop');
 
 /* ===== State ===== */
 let projects = [];
@@ -443,7 +444,7 @@ function buildCard(c, readOnly=false){
         </div>
         <div class="ws-card-body">
             <div class="ws-card-title">${escapeHtml(c.title)}</div>
-            ${readOnly ? '' : `<button class="ws-card-menu" type="button" title="${L('更多','More')}" aria-label="${L('更多','More')}"><i data-lucide="more-horizontal"></i></button>`}
+            ${readOnly ? '' : `<button class="ws-card-menu" type="button" title="${L('更多','More')}" aria-label="${L('更多','More')}" aria-haspopup="menu" aria-expanded="false"><i data-lucide="more-horizontal"></i></button>`}
             <div class="ws-card-meta">
                 <span class="ws-card-nodes">${(c.node_count != null ? c.node_count : 0)} ${L('节点','nodes')}</span>
                 <span class="ws-card-meta-dot"></span>
@@ -618,22 +619,28 @@ async function createCanvasOnBoard(title, overlay=createCardEl){
 }
 
 /* ===== Card context menu (rename / delete / move) ===== */
-function closeCardMenu(){ document.querySelector('.ws-card-pop')?.remove(); }
+function closeCardMenu(){
+    document.querySelector('.ws-card-pop')?.remove();
+    document.querySelectorAll('.ws-card-menu[aria-expanded="true"]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+}
 function openCardMenu(canvasId, anchorBtn){
     closeCardMenu();
     const c = canvases.find(x => x.id === canvasId);
     if(!c) return;
     const pop = document.createElement('div');
     pop.className = 'ws-card-pop';
+    pop.setAttribute('role', 'menu');
+    pop.setAttribute('aria-label', L('画布操作','Canvas actions'));
     pop.innerHTML = `
-        <button class="ws-pop-item" data-act="pin"><i data-lucide="${c.pinned ? 'pin-off' : 'pin'}" class="w-4 h-4"></i><span>${c.pinned ? L('取消置顶','Unpin') : L('置顶','Pin')}</span></button>
-        <button class="ws-pop-item" data-act="rename"><i data-lucide="pencil" class="w-4 h-4"></i><span>${L('重命名','Rename')}</span></button>
-        <button class="ws-pop-item" data-act="export"><i data-lucide="download" class="w-4 h-4"></i><span>${L('导出画布','Export canvas')}</span></button>
-        <button class="ws-pop-item" data-act="export-assets"><i data-lucide="archive" class="w-4 h-4"></i><span>${L('导出画布 + 资源','Export with assets')}</span></button>
-        <button class="ws-pop-item" data-act="cut"><i data-lucide="scissors" class="w-4 h-4"></i><span>${L('剪切到其他项目','Cut to project')}</span></button>
+        <button class="ws-pop-item" role="menuitem" data-act="pin"><i data-lucide="${c.pinned ? 'pin-off' : 'pin'}" class="w-4 h-4"></i><span>${c.pinned ? L('取消置顶','Unpin') : L('置顶','Pin')}</span></button>
+        <button class="ws-pop-item" role="menuitem" data-act="rename"><i data-lucide="pencil" class="w-4 h-4"></i><span>${L('重命名','Rename')}</span></button>
+        <button class="ws-pop-item" role="menuitem" data-act="export"><i data-lucide="download" class="w-4 h-4"></i><span>${L('导出画布','Export canvas')}</span></button>
+        <button class="ws-pop-item" role="menuitem" data-act="export-assets"><i data-lucide="archive" class="w-4 h-4"></i><span>${L('导出画布 + 资源','Export with assets')}</span></button>
+        <button class="ws-pop-item" role="menuitem" data-act="cut"><i data-lucide="scissors" class="w-4 h-4"></i><span>${L('剪切到其他项目','Cut to project')}</span></button>
         <div class="ws-pop-sep"></div>
-        <button class="ws-pop-item danger" data-act="delete"><i data-lucide="trash-2" class="w-4 h-4"></i><span>${L('删除','Delete')}</span></button>`;
+        <button class="ws-pop-item danger" role="menuitem" data-act="delete"><i data-lucide="trash-2" class="w-4 h-4"></i><span>${L('删除','Delete')}</span></button>`;
     document.body.appendChild(pop);
+    anchorBtn.setAttribute('aria-expanded', 'true');
     const r = anchorBtn.getBoundingClientRect();
     const w = pop.offsetWidth || 188, h = pop.offsetHeight || 120;
     let left = Math.min(r.left, window.innerWidth - w - 12);
@@ -1079,6 +1086,7 @@ studioSettingsBtn?.addEventListener('click', () => {
 });
 mobileProjectToggle?.addEventListener('click', () => workspace.classList.add('sidebar-open'));
 mobileSidebarClose?.addEventListener('click', () => workspace.classList.remove('sidebar-open'));
+mobileSidebarBackdrop?.addEventListener('click', () => workspace.classList.remove('sidebar-open'));
 
 newProjectBtn.addEventListener('click', openNewProject);
 newProjectConfirm.addEventListener('click', createProject);

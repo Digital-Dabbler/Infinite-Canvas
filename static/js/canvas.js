@@ -14912,6 +14912,8 @@ window.addEventListener('dragend', () => dropOverlay.classList.remove('active'))
 window.addEventListener('drop', () => dropOverlay.classList.remove('active'));
 window.addEventListener('paste', e => {
     if(!canvas) return;
+    // 在输入框、可编辑区域或文本框内粘贴图片时，不要触发画布节点上传/填充。
+    if(isEditableTarget(e.target)) return;
     const files = [...(e.clipboardData?.items || [])].filter(x => x.kind === 'file' && /^(image|video|audio)\//.test(String(x.type || ''))).map(x => x.getAsFile());
     if(!files.length) return;
     e.preventDefault();

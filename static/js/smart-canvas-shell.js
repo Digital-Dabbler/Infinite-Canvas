@@ -9,7 +9,8 @@
     const balancePopover = document.getElementById('rhBalancePopover');
     const oldTitle = document.getElementById('smartTitle');
     const shellTitle = document.getElementById('rhCanvasTitle');
-    let snapEnabled = localStorage.getItem(SNAP_KEY) !== '0';
+    // 精细画布默认自由拖动；只有用户明确开启后才进行 20px 吸附。
+    let snapEnabled = localStorage.getItem(SNAP_KEY) === '1';
     let user = null;
     window.isSmartCanvasSnapEnabled = () => snapEnabled;
 
