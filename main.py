@@ -14792,8 +14792,86 @@ def runninghub_entry_config_from_model(provider, model):
         "workflowJson": {},
     }
 
+def runninghub_response_json(response):
+    try:
+        return response.json()
+    except Exception:
+        return {}
+
+def runninghub_upload_error_text(response, raw):
+    message = str(raw.get("msg") or "").strip() if isinstance(raw, dict) else ""
+    if message:
+        return message
+    status = getattr(response, "status_code", 0)
+    return f"HTTP {status}" if status else "未知错误"
+
+async def runninghub_upload_binary_asset(client, provider, filename, content, content_type, use_wallet=False):
+    """通过 openapi/v2 的 media/upload/binary 上传素材，返回 fileName/downloadUrl。"""
+    upload_url = runninghub_openapi_url(provider, "media/upload/binary")
+    headers = {
+        "Authorization": bearer_auth_value(runninghub_api_key(provider, use_wallet=use_wallet)),
+        "Accept": "application/json",
+    }
+    response = await client.post(upload_url, headers=headers, files={"file": (filename, content, content_type)})
+    raw = runninghub_response_json(response)
+    data = raw.get("data") if isinstance(raw, dict) else None
+    if isinstance(data, dict) and raw.get("code") in (0, "0"):
+        file_name = str(data.get("fileName") or data.get("file_name") or "").strip()
+        download_url = str(data.get("download_url") or data.get("downloadUrl") or data.get("url") or "").strip()
+        if file_name or download_url:
+            return {
+                "fileName": file_name or download_url,
+                "downloadUrl": download_url,
+                "fileType": str(data.get("type") or "").strip() or content_type,
+            }
+    raise HTTPException(status_code=502, detail=f"RunningHub 素材上传失败：{runninghub_upload_error_text(response, raw)}")
+
+async def runninghub_upload_legacy_asset(client, provider, filename, content, content_type, use_wallet=False):
+    """旧 /task/openapi/upload 兼容回退，保留企业共享 Key 的 Bearer-only 重试分支。"""
+    upload_url = runninghub_endpoint_url(provider, "/task/openapi/upload")
+    files = {"file": (filename, content, content_type)}
+    data = {"apiKey": runninghub_api_key(provider, use_wallet=use_wallet), "fileType": "input"}
+    response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, provider), data=data, files=files)
+    raw = runninghub_response_json(response)
+    if runninghub_should_retry_body_key_only(raw):
+        response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, provider, include_authorization=False), data=data, files=files)
+        raw = runninghub_response_json(response)
+    if use_wallet and runninghub_should_retry_body_key_only(raw):
+        response = await client.post(
+            upload_url,
+            headers=runninghub_app_headers(False, use_wallet, provider),
+            data=runninghub_wallet_bearer_body(data),
+            files=files,
+        )
+        raw = runninghub_response_json(response)
+    if isinstance(raw, dict) and raw.get("code") in (0, "0") and isinstance(raw.get("data"), dict) and raw["data"].get("fileName"):
+        return {
+            "fileName": raw["data"]["fileName"],
+            "downloadUrl": "",
+            "fileType": str(raw["data"].get("fileType") or "").strip() or content_type,
+        }
+    return None
+
+async def runninghub_upload_asset_content(client, provider, filename, content, content_type, use_wallet=False):
+    """上传工作流/AI 应用素材：先走 v2 二进制上传，再回退旧 task/openapi/upload。
+
+    旧端点对当前 RunningHub Key 只返回 ApiKey verification failed 或
+    apiKey is required，不能继续作为主路径，否则带图片输入的工作流会在提交前失败。
+    """
+    try:
+        return await runninghub_upload_binary_asset(client, provider, filename, content, content_type, use_wallet)
+    except HTTPException as primary_error:
+        try:
+            legacy = await runninghub_upload_legacy_asset(client, provider, filename, content, content_type, use_wallet)
+        except Exception:
+            legacy = None
+        if legacy:
+            return legacy
+        raise primary_error
+
+
 async def runninghub_upload_local_to_filename(client, provider, url, use_wallet=False):
-    """把本地/远程素材上传到 RunningHub /task/openapi/upload，返回 fileName（供 nodeInfoList 使用）。"""
+    """把本地/远程素材上传到 RunningHub，返回 fileName（供 nodeInfoList 使用）。"""
     text = str(url or "").strip()
     if not text:
         return ""
@@ -14813,26 +14891,10 @@ async def runninghub_upload_local_to_filename(client, provider, url, use_wallet=
         return ""
     if not content:
         return ""
-    api_key = runninghub_api_key(provider, use_wallet=use_wallet)
-    upload_url = runninghub_endpoint_url(provider, "/task/openapi/upload")
-    files = {"file": (filename, content, content_type)}
-    data = {"apiKey": api_key, "fileType": "input"}
-    response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, provider), data=data, files=files)
-    raw = response.json()
-    if runninghub_should_retry_body_key_only(raw):
-        response = await client.post(upload_url, headers=runninghub_app_headers(False, use_wallet, provider, include_authorization=False), data=data, files=files)
-        raw = response.json()
-    if use_wallet and runninghub_should_retry_body_key_only(raw):
-        response = await client.post(
-            upload_url,
-            headers=runninghub_app_headers(False, use_wallet, provider),
-            data=runninghub_wallet_bearer_body(data),
-            files=files,
-        )
-        raw = response.json()
-    if isinstance(raw, dict) and raw.get("code") in (0, "0") and isinstance(raw.get("data"), dict) and raw["data"].get("fileName"):
-        return raw["data"]["fileName"]
-    raise HTTPException(status_code=502, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 上传素材失败：{raw}")
+    uploaded = await runninghub_upload_asset_content(
+        client, provider, filename, content, content_type, use_wallet
+    )
+    return uploaded["fileName"]
 
 async def generate_runninghub_entry_image(prompt, size, model, reference_images, provider, entry):
     """运行 RunningHub 工作流 / AI 应用（与智能画布一致的运行方式），返回首张图片结果。"""
@@ -16980,30 +17042,17 @@ async def runninghub_upload_asset(payload: RunningHubUploadAssetRequest, request
             raise HTTPException(status_code=400, detail=f"不支持的素材地址：{source_url}")
         if not content:
             raise HTTPException(status_code=400, detail="素材为空，无法上传到 RunningHub")
-        upload_url = runninghub_endpoint_url(provider, "/task/openapi/upload")
-        files = {"file": (filename, content, content_type)}
-        data = {"apiKey": api_key, "fileType": "input"}
-        try:
-            response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet, provider), data=data, files=files)
-            raw = response.json()
-            if runninghub_should_retry_body_key_only(raw):
-                response = await client.post(upload_url, headers=runninghub_app_headers(False, payload.useWallet, provider, include_authorization=False), data=data, files=files)
-                raw = response.json()
-            if payload.useWallet and runninghub_should_retry_body_key_only(raw):
-                response = await client.post(
-                    upload_url,
-                    headers=runninghub_app_headers(False, payload.useWallet, provider),
-                    data=runninghub_wallet_bearer_body(data),
-                    files=files,
-                )
-                raw = response.json()
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"上传素材到 RunningHub 失败：{exc}") from exc
-    if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=json.dumps(raw, ensure_ascii=False)[:800])
-    if isinstance(raw, dict) and raw.get("code") in (0, "0") and isinstance(raw.get("data"), dict) and raw["data"].get("fileName"):
-        return {"success": True, "data": {"fileName": raw["data"]["fileName"], "fileType": raw["data"].get("fileType") or content_type}}
-    raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 上传失败：{raw}")
+        uploaded = await runninghub_upload_asset_content(
+            client, provider, filename, content, content_type, payload.useWallet
+        )
+    return {
+        "success": True,
+        "data": {
+            "fileName": uploaded["fileName"],
+            "fileType": uploaded.get("fileType") or content_type,
+            "downloadUrl": uploaded.get("downloadUrl") or "",
+        },
+    }
 
 @app.get("/api/codex/status")
 async def codex_status():
