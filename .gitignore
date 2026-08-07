@@ -9,6 +9,17 @@ data/*
 assets/
 output/
 
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Runtime generation history
+history.json
+
+# Local agent skills and lock files
+.agents/
+skills-lock.json
+
 # Packages installed into the bundled Python runtime on this machine
 python/Lib/
 python/Scripts/
