@@ -20,8 +20,8 @@
     <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1785607755"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1785987423">
-    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1785945069">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1786067488">
+    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1786044727">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -77,12 +77,12 @@
             </div>
         </header>
         <nav class="rh-tool-rail" aria-label="画布工具">
-            <button type="button" data-rh-action="create"><span class="rh-tool-primary"><i data-lucide="plus"></i></span><em>新建</em></button>
-            <button type="button" data-rh-action="assets"><i data-lucide="archive"></i><em>资产</em></button>
-            <button type="button" data-rh-action="workflow"><i data-lucide="workflow"></i><em>工作流</em></button>
-            <button type="button" data-rh-action="history"><i data-lucide="history"></i><em>生成历史</em></button>
-            <button type="button" data-rh-action="outline"><i data-lucide="list-tree"></i><em>画布目录</em></button>
-            <button type="button" data-rh-action="edit"><i data-lucide="scissors"></i><em>编辑</em></button>
+            <button type="button" data-rh-action="create" aria-expanded="false"><span class="rh-tool-primary"><i data-lucide="plus"></i></span><em data-i18n="smart.railCreate">新建</em></button>
+            <button type="button" data-rh-action="assets" aria-expanded="false"><i data-lucide="archive"></i><em data-i18n="smart.railAssets">资产</em></button>
+            <button type="button" data-rh-action="workflow" aria-expanded="false"><i data-lucide="workflow"></i><em data-i18n="smart.railWorkflow">工作流</em></button>
+            <button type="button" data-rh-action="history" aria-expanded="false"><i data-lucide="history"></i><em data-i18n="smart.railHistory">生成历史</em></button>
+            <button type="button" data-rh-action="outline" aria-expanded="false"><i data-lucide="list-tree"></i><em data-i18n="smart.railOutline">画布目录</em></button>
+            <button type="button" data-rh-action="edit" aria-expanded="false"><i data-lucide="scissors"></i><em data-i18n="smart.railEdit">编辑</em></button>
         </nav>
         <div class="rh-view-controls">
             <button id="rhMinimapToggle" type="button" title="小地图" aria-label="小地图"><i data-lucide="map"></i></button>
@@ -346,6 +346,7 @@
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Z</kbd></span><span data-i18n="smart.shortcutOverview">缩小画布视图</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>双击</kbd></span><span data-i18n="smart.shortcutCreateMenu">打开快捷菜单</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>空白处</kbd></span><span data-i18n="smart.shortcutPan">拖动画布</span></div>
+                    <div class="shortcut-item"><span class="shortcut-keys"><kbd>鼠标中键</kbd></span><span data-i18n="smart.shortcutMiddlePan">任意位置按住拖动画布</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>滚轮</kbd></span><span data-i18n="smart.shortcutZoom">缩放画布或预览图片</span></div>
                     <div class="shortcut-item"><span class="shortcut-keys"><kbd>Del</kbd></span><span data-i18n="smart.shortcutDelete">删除选中节点</span></div>
                 </div>
@@ -571,7 +572,7 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1785987448"></script>
-    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1785911227"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1786068181"></script>
+    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1786046408"></script>
 </body>
 </html>

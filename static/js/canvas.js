@@ -7077,6 +7077,7 @@ function toggleCanvasAssetLibrary(open=!canvasAssetLibraryOpen){
     if(canvasAssetLibraryOpen && workflowTransferModal?.classList.contains('open')) closeWorkflowTransferModal();
     canvasAssetPanel?.classList.toggle('open', canvasAssetLibraryOpen);
     canvasAssetToggle?.classList.toggle('active', canvasAssetLibraryOpen);
+    canvasAssetToggle?.setAttribute('aria-expanded', canvasAssetLibraryOpen ? 'true' : 'false');
     if(!canvasAssetLibraryOpen) hideCanvasAssetHoverPreview();
     if(canvasAssetLibraryOpen) loadCanvasAssetLibrary();
 }
@@ -12418,6 +12419,7 @@ function openCanvasLog(event){
     const modal = document.getElementById('logModal') || (typeof logModal !== 'undefined' ? logModal : null);
     const list = document.getElementById('logList') || (typeof logList !== 'undefined' ? logList : null);
     modal?.classList.add('open');
+    syncCanvasLogToggleState();
     if(list && !list.innerHTML) list.innerHTML = `<div class="log-empty">${tr('canvas.noLogs')}</div>`;
     try {
         renderCanvasLog();
@@ -12429,9 +12431,26 @@ function openCanvasLog(event){
 function closeCanvasLog(){
     const modal = document.getElementById('logModal') || (typeof logModal !== 'undefined' ? logModal : null);
     modal?.classList.remove('open');
+    syncCanvasLogToggleState();
+}
+// 日志入口与资产库/工作流保持一致：点一下打开，再点一下关闭。
+function toggleCanvasLog(event){
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    event?.stopImmediatePropagation?.();
+    const modal = document.getElementById('logModal') || (typeof logModal !== 'undefined' ? logModal : null);
+    if(modal?.classList.contains('open')) closeCanvasLog();
+    else openCanvasLog();
+}
+function syncCanvasLogToggleState(){
+    const modal = document.getElementById('logModal') || (typeof logModal !== 'undefined' ? logModal : null);
+    const open = Boolean(modal?.classList.contains('open'));
+    canvasLogToggle?.classList.toggle('active', open);
+    canvasLogToggle?.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 window.openCanvasLog = openCanvasLog;
 window.closeCanvasLog = closeCanvasLog;
+window.toggleCanvasLog = toggleCanvasLog;
 function makePending(id, run, task={}){
     return {id, startedAt:nowMs(), run, ...task};
 }
@@ -13022,7 +13041,7 @@ workflowTransferToggle?.addEventListener('click', () => {
 });
 canvasLogToggle?.addEventListener('click', event => {
     event.preventDefault();
-    openCanvasLog();
+    toggleCanvasLog();
 });
 workflowImportInput?.addEventListener('change', event => {
     const file = event.target.files?.[0];
@@ -13872,11 +13891,13 @@ function openWorkflowTransferModal(){
     updateWorkflowTransferMeta();
     workflowTransferModal?.classList.add('open');
     workflowTransferToggle?.classList.add('active');
+    workflowTransferToggle?.setAttribute('aria-expanded','true');
     refreshIcons();
 }
 function closeWorkflowTransferModal(){
     workflowTransferModal?.classList.remove('open');
     workflowTransferToggle?.classList.remove('active');
+    workflowTransferToggle?.setAttribute('aria-expanded','false');
     workflowImportDropZone?.classList.remove('drag-over');
 }
 function updateWorkflowTransferMeta(){
@@ -14770,11 +14791,14 @@ board.addEventListener('click', e => {
 }, true);
 function startBoardPan(e, opts={}){
     if(!canvas) return false;
-    if(isEditableTarget(e.target) || e.target.closest?.('#createMenu, #linkCreateMenu, #nodeInputMenu, #nodeOutputMenu, #imageNodeMenu, .minimap')) return false;
+    if(e.target.closest?.('#createMenu, #linkCreateMenu, #nodeInputMenu, #nodeOutputMenu, #imageNodeMenu, .minimap')) return false;
+    // 中键强制平移（forcePan）时允许从输入框等可编辑区域开始，并保留当前编辑焦点。
+    const editable = isEditableTarget(e.target);
+    if(editable && !opts.forcePan) return false;
     e.preventDefault();
     e.stopPropagation();
     closeCreateMenu();
-    if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+    if(!editable && document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
     dragBoard = {sx:e.clientX, sy:e.clientY, ox:viewport.x, oy:viewport.y, moved:false, clearSelectionOnClick:Boolean(opts.clearSelectionOnClick)};
     document.body.classList.add('canvas-board-pan');
     window.onmousemove = e2 => {
@@ -14794,12 +14818,38 @@ function startBoardPan(e, opts={}){
     return true;
 }
 
+// 中键固定为平移画布：捕获阶段先接管，避免鼠标落在节点、分组或节点内控件上时被其他拖拽逻辑抢走。
+board.addEventListener('mousedown', e => {
+    if(!canvas || e.button !== 1) return;
+    if(dragNode || dragBoard || resizeNode || tempLink || minimapDrag || llmPaneDrag) return;
+    // 无论是否真的开始平移，都屏蔽中键的自动滚动默认行为。
+    if(!startBoardPan(e, {forcePan:true})) e.preventDefault();
+}, true);
+window.addEventListener('blur', () => { if(dragBoard) endDrag(); });
+board.addEventListener('auxclick', e => {
+    if(e.button === 1) e.preventDefault();
+}, true);
+// 节点内的文本区等子元素会阻止 mousemove/mouseup 冒泡，
+// 因此平移过程额外在捕获阶段跟一份，避免拖到这些区域时卡住。
+// 位移根据 dragBoard 起点绝对计算，与原有 window.onmousemove 重复执行也不会叠加。
+window.addEventListener('mousemove', e => {
+    if(!dragBoard) return;
+    if(Math.hypot(e.clientX - dragBoard.sx, e.clientY - dragBoard.sy) > 4) dragBoard.moved = true;
+    viewport.x = dragBoard.ox + e.clientX - dragBoard.sx;
+    viewport.y = dragBoard.oy + e.clientY - dragBoard.sy;
+    applyViewport();
+}, true);
+window.addEventListener('mouseup', e => {
+    if(!dragBoard || e.buttons !== 0) return;
+    // 优先走 startBoardPan 注册的结束处理（包含左键空白处点击清选），它内部会调 endDrag 并清空自身。
+    const handler = window.onmouseup;
+    if(typeof handler === 'function') handler(e);
+    else endDrag(e);
+}, true);
 board.onmousedown = e => {
     if(!canvas) return;
-    if(e.button === 1){
-        startBoardPan(e);
-        return;
-    }
+    // 中键已由上面的捕获阶段监听统一处理。
+    if(e.button === 1) return;
     if(e.button !== 0) return;
     if(startKnifeDrag(e)) return;
     // Dismiss any open native select dropdown

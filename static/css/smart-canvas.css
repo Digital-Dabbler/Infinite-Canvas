@@ -37,6 +37,11 @@ html[data-studio-scale="off"].studio-scale-managed .preview-modal {
     zoom: var(--studio-ui-scale, 1);
 }
 .shell.panning { cursor:grabbing; }
+/* 中键平移画布：光标在节点、工作流分组上也保持抓手，避免显示“移动节点”的指针。 */
+body.smart-canvas-panning,
+body.smart-canvas-panning * { cursor:grabbing !important; user-select:none !important; }
+/* 平移时屏蔽 iframe 命中，避免拖过 AI 对话面板时鼠标事件被子文档吸走而卡住。 */
+body.smart-canvas-panning iframe { pointer-events:none !important; }
 .shell.zoom-preview { cursor:crosshair; }
 .world { position:absolute; left:0; top:0; width:6000px; height:4000px; transform-origin:0 0; }
 /* 画布缩放（非 1:1）时，关闭 world 内卡片的 backdrop-filter，避免合成层位图被缩放导致“参数设置”等组件发虚。

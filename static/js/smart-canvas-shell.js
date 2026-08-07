@@ -129,37 +129,170 @@
         }
         toast(kind === 'prompt' ? '已创建提示词节点' : '已创建便签');
     }
-    document.querySelectorAll('[data-rh-action]').forEach(button => button.addEventListener('click', event => {
-        event.stopPropagation();
-        const action = button.dataset.rhAction;
-        if(action === 'create') openCreateMenu({clientX:82,clientY:Math.max(90,event.currentTarget.getBoundingClientRect().top)});
-        if(action === 'assets') toggleAssetLibrary();
-        if(action === 'workflow') openSmartWorkflowTransferModal();
-        if(action === 'history') openSmartCanvasLog();
-        if(action === 'outline') toggleSmartOutline();
-        if(action === 'edit') {
-            const target = currentMediaToolbarTarget();
-            if(target?.kind === 'image') runImageToolbarAction('edit');
-            else toast('请先选择一张图片');
-        }
-    }));
-    document.getElementById('rhMinimapToggle').onclick = event => {
-        const open = !minimap.classList.contains('rh-open');
-        minimap.classList.toggle('rh-open',open); event.currentTarget.classList.toggle('active',open);
-        if(open) updateMinimap();
+    // ---------------------------------------------------------------------
+    // 统一开合控制：左侧工具栏与视图控件的每个入口都是「点一下打开、再点一下关闭」。
+    // 面板可能被 Esc、面板自带关闭按钮或画布点击关闭，所以按钮状态不能只在点击时写死，
+    // 统一由 MutationObserver 观察面板 class 回写 aria-expanded / .active。
+    // ---------------------------------------------------------------------
+    function t(key, fallback){
+        const value = window.StudioI18n?.t ? window.StudioI18n.t(key) : key;
+        return value === key ? (fallback ?? key) : value;
+    }
+    function isOpenEl(el, cls){ return Boolean(el?.classList?.contains(cls || 'open')); }
+    const surfaces = {
+        create: {
+            labelKey:'smart.railCreate', labelFallback:'新建',
+            el: () => document.getElementById('createMenu'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(button){
+                const rect = button?.getBoundingClientRect?.();
+                openCreateMenu({clientX:82, clientY:Math.max(90, rect ? rect.top : 90)});
+            },
+            close(){ closeCreateMenu(); },
+        },
+        assets: {
+            labelKey:'smart.railAssets', labelFallback:'资产',
+            group:'dock',
+            el: () => document.getElementById('assetPanel'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){ toggleAssetLibrary(true); },
+            close(){ toggleAssetLibrary(false); },
+        },
+        workflow: {
+            labelKey:'smart.railWorkflow', labelFallback:'工作流',
+            group:'dock',
+            el: () => document.getElementById('smartWorkflowTransferModal'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){ openSmartWorkflowTransferModal(); },
+            close(){ closeSmartWorkflowTransferModal(); },
+        },
+        outline: {
+            labelKey:'smart.railOutline', labelFallback:'画布目录',
+            group:'dock',
+            el: () => document.getElementById('smartOutlinePanel'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){ toggleSmartOutline(true); },
+            close(){ toggleSmartOutline(false); },
+        },
+        history: {
+            labelKey:'smart.railHistory', labelFallback:'生成历史',
+            el: () => document.getElementById('smartLogModal'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){ openSmartCanvasLog(); },
+            close(){ closeSmartCanvasLog(); },
+        },
+        edit: {
+            labelKey:'smart.railEdit', labelFallback:'编辑',
+            el: () => document.getElementById('imageEditModal'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){
+                const target = currentMediaToolbarTarget();
+                if(target?.kind === 'image') runImageToolbarAction('edit');
+                else toast(t('smart.railEditNeedImage','请先选择一张图片'));
+            },
+            close(){ closeImageEditor(); },
+        },
+        shortcut: {
+            labelKey:'smart.shortcuts', labelFallback:'快捷键',
+            el: () => document.getElementById('smartShortcutModal'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){ openSmartCanvasShortcuts(); },
+            close(){ closeSmartCanvasShortcuts(); },
+        },
+        minimap: {
+            labelKey:'smart.railMinimap', labelFallback:'小地图',
+            el: () => minimap,
+            isOpen(){ return isOpenEl(this.el(),'rh-open'); },
+            open(){ minimap?.classList.add('rh-open'); renderMinimap(); },
+            close(){ minimap?.classList.remove('rh-open'); },
+        },
+        agent: {
+            labelKey:'smart.railAgent', labelFallback:'AI 对话',
+            el: () => agentPanel,
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){ openAgent(); },
+            close(){ agentPanel?.classList.remove('open'); },
+        },
     };
+    const surfaceButtons = new Map();
+    function registerSurfaceButton(name, button){
+        if(!button || !surfaces[name]) return;
+        surfaceButtons.set(name, button);
+        button.dataset.rhSurface = name;
+        button.setAttribute('aria-expanded','false');
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleSurface(name);
+        });
+    }
+    function toggleSurface(name, force){
+        const surface = surfaces[name];
+        if(!surface) return;
+        const button = surfaceButtons.get(name);
+        const shouldOpen = typeof force === 'boolean' ? force : !surface.isOpen();
+        // 头部账户/余额浮层与面板不应同时存在。
+        closePopovers();
+        if(shouldOpen){
+            // 新建菜单是瞬时浮层，打开任何其他面板时都应先收起它。
+            if(name !== 'create' && surfaces.create.isOpen()) surfaces.create.close();
+            // 同区面板互相遮挡，打开一个就收起同组其他面板。
+            if(surface.group){
+                Object.entries(surfaces).forEach(([key, other]) => {
+                    if(key !== name && other.group === surface.group && other.isOpen()) other.close();
+                });
+            }
+            surface.open(button);
+        } else {
+            surface.close();
+        }
+        syncSurfaceStates();
+    }
+    function syncSurfaceStates(){
+        surfaceButtons.forEach((button, name) => {
+            const surface = surfaces[name];
+            const open = surface.isOpen();
+            button.classList.toggle('active', open);
+            button.setAttribute('aria-expanded', open ? 'true' : 'false');
+            const label = t(surface.labelKey, surface.labelFallback);
+            const tip = open
+                ? t('smart.panelClickToClose','点击关闭{name}').replace('{name}', label)
+                : t('smart.panelClickToOpen','点击打开{name}').replace('{name}', label);
+            button.title = tip;
+            button.setAttribute('aria-label', tip);
+        });
+    }
+    window.syncSmartCanvasRailStates = syncSurfaceStates;
+    document.querySelectorAll('[data-rh-action]').forEach(button => registerSurfaceButton(button.dataset.rhAction, button));
+    registerSurfaceButton('minimap', document.getElementById('rhMinimapToggle'));
+    registerSurfaceButton('shortcut', document.getElementById('rhShortcut'));
+    registerSurfaceButton('agent', document.getElementById('rhAgentToggle'));
+    // 面板可以被自身关闭按钮、Esc 或画布点击关闭，这里回写按钮开合态，避免出现「按钮亮着但面板已关」。
+    const surfaceObserver = new MutationObserver(() => syncSurfaceStates());
+    new Set(Object.values(surfaces).map(surface => surface.el()).filter(Boolean))
+        .forEach(el => surfaceObserver.observe(el, {attributes:true, attributeFilter:['class']}));
+    window.addEventListener('studio-lang-change', () => syncSurfaceStates());
+    // Esc 也应能关闭这些侧栏/浮层，smart-canvas.js 只处理了一部分，这里补齐剩余面板。
+    document.addEventListener('keydown', event => {
+        if(event.key !== 'Escape') return;
+        ['agent','workflow','outline','minimap'].forEach(name => {
+            if(surfaces[name].isOpen()) surfaces[name].close();
+        });
+        syncSurfaceStates();
+    });
     snapButton.onclick = () => {
         snapEnabled = !snapEnabled; localStorage.setItem(SNAP_KEY,snapEnabled ? '1' : '0');
-        snapButton.classList.toggle('active',snapEnabled); toast(snapEnabled ? '已开启 20px 网格吸附' : '已关闭网格吸附');
+        snapButton.classList.toggle('active',snapEnabled);
+        snapButton.setAttribute('aria-pressed',snapEnabled ? 'true' : 'false');
+        toast(snapEnabled ? '已开启 20px 网格吸附' : '已关闭网格吸附');
     };
     snapButton.classList.toggle('active',snapEnabled);
+    snapButton.setAttribute('aria-pressed',snapEnabled ? 'true' : 'false');
     document.getElementById('rhFitAll').onclick = () => { fitAllNodesViewport(); syncZoom(); };
     document.getElementById('rhZoomOut').onclick = () => setScale(viewport.scale / 1.15);
     document.getElementById('rhZoomIn').onclick = () => setScale(viewport.scale * 1.15);
     zoomLabel.onclick = () => setScale(1);
-    document.getElementById('rhShortcut').onclick = openSmartCanvasShortcuts;
-    document.getElementById('rhAgentToggle').onclick = openAgent;
-    document.getElementById('rhAgentClose').onclick = () => agentPanel.classList.remove('open');
+    document.getElementById('rhAgentClose').onclick = () => toggleSurface('agent', false);
     document.getElementById('rhAnnouncementBtn').onclick = () => parent.postMessage({type:'studio:open-announcement'},location.origin);
     document.getElementById('rhAccountBtn').onclick = event => { event.stopPropagation(); balancePopover.classList.remove('open'); accountPopover.classList.toggle('open'); };
     document.getElementById('rhBalanceBtn').onclick = event => { event.stopPropagation(); accountPopover.classList.remove('open'); balancePopover.classList.toggle('open'); };
@@ -186,5 +319,5 @@
     });
     shell.addEventListener('wheel', () => requestAnimationFrame(syncZoom),{passive:true});
     shellTitle.textContent = oldTitle?.textContent || 'Untitled';
-    loadAccount(); loadBalances(); syncZoom(); refreshIcons();
+    loadAccount(); loadBalances(); syncZoom(); syncSurfaceStates(); refreshIcons();
 })();

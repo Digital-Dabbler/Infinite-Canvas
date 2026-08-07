@@ -384,6 +384,7 @@
         "smart.shortcutOverview": { zh: "缩小画布视图", en: "Zoom out to canvas overview" },
         "smart.shortcutCreateMenu": { zh: "打开快捷菜单", en: "Open the quick create menu" },
         "smart.shortcutPan": { zh: "拖动画布", en: "Drag to pan the canvas" },
+        "smart.shortcutMiddlePan": { zh: "任意位置按住拖动画布", en: "Hold anywhere and drag to pan the canvas" },
         "smart.shortcutZoom": { zh: "缩放画布或预览图片", en: "Zoom canvas or preview image" },
         "smart.shortcutDelete": { zh: "删除选中节点", en: "Delete selected nodes" }
         ,"smart.workflowGroup": { zh: "工作流分组", en: "Workflow group" }
@@ -399,5 +400,16 @@
         ,"smart.imageGeneration": { zh: "图片生成", en: "Image generation" }
         ,"smart.imageGenerationSub": { zh: "在同一节点管理多次生成结果", en: "Manage generation results in one node" }
         ,"smart.imageEdit": { zh: "图片编辑", en: "Edit image" }
+        ,"smart.railCreate": { zh: "新建", en: "New" }
+        ,"smart.railAssets": { zh: "资产", en: "Assets" }
+        ,"smart.railWorkflow": { zh: "工作流", en: "Workflows" }
+        ,"smart.railHistory": { zh: "生成历史", en: "History" }
+        ,"smart.railOutline": { zh: "画布目录", en: "Outline" }
+        ,"smart.railEdit": { zh: "编辑", en: "Edit" }
+        ,"smart.railMinimap": { zh: "小地图", en: "Minimap" }
+        ,"smart.railAgent": { zh: "AI 对话", en: "AI chat" }
+        ,"smart.railEditNeedImage": { zh: "请先选择一张图片", en: "Select an image first" }
+        ,"smart.panelClickToOpen": { zh: "点击打开{name}", en: "Click to open {name}" }
+        ,"smart.panelClickToClose": { zh: "点击关闭{name}", en: "Click to close {name}" }
     });
 })();

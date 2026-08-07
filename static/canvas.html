@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1784512402"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1785607755"></script>
-    <link rel="stylesheet" href="/static/css/canvas.css?v=2026.07.29.1785807889">
+    <link rel="stylesheet" href="/static/css/canvas.css?v=2026.07.29.1786046367">
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1784512371">
 </head>
 <body>
@@ -52,9 +52,9 @@
                     <button class="tool-btn" onclick="groupSelectedImages()"><i data-lucide="group" class="w-4 h-4"></i><span data-i18n="canvas.group">分组</span></button>
                 </div>
                 <div class="toolbar-fixed">
-                    <button id="workflowTransferToggle" class="tool-btn toolbar-workflow" type="button" title="导入导出工作流" aria-label="导入导出工作流"><i data-lucide="package-open" class="w-4 h-4"></i><span>工作流</span></button>
-                    <button id="canvasAssetToggle" class="tool-btn toolbar-asset canvas-asset-toggle" type="button" title="资产库" aria-label="资产库"><i data-lucide="library" class="w-4 h-4"></i><span>资产库</span></button>
-                    <button id="canvasLogToggle" class="tool-btn toolbar-log" type="button" onclick="openCanvasLog(event)" title="日志" aria-label="日志" data-i18n-title="canvas.logs"><i data-lucide="list-todo" class="w-4 h-4"></i><span data-i18n="canvas.logs">日志</span></button>
+                    <button id="workflowTransferToggle" class="tool-btn toolbar-workflow" type="button" aria-expanded="false" title="导入导出工作流" aria-label="导入导出工作流"><i data-lucide="package-open" class="w-4 h-4"></i><span>工作流</span></button>
+                    <button id="canvasAssetToggle" class="tool-btn toolbar-asset canvas-asset-toggle" type="button" aria-expanded="false" title="资产库" aria-label="资产库"><i data-lucide="library" class="w-4 h-4"></i><span>资产库</span></button>
+                    <button id="canvasLogToggle" class="tool-btn toolbar-log" type="button" onclick="toggleCanvasLog(event)" aria-expanded="false" title="日志" aria-label="日志" data-i18n-title="canvas.logs"><i data-lucide="list-todo" class="w-4 h-4"></i><span data-i18n="canvas.logs">日志</span></button>
                 </div>
             </div>
         </div>
@@ -385,6 +385,6 @@
     </div>
 
     <script src="/static/js/ltx-director-timeline.js?v=2026.07.29.1784512371"></script>
-    <script src="/static/js/canvas.js?v=2026.07.29.1785807890"></script>
+    <script src="/static/js/canvas.js?v=2026.07.29.1786068181"></script>
 </body>
 </html>

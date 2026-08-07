@@ -10233,7 +10233,7 @@ function handlePortDrop(drag, e){
         requestAnimationFrame(() => openPortConnectMenu(drag.fromId, drag.fromPort, e));
         return;
     }
-    if(hit?.closest?.('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
+    if(hit?.closest?.('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
         discardPendingUndo(); render(); return;
     }
     const p = screenToWorld(e);
@@ -18552,17 +18552,78 @@ function createNodeFromMenu(type){
     createMenuGroupId = '';
     return created;
 }
+// 画布平移：鼠标中键在画布任意位置（包括节点、工作流分组内部）都固定为移动画布，
+// 避免鼠标落在分组/节点上时误触发移动分组。左键空白处拖拽的既有行为保持不变。
+const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';
+function startCanvasPan(e){
+    didPan = false;
+    panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
+    shell.classList.add('panning');
+    document.body.classList.add('smart-canvas-panning', 'smart-canvas-interacting');
+}
+function updateCanvasPan(e){
+    if(!panState) return false;
+    const dx = e.clientX - panState.startX;
+    const dy = e.clientY - panState.startY;
+    if(Math.abs(dx) + Math.abs(dy) > 3) didPan = true;
+    viewport.x = panState.ox + dx;
+    viewport.y = panState.oy + dy;
+    applyViewport();
+    return true;
+}
+function finishCanvasPan(){
+    if(!panState) return false;
+    panState = null;
+    shell.classList.remove('panning');
+    document.body.classList.remove('smart-canvas-panning', 'smart-canvas-interacting');
+    scheduleSave();
+    setTimeout(() => { didPan = false; }, 0);
+    return true;
+}
+// 平移过程走捕获阶段：节点内的文本框等子元素会阻止事件冒泡，
+// 不走捕获时中键拖到这些区域上会丢帧或卡住平移状态。
+window.addEventListener('mousemove', e => {
+    if(panState) updateCanvasPan(e);
+}, true);
+window.addEventListener('mouseup', e => {
+    if(panState && (e.button === panState.button || e.buttons === 0)) finishCanvasPan();
+}, true);
+// 在窗口外松开鼠标时不会收到 mouseup，失焦时收尾避免画布一直跟随鼠标。
+window.addEventListener('blur', () => { finishCanvasPan(); });
+// 中键按下走捕获阶段：先于节点/分组自身的拖拽逻辑接管，保证任何位置都只平移画布。
+shell.addEventListener('mousedown', e => {
+    if(e.button !== 1) return;
+    if(e.target?.closest?.(CANVAS_PAN_IGNORE_SELECTOR)) return;
+    // 已经处于其他手势（拖节点、缩放、连线、框选等）时不接管，避免两套拖拽同时生效。
+    if(panState || dragState || resizeState || selectionState || portDragState || connectionEraseState || thumbDragState || llmInstructionResizeState || promptSplitResizeState || promptResizeState || smartMinimapDrag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeCreateMenu();
+    closePortConnectMenu();
+    // 在输入区域上中键拖拽也平移画布，但保留焦点和光标，不打断编辑。
+    if(!isEditableTarget(e.target)){
+        window.getSelection?.()?.removeAllRanges?.();
+        if(document.activeElement?.blur) document.activeElement.blur();
+    }
+    startCanvasPan(e);
+}, true);
+// 阻止中键松开后浏览器的自动滚动/中键粘贴等默认行为。
+shell.addEventListener('auxclick', e => {
+    if(e.button !== 1) return;
+    if(e.target?.closest?.(CANVAS_PAN_IGNORE_SELECTOR)) return;
+    e.preventDefault();
+}, true);
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
 }, true);
 shell.addEventListener('click', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
     const nodeEl = e.target.closest('.image-node');
@@ -18570,8 +18631,8 @@ shell.addEventListener('click', e => {
     else exitZoomPreview(screenToWorld(e));
 }, true);
 shell.onmousedown = e => {
-    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
-    if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     closeCreateMenu();
     closePortConnectMenu();
     if(e.button === 0 && e.shiftKey){
@@ -18600,12 +18661,10 @@ shell.onmousedown = e => {
         updateSelectionBox(e);
         return;
     }
-    if(e.button !== 0 && e.button !== 1) return;
+    // 中键已由上面的捕获阶段监听统一处理，这里只保留左键空白处拖拽平移。
+    if(e.button !== 0) return;
     e.preventDefault();
-    didPan = false;
-    panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
-    shell.classList.add('panning');
-    document.body.classList.add('smart-canvas-interacting');
+    startCanvasPan(e);
 };
 shell.oncontextmenu = e => {
     if((e.ctrlKey || e.metaKey) || isRKeyDown){
@@ -18613,7 +18672,7 @@ shell.oncontextmenu = e => {
         e.stopPropagation();
         return;
     }
-    if(didPan || e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(didPan || e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     e.stopPropagation();
@@ -18629,14 +18688,14 @@ shell.oncontextmenu = e => {
     openCreateMenu(e);
 };
 shell.ondblclick = e => {
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     openCreateMenu(e);
 };
 shell.onclick = e => {
     if(selectionJustFinished) return;
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     closeCreateMenu();
     closePortConnectMenu();
@@ -18904,12 +18963,7 @@ window.onmousemove = e => {
         else return;
     }
     if(panState){
-        const dx = e.clientX - panState.startX;
-        const dy = e.clientY - panState.startY;
-        if(Math.abs(dx) + Math.abs(dy) > 3) didPan = true;
-        viewport.x = panState.ox + dx;
-        viewport.y = panState.oy + dy;
-        applyViewport();
+        updateCanvasPan(e);
         return;
     }
     if(!dragState) return;
@@ -19019,12 +19073,7 @@ window.onmouseup = e => {
         if(!thumbDragState.detached) discardPendingUndo();
         thumbDragState = null;
     }
-    if(panState) {
-        panState = null;
-        shell.classList.remove('panning');
-        scheduleSave();
-        setTimeout(() => { didPan = false; }, 0);
-    }
+    if(panState) finishCanvasPan();
     if(smartMinimapDrag){
         smartMinimapDrag = false;
     }
@@ -19144,7 +19193,7 @@ window.onmouseup = e => {
     }
 };
 shell.addEventListener('wheel', e => {
-    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
+    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
     e.preventDefault();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
