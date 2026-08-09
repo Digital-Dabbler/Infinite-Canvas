@@ -149,22 +149,28 @@
                 openCreateMenu({clientX:82, clientY:Math.max(90, rect ? rect.top : 90)});
             },
             close(){ closeCreateMenu(); },
-        },
-        assets: {
+        },        assets: {
             labelKey:'smart.railAssets', labelFallback:'资产',
             group:'dock',
-            el: () => document.getElementById('assetPanel'),
-            isOpen(){ return isOpenEl(this.el()); },
-            open(){ toggleAssetLibrary(true); },
-            close(){ toggleAssetLibrary(false); },
+            el: () => document.getElementById('assets-library-modal'),
+            isOpen(){ return LibraryModalManager?.isOpen?.('assets'); },
+            open(){ window.openAssetLibrary?.(); },
+            close(){ LibraryModalManager?.closeAll?.(); },
         },
-        workflow: {
+        prompts: {
+            labelKey:'smart.railPrompts', labelFallback:'提示词',
+            group:'dock',
+            el: () => document.getElementById('prompts-library-modal'),
+            isOpen(){ return LibraryModalManager?.isOpen?.('prompts'); },
+            open(){ window.openPromptLibrary?.(); },
+            close(){ LibraryModalManager?.closeAll?.(); },
+        },        workflow: {
             labelKey:'smart.railWorkflow', labelFallback:'工作流',
             group:'dock',
-            el: () => document.getElementById('smartWorkflowTransferModal'),
-            isOpen(){ return isOpenEl(this.el()); },
-            open(){ openSmartWorkflowTransferModal(); },
-            close(){ closeSmartWorkflowTransferModal(); },
+            el: () => document.getElementById('workflows-library-modal'),
+            isOpen(){ return LibraryModalManager?.isOpen?.('workflows'); },
+            open(){ window.openWorkflowLibrary?.(); },
+            close(){ LibraryModalManager?.closeAll?.(); },
         },
         outline: {
             labelKey:'smart.railOutline', labelFallback:'画布目录',

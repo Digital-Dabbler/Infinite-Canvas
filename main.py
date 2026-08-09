@@ -329,6 +329,8 @@ MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
+LIBRARY_FAVORITES_PATH = os.path.join(DATA_DIR, "library_favorites.json")
+LIBRARY_FAVORITES_LOCK = Lock()
 ASSET_TRASH_PATH = os.path.join(DATA_DIR, "asset_trash.json")
 ASSET_AI_SETTINGS_PATH = os.path.join(DATA_DIR, "asset_ai_settings.json")
 ASSET_AI_TASKS_PATH = os.path.join(DATA_DIR, "asset_ai_tasks.json")
@@ -5524,6 +5526,7 @@ class AssetLibraryAddRequest(BaseModel):
     url: str = ""
     name: str = ""
     library_id: str = ""
+    category: str = ""
 
 class AssetLibraryBatchAddRequest(BaseModel):
     category_id: str = ""
@@ -5586,6 +5589,7 @@ class PromptLibraryItemRequest(BaseModel):
     positive: str = ""
     negative: str = ""
     scene: str = ""
+    published: Optional[bool] = None
 
 class PromptLibraryBatchDeleteRequest(BaseModel):
     ids: List[str] = []
@@ -10869,15 +10873,7 @@ def scan_shared_tree(folder_id, folder_abs, rel_prefix="", display="", counter=N
     return node
 
 def builtin_prompt_templates():
-    try:
-        template_path = prompt_template_markdown_path()
-        if not template_path:
-            return []
-        with open(template_path, "r", encoding="utf-8") as f:
-            return parse_prompt_template_markdown(f.read())
-    except Exception as e:
-        print(f"读取提示词模板失败: {e}")
-        return []
+    return []
 
 def normalize_prompt_category_id(category="custom"):
     category_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(category or "custom"))[:40] or "custom"
@@ -10901,6 +10897,7 @@ def normalize_prompt_library_item(item):
         "source_root_id": str(item.get("source_root_id") or ""),
         "source_direct_id": str(item.get("source_direct_id") or ""),
         "source_author_id": str(item.get("source_author_id") or ""),
+        "published": bool(item.get("published") or item.get("owner_type") == "system"),
     }
     normalized.update(asset_owner_fields(item))
     return normalized
@@ -11083,7 +11080,6 @@ def ensure_user_asset_spaces(user):
                 "fixed": True,
                 **owner,
                 "categories": [
-                    {"id": f"cat_{uuid.uuid4().hex[:12]}", "name": "素材", "type": "image", "items": [], **owner},
                     {"id": f"wf_{uuid.uuid4().hex[:12]}", "name": "工作流", "type": "workflow", "items": [], **owner},
                 ],
             })
@@ -21111,16 +21107,6 @@ async def list_canvas_assets():
     # （否则画布多时一次请求就会卡住整个 asyncio loop，连 WebSocket 一起掉线）。
     return await asyncio.to_thread(canvas_assets_index)
 
-@app.get("/api/smart-canvas/prompt-templates")
-async def smart_canvas_prompt_templates():
-    try:
-        template_path = prompt_template_markdown_path()
-        source = os.path.relpath(template_path, BASE_DIR).replace("\\", "/") if template_path else ""
-        return {"templates": builtin_prompt_templates(), "source": source}
-    except Exception as e:
-        print(f"读取提示词模板失败: {e}")
-        return {"templates": []}
-
 @app.post("/api/canvas-assets/check")
 async def check_canvas_assets(payload: CanvasAssetCheckRequest):
     result = {}
@@ -21695,6 +21681,7 @@ async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemReq
                     "positive": payload.positive or item.get("positive"),
                     "negative": payload.negative,
                     "scene": payload.scene,
+                    "published": payload.published if payload.published is not None else bool(item.get("published") or item.get("owner_type") == "system"),
                     "updated_at": now_ms(),
                 })
                 library["items"][index] = next_item
@@ -21751,6 +21738,85 @@ async def batch_delete_prompt_library_items(payload: PromptLibraryBatchDeleteReq
     for item in removed_items:
         cancel_queued_asset_tasks_for_target(item.get("id"))
     return {"library": public_prompt_libraries_for_user(data, user), "removed": removed, "trashed": True}
+
+def default_library_favorites():
+    return {"version": 1, "favorites": [], "updated_at": now_ms()}
+
+def load_library_favorites():
+    data = _read_json_file(LIBRARY_FAVORITES_PATH, default_library_favorites())
+    if not isinstance(data, dict) or not isinstance(data.get("favorites"), list):
+        data = default_library_favorites()
+    return data
+
+def save_library_favorites(data):
+    with LIBRARY_FAVORITES_LOCK:
+        clean = {
+            "version": 1,
+            "favorites": [f for f in (data.get("favorites") or []) if isinstance(f, dict)],
+            "updated_at": now_ms(),
+        }
+        _write_json_atomic(LIBRARY_FAVORITES_PATH, clean)
+    return clean
+
+def library_favorite_ids(user_id, kind):
+    favorites = load_library_favorites().get("favorites") or []
+    uid = str(user_id or "")
+    return [str(f.get("item_id") or "") for f in favorites
+            if str(f.get("user_id") or "") == uid and str(f.get("kind") or "") == kind and f.get("item_id")]
+
+class LibraryFavoriteRequest(BaseModel):
+    kind: str = "prompt"
+    item_id: str = ""
+
+@app.get("/api/library/favorites")
+async def get_library_favorites(request: Request, kind: str = "prompt"):
+    user = require_authenticated(request)
+    if kind not in {"prompt", "workflow"}:
+        raise HTTPException(status_code=400, detail="不支持的收藏类型")
+    return {"favorites": library_favorite_ids(user.get("id"), kind)}
+
+@app.post("/api/library/favorites")
+async def add_library_favorite(payload: LibraryFavoriteRequest, request: Request):
+    user = require_authenticated(request)
+    if payload.kind not in {"prompt", "workflow"} or not str(payload.item_id or "").strip():
+        raise HTTPException(status_code=400, detail="参数无效")
+    kind, item_id = payload.kind, str(payload.item_id).strip()[:120]
+    uid = str(user.get("id") or "")
+    data = load_library_favorites()
+    favorites = data.setdefault("favorites", [])
+    if not any(str(f.get("user_id") or "") == uid and str(f.get("kind") or "") == kind and str(f.get("item_id") or "") == item_id for f in favorites):
+        favorites.append({"user_id": uid, "kind": kind, "item_id": item_id, "created_at": now_ms()})
+    save_library_favorites(data)
+    return {"ok": True, "favorites": library_favorite_ids(uid, kind)}
+
+@app.delete("/api/library/favorites/{kind}/{item_id:path}")
+async def remove_library_favorite(kind: str, item_id: str, request: Request):
+    user = require_authenticated(request)
+    if kind not in {"prompt", "workflow"}:
+        raise HTTPException(status_code=400, detail="不支持的收藏类型")
+    uid = str(user.get("id") or "")
+    data = load_library_favorites()
+    data["favorites"] = [f for f in (data.get("favorites") or [])
+                         if not (str(f.get("user_id") or "") == uid and str(f.get("kind") or "") == kind and str(f.get("item_id") or "") == item_id)]
+    save_library_favorites(data)
+    return {"ok": True, "favorites": library_favorite_ids(uid, kind)}
+
+class AssetLibraryPublishRequest(BaseModel):
+    published: bool = True
+
+@app.patch("/api/asset-library/items/{item_id}/publish")
+async def set_asset_library_item_published(item_id: str, payload: AssetLibraryPublishRequest, request: Request):
+    user = require_authenticated(request)
+    lib = load_asset_library()
+    for library in lib.get("libraries", []):
+        for cat in library.get("categories", []):
+            for item in cat.get("items", []):
+                if item.get("id") == item_id:
+                    require_asset_manage(item, user)
+                    item["published"] = bool(payload.published)
+                    save_asset_library(lib)
+                    return {"library": lib, "item": item}
+    raise HTTPException(status_code=404, detail="内容不存在")
 
 PROMPT_BUILTIN_CATEGORY_IDS = {"view", "storyboard", "character", "product", "lighting", "custom"}
 
@@ -21971,6 +22037,9 @@ async def add_asset_library_item(payload: AssetLibraryAddRequest, request: Reque
         raise HTTPException(status_code=400, detail="只支持保存本地 /assets 或 /output 媒体")
     _, item = make_asset_library_item(src, payload.name or os.path.basename(src), subdir=cat.get("dir") or "")
     apply_asset_metadata(item, user)
+    preset_category = str(payload.category or "").strip().lower()
+    if preset_category in {"video", "scene", "ui", "icon", "clothing", "portrait", "other"}:
+        item["category"] = preset_category
     item["library_id"] = library.get("id")
     item["category_id"] = cat.get("id")
     cat.setdefault("items", []).append(item)

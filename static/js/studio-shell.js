@@ -42,7 +42,7 @@
         } catch(e){}
     }
     function openPanel(name, push=true){
-        const paths = { assets:'/static/asset-manager.html', 'api-settings':'/static/api-settings.html', admin:'/static/admin.html' };
+        const paths = { assets:'/static/library.html', 'api-settings':'/static/api-settings.html', admin:'/static/admin.html' };
         if(!paths[name]) return;
         closeFloating();
         panelTitle.textContent = name === 'admin' ? '管理台' : name === 'assets' ? '资产库' : 'API 设置';

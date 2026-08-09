@@ -15,6 +15,7 @@
         '/static/js/i18n/canvas.js',
         '/static/js/i18n/smart-canvas.js',
         '/static/js/i18n/comfyui-settings.js',
+        '/static/js/i18n/library.js',
     ];
     const tags = scripts.map(src => '<script src="' + src + '?v=' + VERSION + '"></script>').join('');
     if(document.readyState === 'loading' && document.currentScript){

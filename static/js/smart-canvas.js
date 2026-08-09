@@ -1055,14 +1055,14 @@ async function exportSelectedSmartWorkflow(includeResources=false){
         toast(err.message || '导出工作流失败');
     }
 }
-function insertSmartWorkflowIntoCanvas(imported){
+function insertSmartWorkflowIntoCanvas(imported, targetPoint = null){
     const srcNodes = (imported.nodes || []).filter(Boolean);
     const srcConnections = (imported.connections || []).filter(Boolean);
     if(!canvas || !srcNodes.length) throw new Error('工作流中没有可导入的节点');
     pushUndo();
     const minX = Math.min(...srcNodes.map(n => Number(n.x || 0)));
     const minY = Math.min(...srcNodes.map(n => Number(n.y || 0)));
-    const target = viewportCenter();
+    const target = targetPoint || viewportCenter();
     const dx = target.x - minX;
     const dy = target.y - minY;
     const idMap = new Map();
@@ -1105,6 +1105,156 @@ async function importSmartWorkflowFile(file){
         toast(err.message || '导入工作流失败');
     }
 }
+
+// ---------------------------------------------------------------------
+// 库（提示词库 / 工作流库）应用到画布
+// ---------------------------------------------------------------------
+function selectedPromptNodeForLibrary(){
+    if(!Array.isArray(nodes)) return null;
+    const selected = new Set([
+        ...(Array.isArray(selectedIds) ? selectedIds : []),
+        ...(selectedId ? [selectedId] : [])
+    ]);
+    return nodes.find(node => node?.type === 'smart-prompt' && selected.has(node.id)) || null;
+}
+
+function applyLibraryPromptToCanvas(text){
+    if(!canvas){ toast('请先打开画布'); return {selected:false}; }
+    const node = selectedPromptNodeForLibrary();
+    if(node) return {selected: node.id};
+    const point = viewportCenter();
+    const created = createPromptNode(Math.round(point.x - 158), Math.round(point.y - 97));
+    created.text = String(text || '').trim();
+    render();
+    scheduleSave();
+    toast('已创建提示词节点');
+    return {created: created.id};
+}
+
+function applyLibraryPromptToNode(text, mode, nodeId){
+    const node = (nodes || []).find(n => n?.id === nodeId && n?.type === 'smart-prompt');
+    if(!node) return false;
+    const value = String(text || '').trim();
+    pushUndo();
+    if(mode === 'replace'){
+        node.text = value;
+    } else {
+        const sep = String(node.promptSeparator || ';');
+        node.text = node.text && String(node.text).trim() ? String(node.text).trimEnd() + sep + value : value;
+    }
+    render();
+    scheduleSave();
+    toast(mode === 'replace' ? '已替换提示词' : '已追加提示词');
+    return true;
+}
+
+function libraryWorkflowBounds(imported){
+    const srcNodes = (imported?.nodes || []).filter(Boolean);
+    if(!srcNodes.length) return {width:800, height:600, x:0, y:0};
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for(const n of srcNodes){
+        const x = Number(n?.x || 0), y = Number(n?.y || 0);
+        const w = Number(n?.w || 316), h = Number(n?.h || 240);
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + h);
+    }
+    return {width: Math.max(200, maxX - minX), height: Math.max(160, maxY - minY), x: minX, y: minY};
+}
+
+function findEmptySpaceForWorkflow(width, height){
+    const center = viewportCenter();
+    const stepX = Math.max(560, width + 140);
+    const stepY = Math.max(380, height + 140);
+    const offsets = [
+        {x:0,y:0},{x:stepX,y:0},{x:-stepX,y:0},{x:0,y:stepY},{x:0,y:-stepY},
+        {x:stepX,y:stepY},{x:-stepX,y:stepY},{x:stepX,y:-stepY},{x:-stepX,y:-stepY}
+    ];
+    for(let ring=2; ring<=8; ring++){
+        offsets.push(
+            {x:ring * stepX,y:0},{x:-ring * stepX,y:0},{x:0,y:ring * stepY},{x:0,y:-ring * stepY},
+            {x:ring * stepX,y:ring * stepY},{x:-ring * stepX,y:ring * stepY},
+            {x:ring * stepX,y:-ring * stepY},{x:-ring * stepX,y:-ring * stepY}
+        );
+    }
+    const pad = 80;
+    for(const offset of offsets){
+        const box = {
+            x: Math.round(center.x + offset.x - width / 2),
+            y: Math.round(center.y + offset.y - height / 2),
+            width,
+            height
+        };
+        const occupied = (nodes || []).some(node => {
+            const rect = nodeRect(node);
+            if(!rect || !Number.isFinite(rect.x) || !Number.isFinite(rect.y)) return false;
+            return box.x < rect.x + rect.width + pad && box.x + box.width + pad > rect.x
+                && box.y < rect.y + rect.height + pad && box.y + box.height + pad > rect.y;
+        });
+        if(!occupied) return {x: box.x, y: box.y};
+    }
+    return {x: Math.round(center.x), y: Math.round(center.y - height / 2)};
+}
+
+async function applyLibraryWorkflowToCanvas(item){
+    if(!canvas){ toast('请先打开画布'); return; }
+    if(!item?.url){ toast('工作流文件地址无效'); return; }
+    try {
+        const isZip = String(item.format || '').toLowerCase() === 'zip'
+            || String(item.url).toLowerCase().endsWith('.zip');
+        let imported = null;
+        if(isZip){
+            const blobRes = await fetch(item.url);
+            if(!blobRes.ok) throw new Error('下载工作流文件失败');
+            const form = new FormData();
+            form.append('file', new File([await blobRes.blob()], (item.name || 'workflow') + '.zip', {type:'application/zip'}));
+            const res = await fetch('/api/canvas-workflows/import', {method:'POST', body:form});
+            if(!res.ok) throw new Error(await responseErrorMessage(res, '导入工作流失败'));
+            imported = normalizeImportedSmartWorkflow(await res.json());
+        } else {
+            const res = await fetch(item.url);
+            if(!res.ok) throw new Error('下载工作流文件失败');
+            imported = normalizeImportedSmartWorkflow(LibraryUtils.safeJsonParse(await res.text(), null));
+        }
+        if(!imported?.nodes?.length) throw new Error('工作流中没有可导入的节点');
+        const bounds = libraryWorkflowBounds(imported);
+        const position = findEmptySpaceForWorkflow(bounds.width, bounds.height);
+        insertSmartWorkflowIntoCanvas(imported, {x: position.x, y: position.y});
+        toast(`已导入 ${imported.nodes.length} 个节点到画布`);
+    } catch(err) {
+        toast(err.message || '应用工作流失败');
+    }
+}
+
+function applyLibraryAssetToCanvas(item){
+    if(!canvas){ toast('请先打开画布'); return; }
+    if(!item?.url){ toast('素材地址无效'); return; }
+    const point = viewportCenter();
+    const image = imageForDisplay({...item, name:item.name || 'asset', url:item.url});
+    const node = {
+        id: uid('upload'),
+        type: 'smart-image-upload',
+        x: Math.round(point.x - 150),
+        y: Math.round(point.y - 100),
+        title: item.name || 'asset',
+        images: [image],
+        activeImageIndex: 0,
+        created_at: Date.now()
+    };
+    node.scale = mediaNodeDefaultScale(node);
+    pushUndo();
+    nodes.push(node);
+    localUnsyncedNodeIds.add(node.id);
+    selectedId = node.id;
+    render();
+    scheduleSave();
+    toast('已添加到画布');
+}
+
+window.applyLibraryPrompt = applyLibraryPromptToCanvas;
+window.applyLibraryPromptToNode = applyLibraryPromptToNode;
+window.applyLibraryWorkflow = applyLibraryWorkflowToCanvas;
+window.applyLibraryAsset = applyLibraryAssetToCanvas;
+
 const RECENT_SMART_SETTINGS_KEY = 'smart_canvas_recent_run_settings_v1';
 const initialSmartSettings = cloneSmartSettings(settings);
 let canvasDefaultSmartSettings = cloneSmartSettings(settings);
@@ -8759,7 +8909,6 @@ function promptNodeBodyHtml(node){
     const readonly = node.llmEnabled && llmConfigured ? 'readonly' : '';
     const systemPrompt = (node.llmSystemPrompt || '').trim();
     const inputThumbs = smartNodeInputThumbsHtml(promptNodeInputImages(node));
-    const templateActive = activePromptTemplateNodeId() === node.id;
     const promptItems = promptNodePromptItems(node);
     const promptSplitPreviewH = promptNodeSplitPreviewHeight(node);
     const upstreamPromptItems = promptNodeUpstreamPromptItems(node);
@@ -8788,7 +8937,6 @@ function promptNodeBodyHtml(node){
     return `<div class="prompt-node-card">
         <div class="prompt-node-text-wrap"><textarea class="prompt-node-text prompt-node-control" ${readonly} placeholder="${escapeHtml(tr('smart.promptPlaceholderNode'))}">${escapeHtml(node.text || '')}</textarea>${smartTextCopyButtonHtml('.prompt-node-text', 'prompt-node-control')}</div>
         <div class="prompt-node-tools">
-            <button class="prompt-node-pill prompt-node-control prompt-preset-edit ${templateActive ? 'active' : ''}" type="button"><i data-lucide="library"></i><span>模板库</span></button>
             <button class="prompt-node-pill prompt-node-control prompt-split-toggle ${node.promptSplitEnabled ? 'active' : ''}" type="button"><i data-lucide="split"></i><span>分隔符</span></button>
             <button class="prompt-node-pill prompt-llm-toggle ${node.llmEnabled ? 'active' : ''}" type="button"><i data-lucide="sparkles"></i><span>LLM</span></button>
         </div>
@@ -9211,13 +9359,19 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
     if(!photoshopContextMenu) return;
     const node = nodes.find(item => item.id === nodeId);
     const image = imageForDisplay(node?.images?.[imageIndex]);
-    if(!node || !image?.url || mediaKindForItem(image) !== 'image') return;
+    const kind = mediaKindForItem(image || {});
+    if(!node || !image?.url || (kind !== 'image' && kind !== 'video')) return;
     closeCreateMenu();
     closePortConnectMenu();
     selectedId = nodeId;
     selectedIds = [];
     selectedImage = {nodeId, index:imageIndex};
-    photoshopContextMenu.innerHTML = `<button type="button" role="menuitem" data-send-photoshop><i data-lucide="panels-top-left"></i><span>${escapeHtml(tr('smart.sendToPhotoshop'))}</span></button>`;
+    const menuItems = [];
+    if(kind === 'image'){
+        menuItems.push(`<button type="button" role="menuitem" data-send-photoshop><i data-lucide="panels-top-left"></i><span>${escapeHtml(tr('smart.sendToPhotoshop'))}</span></button>`);
+    }
+    menuItems.push(`<button type="button" role="menuitem" data-add-my-assets><i data-lucide="library-big"></i><span>${escapeHtml(tr('library.addToMyAssets'))}</span></button>`);
+    photoshopContextMenu.innerHTML = menuItems.join('');
     photoshopContextMenu.classList.add('open');
     photoshopContextMenu.setAttribute('aria-hidden', 'false');
     positionPhotoshopContextMenu(clientX, clientY);
@@ -9225,6 +9379,16 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
         event.preventDefault();
         event.stopPropagation();
         sendImageToPhotoshop(nodeId, imageIndex, event.currentTarget);
+    });
+    photoshopContextMenu.querySelector('[data-add-my-assets]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        closePhotoshopContextMenu();
+        if(window.openAssetUploadDialog){
+            window.openAssetUploadDialog(nodeId, imageIndex);
+        } else {
+            toast('资产库未就绪，请刷新页面后重试');
+        }
     });
     refreshIcons();
 }
@@ -9884,12 +10048,6 @@ function bindPromptNodeControls(el, node){
         render();
         scheduleSave();
     };
-    const presetEdit = el.querySelector('.prompt-preset-edit');
-    if(presetEdit) presetEdit.onclick = e => {
-        e.preventDefault();
-        e.stopPropagation();
-        editPromptPresetForNode(node);
-    };
     const toggle = el.querySelector('.prompt-llm-toggle');
     if(toggle) toggle.onclick = e => {
         e.preventDefault(); e.stopPropagation();
@@ -10490,9 +10648,10 @@ function bindNodeEvents(){
                 e.preventDefault();
             });
             item.addEventListener('contextmenu', e => {
-                if(e.target.closest('video,audio,.image-delete,.image-name-badge')) return;
+                if(e.target.closest('audio,.image-delete,.image-name-badge')) return;
                 const target = thumbTarget();
-                if(!target.image || mediaKindForItem(target.image) !== 'image') return;
+                const targetKind = mediaKindForItem(target.image || {});
+                if(!target.image || (targetKind !== 'image' && targetKind !== 'video')) return;
                 e.preventDefault();
                 e.stopPropagation();
                 e.stopImmediatePropagation();
@@ -19273,7 +19432,7 @@ window.addEventListener('keydown', e => {
         if(key === 'a'){
             if(e.repeat) return;
             e.preventDefault();
-            toggleAssetLibrary();
+            window.openAssetLibrary?.();
             return;
         }
     }
@@ -19393,15 +19552,6 @@ fileInput.onchange = () => {
     uploadTargetId = '';
     fileInput.value = '';
 };
-if(assetToggle) assetToggle.onclick = () => toggleAssetLibrary();
-if(assetCloseBtn) assetCloseBtn.onclick = () => toggleAssetLibrary(false);
-if(assetOpenManagerBtn) assetOpenManagerBtn.onclick = () => {
-    if(window.parent && window.parent !== window) {
-        window.parent.postMessage({type:'studio:open-panel', panel:'assets'}, location.origin);
-    } else {
-        window.location.href = '/static/asset-manager.html';
-    }
-};
 if(smartWorkflowToggle) smartWorkflowToggle.onclick = event => {
     event.preventDefault();
     event.stopPropagation();
@@ -19484,140 +19634,6 @@ assetPanel?.addEventListener('wheel', e => {
 assetDialogBackdrop?.addEventListener('pointerdown', e => e.stopPropagation());
 assetDialogBackdrop?.addEventListener('mousedown', e => e.stopPropagation());
 assetDialogBackdrop?.addEventListener('click', e => e.stopPropagation());
-promptPresetPanel?.addEventListener('pointerdown', e => e.stopPropagation());
-promptPresetPanel?.addEventListener('mousedown', e => e.stopPropagation());
-promptPresetPanel?.addEventListener('click', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('pointerdown', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('mousedown', e => e.stopPropagation());
-promptTemplatePanel?.addEventListener('wheel', e => e.stopPropagation(), {passive:false});
-promptTemplatePanel?.addEventListener('click', e => {
-    e.stopPropagation();
-    const apply = e.target.closest('[data-template-apply]');
-    if(apply){ applyPromptTemplateToNode(apply.dataset.templateApply || 'positive'); return; }
-    if(e.target.closest('[data-template-save-current]')){ saveCurrentPromptAsTemplate(); return; }
-    if(e.target.closest('[data-template-new]')){ createBlankPromptTemplate(); return; }
-    if(e.target.closest('[data-template-edit]')) { promptTemplateEditing = true; renderPromptTemplatePanel(); return; }
-    if(e.target.closest('[data-template-edit-cancel]')) { promptTemplateEditing = false; renderPromptTemplatePanel(); return; }
-    if(e.target.closest('[data-template-edit-save]')){ savePromptTemplateEdit(); return; }
-    if(e.target.closest('[data-template-delete]')){ deletePromptTemplate(); return; }
-    const cat = e.target.closest('[data-template-cat]');
-    if(cat){
-        promptTemplateCategory = cat.dataset.templateCat || 'all';
-        promptTemplateSelectedId = '';
-        promptTemplateEditing = false;
-        renderPromptTemplatePanel({preserveScroll:false});
-        return;
-    }
-    const catEdit = e.target.closest('[data-template-cat-edit]');
-    if(catEdit){
-        const id = catEdit.dataset.templateCatEdit || '';
-        renamePromptTemplateGroup(id);
-        return;
-    }
-    const catDelete = e.target.closest('[data-template-cat-delete]');
-    if(catDelete){
-        deletePromptTemplateGroup(catDelete.dataset.templateCatDelete || '');
-        return;
-    }
-    if(e.target.closest('[data-template-group-edit]')){
-        promptTemplateGroupEditMode = !promptTemplateGroupEditMode;
-        renderPromptTemplatePanel({preserveScroll:false});
-        return;
-    }
-    if(e.target.closest('[data-template-cat-new]')) { createPromptTemplateGroup(); return; }
-    const card = e.target.closest('[data-template-id]');
-    if(card){
-        promptTemplateSelectedId = card.dataset.templateId || '';
-        promptTemplateEditing = false;
-        renderPromptTemplatePanel();
-        return;
-    }
-});
-if(promptPresetClose) promptPresetClose.onclick = closePromptPresetPanel;
-if(promptTemplateClose) promptTemplateClose.onclick = closePromptTemplatePanel;
-if(promptTemplateSearch) promptTemplateSearch.oninput = () => renderPromptTemplatePanel({preserveScroll:false});
-if(promptTemplateLibrarySelect) promptTemplateLibrarySelect.onchange = async () => {
-    activePromptLibraryId = promptTemplateLibrarySelect.value || 'system';
-    promptTemplateSelectedId = '';
-    // 切换词库必须重置分类筛选，否则上一个库的分类（如系统的“视角”）会把新库内容过滤为空。
-    promptTemplateCategory = 'all';
-    promptTemplateEditing = false;
-    // 拉取最新数据，确保素材库管理里新建/新增的词库与提示词在画布即时可见。
-    const want = activePromptLibraryId;
-    try { await loadPromptTemplates(); } catch(e){}
-    if(promptLibraries.some(lib => lib.id === want)) activePromptLibraryId = want;
-    renderPromptLibrarySelect();
-    renderPromptTemplatePanel({preserveScroll:false});
-};
-if(composerTemplateBtn) composerTemplateBtn.onclick = event => {
-    event.preventDefault();
-    event.stopPropagation();
-    if(promptTemplatePanel?.classList?.contains('open') && promptTemplatePanel.dataset.target === 'composer'){
-        closePromptTemplatePanel();
-        return;
-    }
-    openPromptTemplatePanel(activeComposerNode()?.id || selectedNode()?.id || '', promptTemplateSelectedId, {target:'composer'});
-};
-if(promptPresetSelect) promptPresetSelect.onchange = () => renderPromptPresetPanel(promptPresetSelect.value);
-[promptPresetName, promptPresetText].forEach(input => {
-    input?.addEventListener('input', () => {
-        resetPromptPresetDeleteState();
-        setPromptPresetStatus(tr('smart.promptPresetEditing'));
-    });
-});
-if(promptPresetApply) promptPresetApply.onclick = () => {
-    const preset = currentPromptPreset(promptPresetSelect.value);
-    const node = promptPresetPanelNode();
-    if(!preset || !node) return;
-    node.promptPresetId = preset.id;
-    node.text = preset.text || '';
-    closePromptPresetPanel();
-    render();
-    scheduleSave();
-};
-if(promptPresetSave) promptPresetSave.onclick = () => {
-    const preset = currentPromptPreset(promptPresetSelect.value);
-    if(!preset) return;
-    const name = promptPresetName.value.trim();
-    const text = promptPresetText.value.trim();
-    if(!name || !text){ setPromptPresetStatus(tr('smart.promptPresetRequired'), 'warn'); return; }
-    const idx = promptPresets.findIndex(p => p.id === preset.id);
-    if(idx >= 0) promptPresets[idx] = {...promptPresets[idx], name, text, updatedAt:Date.now()};
-    savePromptPresets();
-    const node = promptPresetPanelNode();
-    if(node?.promptPresetId === preset.id) node.text = text;
-    renderPromptPresetPanel(preset.id, tr('smart.promptPresetSaved'));
-    setPromptPresetStatus(tr('smart.promptPresetSaved'), 'ok');
-    render();
-    scheduleSave();
-};
-if(promptPresetNew) promptPresetNew.onclick = () => {
-    const node = promptPresetPanelNode();
-    const preset = createPromptPresetFromNode(node, {openPanel:false});
-    if(!preset) return;
-    renderPromptPresetPanel(preset.id, tr('smart.promptPresetSavedNew'));
-    setPromptPresetStatus(tr('smart.promptPresetSavedNew'), 'ok');
-    promptPresetName?.focus();
-    promptPresetName?.select();
-};
-if(promptPresetDelete) promptPresetDelete.onclick = () => {
-    const preset = currentPromptPreset(promptPresetSelect.value);
-    if(!preset) return;
-    if(!promptPresetDeleteArmed){
-        promptPresetDeleteArmed = true;
-        promptPresetDelete.textContent = tr('smart.promptPresetDeleteAgain');
-        promptPresetDelete.classList.add('confirm-danger');
-        setPromptPresetStatus(tr('smart.promptPresetDeleteConfirm').replace('{name}', preset.name || tr('smart.promptPresetUnnamed')), 'warn');
-        return;
-    }
-    promptPresets = promptPresets.filter(p => p.id !== preset.id);
-    nodes.forEach(node => { if(node.promptPresetId === preset.id) node.promptPresetId = ''; });
-    savePromptPresets();
-    renderPromptPresetPanel(promptPresets[0]?.id || '', tr('smart.promptPresetDeleted'));
-    setPromptPresetStatus(tr('smart.promptPresetDeleted'), 'ok');
-    render();
-    scheduleSave();
-};
 document.querySelectorAll('[data-asset-tab]').forEach(btn => {
     btn.onclick = () => {
         assetTab = btn.dataset.assetTab;
@@ -19896,11 +19912,9 @@ mentionPicker.addEventListener('mousedown', event => event.stopPropagation());
 document.addEventListener('click', event => {
     if(!event.target.closest('.smart-control')) closeAllSmartPopovers();
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
-    if(!event.target.closest('.prompt-preset-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('.prompt-preset-save')) closePromptPresetPanel();
-    if(!event.target.closest('.prompt-template-panel') && !event.target.closest('.prompt-preset-edit') && !event.target.closest('#composerTemplateBtn')) closePromptTemplatePanel();
 });
 document.addEventListener('keydown', event => {
-    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); closePromptPresetPanel(); closePromptTemplatePanel(); }
+    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); }
 });
 function cropDragModeFromPointer(event){
     const explicit = event.target.closest?.('[data-crop-handle]')?.dataset?.cropHandle;

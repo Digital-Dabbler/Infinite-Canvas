@@ -1,0 +1,22 @@
+﻿/* Workflow Library CSS */
+.workflow-library-card .library-card-cover {
+    aspect-ratio: 16/10;
+    background: var(--soft);
+    overflow: hidden;
+}
+.workflow-library-card .library-card-cover img {
+    width: 100%; height: 100%; object-fit: cover;
+}
+.workflow-cover-placeholder {
+    width: 100%; height: 100%;
+    display: grid; place-items: center;
+    color: var(--muted);
+}
+.workflow-cover-placeholder svg { width: 48px; height: 48px; }
+.workflow-meta {
+    margin-top: 6px; font-size: 11px; color: var(--muted);
+    display: flex; align-items: center; gap: 10px;
+}
+.workflow-node-count { display: flex; align-items: center; gap: 4px; }
+.workflow-node-count svg { width: 13px; height: 13px; }
+
