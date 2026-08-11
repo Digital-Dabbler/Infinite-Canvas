@@ -20382,6 +20382,17 @@ composer.addEventListener('click', event => {
     event.stopPropagation();
 });
 promptInput.addEventListener('input', maybeOpenMentionPicker);
+document.querySelector('.composer-prompt-library')?.addEventListener('click', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = activeComposerNode();
+    if(!node) return;
+    if(!window.isPromptPresetTargetEditable?.(node)){
+        toast('当前输入由上游提示词节点控制');
+        return;
+    }
+    window.openPromptLibraryForTarget?.(node.id);
+});
 promptInput.addEventListener('input', () => {
     delete promptInput.dataset.preserveDraftOnce;
     savePromptDraftForCurrent();

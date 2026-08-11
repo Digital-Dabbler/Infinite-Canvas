@@ -49,6 +49,30 @@
 .prompt-node-text-wrap .prompt-preset-empty,
 .prompt-node-text-wrap .prompt-preset-actions { display:none; }
 .prompt-node-text-wrap .prompt-preset-chip { pointer-events:auto; }
+.composer .prompt-row > .composer-preset-controls {
+    position:static;
+    z-index:3;
+    display:block;
+    margin:0;
+    padding:0;
+    pointer-events:auto;
+}
+.composer .prompt-row > .composer-preset-controls .prompt-preset-shell {
+    max-height:92px;
+    margin:0;
+    padding:8px 44px 7px 10px;
+    overflow:auto;
+    border-bottom:1px solid var(--line);
+    scrollbar-width:thin;
+}
+.composer .prompt-row > .composer-preset-controls .prompt-preset-shell:not(:has(.prompt-preset-chip)) { display:none; }
+.composer .prompt-row > .composer-preset-controls .prompt-preset-row { grid-template-columns:1fr auto; padding:0; border:0; border-radius:0; background:transparent; }
+.composer .prompt-row > .composer-preset-controls .prompt-preset-row::before { display:none; }
+.composer .prompt-row > .composer-preset-controls .prompt-preset-chips { min-height:0; overflow:visible; pointer-events:auto; }
+.composer .prompt-row > .composer-preset-controls .prompt-preset-empty,
+.composer .prompt-row > .composer-preset-controls .prompt-preset-actions { display:none; }
+.composer .prompt-row > .composer-preset-controls .prompt-preset-chip,
+.composer .prompt-row > .composer-preset-controls .prompt-preset-chip button { pointer-events:auto; }
 .prompt-node-text-wrap .prompt-node-text { flex: 1 1 auto; height: auto; }
 .prompt-node-card > .prompt-preset-final-only { margin: 0; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rh-brand) 34%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--card) 88%, var(--soft)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--rh-brand) 62%, transparent); }
 .prompt-node-card > .prompt-preset-final-only .prompt-preset-final { padding: 0; }

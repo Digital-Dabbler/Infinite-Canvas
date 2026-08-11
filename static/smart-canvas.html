@@ -45,9 +45,12 @@
                     </div>
                     <div id="inputThumbsRow" class="input-thumbs-row"></div>
                     <div id="inputPromptPreview" class="input-prompt-preview"></div>
-                    <div id="composerPresetControls" class="composer-preset-controls"></div>
                     <div class="prompt-row">
+                        <div id="composerPresetControls" class="composer-preset-controls"></div>
                         <div id="promptInput" class="prompt-input" contenteditable="true" data-i18n-placeholder="smart.promptPlaceholder" data-placeholder="描述你想生成或编辑的图片..."></div>
+                        <button class="smart-text-copy-btn text-node-library composer-prompt-library" type="button" title="提示词库" aria-label="提示词库" data-i18n-title="smart.promptLibrary" data-i18n-label="smart.promptLibrary">
+                            <i data-lucide="library-big"></i>
+                        </button>
                         <button class="smart-text-copy-btn smart-text-copy-composer" type="button" data-copy-text-target="#promptInput" title="复制文本" aria-label="复制文本" data-i18n-title="smart.copyText" data-i18n-label="smart.copyText">
                             <i data-lucide="copy"></i>
                         </button>

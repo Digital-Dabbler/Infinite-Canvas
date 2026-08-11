@@ -147,7 +147,9 @@
         if (!host) return;
         const node = typeof activeComposerNode === 'function' ? activeComposerNode() : null;
         if (!node) { host.innerHTML = ''; return; }
-        host.innerHTML = presetBarHtml(node.id, 'composer');
+        // The composer uses the same embedded chip strip as a text node. The
+        // surrounding prompt row supplies its own fixed prompt-library button.
+        host.innerHTML = presetBarHtml(node.id, 'node', 'row');
         bindControls(host, node.id);
         window.lucide?.createIcons();
     }
