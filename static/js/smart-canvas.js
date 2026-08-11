@@ -2929,6 +2929,75 @@ function providerImageModels(providerId){
     if(providerId === 'volcengine') return volcengineProvider().image_models || [];
     return (apiProviders || []).find(p => p.id === providerId)?.image_models || [];
 }
+function imageModelCapabilityFor(providerId, model){
+    return imageModelCapabilityCache.get(imageCapabilityCacheKey(providerId, model)) || null;
+}
+function imageModelSelectionNode(){
+    return activeComposerNode() || selectedNode();
+}
+function imageModelUsesReferenceInput(node=imageModelSelectionNode()){
+    return imageRefsOnly(node ? visibleReferenceImagesFor(node) : []).length > 0;
+}
+function imageModelInputSupport(providerId, model){
+    const capability = imageModelCapabilityFor(providerId, model);
+    if(capability?.discovered){
+        const imageFields = (capability.fields || []).filter(field => String(field?.type || '').toUpperCase() === 'IMAGE');
+        return {
+            known:true,
+            acceptsReference:imageFields.length > 0,
+            requiresReference:imageFields.some(field => field.required === true)
+        };
+    }
+    // RunningHub 能力尚未返回时，仍可用稳定的模型路径区分文生图和图生图；未知模型两边都保留，避免错误隐藏。
+    const name = String(model || '').trim().toLowerCase();
+    const imageToImage = /(?:image|img)[-_\s]*to[-_\s]*(?:image|img)|\/(?:edit|inpaint|outpaint)(?:[-_/]|$)|(?:^|[-_/])edit(?:[-_/]|$)|controlnet/.test(name);
+    const textToImage = /(?:text|txt)[-_\s]*to[-_\s]*(?:image|img)/.test(name);
+    if(imageToImage && !textToImage) return {known:true, acceptsReference:true, requiresReference:true};
+    if(textToImage && !imageToImage) return {known:true, acceptsReference:false, requiresReference:false};
+    return {known:false, acceptsReference:true, requiresReference:false};
+}
+function imageModelModeKey(providerId, hasReference){
+    return `${String(providerId || '').trim()}::${hasReference ? 'reference' : 'text'}`;
+}
+function rememberedImageModelForMode(providerId, hasReference){
+    return String(settings.imageModelSelections?.[imageModelModeKey(providerId, hasReference)] || '').trim();
+}
+function rememberImageModelForMode(providerId, hasReference, model){
+    const value = String(model || '').trim();
+    if(!value) return;
+    settings.imageModelSelections = settings.imageModelSelections && typeof settings.imageModelSelections === 'object'
+        ? settings.imageModelSelections
+        : {};
+    settings.imageModelSelections[imageModelModeKey(providerId, hasReference)] = value;
+}
+function imageModelsForCurrentInputs(providerId, models=providerImageModels(providerId), node=imageModelSelectionNode()){
+    const hasReference = imageModelUsesReferenceInput(node);
+    const filtered = (models || []).filter(model => {
+        const support = imageModelInputSupport(providerId, model);
+        return hasReference ? support.acceptsReference : !support.requiresReference;
+    });
+    return {models:filtered, hasReference};
+}
+function syncImageModelForCurrentInputs(node=imageModelSelectionNode()){
+    if(settings.engine !== 'api' || settings.apiKind === 'video' || !settings.provider_id) return {models:[], hasReference:false, changed:false};
+    const selection = imageModelsForCurrentInputs(settings.provider_id, providerImageModels(settings.provider_id), node);
+    const {models, hasReference} = selection;
+    if(models.includes(settings.model)){
+        rememberImageModelForMode(settings.provider_id, hasReference, settings.model);
+        return {...selection, changed:false};
+    }
+    const remembered = rememberedImageModelForMode(settings.provider_id, hasReference);
+    const nextModel = models.includes(remembered) ? remembered : (models[0] || '');
+    if(nextModel === settings.model) return {...selection, changed:false};
+    settings.model = nextModel;
+    settings.imageCapabilityKey = '';
+    settings.imageCapabilitySize = '';
+    settings.imageCapabilityWidth = '';
+    settings.imageCapabilityHeight = '';
+    settings.imageModelParams = {};
+    if(nextModel) rememberImageModelForMode(settings.provider_id, hasReference, nextModel);
+    return {...selection, changed:true};
+}
 // 即梦 image_upscale 支持的放大分辨率（与后端 JIMENG_UPSCALE_RESOLUTIONS 保持一致）
 const JIMENG_UPSCALE_RESOLUTIONS = ['2k', '4k', '8k'];
 function jimengImageProviderId(){
@@ -3623,7 +3692,8 @@ function renderDynamicParams(options={}){
 function renderApiParams(){
     const providers = imageProviders();
     if(!settings.provider_id || !providers.some(p => p.id === settings.provider_id)) settings.provider_id = providers[0]?.id || '';
-    const models = filterJimengImageModels(providerImageModels(settings.provider_id));
+    const inputSelection = syncImageModelForCurrentInputs();
+    const models = filterJimengImageModels(inputSelection.models);
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
     const runningHub = isRunningHubVideoProvider(settings.provider_id);
     const capabilityKey = imageCapabilityCacheKey(settings.provider_id, settings.model);
@@ -4992,6 +5062,7 @@ function setDynamicSetting(key, value){
         settings.imageCapabilityWidth = '';
         settings.imageCapabilityHeight = '';
         settings.imageModelParams = {};
+        rememberImageModelForMode(settings.provider_id, imageModelUsesReferenceInput(), settings.model);
     }
     if(key === 'videoProvider'){
         settings.videoModel = '';
@@ -9417,6 +9488,7 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
         menuItems.push(`<button type="button" role="menuitem" data-send-photoshop><i data-lucide="panels-top-left"></i><span>${escapeHtml(tr('smart.sendToPhotoshop'))}</span></button>`);
     }
     menuItems.push(`<button type="button" role="menuitem" data-add-my-assets><i data-lucide="library-big"></i><span>${escapeHtml(tr('library.addToMyAssets'))}</span></button>`);
+    menuItems.push('<button type="button" role="menuitem" data-set-canvas-cover><i data-lucide="panel-top"></i><span>设为封面</span></button>');
     if(node.workflowGroupId){
         menuItems.push('<button type="button" role="menuitem" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>');
     }
@@ -9438,6 +9510,12 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
         } else {
             toast('资产库未就绪，请刷新页面后重试');
         }
+    });
+    photoshopContextMenu.querySelector('[data-set-canvas-cover]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        closePhotoshopContextMenu();
+        setSmartCanvasCover(node, imageIndex, image, kind);
     });
     photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click', event => {
         event.preventDefault();
@@ -14830,6 +14908,8 @@ function renderInputPromptPreview(node){
 }
 function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
+    const imageModelSelection = syncImageModelForCurrentInputs(node);
+    if(imageModelSelection.changed) scheduleDynamicParamsRefresh(80);
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
     const dedup = node ? visibleReferenceImagesFor(node) : [];
