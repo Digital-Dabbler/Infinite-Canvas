@@ -3122,6 +3122,83 @@ function providerVideoModels(providerId){
     const provider = videoApiProviders().find(p => p.id === providerId);
     return [...new Set(provider?.video_models || [])];
 }
+function videoModelCapabilityFor(providerId, model){
+    return videoModelCapabilityCache.get(videoCapabilityCacheKey(providerId, model)) || null;
+}
+function videoModelSelectionNode(){
+    return activeComposerNode() || selectedNode();
+}
+function videoModelUsesImageReference(node=videoModelSelectionNode()){
+    return imageRefsOnly(node ? visibleReferenceImagesFor(node) : []).length > 0;
+}
+function videoModelImageInputFields(capability){
+    const fields = (capability?.fields || []).filter(field => String(field?.type || '').toUpperCase() === 'IMAGE');
+    [
+        videoCapabilityField(capability, 'firstFrameUrl', 'first_frame_url', 'firstFrameImage', 'first_frame_image'),
+        videoCapabilityField(capability, 'lastFrameUrl', 'last_frame_url', 'lastFrameImage', 'last_frame_image')
+    ].filter(Boolean).forEach(field => {
+        if(!fields.includes(field)) fields.push(field);
+    });
+    return fields;
+}
+function videoModelInputSupport(providerId, model){
+    const capability = videoModelCapabilityFor(providerId, model);
+    if(capability?.discovered){
+        const imageFields = videoModelImageInputFields(capability);
+        return {
+            known:true,
+            acceptsReference:imageFields.length > 0,
+            requiresReference:imageFields.some(field => field.required === true)
+        };
+    }
+    // 能力尚未返回时按稳定的模型路径区分文生视频、图生视频和首尾帧视频；未知模型两边都保留，避免错误隐藏。
+    const name = String(model || '').trim().toLowerCase();
+    const imageToVideo = /(?:image|img)[-_\s]*to[-_\s]*(?:video|vid)|(?:first|last)[-_\s]*frame|frame[-_\s]*to[-_\s]*(?:video|vid)|reference[-_\s]*(?:(?:image|frame)[-_\s]*)?to[-_\s]*(?:video|vid)|(?:^|[-_/])i2v(?:[-_/]|$)/.test(name);
+    const textToVideo = /(?:text|txt)[-_\s]*to[-_\s]*(?:video|vid)|(?:^|[-_/])t2v(?:[-_/]|$)/.test(name);
+    if(imageToVideo && !textToVideo) return {known:true, acceptsReference:true, requiresReference:true};
+    if(textToVideo && !imageToVideo) return {known:true, acceptsReference:false, requiresReference:false};
+    return {known:false, acceptsReference:true, requiresReference:false};
+}
+function videoModelModeKey(providerId, hasReference){
+    return `${String(providerId || '').trim()}::${hasReference ? 'reference' : 'text'}`;
+}
+function rememberedVideoModelForMode(providerId, hasReference){
+    return String(settings.videoModelSelections?.[videoModelModeKey(providerId, hasReference)] || '').trim();
+}
+function rememberVideoModelForMode(providerId, hasReference, model){
+    const value = String(model || '').trim();
+    if(!value) return;
+    settings.videoModelSelections = settings.videoModelSelections && typeof settings.videoModelSelections === 'object'
+        ? settings.videoModelSelections
+        : {};
+    settings.videoModelSelections[videoModelModeKey(providerId, hasReference)] = value;
+}
+function videoModelsForCurrentInputs(providerId, models=providerVideoModels(providerId), node=videoModelSelectionNode()){
+    const hasReference = videoModelUsesImageReference(node);
+    const filtered = (models || []).filter(model => {
+        const support = videoModelInputSupport(providerId, model);
+        return hasReference ? support.acceptsReference : !support.requiresReference;
+    });
+    return {models:filtered, hasReference};
+}
+function syncVideoModelForCurrentInputs(node=videoModelSelectionNode()){
+    if(!['api', 'volcengine'].includes(settings.engine) || settings.apiKind !== 'video' || !settings.videoProvider){
+        return {models:[], hasReference:false, changed:false};
+    }
+    const selection = videoModelsForCurrentInputs(settings.videoProvider, providerVideoModels(settings.videoProvider), node);
+    const {models, hasReference} = selection;
+    if(models.includes(settings.videoModel)){
+        rememberVideoModelForMode(settings.videoProvider, hasReference, settings.videoModel);
+        return {...selection, changed:false};
+    }
+    const remembered = rememberedVideoModelForMode(settings.videoProvider, hasReference);
+    const nextModel = models.includes(remembered) ? remembered : (models[0] || '');
+    if(nextModel === settings.videoModel) return {...selection, changed:false};
+    settings.videoModel = nextModel;
+    settings.videoCapabilityKey = '';
+    if(nextModel) rememberVideoModelForMode(settings.videoProvider, hasReference, nextModel);
+    return {...selection, changed:true};
+}
 function volcengineVideoModels(){
     const provider = (apiProviders || []).find(p => p.id === 'volcengine');
     return [...new Set(provider?.video_models || [])];
@@ -3747,7 +3824,8 @@ function renderJimengUpscaleControl(){
 function renderApiVideoParams(){
     const providers = videoApiProviders();
     if(!settings.videoProvider || !providers.some(p => p.id === settings.videoProvider)) settings.videoProvider = providers[0]?.id || '';
-    const models = filterJimengVideoModels(providerVideoModels(settings.videoProvider));
+    const inputSelection = syncVideoModelForCurrentInputs();
+    const models = filterJimengVideoModels(inputSelection.models);
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || '';
     const runningHub = isRunningHubVideoProvider(settings.videoProvider);
     const capabilityKey = videoCapabilityCacheKey(settings.videoProvider, settings.videoModel);
@@ -3809,8 +3887,9 @@ function renderVolcengineParams(){
 function renderVolcengineVideoParams(){
     const provider = volcengineProvider();
     const providers = [provider];
-    const models = volcengineVideoModels();
     settings.videoProvider = 'volcengine';
+    const inputSelection = syncVideoModelForCurrentInputs();
+    const models = inputSelection.models;
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || '';
     dynamicParams.innerHTML = `
         ${renderVideoModelControl(models)}
@@ -5068,7 +5147,10 @@ function setDynamicSetting(key, value){
         settings.videoModel = '';
         settings.videoCapabilityKey = '';
     }
-    if(key === 'videoModel') settings.videoCapabilityKey = '';
+    if(key === 'videoModel'){
+        settings.videoCapabilityKey = '';
+        rememberVideoModelForMode(settings.videoProvider, videoModelUsesImageReferenceInput(), settings.videoModel);
+    }
     if(key === 'videoMultimodal') settings._videoMultimodalUserSet = true;
     if(key === 'videoMultimodal' && settings.videoMultimodal) settings.videoUseFrameRoles = false;
     normalizeSmartVideoModeSettings(settings, key === 'videoUseFrameRoles');
@@ -14910,6 +14992,8 @@ function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
     const imageModelSelection = syncImageModelForCurrentInputs(node);
     if(imageModelSelection.changed) scheduleDynamicParamsRefresh(80);
+    const videoModelSelection = syncVideoModelForCurrentInputs(node);
+    if(videoModelSelection.changed) scheduleDynamicParamsRefresh(80);
     syncJimengModelPillForRefs();
     syncJimengVideoModelPillForRefs();
     const dedup = node ? visibleReferenceImagesFor(node) : [];
