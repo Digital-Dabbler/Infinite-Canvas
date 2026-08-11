@@ -2543,7 +2543,16 @@ function applyViewport(){
     shell.style.backgroundPosition = '0 0';
     renderMinimap();
     scheduleSmartImageResolutionSync(world, 120);
-    requestAnimationFrame(() => positionImageActionToolbar());
+    requestAnimationFrame(() => {
+        positionImageActionToolbar();
+        // 图片生成 composer 位于 world 内，会随视口变换自然移动；文本节点的
+        // 生成面板在独立图层中，因此在每次平移/缩放后按当前节点屏幕位置同步。
+        // 这里不触发自动平移，避免用户拖动画布时面板反向拉回视口。
+        const active = selectedNode();
+        if(active?.type !== 'smart-prompt') return;
+        const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(active.id)}"]`);
+        positionTextNodePanel(nodeEl, null, false);
+    });
 }
 function screenToWorld(event){
     const rect = shell.getBoundingClientRect();
