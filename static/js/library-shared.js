@@ -198,7 +198,8 @@ const LibraryUtils = {
 
 function t(key, fallback = '') {
     if (window.StudioI18n?.t) {
-        return window.StudioI18n.t(key, fallback);
+        const translated = window.StudioI18n.t(key);
+        return translated === key ? (fallback || translated) : translated;
     }
     const dict = {
         'library.search': '搜索...',

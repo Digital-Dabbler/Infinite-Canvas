@@ -13,6 +13,9 @@ const AssetLibrary = {
     browseFolderId: '',
     folderDeleteTarget: '',
     selectedAssetIds: new Set(),
+    selectedFolderIds: new Set(),
+    unavailableAssetIds: new Set(),
+    openFolderMenuId: '',
     library: null,
     initialized: false,
     loading: false,
@@ -55,6 +58,8 @@ const AssetLibrary = {
                 this.manageMode = false;
                 this.browseFolderId = '';
                 this.selectedAssetIds.clear();
+                this.selectedFolderIds.clear();
+                this.openFolderMenuId = '';
                 LibrarySearch.clear('assets-library-overlay');
                 this.search = '';
                 this.render();
@@ -85,6 +90,30 @@ const AssetLibrary = {
                 this.renderContent();
                 return;
             }
+            const folderMenuAction = e.target.closest('[data-folder-menu-action]');
+            if (folderMenuAction) {
+                this.handleFolderMenuAction(folderMenuAction.dataset.folderMenuAction || '', folderMenuAction.dataset.folderId || '');
+                return;
+            }
+            const folderMenuToggle = e.target.closest('[data-folder-menu-toggle]');
+            if (folderMenuToggle) {
+                this.toggleFolderMenu(folderMenuToggle.dataset.folderMenuToggle || '');
+                return;
+            }
+            if (this.openFolderMenuId) this.openFolderMenuId = '';
+            const folderCheck = e.target.closest('[data-folder-check]');
+            if (folderCheck) {
+                this.toggleFolderSelection(folderCheck.dataset.folderCheck || '');
+                return;
+            }
+            if (e.target.closest('[data-folder-manage-select-all]')) {
+                this.toggleSelectAllFolders();
+                return;
+            }
+            if (e.target.closest('[data-folder-manage-delete]')) {
+                this.batchDeleteFolders();
+                return;
+            }
             const renameBtn = e.target.closest('[data-folder-rename]');
             if (renameBtn) {
                 this.promptForRenameFolder(renameBtn.dataset.folderRename || '');
@@ -97,8 +126,12 @@ const AssetLibrary = {
             }
             const openFolder = e.target.closest('[data-open-folder]');
             if (openFolder) {
-                this.browseFolderId = openFolder.dataset.openFolder || '';
-                this.renderContent();
+                const folderId = openFolder.dataset.openFolder || '';
+                if (this.manageMode) this.toggleFolderSelection(folderId);
+                else {
+                    this.browseFolderId = folderId;
+                    this.renderContent();
+                }
                 return;
             }
             if (e.target.closest('[data-folder-back]')) {
@@ -142,6 +175,7 @@ const AssetLibrary = {
                 this.batchDeleteAssets();
             }
         });
+        overlay?.addEventListener('error', e => this.handleMediaLoadError(e), true);
         overlay?.addEventListener('change', e => {
             if (e.target.matches('[data-time-filter]')) {
                 this.timeFilter = e.target.value || 'all';
@@ -449,7 +483,12 @@ const AssetLibrary = {
     renderFolderRoot() {
         const content = document.querySelector('#assets-library-overlay .library-content');
         if (!content) return;
-        let folders = this.personalImageFolders();
+        const allFolders = this.personalImageFolders();
+        const validFolderIds = new Set(allFolders.map(folder => String(folder.id || '')));
+        for (const id of this.selectedFolderIds) {
+            if (!validFolderIds.has(id)) this.selectedFolderIds.delete(id);
+        }
+        let folders = allFolders;
         if (this.search) {
             const q = this.search;
             folders = folders.filter(folder => String(folder.name || '').toLowerCase().includes(q));
@@ -463,35 +502,59 @@ const AssetLibrary = {
         if (!folders.length) {
             const filtered = this.category !== 'all' || this.timeFilter !== 'all' || this.search;
             const title = filtered
-                ? t('library.noMatchingFolders', '没有符合条件的文件夹')
-                : t('library.noFolders', '还没有文件夹');
+                ? t('library.noMatchingFolders', '\u6ca1\u6709\u7b26\u5408\u6761\u4ef6\u7684\u6587\u4ef6\u5939')
+                : t('library.noFolders', '\u8fd8\u6ca1\u6709\u6587\u4ef6\u5939');
             const desc = filtered
-                ? t('library.noMatchingFoldersHint', '换个分类、时间或关键词试试')
-                : t('library.noFoldersHint', '点右上角“新建文件夹”创建，上传时选择它作为保存位置');
-            const cta = filtered ? '' : `<button type="button" class="library-empty-btn" data-toolbar-new-folder><i data-lucide="folder-plus"></i>${LibraryUtils.escapeHtml(t('library.newFolder', '新建文件夹'))}</button>`;
-            content.innerHTML = `<div class="library-empty"><div class="library-empty-icon"><i data-lucide="folder"></i></div><div class="library-empty-title">${LibraryUtils.escapeHtml(title)}</div><div class="library-empty-desc">${LibraryUtils.escapeHtml(desc)}</div>${cta}</div>`;
+                ? t('library.noMatchingFoldersHint', '\u6362\u4e2a\u5206\u7c7b\u3001\u65f6\u95f4\u6216\u5173\u952e\u8bcd\u8bd5\u8bd5')
+                : t('library.noFoldersHint', '\u70b9\u53f3\u4e0a\u89d2\u201c\u65b0\u5efa\u6587\u4ef6\u5939\u201d\u521b\u5efa\uff0c\u4e0a\u4f20\u65f6\u9009\u62e9\u5b83\u4f5c\u4e3a\u4fdd\u5b58\u4f4d\u7f6e');
+            const cta = filtered ? '' : `<button type="button" class="library-empty-btn" data-toolbar-new-folder><i data-lucide="folder-plus"></i>${LibraryUtils.escapeHtml(t('library.newFolder', '\u65b0\u5efa\u6587\u4ef6\u5939'))}</button>`;
+            content.innerHTML = `<div class="library-empty library-folder-empty"><div class="library-empty-icon library-empty-folder-art"><img src="/static/images/asset-folder-stack.png" alt="" draggable="false"></div><div class="library-empty-title">${LibraryUtils.escapeHtml(title)}</div><div class="library-empty-desc">${LibraryUtils.escapeHtml(desc)}</div>${cta}</div>`;
             if (window.lucide) lucide.createIcons();
             return;
         }
+        const allSelected = folders.length > 0 && folders.every(folder => this.selectedFolderIds.has(String(folder.id || '')));
+        const manageBar = this.manageMode ? `<div class="library-manage-bar library-folder-manage-bar">
+            <span class="library-manage-count">${LibraryUtils.escapeHtml(t('library.selectedFolderCount', '\u5df2\u9009 {n} \u4e2a\u6587\u4ef6\u5939').replace('{n}', this.selectedFolderIds.size))}</span>
+            <button type="button" class="library-editor-btn" data-folder-manage-select-all>${LibraryUtils.escapeHtml(allSelected ? t('library.deselectAll', '\u53d6\u6d88\u5168\u9009') : t('library.selectAll', '\u5168\u9009'))}</button>
+            <button type="button" class="library-editor-btn danger" data-folder-manage-delete ${this.selectedFolderIds.size ? '' : 'disabled'}><i data-lucide="trash-2"></i>${LibraryUtils.escapeHtml(t('library.batchDeleteFolders', '\u5220\u9664\u9009\u4e2d\u6587\u4ef6\u5939'))}</button>
+            <button type="button" class="library-editor-btn primary" data-manage-done>${LibraryUtils.escapeHtml(t('library.manageDone', '\u5b8c\u6210'))}</button>
+        </div>` : '';
         content.innerHTML = `<div class="library-grid library-folder-grid">${folders.map(folder => {
+            const folderId = String(folder.id || '');
             const count = folder.items?.length || 0;
-            const manageActions = this.manageMode ? `<div class="library-card-actions">
-                <button type="button" class="library-card-action" data-folder-rename="${LibraryUtils.escapeHtml(folder.id)}"><i data-lucide="pencil"></i>${LibraryUtils.escapeHtml(t('library.renameFolder', '重命名'))}</button>
-                <button type="button" class="library-card-action danger" data-folder-delete="${LibraryUtils.escapeHtml(folder.id)}"><i data-lucide="trash-2"></i>${LibraryUtils.escapeHtml(t('library.deleteFolder', '删除'))}</button>
+            const selected = this.selectedFolderIds.has(folderId);
+            const folderMenuOpen = this.openFolderMenuId === folderId;
+            const folderCover = String(folder.cover_url || '').trim();
+            const menuToggle = !this.manageMode ? `<button type="button" class="library-folder-menu-toggle ${folderMenuOpen ? 'active' : ''}" data-folder-menu-toggle="${LibraryUtils.escapeHtml(folderId)}" aria-label="${LibraryUtils.escapeHtml(t('library.folderMoreActions', '\u6587\u4ef6\u5939\u66f4\u591a\u64cd\u4f5c'))}" aria-expanded="${folderMenuOpen}"><i data-lucide="ellipsis"></i></button>` : '';
+            const folderMenu = !this.manageMode && folderMenuOpen ? `<div class="library-folder-context-menu" role="menu">
+                <button type="button" class="danger" data-folder-menu-action="delete" data-folder-id="${LibraryUtils.escapeHtml(folderId)}" role="menuitem"><i data-lucide="trash-2"></i><span>${LibraryUtils.escapeHtml(t('library.deleteFolder', '\u5220\u9664\u6587\u4ef6\u5939'))}</span></button>
+                <button type="button" data-folder-menu-action="download" data-folder-id="${LibraryUtils.escapeHtml(folderId)}" role="menuitem"><i data-lucide="download"></i><span>${LibraryUtils.escapeHtml(t('library.downloadFolder', '\u4e0b\u8f7d'))}</span></button>
+                <button type="button" data-folder-menu-action="rename" data-folder-id="${LibraryUtils.escapeHtml(folderId)}" role="menuitem"><i data-lucide="pencil"></i><span>${LibraryUtils.escapeHtml(t('library.renameFolder', '\u91cd\u547d\u540d'))}</span></button>
+                <button type="button" data-folder-menu-action="cover" data-folder-id="${LibraryUtils.escapeHtml(folderId)}" role="menuitem"><i data-lucide="image"></i><span>${LibraryUtils.escapeHtml(t('library.setFolderCover', '\u5c01\u9762'))}</span></button>
             </div>` : '';
-            return `<div class="library-card library-folder-card" data-open-folder="${LibraryUtils.escapeHtml(folder.id)}">
+            const manageCheck = this.manageMode ? `<button type="button" class="asset-manage-check folder-manage-check ${selected ? 'checked' : ''}" data-folder-check="${LibraryUtils.escapeHtml(folderId)}" aria-label="${LibraryUtils.escapeHtml(t(selected ? 'library.deselectFolder' : 'library.selectFolder', selected ? '\u53d6\u6d88\u9009\u62e9\u6587\u4ef6\u5939' : '\u9009\u62e9\u6587\u4ef6\u5939'))}" aria-pressed="${selected}"><i data-lucide="check"></i></button>` : '';
+            const manageActions = this.manageMode ? `<div class="library-folder-card-actions">
+                <button type="button" class="library-folder-card-action" data-folder-rename="${LibraryUtils.escapeHtml(folderId)}" title="${LibraryUtils.escapeHtml(t('library.renameFolder', '\u91cd\u547d\u540d'))}" aria-label="${LibraryUtils.escapeHtml(t('library.renameFolder', '\u91cd\u547d\u540d'))}"><i data-lucide="pencil"></i></button>
+                <button type="button" class="library-folder-card-action danger" data-folder-delete="${LibraryUtils.escapeHtml(folderId)}" title="${LibraryUtils.escapeHtml(t('library.deleteFolder', '\u5220\u9664\u6587\u4ef6\u5939'))}" aria-label="${LibraryUtils.escapeHtml(t('library.deleteFolder', '\u5220\u9664\u6587\u4ef6\u5939'))}"><i data-lucide="trash-2"></i></button>
+            </div>` : '';
+            return `<div class="library-card library-folder-card ${selected ? 'is-selected' : ''}" data-open-folder="${LibraryUtils.escapeHtml(folderId)}">
                 <div class="library-card-cover">
-                    <div class="placeholder">
-                        <i data-lucide="folder"></i>
+                    <img class="library-folder-stack-art" src="/static/images/asset-folder-stack.png" alt="" draggable="false">
+                    ${folderCover ? `<img class="library-folder-custom-cover" data-folder-cover-image src="${LibraryUtils.escapeHtml(folderCover)}" alt="" loading="lazy" decoding="async">` : ''}
+                    ${manageCheck}
+                    ${menuToggle}
+                    ${manageActions}
+                    ${folderMenu}
+                    <div class="library-folder-cover-meta" aria-label="${LibraryUtils.escapeHtml(t('library.folderItemCount', '{n} \u4e2a\u7d20\u6750').replace('{n}', count))}">
+                        <span class="library-folder-cover-count">${count}</span>
+                        <span class="library-folder-cover-label">${LibraryUtils.escapeHtml(t('library.folder', '\u6587\u4ef6\u5939'))}</span>
                     </div>
                 </div>
                 <div class="library-card-body">
-                    <div class="library-card-title">${LibraryUtils.escapeHtml(folder.name || '素材')}</div>
-                    <div class="library-card-meta"><span>${LibraryUtils.escapeHtml(t('library.folderItemCount', '{n} 个素材').replace('{n}', count))}</span></div>
+                    <div class="library-card-title">${LibraryUtils.escapeHtml(folder.name || '\u7d20\u6750')}</div>
                 </div>
-                ${manageActions}
             </div>`;
-        }).join('')}</div>`;
+        }).join('')}</div>${manageBar}`;
         if (window.lucide) lucide.createIcons();
     },
 
@@ -509,16 +572,42 @@ const AssetLibrary = {
         return '右键画布中的图片或视频，选择“加入我的资产”即可上传到这里';
     },
 
+    isMediaUnavailable(item) {
+        return Boolean(item?.media_missing) || this.unavailableAssetIds.has(String(item?.id || ''));
+    },
+
+    missingMediaHtml() {
+        return `<div class="library-media-missing"><i data-lucide="image-off"></i><span>${LibraryUtils.escapeHtml(t('library.mediaUnavailable', '\u8d44\u6e90\u4e0d\u53ef\u7528'))}</span></div>`;
+    },
+
+    handleMediaLoadError(event) {
+        const cover = event.target?.closest?.('[data-folder-cover-image]');
+        if (cover) {
+            cover.remove();
+            return;
+        }
+        const media = event.target?.closest?.('[data-library-media]');
+        if (!media || media.dataset.mediaFailed) return;
+        media.dataset.mediaFailed = '1';
+        const id = String(media.dataset.assetId || '');
+        if (id) this.unavailableAssetIds.add(id);
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = this.missingMediaHtml();
+        media.replaceWith(wrapper.firstElementChild);
+        if (window.lucide) lucide.createIcons();
+    },
+
     thumbHtml(item) {
+        if (this.isMediaUnavailable(item)) return this.missingMediaHtml();
         const kind = String(item.kind || item.type || 'image');
         const url = String(item.url || '');
         if (kind === 'video' || /\.(mp4|webm|mov|m4v|mkv)(\?|#|$)/i.test(url)) {
-            return `<video src="${LibraryUtils.escapeHtml(url)}" muted preload="metadata" playsinline></video>`;
+            return `<video data-library-media data-asset-id="${LibraryUtils.escapeHtml(item.id || '')}" src="${LibraryUtils.escapeHtml(url)}" muted preload="metadata" playsinline></video>`;
         }
         if (kind === 'audio' || /\.(mp3|wav|m4a|aac|ogg|flac)(\?|#|$)/i.test(url)) {
             return `<div class="placeholder"><i data-lucide="file-audio"></i></div>`;
         }
-        return `<img src="${LibraryUtils.escapeHtml(url)}" alt="${LibraryUtils.escapeHtml(item.name || 'asset')}" loading="lazy" decoding="async">`;
+        return `<img data-library-media data-asset-id="${LibraryUtils.escapeHtml(item.id || '')}" src="${LibraryUtils.escapeHtml(url)}" alt="${LibraryUtils.escapeHtml(item.name || 'asset')}" loading="lazy" decoding="async">`;
     },
 
     cardHtml(item) {
@@ -551,6 +640,10 @@ const AssetLibrary = {
     async handleApply(id) {
         const item = this.findItem(id);
         if (!item) return;
+        if (this.isMediaUnavailable(item)) {
+            toast(t('library.mediaUnavailable', '\u8d44\u6e90\u4e0d\u53ef\u7528'));
+            return;
+        }
         if (!window.applyLibraryAsset) {
             toast(t('library.canvasNotReady', '请先打开画布'));
             return;
@@ -580,6 +673,7 @@ const AssetLibrary = {
     toggleManage(force) {
         this.manageMode = typeof force === 'boolean' ? force : !this.manageMode;
         this.selectedAssetIds.clear();
+        this.selectedFolderIds.clear();
         this.render();
     },
 
@@ -597,6 +691,134 @@ const AssetLibrary = {
             else this.selectedAssetIds.add(item.id);
         });
         this.renderContent();
+    },
+
+    toggleFolderMenu(id) {
+        const folderId = String(id || '');
+        if (!folderId) return;
+        this.openFolderMenuId = this.openFolderMenuId === folderId ? '' : folderId;
+        this.renderFolderRoot();
+    },
+
+    handleFolderMenuAction(action, folderId) {
+        const id = String(folderId || '');
+        if (!id) return;
+        this.openFolderMenuId = '';
+        if (action === 'delete') {
+            this.confirmDeleteFolder(id);
+            return;
+        }
+        if (action === 'rename') {
+            this.promptForRenameFolder(id);
+            return;
+        }
+        if (action === 'download') {
+            this.downloadFolder(id);
+            return;
+        }
+        if (action === 'cover') this.promptForFolderCover(id);
+    },
+
+    downloadFolder(folderId) {
+        const folder = this.findFolder(folderId);
+        const library = this.personalLibrary();
+        if (!folder || !library) return;
+        const params = new URLSearchParams({ library_id: library.id || '' });
+        const anchor = document.createElement('a');
+        anchor.href = `/api/asset-library/categories/${encodeURIComponent(folderId)}/download?${params}`;
+        anchor.download = '';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        toast(t('library.folderDownloadStarted', '\u5df2\u5f00\u59cb\u4e0b\u8f7d'));
+    },
+
+    async promptForFolderCover(folderId) {
+        const folder = this.findFolder(folderId);
+        const library = this.personalLibrary();
+        if (!folder || !library) return;
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.hidden = true;
+        document.body.appendChild(input);
+        input.addEventListener('change', async () => {
+            const file = input.files?.[0];
+            input.remove();
+            if (!file) return;
+            try {
+                const form = new FormData();
+                form.append('files', file, file.name || 'folder-cover');
+                const upload = await fetch('/api/ai/upload', { method: 'POST', body: form });
+                const uploaded = await upload.json().catch(() => ({}));
+                const url = String(uploaded?.files?.[0]?.url || '');
+                if (!upload.ok || !url) throw new Error(uploaded?.detail || '\u5c01\u9762\u4e0a\u4f20\u5931\u8d25');
+                const response = await fetch(`/api/asset-library/categories/${encodeURIComponent(folderId)}/cover`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ library_id: library.id, cover_url: url })
+                });
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(payload.detail || '\u4fdd\u5b58\u5c01\u9762\u5931\u8d25');
+                await this.load();
+                toast(t('library.folderCoverUpdated', '\u5c01\u9762\u5df2\u66f4\u65b0'));
+            } catch (err) {
+                toast(err.message || t('library.folderCoverUploadFailed', '\u5c01\u9762\u4e0a\u4f20\u5931\u8d25'));
+            }
+        }, { once: true });
+        input.click();
+    },
+
+    toggleFolderSelection(id) {
+        const folderId = String(id || '');
+        if (!folderId) return;
+        if (this.selectedFolderIds.has(folderId)) this.selectedFolderIds.delete(folderId);
+        else this.selectedFolderIds.add(folderId);
+        this.renderFolderRoot();
+    },
+
+    toggleSelectAllFolders() {
+        let folders = this.personalImageFolders();
+        if (this.search) {
+            const q = this.search;
+            folders = folders.filter(folder => String(folder.name || '').toLowerCase().includes(q));
+        }
+        if (this.category !== 'all') folders = folders.filter(folder => this.folderMatchesCategory(folder, this.category));
+        if (this.timeFilter !== 'all') folders = folders.filter(folder => this.folderMatchesTime(folder));
+        const allSelected = folders.length > 0 && folders.every(folder => this.selectedFolderIds.has(String(folder.id || '')));
+        folders.forEach(folder => {
+            const id = String(folder.id || '');
+            if (!id) return;
+            if (allSelected) this.selectedFolderIds.delete(id);
+            else this.selectedFolderIds.add(id);
+        });
+        this.renderFolderRoot();
+    },
+
+    async batchDeleteFolders() {
+        const ids = [...this.selectedFolderIds].filter(Boolean);
+        if (!ids.length) return;
+        const message = t('library.batchDeleteFoldersConfirm', '\u5c06\u5220\u9664\u9009\u4e2d\u6587\u4ef6\u5939\u53ca\u5176\u4e2d\u7684\u7d20\u6750\uff08\u53ef\u4ece\u56de\u6536\u7ad9\u6062\u590d\uff09\uff0c\u786e\u8ba4\u7ee7\u7eed\uff1f');
+        if (!confirm(message)) return;
+        const library = this.personalLibrary();
+        if (!library) {
+            toast(t('library.personalLibraryMissing', '\u4e2a\u4eba\u8d44\u4ea7\u5e93\u5c1a\u672a\u5c31\u7eea'));
+            return;
+        }
+        try {
+            const response = await fetch('/api/asset-library/categories/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ library_id: library.id, ids, mode: 'contents' })
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.detail || '\u5220\u9664\u5931\u8d25');
+            this.selectedFolderIds.clear();
+            await this.load();
+            toast(t('library.folderBatchDeleted', '\u5df2\u5220\u9664\u9009\u4e2d\u6587\u4ef6\u5939'));
+        } catch (err) {
+            toast(err.message || '\u5220\u9664\u5931\u8d25');
+        }
     },
 
     async promptForNewFolder() {

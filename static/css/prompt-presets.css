@@ -1,0 +1,61 @@
+/* Shared preset controls: compact control strip for Composer and prompt nodes */
+.prompt-preset-shell { display: grid; gap: 7px; margin: 0 0 9px; }
+.composer-preset-controls { padding: 2px 0 8px; }
+.composer-preset-controls:empty { display: none; }
+.prompt-preset-row { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; align-items: start; gap: 8px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--soft) 62%, transparent); }
+.prompt-preset-row::before { content: '提示词预设'; padding-top: 5px; color: var(--faint); font-size: 9px; font-weight: 850; letter-spacing: .1em; }
+.prompt-preset-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 26px; padding: 0; }
+.prompt-preset-chip { display: inline-flex; align-items: center; max-width: 180px; min-height: 25px; gap: 5px; padding: 0 5px 0 8px; border: 1px solid color-mix(in srgb, var(--rh-brand) 52%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--rh-brand) 12%, var(--card)); color: var(--text); font-size: 11px; font-weight: 750; cursor: grab; }
+.prompt-preset-chip.dragging { opacity: .45; }
+.prompt-preset-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-preset-chip button { display: grid; place-items: center; width: 17px; height: 17px; border-radius: 5px; color: var(--muted); background: transparent; }
+.prompt-preset-chip button:hover { color: var(--text); background: var(--line); }
+.prompt-preset-chip svg { width: 11px; height: 11px; }
+.prompt-preset-empty, .prompt-preset-upstream { color: var(--faint); font-size: 11px; line-height: 25px; }
+.prompt-preset-upstream { color: var(--muted); }
+.prompt-preset-actions { display: flex; gap: 4px; }
+.prompt-preset-actions button { height: 27px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--muted); font-size: 11px; font-weight: 750; transition: border-color .15s ease, color .15s ease, background .15s ease; }
+.prompt-preset-actions button:hover:not(:disabled) { border-color: var(--rh-brand); color: var(--text); background: color-mix(in srgb, var(--rh-brand) 10%, var(--card)); }
+.prompt-preset-actions button:disabled { opacity: .38; cursor: not-allowed; }
+.prompt-preset-actions svg { width: 13px; height: 13px; }
+.prompt-preset-final { padding: 0 8px; }
+.prompt-preset-final summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; padding: 4px 0; cursor: pointer; color: var(--muted); font-size: 10px; font-weight: 750; list-style: none; touch-action: manipulation; }
+.prompt-preset-final summary:focus-visible { outline: 2px solid var(--strong); outline-offset: 2px; border-radius: 5px; }
+.prompt-preset-final summary::-webkit-details-marker { display: none; }
+.prompt-preset-final summary::before { content: '▸'; margin-right: 5px; color: var(--faint); }
+.prompt-preset-final[open] summary::before { content: '▾'; }
+.prompt-preset-length { margin-left: auto; color: var(--faint); font-variant-numeric: tabular-nums; }
+.prompt-preset-length.warn { color: #f59e0b; }
+.prompt-preset-final-body { position: relative; display: block; margin: 2px 0 8px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--line) 88%, transparent); border-radius: 9px; background: color-mix(in srgb, var(--soft) 72%, var(--card)); }
+.prompt-preset-final-body pre { max-height: 116px; margin: 0; padding-right: 34px; overflow: auto; white-space: pre-wrap; color: color-mix(in srgb, var(--text) 92%, var(--muted)); font: 500 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.prompt-preset-final-body .prompt-preset-copy-final { position: absolute; top: 8px; right: 8px; z-index: 1; width: 28px; height: 28px; min-width: 28px; padding: 0; }
+.prompt-node-text-wrap { display: flex; flex-direction: column; }
+.prompt-node-text-wrap .prompt-preset-shell {
+    position:static;
+    z-index:3;
+    flex:0 0 auto;
+    max-height:92px;
+    margin:0;
+    padding:8px 44px 7px 10px;
+    overflow:auto;
+    border-bottom:1px solid var(--line);
+    pointer-events:none;
+    scrollbar-width:thin;
+}
+.prompt-node-text-wrap .prompt-preset-shell:not(:has(.prompt-preset-chip)) { display:none; }
+.prompt-node-text-wrap .prompt-preset-row { grid-template-columns: 1fr auto; padding: 0; border: 0; border-radius: 0; background: transparent; }
+.prompt-node-text-wrap .prompt-preset-row::before { display: none; }
+.prompt-node-text-wrap .prompt-preset-chips { min-height:0; overflow:visible; pointer-events:auto; }
+.prompt-node-text-wrap .prompt-preset-empty,
+.prompt-node-text-wrap .prompt-preset-actions { display:none; }
+.prompt-node-text-wrap .prompt-preset-chip { pointer-events:auto; }
+.prompt-node-text-wrap .prompt-node-text { flex: 1 1 auto; height: auto; }
+.prompt-node-card > .prompt-preset-final-only { margin: 0; padding: 0 8px; border: 1px solid color-mix(in srgb, var(--rh-brand) 34%, var(--line)); border-radius: 12px; background: color-mix(in srgb, var(--card) 88%, var(--soft)); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--rh-brand) 62%, transparent); }
+.prompt-node-card > .prompt-preset-final-only .prompt-preset-final { padding: 0; }
+.prompt-node-card > .prompt-preset-final-only .prompt-preset-final[open] summary { border-bottom: 1px solid color-mix(in srgb, var(--line) 86%, transparent); }
+.theme-dark .prompt-preset-row { background: rgba(7, 13, 23, .42); border-color: rgba(148,163,184,.2); }
+.theme-dark .prompt-preset-chip { background: color-mix(in srgb, var(--rh-brand) 17%, #111722); border-color: color-mix(in srgb, var(--rh-brand) 44%, #475569); }
+.theme-dark .prompt-preset-actions button { background: #111722; border-color: #334155; }
+.theme-dark .prompt-node-card > .prompt-preset-final-only { background: rgba(17, 23, 34, .92); border-color: color-mix(in srgb, var(--rh-brand) 40%, #334155); box-shadow: inset 3px 0 0 color-mix(in srgb, var(--rh-brand) 70%, transparent); }
+.theme-dark .prompt-preset-final-body { background: rgba(7, 13, 23, .62); border-color: rgba(148,163,184,.2); }
+@media (max-width: 760px) { .prompt-preset-row { grid-template-columns: 1fr auto; } .prompt-preset-row::before { display: none; } .prompt-preset-actions .prompt-preset-open span { display: none; } .prompt-preset-chip { max-width: 142px; } }

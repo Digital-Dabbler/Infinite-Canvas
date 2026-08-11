@@ -39,6 +39,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Uplo
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response, StreamingResponse, JSONResponse, RedirectResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -260,6 +261,8 @@ async def startup_event():
         ensure_all_user_asset_spaces()
         recover_asset_ai_tasks_after_restart()
         await asyncio.to_thread(cleanup_expired_asset_trash)
+        await asyncio.to_thread(cleanup_expired_workflow_trash)
+        await asyncio.to_thread(clear_legacy_asset_library_workflows)
         asyncio.create_task(asset_ai_dispatch_loop())
         asyncio.create_task(asset_trash_cleanup_loop())
     except Exception as exc:
@@ -332,6 +335,11 @@ PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 LIBRARY_FAVORITES_PATH = os.path.join(DATA_DIR, "library_favorites.json")
 LIBRARY_FAVORITES_LOCK = Lock()
 ASSET_TRASH_PATH = os.path.join(DATA_DIR, "asset_trash.json")
+WORKFLOW_LIBRARY_PATH = os.path.join(DATA_DIR, "workflow_library.json")
+WORKFLOW_TRASH_PATH = os.path.join(DATA_DIR, "workflow_trash.json")
+WORKFLOW_LIBRARY_DIR = os.path.join(ASSETS_DIR, "workflow_library")
+WORKFLOW_LIBRARY_PRIVATE_DIR = os.path.join(WORKFLOW_LIBRARY_DIR, "private")
+WORKFLOW_LIBRARY_PUBLIC_DIR = os.path.join(WORKFLOW_LIBRARY_DIR, "public")
 ASSET_AI_SETTINGS_PATH = os.path.join(DATA_DIR, "asset_ai_settings.json")
 ASSET_AI_TASKS_PATH = os.path.join(DATA_DIR, "asset_ai_tasks.json")
 LOCAL_ASSET_OWNERSHIP_PATH = os.path.join(DATA_DIR, "local_asset_ownership.json")
@@ -5455,6 +5463,13 @@ class CanvasWorkflowExportRequest(BaseModel):
     library_id: str = ""
     category_id: str = ""
     name: str = ""
+    cover_url: str = ""
+
+class WorkflowLibraryPublishRequest(BaseModel):
+    published: bool = True
+
+class WorkflowLibraryRestoreRequest(BaseModel):
+    trash_id: str = ""
 
 class SmartCanvasGroupExportItem(BaseModel):
     kind: str = ""
@@ -5518,6 +5533,10 @@ class AssetLibraryCategoryRequest(BaseModel):
     type: str = "image"
     library_id: str = ""
 
+class AssetLibraryCategoryCoverRequest(BaseModel):
+    library_id: str = ""
+    cover_url: str = ""
+
 class AssetLibraryRequest(BaseModel):
     name: str = "资产库"
 
@@ -5550,6 +5569,11 @@ class AssetLibraryRenameRequest(BaseModel):
 class AssetLibraryBatchDeleteRequest(BaseModel):
     ids: List[str] = []
     library_id: str = ""
+
+class AssetLibraryBatchCategoryDeleteRequest(BaseModel):
+    ids: List[str] = []
+    library_id: str = ""
+    mode: str = "contents"
 
 class AssetLibraryBatchMoveRequest(BaseModel):
     ids: List[str] = []
@@ -5584,8 +5608,14 @@ class PromptLibraryRequest(BaseModel):
 class PromptLibraryItemRequest(BaseModel):
     library_id: str = ""
     item_id: str = ""
-    name: str = "提示词"
+    name: str = "\u63d0\u793a\u8bcd"
     category: str = "custom"
+    subcategory: str = ""
+    description: str = ""
+    cover_url: str = ""
+    prefix: str = ""
+    suffix: str = ""
+    # Legacy aliases retained for existing clients and stored cards.
     positive: str = ""
     negative: str = ""
     scene: str = ""
@@ -9383,6 +9413,15 @@ def output_file_from_url(url):
             return path
     return None
 
+def asset_library_item_media_available(item):
+    """Return False only for a local asset URL that no longer resolves on disk."""
+    url = str((item or {}).get("url") or "").strip()
+    if not url:
+        return False
+    if url.startswith(("/assets/", "/output/", "/api/storage-files/")):
+        return bool(output_file_from_url(url))
+    return True
+
 def collect_local_media_urls(value: Any) -> List[str]:
     """Collect local /assets and /output URLs from nested canvas log payloads."""
     urls = []
@@ -10873,7 +10912,26 @@ def scan_shared_tree(folder_id, folder_abs, rel_prefix="", display="", counter=N
     return node
 
 def builtin_prompt_templates():
-    return []
+    """Load the canonical, read-only inspiration catalog shipped with the app."""
+    catalog_path = os.path.join(STATIC_DIR, "data", "prompt-library-system.json")
+    try:
+        with open(catalog_path, "r", encoding="utf-8") as handle:
+            rows = json.load(handle)
+    except Exception:
+        rows = []
+    if not isinstance(rows, list):
+        rows = []
+    return [dict(row, owner_type="system", owner_id="system", published=True) for row in rows if isinstance(row, dict)]
+
+
+def prompt_system_categories():
+    return [
+        {"id": "all", "name": "\u5168\u90e8"},
+        {"id": "style", "name": "\u98ce\u683c"},
+        {"id": "filter", "name": "\u6ee4\u955c"},
+        {"id": "function", "name": "\u529f\u80fd"},
+        {"id": "other", "name": "\u5176\u4ed6"},
+    ]
 
 def normalize_prompt_category_id(category="custom"):
     category_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(category or "custom"))[:40] or "custom"
@@ -10883,21 +10941,29 @@ def normalize_prompt_library_item(item):
     if not isinstance(item, dict):
         item = {}
     name = sanitize_asset_name(item.get("name") or "提示词", "提示词")
-    positive = str(item.get("positive") or item.get("text") or "").strip()
+    prefix = str(item.get("prefix") or item.get("positive") or item.get("text") or "").strip()
+    suffix = str(item.get("suffix") or item.get("negative") or "").strip()
+    raw_cover_url = str(item.get("cover_url") or "").strip()
+    cover_url = raw_cover_url if raw_cover_url.startswith(("/assets/", "/static/images/prompt-library/")) else ""
     normalized = {
         "id": re.sub(r"[^A-Za-z0-9_-]+", "_", str(item.get("id") or item.get("item_id") or f"tpl_{uuid.uuid4().hex[:12]}"))[:60],
         "name": name,
         "category": normalize_prompt_category_id(item.get("category") or "custom"),
-        "scene": str(item.get("scene") or "").strip()[:500],
-        "positive": positive,
-        "negative": str(item.get("negative") or "").strip(),
+        "subcategory": normalize_prompt_category_id(item.get("subcategory") or "") if item.get("subcategory") else "",
+        "description": str(item.get("description") or item.get("scene") or "").strip()[:500],
+        "scene": str(item.get("scene") or item.get("description") or "").strip()[:500],
+        "cover_url": cover_url[:500],
+        "prefix": prefix,
+        "suffix": suffix,
+        "positive": prefix,
+        "negative": suffix,
         "params": item.get("params") if isinstance(item.get("params"), dict) else {},
         "created_at": int(item.get("created_at") or now_ms()),
         "updated_at": int(item.get("updated_at") or item.get("created_at") or now_ms()),
         "source_root_id": str(item.get("source_root_id") or ""),
         "source_direct_id": str(item.get("source_direct_id") or ""),
         "source_author_id": str(item.get("source_author_id") or ""),
-        "published": bool(item.get("published") or item.get("owner_type") == "system"),
+        "published": bool(item.get("owner_type") == "system"),
     }
     normalized.update(asset_owner_fields(item))
     return normalized
@@ -10908,7 +10974,7 @@ def seed_system_prompt_library():
         "name": "系统提示词库",
         "type": "prompt",
         "items": builtin_prompt_templates(),
-        "categories": defaultPromptTemplateCategories(),
+        "categories": prompt_system_categories(),
     }
 
 def default_prompt_libraries():
@@ -10919,14 +10985,7 @@ def default_prompt_libraries():
     }
 
 def defaultPromptTemplateCategories():
-    return [
-        {"id": "view", "name": "视角"},
-        {"id": "storyboard", "name": "分镜"},
-        {"id": "character", "name": "角色"},
-        {"id": "product", "name": "产品"},
-        {"id": "lighting", "name": "光影"},
-        {"id": "custom", "name": "我的"},
-    ]
+    return prompt_system_categories()
 
 def normalize_prompt_template_categories(*category_lists, include_defaults=True):
     normalized = []
@@ -10974,7 +11033,8 @@ def normalize_prompt_libraries(data):
         seen_lib_ids.add(lib_id)
         items = []
         seen_items = set()
-        for raw_item in (raw.get("items") if isinstance(raw.get("items"), list) else []):
+        raw_items = builtin_prompt_templates() if is_system else (raw.get("items") if isinstance(raw.get("items"), list) else [])
+        for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
             item = normalize_prompt_library_item(raw_item)
@@ -10984,7 +11044,7 @@ def normalize_prompt_libraries(data):
             seen_items.add(item_id)
             items.append(item)
         default_name = "系统提示词库" if is_system else "提示词库"
-        raw_categories = raw.get("categories") if isinstance(raw.get("categories"), list) else []
+        raw_categories = prompt_system_categories() if is_system else (raw.get("categories") if isinstance(raw.get("categories"), list) else [])
         if not is_system:
             # 非系统库不保留任何内置分组（视角/分镜等），仅保留用户自建分组
             builtin_ids = {"view", "storyboard", "character", "product", "lighting", "custom"}
@@ -11118,6 +11178,7 @@ def public_asset_library_for_user(lib, user):
         for category in library.get("categories", []):
             category["can_manage"] = library["can_manage"]
             for item in category.get("items", []):
+                item["media_missing"] = not asset_library_item_media_available(item)
                 item["can_manage"] = admin or (
                     item.get("owner_type") == "user" and item.get("owner_id") == user_id
                 )
@@ -11188,6 +11249,113 @@ def asset_trash_entry(kind, record, location, user):
         "deleted_at": now_ms(),
         "expires_at": now_ms() + 30 * 24 * 60 * 60 * 1000,
     }
+
+def default_workflow_library():
+    return {"version": 1, "workflows": [], "published": [], "updated_at": now_ms()}
+
+def load_workflow_library():
+    data = _read_json_file(WORKFLOW_LIBRARY_PATH, default_workflow_library())
+    if not isinstance(data, dict):
+        data = default_workflow_library()
+    data.setdefault("version", 1)
+    data["workflows"] = [item for item in (data.get("workflows") or []) if isinstance(item, dict)]
+    data["published"] = [item for item in (data.get("published") or []) if isinstance(item, dict)]
+    data["updated_at"] = int(data.get("updated_at") or now_ms())
+    return data
+
+def save_workflow_library(data):
+    clean = {
+        "version": 1,
+        "workflows": [item for item in (data.get("workflows") or []) if isinstance(item, dict)],
+        "published": [item for item in (data.get("published") or []) if isinstance(item, dict)],
+        "updated_at": now_ms(),
+    }
+    _write_json_atomic(WORKFLOW_LIBRARY_PATH, clean)
+    return clean
+
+def default_workflow_trash():
+    return {"version": 1, "items": [], "updated_at": now_ms()}
+
+def load_workflow_trash():
+    data = _read_json_file(WORKFLOW_TRASH_PATH, default_workflow_trash())
+    if not isinstance(data, dict):
+        data = default_workflow_trash()
+    data["items"] = [item for item in (data.get("items") or []) if isinstance(item, dict)]
+    return data
+
+def save_workflow_trash(data):
+    clean = {"version": 1, "items": [item for item in (data.get("items") or []) if isinstance(item, dict)], "updated_at": now_ms()}
+    _write_json_atomic(WORKFLOW_TRASH_PATH, clean)
+    return clean
+
+def workflow_relative_url(path):
+    rel = os.path.relpath(path, ASSETS_DIR).replace("\\", "/")
+    return f"/assets/{urllib.parse.quote(rel, safe='/')}"
+
+def workflow_file_path(url):
+    return output_file_from_url(url) if str(url or "").startswith("/assets/") else None
+
+def workflow_archive_copy(raw, workflow_id, public=False):
+    target_dir = WORKFLOW_LIBRARY_PUBLIC_DIR if public else WORKFLOW_LIBRARY_PRIVATE_DIR
+    os.makedirs(target_dir, exist_ok=True)
+    target = os.path.join(target_dir, f"{workflow_id}.zip")
+    with open(target, "wb") as handle:
+        handle.write(raw)
+    return workflow_relative_url(target)
+
+def workflow_cover_copy(url, workflow_id, public=False):
+    source = output_file_from_url(url)
+    if not source or not os.path.isfile(source) or not content_type_for_path(source).startswith("image/"):
+        return ""
+    target_dir = WORKFLOW_LIBRARY_PUBLIC_DIR if public else WORKFLOW_LIBRARY_PRIVATE_DIR
+    os.makedirs(target_dir, exist_ok=True)
+    ext = os.path.splitext(source)[1].lower() or ".png"
+    target = os.path.join(target_dir, f"{workflow_id}_cover{ext}")
+    shutil.copy2(source, target)
+    return workflow_relative_url(target)
+
+def remove_workflow_files(record):
+    for field in ("archive_url", "cover_url"):
+        path = workflow_file_path(record.get(field) or "")
+        if path and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+def cleanup_expired_workflow_trash():
+    trash = load_workflow_trash()
+    now = now_ms()
+    kept = []
+    for entry in trash.get("items") or []:
+        if int(entry.get("expires_at") or 0) > now:
+            kept.append(entry)
+        else:
+            remove_workflow_files(entry.get("record") or {})
+    if len(kept) != len(trash.get("items") or []):
+        trash["items"] = kept
+        save_workflow_trash(trash)
+
+def workflow_public_view(data, user):
+    uid = str((user or {}).get("id") or "")
+    cleanup_expired_workflow_trash()
+    return {
+        "viewer": {"user_id": uid, "is_admin": asset_is_admin(user)},
+        "workflows": [item for item in data.get("workflows") or [] if str(item.get("owner_id") or "") == uid],
+        "published": [item for item in data.get("published") or [] if str(item.get("owner_id") or "") == uid],
+        "inspiration": list(data.get("published") or []),
+    }
+
+def clear_legacy_asset_library_workflows():
+    lib = load_asset_library()
+    changed = False
+    for library in lib.get("libraries") or []:
+        for category in library.get("categories") or []:
+            if category.get("type") == "workflow" and category.get("items"):
+                category["items"] = []
+                changed = True
+    if changed:
+        save_asset_library(lib)
 
 def cancel_queued_asset_tasks_for_target(target_id):
     changed = False
@@ -21257,6 +21425,132 @@ def build_canvas_workflow_archive(payload: CanvasWorkflowExportRequest) -> Tuple
     buffer.seek(0)
     return buffer.getvalue(), {"resources": resources, "node_count": len(nodes_payload), "connection_count": len(connections_payload)}
 
+@app.get("/api/workflow-library")
+async def get_workflow_library(request: Request):
+    user = require_authenticated(request)
+    return workflow_public_view(load_workflow_library(), user)
+
+@app.post("/api/workflow-library")
+async def create_workflow_library_item(payload: CanvasWorkflowExportRequest, request: Request):
+    user = require_authenticated(request)
+    if not str(payload.name or "").strip():
+        raise HTTPException(status_code=400, detail="\u8bf7\u8f93\u5165\u5de5\u4f5c\u6d41\u540d\u79f0")
+    archive, meta = build_canvas_workflow_archive(payload)
+    workflow_id = f"workflow_{uuid.uuid4().hex[:14]}"
+    record = {
+        "id": workflow_id,
+        "name": sanitize_asset_name(payload.name, "\u672a\u547d\u540d\u5de5\u4f5c\u6d41")[:20],
+        "owner_id": str(user.get("id") or ""),
+        "owner_name": str(user.get("name") or user.get("username") or ""),
+        "archive_url": workflow_archive_copy(archive, workflow_id),
+        "cover_url": workflow_cover_copy(payload.cover_url, workflow_id),
+        "node_count": meta.get("node_count") or len(payload.nodes or []),
+        "connection_count": meta.get("connection_count") or len(payload.connections or []),
+        "resource_count": len(meta.get("resources") or []),
+        "created_at": now_ms(),
+        "updated_at": now_ms(),
+    }
+    data = load_workflow_library()
+    data.setdefault("workflows", []).append(record)
+    save_workflow_library(data)
+    return {"workflow": record, "library": workflow_public_view(data, user)}
+
+@app.patch("/api/workflow-library/{workflow_id}/publish")
+async def publish_workflow_library_item(workflow_id: str, payload: WorkflowLibraryPublishRequest, request: Request):
+    user = require_authenticated(request)
+    data = load_workflow_library()
+    uid = str(user.get("id") or "")
+    source = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
+    if not source:
+        raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
+    existing = next((item for item in data.get("published") or [] if item.get("source_workflow_id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
+    if not payload.published:
+        if existing:
+            data["published"] = [item for item in data.get("published") or [] if item is not existing]
+            remove_workflow_files(existing)
+            save_workflow_library(data)
+        return {"library": workflow_public_view(data, user), "published": False}
+    if existing:
+        return {"library": workflow_public_view(data, user), "snapshot": existing, "published": True}
+    source_archive = workflow_file_path(source.get("archive_url") or "")
+    if not source_archive or not os.path.isfile(source_archive):
+        raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u5c01\u5305\u4e0d\u5b58\u5728")
+    snapshot_id = f"published_{uuid.uuid4().hex[:14]}"
+    with open(source_archive, "rb") as handle:
+        snapshot_archive = workflow_archive_copy(handle.read(), snapshot_id, public=True)
+    snapshot = {**{key: value for key, value in source.items() if key not in {"id", "archive_url", "cover_url"}},
+        "id": snapshot_id, "source_workflow_id": workflow_id,
+        "archive_url": snapshot_archive,
+        "cover_url": workflow_cover_copy(source.get("cover_url") or "", snapshot_id, public=True),
+        "published_at": now_ms(), "created_at": now_ms()}
+    data.setdefault("published", []).append(snapshot)
+    save_workflow_library(data)
+    return {"library": workflow_public_view(data, user), "snapshot": snapshot, "published": True}
+
+@app.delete("/api/workflow-library/{workflow_id}")
+async def delete_workflow_library_item(workflow_id: str, request: Request):
+    user = require_authenticated(request)
+    data = load_workflow_library()
+    uid = str(user.get("id") or "")
+    source = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
+    if not source:
+        raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
+    data["workflows"] = [item for item in data.get("workflows") or [] if item is not source]
+    save_workflow_library(data)
+    trash = load_workflow_trash()
+    trash.setdefault("items", []).append({"trash_id": f"workflow_trash_{uuid.uuid4().hex[:12]}", "record": source, "owner_id": uid, "deleted_at": now_ms(), "expires_at": now_ms() + 30 * 24 * 60 * 60 * 1000})
+    save_workflow_trash(trash)
+    return {"library": workflow_public_view(data, user), "trashed": True}
+
+@app.get("/api/workflow-library/trash")
+async def get_workflow_library_trash(request: Request):
+    user = require_authenticated(request)
+    uid = str(user.get("id") or "")
+    cleanup_expired_workflow_trash()
+    return {"items": [item for item in load_workflow_trash().get("items") or [] if str(item.get("owner_id") or "") == uid]}
+
+@app.post("/api/workflow-library/trash/{trash_id}/restore")
+async def restore_workflow_library_item(trash_id: str, request: Request):
+    user = require_authenticated(request)
+    uid = str(user.get("id") or "")
+    trash = load_workflow_trash()
+    entry = next((item for item in trash.get("items") or [] if item.get("trash_id") == trash_id and str(item.get("owner_id") or "") == uid), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="\u56de\u6536\u7ad9\u4e2d\u6ca1\u6709\u8be5\u5de5\u4f5c\u6d41")
+    data = load_workflow_library()
+    data.setdefault("workflows", []).append(entry.get("record") or {})
+    save_workflow_library(data)
+    trash["items"] = [item for item in trash.get("items") or [] if item is not entry]
+    save_workflow_trash(trash)
+    return {"library": workflow_public_view(data, user), "restored": True}
+
+@app.delete("/api/workflow-library/published/{snapshot_id}")
+async def withdraw_workflow_library_snapshot(snapshot_id: str, request: Request):
+    user = require_authenticated(request)
+    data = load_workflow_library()
+    uid = str(user.get("id") or "")
+    snapshot = next((item for item in data.get("published") or [] if item.get("id") == snapshot_id and str(item.get("owner_id") or "") == uid), None)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="\u5df2\u53d1\u5e03\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
+    data["published"] = [item for item in data.get("published") or [] if item is not snapshot]
+    remove_workflow_files(snapshot)
+    save_workflow_library(data)
+    return {"library": workflow_public_view(data, user), "withdrawn": True}
+
+@app.get("/api/workflow-library/{workflow_id}/package")
+async def download_workflow_library_package(workflow_id: str, request: Request):
+    user = require_authenticated(request)
+    data = load_workflow_library()
+    uid = str(user.get("id") or "")
+    record = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
+    record = record or next((item for item in data.get("published") or [] if item.get("id") == workflow_id), None)
+    if not record:
+        raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
+    archive = workflow_file_path(record.get("archive_url") or "")
+    if not archive or not os.path.isfile(archive):
+        raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u5c01\u5305\u4e0d\u5b58\u5728")
+    return FileResponse(archive, media_type="application/zip", filename=f"{sanitize_export_filename(record.get('name') or 'workflow', 'workflow')}.zip")
+
 @app.post("/api/canvas-workflows/export")
 async def export_canvas_workflow(payload: CanvasWorkflowExportRequest):
     archive, _ = build_canvas_workflow_archive(payload)
@@ -21315,8 +21609,7 @@ async def upload_asset_library_workflows(
     save_asset_library(lib)
     return {"library": lib, "items": added}
 
-@app.post("/api/canvas-workflows/import")
-async def import_canvas_workflow(file: UploadFile = File(...)):
+async def import_canvas_workflow(file: UploadFile):
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="文件为空")
@@ -21380,6 +21673,22 @@ async def import_canvas_workflow(file: UploadFile = File(...)):
         "connections": connections_payload,
         "resource_map": resource_mapping,
     }
+
+@app.post("/api/workflow-library/{workflow_id}/apply")
+async def apply_workflow_library_item(workflow_id: str, request: Request):
+    user = require_authenticated(request)
+    data = load_workflow_library()
+    uid = str(user.get("id") or "")
+    record = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
+    record = record or next((item for item in data.get("published") or [] if item.get("id") == workflow_id), None)
+    if not record:
+        raise HTTPException(status_code=404, detail="\\u5de5\\u4f5c\\u6d41\\u4e0d\\u5b58\\u5728")
+    archive = workflow_file_path(record.get("archive_url") or "")
+    if not archive or not os.path.isfile(archive):
+        raise HTTPException(status_code=404, detail="\\u5de5\\u4f5c\\u6d41\\u5c01\\u5305\\u4e0d\\u5b58\\u5728")
+    with open(archive, "rb") as handle:
+        upload = UploadFile(filename=f"{record.get('name') or 'workflow'}.zip", file=BytesIO(handle.read()))
+    return await import_canvas_workflow(upload)
 
 def smart_group_export_folder(folder: str, group_name: str) -> str:
     text = str(folder or "").strip()
@@ -21646,15 +21955,20 @@ async def add_prompt_library_item(payload: PromptLibraryItemRequest, request: Re
     if not library:
         raise HTTPException(status_code=404, detail="提示词库不存在")
     require_asset_manage(library, user, "无权向该提示词库添加内容")
-    if not str(payload.positive or "").strip():
-        raise HTTPException(status_code=400, detail="提示词内容不能为空")
+    if not str(payload.prefix or payload.positive or "").strip() and not str(payload.suffix or payload.negative or "").strip():
+        raise HTTPException(status_code=400, detail="\u8bf7\u81f3\u5c11\u586b\u5199\u524d\u7f00\u6216\u540e\u7f00")
     item = normalize_prompt_library_item({
         "id": f"tpl_{uuid.uuid4().hex[:12]}",
         "name": payload.name,
         "category": payload.category,
-        "positive": payload.positive,
-        "negative": payload.negative,
-        "scene": payload.scene,
+        "subcategory": payload.subcategory,
+        "description": payload.description or payload.scene,
+        "cover_url": payload.cover_url,
+        "prefix": payload.prefix or payload.positive,
+        "suffix": payload.suffix or payload.negative,
+        "positive": payload.prefix or payload.positive,
+        "negative": payload.suffix or payload.negative,
+        "scene": payload.description or payload.scene,
         "created_at": now_ms(),
         "updated_at": now_ms(),
         **asset_owner_for_user(user),
@@ -21678,10 +21992,15 @@ async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemReq
                     **item,
                     "name": payload.name or item.get("name"),
                     "category": payload.category or item.get("category"),
-                    "positive": payload.positive or item.get("positive"),
-                    "negative": payload.negative,
-                    "scene": payload.scene,
-                    "published": payload.published if payload.published is not None else bool(item.get("published") or item.get("owner_type") == "system"),
+                    "subcategory": payload.subcategory or item.get("subcategory"),
+                    "description": payload.description or payload.scene or item.get("description"),
+                    "cover_url": payload.cover_url or item.get("cover_url"),
+                    "prefix": payload.prefix or payload.positive or item.get("prefix") or item.get("positive"),
+                    "suffix": payload.suffix or payload.negative,
+                    "positive": payload.prefix or payload.positive or item.get("prefix") or item.get("positive"),
+                    "negative": payload.suffix or payload.negative,
+                    "scene": payload.description or payload.scene,
+                    "published": False,
                     "updated_at": now_ms(),
                 })
                 library["items"][index] = next_item
@@ -21986,6 +22305,72 @@ async def rename_asset_library_category(category_id: str, payload: AssetLibraryR
     save_asset_library(lib)
     return {"library": lib, "category": cat}
 
+@app.patch("/api/asset-library/categories/{category_id}/cover")
+async def update_asset_library_category_cover(category_id: str, payload: AssetLibraryCategoryCoverRequest, request: Request):
+    user = require_authenticated(request)
+    lib = load_asset_library()
+    library, category = find_asset_category_with_library(lib, category_id, payload.library_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="\u6587\u4ef6\u5939\u4e0d\u5b58\u5728")
+    require_asset_manage(category, user)
+    if category.get("type") != "image":
+        raise HTTPException(status_code=400, detail="\u53ea\u80fd\u4e3a\u56fe\u7247\u6587\u4ef6\u5939\u8bbe\u7f6e\u5c01\u9762")
+    cover_url = str(payload.cover_url or "").strip()
+    cover_path = output_file_from_url(cover_url)
+    if not cover_path or not content_type_for_path(cover_path).startswith("image/"):
+        raise HTTPException(status_code=400, detail="\u5c01\u9762\u5fc5\u987b\u662f\u6709\u6548\u7684\u672c\u5730\u56fe\u7247")
+    category["cover_url"] = cover_url
+    save_asset_library(lib)
+    return {"library": public_asset_library_for_user(lib, user), "category": category}
+
+@app.get("/api/asset-library/categories/{category_id}/download")
+async def download_asset_library_category(category_id: str, request: Request, library_id: str = ""):
+    user = require_authenticated(request)
+    lib = load_asset_library()
+    library, category = find_asset_category_with_library(lib, category_id, library_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="\u6587\u4ef6\u5939\u4e0d\u5b58\u5728")
+    require_asset_manage(category, user)
+    if category.get("type") != "image":
+        raise HTTPException(status_code=400, detail="\u5f53\u524d\u6587\u4ef6\u5939\u4e0d\u652f\u6301\u4e0b\u8f7d")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    tmp_path = tmp.name
+    tmp.close()
+    used_names = set()
+    count = 0
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as archive:
+            for item in category.get("items", []) or []:
+                source = output_file_from_url(item.get("url") or "")
+                if not source or not os.path.isfile(source):
+                    continue
+                original_name = os.path.basename(source)
+                requested = sanitize_export_filename(str(item.get("name") or original_name), original_name)
+                if not os.path.splitext(requested)[1]:
+                    requested += os.path.splitext(original_name)[1]
+                candidate = requested
+                index = 2
+                while candidate.casefold() in used_names:
+                    stem, ext = os.path.splitext(requested)
+                    candidate = f"{stem}_{index}{ext}"
+                    index += 1
+                used_names.add(candidate.casefold())
+                archive.write(source, candidate)
+                count += 1
+        if not count:
+            raise HTTPException(status_code=404, detail="\u6587\u4ef6\u5939\u4e2d\u6ca1\u6709\u53ef\u4e0b\u8f7d\u7684\u7d20\u6750")
+        filename = sanitize_export_filename(f"{category.get('name') or 'folder'}.zip", "folder.zip")
+        return FileResponse(
+            tmp_path,
+            media_type="application/zip",
+            filename=filename,
+            background=BackgroundTask(lambda: os.path.exists(tmp_path) and os.remove(tmp_path)),
+        )
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
 @app.delete("/api/asset-library/categories/{category_id}")
 async def delete_asset_library_category(category_id: str, request: Request, library_id: str = "", mode: str = ""):
     user = require_authenticated(request)
@@ -22020,6 +22405,40 @@ async def delete_asset_library_category(category_id: str, request: Request, libr
     library["categories"] = [c for c in library.get("categories", []) if c.get("id") != category_id]
     save_asset_library(lib)
     return {"library": lib}
+
+@app.post("/api/asset-library/categories/delete")
+async def batch_delete_asset_library_categories(payload: AssetLibraryBatchCategoryDeleteRequest, request: Request):
+    user = require_authenticated(request)
+    ids = {str(item) for item in (payload.ids or []) if str(item)}
+    if not ids:
+        raise HTTPException(status_code=400, detail="\u6ca1\u6709\u9009\u62e9\u6587\u4ef6\u5939")
+    if str(payload.mode or "contents") != "contents":
+        raise HTTPException(status_code=400, detail="\u6279\u91cf\u5220\u9664\u53ea\u652f\u6301\u8fde\u540c\u7d20\u6750\u4e00\u8d77\u5220\u9664")
+    lib = load_asset_library()
+    library = find_asset_library(lib, payload.library_id)
+    if not library:
+        raise HTTPException(status_code=404, detail="\u8d44\u4ea7\u5e93\u4e0d\u5b58\u5728")
+    categories = [cat for cat in (library.get("categories") or []) if str(cat.get("id") or "") in ids]
+    if len(categories) != len(ids):
+        raise HTTPException(status_code=404, detail="\u90e8\u5206\u6587\u4ef6\u5939\u4e0d\u5b58\u5728")
+    for category in categories:
+        require_asset_manage(category, user)
+        if category.get("type") == "workflow" and category.get("id") == "workflows" and (library.get("id") or "") == "default":
+            raise HTTPException(status_code=400, detail="\u9ed8\u8ba4\u5de5\u4f5c\u6d41\u5206\u7c7b\u4e0d\u80fd\u5220\u9664")
+    trash = load_asset_trash()
+    removed = 0
+    for category in categories:
+        for item in category.get("items", []) or []:
+            trash.setdefault("items", []).append(asset_trash_entry(
+                "workflow" if category.get("type") == "workflow" else "asset",
+                item, {"library_id": library.get("id"), "category_id": category.get("id")}, user,
+            ))
+            cancel_queued_asset_tasks_for_target(item.get("id"))
+            removed += 1
+    library["categories"] = [cat for cat in (library.get("categories") or []) if str(cat.get("id") or "") not in ids]
+    save_asset_library(lib)
+    save_asset_trash(trash)
+    return {"library": public_asset_library_for_user(lib, user), "removed_folders": len(categories), "removed_items": removed, "trashed": True}
 
 @app.post("/api/asset-library/items")
 async def add_asset_library_item(payload: AssetLibraryAddRequest, request: Request):
