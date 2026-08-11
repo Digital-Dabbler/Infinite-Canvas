@@ -1197,17 +1197,17 @@ function findEmptySpaceForWorkflow(width, height){
 }
 
 async function applyLibraryWorkflowToCanvas(item){
-    if(!canvas){ toast('\u6574\u7ec4\u6267\u884c\u5b8c\u6210'); return; }
-    if(!item?.id){ toast('\u6574\u7ec4\u6267\u884c\u5b8c\u6210'); return; }
+    if(!canvas){ toast('整组执行完成'); return; }
+    if(!item?.id){ toast('整组执行完成'); return; }
     try {
         const res = await fetch(`/api/workflow-library/${encodeURIComponent(item.id)}/apply`,{method:'POST'});
-        if(!res.ok) throw new Error(await responseErrorMessage(res,'\u521b\u5efa\u5de5\u4f5c\u6d41\u5931\u8d25'));
+        if(!res.ok) throw new Error(await responseErrorMessage(res,'创建工作流失败'));
         const imported=normalizeImportedSmartWorkflow(await res.json());
-        if(!imported?.nodes?.length) throw new Error('\u5de5\u4f5c\u6d41\u4e2d\u6ca1\u6709\u53ef\u5bfc\u5165\u7684\u8282\u70b9');
+        if(!imported?.nodes?.length) throw new Error('工作流中没有可导入的节点');
         const bounds=libraryWorkflowBounds(imported),position=findEmptySpaceForWorkflow(bounds.width,bounds.height);
         insertSmartWorkflowIntoCanvas(imported,{x:position.x,y:position.y});
-        toast(`\u5df2\u5bfc\u5165 ${imported.nodes.length} \u4e2a\u8282\u70b9\u5230\u753b\u5e03`);
-    } catch(err){ toast(err.message||'\u5e94\u7528\u5de5\u4f5c\u6d41\u5931\u8d25'); }
+        toast(`已导入 ${imported.nodes.length} 个节点到画布`);
+    } catch(err){ toast(err.message||'应用工作流失败'); }
 }
 
 function applyLibraryAssetToCanvas(item){
@@ -1409,12 +1409,12 @@ function normalizeLegacySmartNode(node){
         node.title = node.title === 'Prompt' || !node.title ? '文本' : node.title;
         node.llmInstruction = String(node.llmInstruction || '');
         node.inputOrder = Array.isArray(node.inputOrder) ? node.inputOrder.filter(Boolean) : [];
-        if(node.textOutputSemanticsV1 !== true){
-            if(Array.isArray(node.promptPresets) && node.promptPresets.length && window.promptPresetComposeText){
-                node.text = window.promptPresetComposeText(node, String(node.text || ''));
-            }
-            node.textOutputSemanticsV1 = true;
+        // Presets are structural wrappers, not editable text. A precise migration
+        // removes only legacy blocks that older builds recorded in `appliedText`.
+        if(Array.isArray(node.promptPresets) && node.promptPresets.length && window.migratePromptPresetNodeText){
+            window.migratePromptPresetNodeText(node);
         }
+        delete node.textOutputSemanticsV1;
     }
     return node;
 }
@@ -1424,9 +1424,13 @@ function migrateLegacySmartCanvasNodes(rawNodes=[], rawConnections=[]){
     let changed = false;
     (rawNodes || []).forEach(source => {
         const originalType = source?.type || '';
+        const originalPromptState = originalType === 'smart-prompt'
+            ? JSON.stringify({text:String(source?.text || ''), presets:source?.promptPresets || [], version:source?.promptPresetTextModelVersion || 0, legacy:source?.textOutputSemanticsV1 === true})
+            : '';
         const node = normalizeLegacySmartNode(source);
         if(!node) return;
         if(node.type !== originalType) changed = true;
+        if(originalPromptState && originalPromptState !== JSON.stringify({text:String(node.text || ''), presets:node.promptPresets || [], version:node.promptPresetTextModelVersion || 0, legacy:node.textOutputSemanticsV1 === true})) changed = true;
         const imagesAreAllRaster = (node.images || []).length > 1 && (node.images || []).every(image => mediaKindForItem(imageForDisplay(image)) === 'image');
         if(isSmartImageUploadNode(node) && imagesAreAllRaster){
             const count = node.images.length;
@@ -2214,11 +2218,20 @@ function promptNodeSeparator(node){
 function promptNodePromptItems(node){
     const text = String(node?.text || '').trim();
     if(!text) return [];
-    if(node?.promptSplitEnabled !== true) return [text];
-    const sep = promptNodeSeparator(node);
-    if(!sep) return [text];
-    const items = text.split(sep).map(item => item.trim()).filter(Boolean);
-    return items.length > 1 ? items : [text];
+    const rawItems = node?.promptSplitEnabled !== true
+        ? [text]
+        : (() => {
+            const sep = promptNodeSeparator(node);
+            if(!sep) return [text];
+            const items = text.split(sep).map(item => item.trim()).filter(Boolean);
+            return items.length > 1 ? items : [text];
+        })();
+    // A prompt node owns its presets even when it becomes an upstream source.
+    // Wrap each split prompt independently so every submitted prompt retains the
+    // selected prefix/body/suffix contract.
+    return rawItems.map(item => window.promptPresetComposeText
+        ? String(window.promptPresetComposeText(node, item) || '').trim()
+        : item).filter(Boolean);
 }
 function promptNodeSplitExtraHeight(node){
     if(node?.promptSplitEnabled !== true) return 0;
@@ -9021,7 +9034,7 @@ function smartLoopEditorText(editor){
         if(node.tagName === 'BR') return '\n';
         return [...node.childNodes].map(walk).join('');
     };
-    return [...(editor?.childNodes || [])].map(walk).join('').replace(/\u00a0/g, ' ');
+    return [...(editor?.childNodes || [])].map(walk).join('').replace(/ /g, ' ');
 }
 function insertSmartLoopToken(editor, token){
     if(!editor) return;
@@ -9396,7 +9409,7 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
     }
     menuItems.push(`<button type="button" role="menuitem" data-add-my-assets><i data-lucide="library-big"></i><span>${escapeHtml(tr('library.addToMyAssets'))}</span></button>`);
     if(node.workflowGroupId){
-        menuItems.push('<button type="button" role="menuitem" data-remove-workflow-member><i data-lucide="log-out"></i><span>\u79fb\u51fa\u5206\u7ec4</span></button>');
+        menuItems.push('<button type="button" role="menuitem" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>');
     }
     photoshopContextMenu.innerHTML = menuItems.join('');
     photoshopContextMenu.classList.add('open');
@@ -9800,22 +9813,22 @@ function workflowGroupOrderedMembers(group){
     members.filter(n=>!out.includes(n)).sort(sort).forEach(n=>out.push(n)); return out;
 }
 function toggleWorkflowGroupLayoutMenu(id){workflowGroupLayoutOpenId=workflowGroupLayoutOpenId===id?'':id;render();}
-function layoutWorkflowGroup(id,mode){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group)return;const members=workflowGroupOrderedMembers(group);if(!members.length)return;pushUndo();const x0=group.x+34,y0=group.y+52,gap=54;if(mode==='grid'){const cols=Math.max(1,Math.ceil(Math.sqrt(members.length)));let x=x0,y=y0,rowH=0;members.forEach((n,i)=>{const r=nodeRect(n);if(i&&i%cols===0){x=x0;y+=rowH+gap;rowH=0;}n.x=Math.round(x);n.y=Math.round(y);x+=Math.max(180,r.width)+gap;rowH=Math.max(rowH,Math.max(110,r.height));});}else if(mode==='vertical'){let y=y0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x0);n.y=Math.round(y);y+=Math.max(110,r.height)+gap;});}else{let x=x0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x);n.y=Math.round(y0);x+=Math.max(180,r.width)+gap;});}fitWorkflowOrganizerBounds(group);workflowGroupLayoutOpenId='';render();scheduleSave();toast('\u5df2\u6574\u7406\u5de5\u4f5c\u6d41\u5206\u7ec4');}
-function removeNodeFromWorkflowGroup(id){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId)return;pushUndo();const groupId=node.workflowGroupId;delete node.workflowGroupId;node.workflowGroupReentryGate=groupId;fitWorkflowOrganizerBounds(nodes.find(n=>n.id===groupId));render();scheduleSave();toast('\u5df2\u79fb\u51fa\u5de5\u4f5c\u6d41\u5206\u7ec4');}
-function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>\u79fb\u51fa\u5206\u7ec4</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
+function layoutWorkflowGroup(id,mode){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group)return;const members=workflowGroupOrderedMembers(group);if(!members.length)return;pushUndo();const x0=group.x+34,y0=group.y+52,gap=54;if(mode==='grid'){const cols=Math.max(1,Math.ceil(Math.sqrt(members.length)));let x=x0,y=y0,rowH=0;members.forEach((n,i)=>{const r=nodeRect(n);if(i&&i%cols===0){x=x0;y+=rowH+gap;rowH=0;}n.x=Math.round(x);n.y=Math.round(y);x+=Math.max(180,r.width)+gap;rowH=Math.max(rowH,Math.max(110,r.height));});}else if(mode==='vertical'){let y=y0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x0);n.y=Math.round(y);y+=Math.max(110,r.height)+gap;});}else{let x=x0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x);n.y=Math.round(y0);x+=Math.max(180,r.width)+gap;});}fitWorkflowOrganizerBounds(group);workflowGroupLayoutOpenId='';render();scheduleSave();toast('已整理工作流分组');}
+function removeNodeFromWorkflowGroup(id){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId)return;pushUndo();const groupId=node.workflowGroupId;delete node.workflowGroupId;node.workflowGroupReentryGate=groupId;fitWorkflowOrganizerBounds(nodes.find(n=>n.id===groupId));render();scheduleSave();toast('已移出工作流分组');}
+function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
 function workflowGroupPayload(group){const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));return {nodes:members.map(n=>{const c=serializableSmartNode(n);delete c.workflowGroupId;if(Array.isArray(c.inputNodeIds))c.inputNodeIds=c.inputNodeIds.filter(id=>ids.has(id));return c;}),connections:(canvas?.connections||[]).filter(c=>ids.has(c.from)&&ids.has(c.to)),include_resources:true,filename:`${group.title||'workflow'}.zip`};}
 function workflowGroupCoverUrl(group){return workflowGroupOrderedMembers(group).flatMap(n=>n.images||[]).map(imageForDisplay).find(i=>i?.url&&mediaKindForItem(i)==='image')?.url||'';}
 function openWorkflowCreateDialog(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n)),modal=document.getElementById('workflowCreateModal');if(!group||!modal)return;pendingWorkflowCreateGroupId=id;const name=document.getElementById('workflowCreateName'),cover=document.getElementById('workflowCreateCover');if(name)name.value=String(group.title||'').slice(0,20);if(cover)cover.innerHTML=workflowGroupCoverUrl(group)?`<img src="${escapeAttr(workflowGroupCoverUrl(group))}" alt="">`:'<i data-lucide="workflow"></i>';document.getElementById('workflowCreateCount').textContent=`${Array.from(name?.value||'').length}/20`;modal.classList.add('open');refreshIcons();name?.focus();}
 function closeWorkflowCreateDialog(){document.getElementById('workflowCreateModal')?.classList.remove('open');pendingWorkflowCreateGroupId='';}
-async function confirmWorkflowCreate(){const group=nodes.find(n=>n.id===pendingWorkflowCreateGroupId&&isWorkflowOrganizerNode(n)),name=String(document.getElementById('workflowCreateName')?.value||'').trim();if(!group||!name){toast('\u8bf7\u8f93\u5165\u5de5\u4f5c\u6d41\u540d\u79f0');return;}const res=await fetch('/api/workflow-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...workflowGroupPayload(group),name,cover_url:workflowGroupCoverUrl(group)})});if(!res.ok)throw new Error(await responseErrorMessage(res,'\u521b\u5efa\u5de5\u4f5c\u6d41\u5931\u8d25'));closeWorkflowCreateDialog();toast('\u5de5\u4f5c\u6d41\u5df2\u521b\u5efa');}
-async function runWorkflowGroup(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group||workflowGroupRunState)return;const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));const cross=(canvas?.connections||[]).some(c=>{const a=nodes.find(n=>n.id===c.from),b=nodes.find(n=>n.id===c.to);return(a?.type==='smart-loop'||b?.type==='smart-loop')&&(ids.has(c.from)!==ids.has(c.to));});if(cross){toast('\u5faa\u73af\u94fe\u8def\u4e0d\u80fd\u8de8\u51fa\u5de5\u4f5c\u6d41\u5206\u7ec4');return;}workflowGroupRunState={id};const original=selectedId;try{for(const node of members){if(!isSmartRunnableNode(node))continue;selectedId=node.id;selectedIds=[];await runGeneration();if(node.error)throw new Error(node.error);}toast('\u6574\u7ec4\u6267\u884c\u5b8c\u6210');}catch(e){toast(e.message||'\u6574\u7ec4\u6267\u884c\u5df2\u505c\u6b62');}finally{workflowGroupRunState=null;selectedId=original;render();scheduleSave();}}
+async function confirmWorkflowCreate(){const group=nodes.find(n=>n.id===pendingWorkflowCreateGroupId&&isWorkflowOrganizerNode(n)),name=String(document.getElementById('workflowCreateName')?.value||'').trim();if(!group||!name){toast('请输入工作流名称');return;}const res=await fetch('/api/workflow-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...workflowGroupPayload(group),name,cover_url:workflowGroupCoverUrl(group)})});if(!res.ok)throw new Error(await responseErrorMessage(res,'创建工作流失败'));closeWorkflowCreateDialog();toast('工作流已创建');}
+async function runWorkflowGroup(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group||workflowGroupRunState)return;const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));const cross=(canvas?.connections||[]).some(c=>{const a=nodes.find(n=>n.id===c.from),b=nodes.find(n=>n.id===c.to);return(a?.type==='smart-loop'||b?.type==='smart-loop')&&(ids.has(c.from)!==ids.has(c.to));});if(cross){toast('循环链路不能跨出工作流分组');return;}workflowGroupRunState={id};const original=selectedId;try{for(const node of members){if(!isSmartRunnableNode(node))continue;selectedId=node.id;selectedIds=[];await runGeneration();if(node.error)throw new Error(node.error);}toast('整组执行完成');}catch(e){toast(e.message||'整组执行已停止');}finally{workflowGroupRunState=null;selectedId=original;render();scheduleSave();}}
 window.toggleWorkflowGroupLayoutMenu=toggleWorkflowGroupLayoutMenu;window.layoutWorkflowGroup=layoutWorkflowGroup;window.runWorkflowGroup=runWorkflowGroup;window.openWorkflowCreateDialog=openWorkflowCreateDialog;
 function canvasOrganizerHtml(node){
     const color=organizerColor(node);
     if(isSmartNoteNode(node)) return `<div class="image-node smart-note-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||240}px;height:${node.h||180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px"><div class="smart-note-toolbar">${organizerColorButtons(node)}${smartTextCopyButtonHtml('.smart-note-text')}<button class="organizer-edit node-delete" type="button"><i data-lucide="trash-2"></i></button></div><textarea class="smart-note-text">${escapeHtml(node.text||'')}</textarea><div class="node-resize-handle" data-resize="1"></div></div>`;
     delete node.titleFontSize;
-    const title=String(node.title||'\u672a\u547d\u540d\u5de5\u4f5c\u6d41'), chars=Math.max(8,Math.min(64,Array.from(title).length));
-    const toolbar=isNodeSelected(node.id)?`<div class="workflow-group-toolbar"><div class="workflow-group-layout"><button type="button" onclick="toggleWorkflowGroupLayoutMenu('${escapeAttr(node.id)}')"><i data-lucide="layout-grid"></i>\u5e03\u5c40<i data-lucide="chevron-down"></i></button>${workflowGroupLayoutOpenId===node.id?`<div class="workflow-group-layout-menu"><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','grid')"><i data-lucide="grid-2x2"></i>\u5bab\u683c\u5e03\u5c40</button><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','horizontal')"><i data-lucide="panel-top"></i>\u6c34\u5e73\u5e03\u5c40</button><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','vertical')"><i data-lucide="panel-left"></i>\u5782\u76f4\u5e03\u5c40</button></div>`:''}</div><button class="workflow-group-run" type="button" onclick="runWorkflowGroup('${escapeAttr(node.id)}')"><i data-lucide="play"></i>\u6574\u7ec4\u6267\u884c</button><button class="workflow-group-create" type="button" onclick="openWorkflowCreateDialog('${escapeAttr(node.id)}')"><i data-lucide="save"></i>\u521b\u5efa\u5de5\u4f5c\u6d41</button></div>`:'';
+    const title=String(node.title||'未命名工作流'), chars=Math.max(8,Math.min(64,Array.from(title).length));
+    const toolbar=isNodeSelected(node.id)?`<div class="workflow-group-toolbar"><div class="workflow-group-layout"><button type="button" onclick="toggleWorkflowGroupLayoutMenu('${escapeAttr(node.id)}')"><i data-lucide="layout-grid"></i>布局<i data-lucide="chevron-down"></i></button>${workflowGroupLayoutOpenId===node.id?`<div class="workflow-group-layout-menu"><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','grid')"><i data-lucide="grid-2x2"></i>宫格布局</button><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','horizontal')"><i data-lucide="panel-top"></i>水平布局</button><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','vertical')"><i data-lucide="panel-left"></i>垂直布局</button></div>`:''}</div><button class="workflow-group-run" type="button" onclick="runWorkflowGroup('${escapeAttr(node.id)}')"><i data-lucide="play"></i>整组执行</button><button class="workflow-group-create" type="button" onclick="openWorkflowCreateDialog('${escapeAttr(node.id)}')"><i data-lucide="save"></i>创建工作流</button></div>`:'';
     return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||520}px;height:${node.h||320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}"><div class="workflow-organizer-head">${toolbar}<div class="organizer-title-control" style="--organizer-title-ch:${chars}"><input class="workflow-organizer-title" value="${escapeAttr(title)}">${smartTextCopyButtonHtml('.workflow-organizer-title')}</div><div class="organizer-color-row">${organizerColorButtons(node)}</div></div><div class="node-resize-handle" data-resize="1"></div></div>`;
 }
 function renderSmartOutline(){
@@ -10298,6 +10311,9 @@ function bindTextNodeControls(el, node){
     el.querySelectorAll('.prompt-node-control:not(.prompt-node-text), .text-node-input-card').forEach(control => {
         ['mousedown', 'click', 'dblclick'].forEach(type => control.addEventListener(type, event => event.stopPropagation()));
     });
+    // Text nodes use this binding path. Attach the preset controls here rather than
+    // the dormant legacy prompt-node binding so delete and reorder handlers exist.
+    window.bindPromptPresetNodeControls?.(el, node);
     const textEl = el.querySelector('.prompt-node-text');
     if(textEl){
         bindScrollableText(textEl);
@@ -10323,8 +10339,12 @@ function bindTextNodeControls(el, node){
             node.text = event.target.value;
             scheduleSave();
         };
-        textEl.onblur = () => {
+        textEl.onblur = event => {
             if(!promptTextEditingIds.delete(node.id)) return;
+            const nextTarget = event.relatedTarget;
+            const panel = textNodePanelLayer?.querySelector?.(`[data-text-generation-panel][data-node-id="${CSS.escape(node.id)}"]`);
+            const stillInTextNodeFlow = Boolean(nextTarget && (el.contains(nextTarget) || panel?.contains(nextTarget)));
+            if(!stillInTextNodeFlow) promptPanelClosedIds.add(node.id);
             render();
             scheduleSave();
         };
@@ -11847,7 +11867,7 @@ function selectInlineEditorText(el){
     sel.addRange(range);
 }
 function inlineEditorText(){
-    return String(editTextInlineEditor?.el?.innerText || editTextInlineEditor?.el?.textContent || '').replace(/\u00a0/g, ' ');
+    return String(editTextInlineEditor?.el?.innerText || editTextInlineEditor?.el?.textContent || '').replace(/ /g, ' ');
 }
 function autosizeEditTextInlineEditor(){
     const editor = editTextInlineEditor;
@@ -14735,6 +14755,9 @@ function updateComposer(){
     }
     composerUpdateSeq++;
     const node = selectedNode();
+    // The text-node generation form is an independent floating layer. Keep it in
+    // lockstep with selection changes, including selecting a non-text node.
+    renderTextNodePanel();
     syncRunButtonState(node);
     if(smartCascadeSilentSelection && !activeComposerSubject){
         composer.classList.remove('open');
@@ -18149,12 +18172,21 @@ async function runPromptLLMNode(nodeId){
         render();
         return;
     }
+    const mediaRefs = promptNodeInputMediaForLLM(node);
+    const runLogStartedAt = nowMs();
+    const runLog = {
+        nodeId:node.id,
+        nodeType:'smart-prompt',
+        kind:'text',
+        settings:{engine:'llm', provider_id:provider, model},
+        prompt:message,
+        refs:mediaRefs.map(ref => ({url:ref.url || '', name:ref.name || '', kind:ref.kind || mediaKindForItem(ref)})).filter(ref => ref.url)
+    };
     node.llmEnabled = true;
     node.running = true;
     promptRunFeedback.delete(node.id);
     render();
     try {
-        const mediaRefs = promptNodeInputMediaForLLM(node);
         const images = imageRefsOnly(mediaRefs).map(img => img.url).filter(Boolean);
         const videos = videoRefsOnly(mediaRefs).map(video => video.url).filter(Boolean);
         const result = await fetch('/api/canvas-llm', {
@@ -18171,8 +18203,19 @@ async function runPromptLLMNode(nodeId){
                 system_prompt:''
             })
         }).then(async r => {
-            if(!r.ok) throw new Error(await r.text());
-            return r.json();
+            const body = await r.text();
+            let data = null;
+            try { data = body ? JSON.parse(body) : null; } catch(_) {}
+            if(!r.ok){
+                const detail = typeof data?.detail === 'string'
+                    ? data.detail
+                    : typeof data?.message === 'string'
+                        ? data.message
+                        : body || `HTTP ${r.status}`;
+                throw new Error(detail);
+            }
+            if(data && typeof data === 'object') return data;
+            throw new Error(body || tr('smart.textGenerationEmpty'));
         });
         const generated = (result.text || '').trim();
         if(!generated) throw new Error(tr('smart.textGenerationEmpty'));
@@ -18181,6 +18224,7 @@ async function runPromptLLMNode(nodeId){
         node.llmModel = model;
         rememberPromptLlmSelection(provider, model);
         promptRunFeedback.set(node.id, {type:'success', message:tr('smart.textGenerationDone')});
+        addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStartedAt});
         toast(tr('smart.textGenerationDone'));
         scheduleSave();
         setTimeout(() => {
@@ -18194,6 +18238,7 @@ async function runPromptLLMNode(nodeId){
             message = tr('smart.textVisionUnsupported');
         }
         promptRunFeedback.set(node.id, {type:'error', message});
+        addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStartedAt, error:message});
     } finally {
         node.running = false;
         render();
@@ -20074,7 +20119,7 @@ document.getElementById('workflowCreateClose')?.addEventListener('click',closeWo
 document.getElementById('workflowCreateCancel')?.addEventListener('click',closeWorkflowCreateDialog);
 document.getElementById('workflowCreateModal')?.addEventListener('click',e=>{if(e.target.id==='workflowCreateModal')closeWorkflowCreateDialog();});
 document.getElementById('workflowCreateName')?.addEventListener('input',e=>{document.getElementById('workflowCreateCount').textContent=`${Array.from(e.target.value||'').length}/20`;});
-document.getElementById('workflowCreateConfirm')?.addEventListener('click',()=>confirmWorkflowCreate().catch(e=>toast(e.message||'\u521b\u5efa\u5de5\u4f5c\u6d41\u5931\u8d25')));
+document.getElementById('workflowCreateConfirm')?.addEventListener('click',()=>confirmWorkflowCreate().catch(e=>toast(e.message||'创建工作流失败')));
 fileInput.onchange = () => {
     const groupPoint = pendingGroupUploadPoint;
     if(!fileInput.files?.length){

@@ -443,7 +443,6 @@ RUNNINGHUB_OPENAPI_BASE_URL = "https://www.runninghub.cn/openapi/v2"
 RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
 RUNNINGHUB_MODEL_REGISTRY_CACHE_TTL = 300
 RUNNINGHUB_MODEL_REGISTRY_CACHE = {}
-RUNNINGHUB_LLM_BASE_URL = "https://llm.runninghub.cn/v1"
 RUNNINGHUB_REMOTE_REFERENCE_CACHE_TTL = 10 * 60
 RUNNINGHUB_REFERENCE_CACHE_MAX = 256
 RUNNINGHUB_REFERENCE_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -453,10 +452,6 @@ RUNNINGHUB_FILE_HOST_REWRITES = {
     "rh-images-1252422369.cos.ap-beijing.myqcloud.com": "rh-images.xiaoyaoyou.com",
 }
 LINGJING_DEFAULT_BASE_URL = "https://apistudio.vip"
-RUNNINGHUB_LLM_MODELS_URLS = [
-    "https://llm.runninghub.cn/v1/models",
-    "https://llm.runninghub.ai/v1/models",
-]
 RUNNINGHUB_FALLBACK_CHAT_MODELS = [
     "google/gemini-3.1-flash-lite-preview",
     "qwen/qwen3-vl-235b-a22b-instruct",
@@ -1383,6 +1378,27 @@ def runninghub_openapi_url(provider, path=""):
     path = path.lstrip("/")
     base = runninghub_openapi_base_url(provider)
     return f"{base}/{path}" if path else base
+
+def runninghub_llm_base_url(provider=None):
+    """Derive the regional LLM gateway from the runtime provider Base URL."""
+    base_url = str((provider or {}).get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL).strip()
+    parsed = urllib.parse.urlsplit(base_url)
+    host = str(parsed.hostname or "").strip().lower()
+    scheme = str(parsed.scheme or "https").strip().lower()
+    if host in {"runninghub.ai", "www.runninghub.ai", "llm.runninghub.ai"}:
+        llm_host = "llm.runninghub.ai"
+    elif host in {"runninghub.cn", "www.runninghub.cn", "llm.runninghub.cn"}:
+        llm_host = "llm.runninghub.cn"
+    else:
+        raise HTTPException(status_code=400, detail='RunningHub Base URL 必须使用 runninghub.ai 或 runninghub.cn，才能调用大模型接口。')
+    return f"{scheme}://{llm_host}/v1"
+
+def runninghub_llm_models_url(provider=None):
+    return f"{runninghub_llm_base_url(provider)}/models"
+
+def runninghub_llm_fallback_chat_models(provider=None):
+    """Never inject an .ai fallback model into a .cn configuration group."""
+    return RUNNINGHUB_FALLBACK_CHAT_MODELS[:] if runninghub_llm_base_url(provider).endswith(".ai/v1") else []
 
 def normalize_provider(item):
     provider_id = str(item.get("id") or "").strip().lower()
@@ -6545,10 +6561,14 @@ def resolve_chat_provider(provider: str, model: str, ms_model: str, api_profile_
     elif protocol == "volcengine":
         base = base_root if base_root.endswith("/api/v3") else base_root + "/api/v3"
     elif protocol == "runninghub":
-        base = RUNNINGHUB_LLM_BASE_URL
+        base = runninghub_llm_base_url(api_provider)
     else:
         base = base_root if base_root.endswith("/v1") else base_root + "/v1"
-    hdrs = api_headers(provider=api_provider, model=mdl)
+    if protocol == "runninghub":
+        # Reuse the provider-scoped wallet-key selection used by image/video/workflow.
+        hdrs = runninghub_api_headers(api_provider, use_wallet=True)
+    else:
+        hdrs = api_headers(provider=api_provider, model=mdl)
     return base, hdrs, mdl
 
 def log_net_error(context, exc, url=""):
@@ -13400,6 +13420,12 @@ def friendly_chat_error_detail(text, model="", provider=None):
     message_lc = message.lower()
     model_name = str(model or "").strip()
 
+    if is_runninghub_provider(provider):
+        combined = f"{code_lc} {message_lc} {lower_text}"
+        if "auth_apikey_type_forbidden" in combined or "only shared (enterprise) api keys are accepted" in combined:
+            return 'RunningHub 大模型接口只接受企业共享/钱包 API Key。请在 API 设置中配置 RunningHub 钱包 Key，而不是普通 RunningHub API Key。'
+        if "auth_apikey_invalid" in combined or "apikey_user_not_found" in combined:
+            return 'RunningHub 大模型鉴权失败：请确认当前配置组的 Base URL、该区域的文本模型和账户余额钱包 Key 属于同一 RunningHub 区域。'
     if is_volcengine_provider(provider):
         if code_lc in {"invalidendpointormodel.notfound", "invalidendpointormodel.modelidaccessdisabled"}:
             provider_name = provider.get("name") or provider.get("id") or "火山方舟"
@@ -14066,29 +14092,28 @@ def runninghub_registry_model_from_id(model_id, output_type=""):
     return {"name_en": model_id, "endpoint": model_id, "output_type": output_type}
 
 async def fetch_runninghub_llm_models(provider=None):
-    headers = runninghub_api_headers(provider)
-    errors = []
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
-        for url in RUNNINGHUB_LLM_MODELS_URLS:
-            try:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code >= 400 or looks_like_html_response(resp.text):
-                    errors.append(f"{url}: HTTP {resp.status_code} {resp.text[:180]}")
-                    continue
-                raw = resp.json() if resp.text else {}
-                grouped, ids = parse_upstream_models(raw, "openai")
-                if ids:
-                    return [runninghub_registry_model_from_id(mid, "chat") for mid in ids], {"source": url, "count": len(ids)}
-                errors.append(f"{url}: empty")
-            except Exception as exc:
-                errors.append(f"{url}: {str(exc)[:180]}")
-    return [], {"source": "", "count": 0, "errors": errors[-3:]}
+    headers = runninghub_api_headers(provider, use_wallet=True)
+    url = runninghub_llm_models_url(provider)
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code >= 400 or looks_like_html_response(resp.text):
+            return [], {"source": "", "count": 0, "errors": [f"{url}: HTTP {resp.status_code} {resp.text[:180]}"]}
+        raw = resp.json() if resp.text else {}
+        grouped, ids = parse_upstream_models(raw, "openai")
+        if ids:
+            return [runninghub_registry_model_from_id(mid, "chat") for mid in ids], {"source": url, "count": len(ids)}
+        return [], {"source": "", "count": 0, "errors": [f"{url}: empty"]}
+    except Exception as exc:
+        return [], {"source": "", "count": 0, "errors": [f"{url}: {str(exc)[:180]}"]}
+
 
 async def fetch_runninghub_model_registry(provider=None, include_fallback=True, include_meta=False):
     provider = provider if isinstance(provider, dict) else {}
     cache_key = "|".join([
         str(provider.get("_api_profile_id") or LEGACY_API_PROFILE_ID),
-        str(provider.get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL).rstrip("/"),
+        runninghub_openapi_base_url(provider),
+        runninghub_llm_base_url(provider),
     ])
     cached = RUNNINGHUB_MODEL_REGISTRY_CACHE.get(cache_key)
     now = time.monotonic()
@@ -14184,8 +14209,8 @@ def runninghub_model_display_name(item, model_id=""):
         return name[:160]
     return ""
 
-def runninghub_registry_payload(items):
-    grouped = {"image": [], "chat": RUNNINGHUB_FALLBACK_CHAT_MODELS[:], "video": []}
+def runninghub_registry_payload(items, provider=None):
+    grouped = {"image": [], "chat": [], "video": []}
     model_names = {}
     all_ids = []
     for item in items or []:
@@ -14196,7 +14221,7 @@ def runninghub_registry_payload(items):
         if display_name:
             model_names[mid] = display_name
         output_type = str(item.get("output_type") or item.get("outputType") or "").strip().lower()
-        if output_type in ("image", "video"):
+        if output_type in ("image", "video", "chat"):
             grouped[output_type].append(mid)
             all_ids.append(mid)
     for model in RUNNINGHUB_DEFAULT_IMAGE_MODELS:
@@ -14207,9 +14232,11 @@ def runninghub_registry_payload(items):
         if model not in grouped["video"]:
             grouped["video"].append(model)
             all_ids.append(model)
-    for model in RUNNINGHUB_FALLBACK_CHAT_MODELS:
-        if model not in all_ids:
-            all_ids.append(model)
+    if not grouped["chat"]:
+        for model in runninghub_llm_fallback_chat_models(provider):
+            if model not in grouped["chat"]:
+                grouped["chat"].append(model)
+                all_ids.append(model)
     for key in grouped:
         grouped[key] = sorted(set(grouped[key]))
     return {
@@ -14224,7 +14251,7 @@ def runninghub_registry_payload(items):
 
 async def runninghub_models_payload(provider=None):
     registry, meta = await fetch_runninghub_model_registry(provider, include_fallback=True, include_meta=True)
-    payload = runninghub_registry_payload(registry)
+    payload = runninghub_registry_payload(registry, provider)
     payload["raw"] = {"registry_count": len(registry), **meta}
     if meta.get("source") == "fallback":
         payload["message"] = "RunningHub 模型接口未返回完整列表，当前显示内置兜底模型。"

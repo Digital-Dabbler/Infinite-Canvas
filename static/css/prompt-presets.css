@@ -5,8 +5,13 @@
 .prompt-preset-row { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; align-items: start; gap: 8px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--soft) 62%, transparent); }
 .prompt-preset-row::before { content: '提示词预设'; padding-top: 5px; color: var(--faint); font-size: 9px; font-weight: 850; letter-spacing: .1em; }
 .prompt-preset-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 26px; padding: 0; }
-.prompt-preset-chip { display: inline-flex; align-items: center; max-width: 180px; min-height: 25px; gap: 5px; padding: 0 5px 0 8px; border: 1px solid color-mix(in srgb, var(--rh-brand) 52%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--rh-brand) 12%, var(--card)); color: var(--text); font-size: 11px; font-weight: 750; cursor: grab; }
+.prompt-preset-chip { position:relative; display: inline-flex; align-items: center; max-width: 180px; min-height: 25px; gap: 5px; padding: 0 5px 0 8px; border: 1px solid color-mix(in srgb, var(--rh-brand) 52%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--rh-brand) 12%, var(--card)); color: var(--text); font-size: 11px; font-weight: 750; cursor: grab; touch-action: none; }
+.prompt-preset-chip:focus-visible { outline:2px solid var(--strong); outline-offset:2px; }
 .prompt-preset-chip.dragging { opacity: .45; }
+.prompt-preset-chip.drop-before::before,
+.prompt-preset-chip.drop-after::after { content:""; position:absolute; top:2px; bottom:2px; width:3px; border-radius:999px; background:var(--strong); }
+.prompt-preset-chip.drop-before::before { left:-5px; }
+.prompt-preset-chip.drop-after::after { right:-5px; }
 .prompt-preset-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prompt-preset-chip button { display: grid; place-items: center; width: 17px; height: 17px; border-radius: 5px; color: var(--muted); background: transparent; }
 .prompt-preset-chip button:hover { color: var(--text); background: var(--line); }
@@ -39,7 +44,7 @@
     padding:8px 44px 7px 10px;
     overflow:auto;
     border-bottom:1px solid var(--line);
-    pointer-events:none;
+    pointer-events:auto;
     scrollbar-width:thin;
 }
 .prompt-node-text-wrap .prompt-preset-shell:not(:has(.prompt-preset-chip)) { display:none; }
@@ -48,7 +53,8 @@
 .prompt-node-text-wrap .prompt-preset-chips { min-height:0; overflow:visible; pointer-events:auto; }
 .prompt-node-text-wrap .prompt-preset-empty,
 .prompt-node-text-wrap .prompt-preset-actions { display:none; }
-.prompt-node-text-wrap .prompt-preset-chip { pointer-events:auto; }
+.prompt-node-text-wrap .prompt-preset-chip,
+.prompt-node-text-wrap .prompt-preset-chip button { pointer-events:auto; }
 .composer .prompt-row > .composer-preset-controls {
     position:static;
     z-index:3;
