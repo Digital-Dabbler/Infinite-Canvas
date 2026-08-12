@@ -3910,6 +3910,9 @@ async function saveProviders(){
                 video_models:item.video_models || [],
                 model_names:(item.model_names && typeof item.model_names === 'object') ? item.model_names : {},
                 model_protocols:(item.model_protocols && typeof item.model_protocols === 'object') ? item.model_protocols : {},
+                // 能力声明由服务端白名单校验。设置页暂不提供低级 schema 编辑器，
+                // 但保存其他平台字段时必须保留已有声明，供统一 Composer 自动消费。
+                model_capabilities:(item.model_capabilities && typeof item.model_capabilities === 'object') ? item.model_capabilities : {},
                 ms_loras:item.id === 'modelscope' ? (item.ms_loras || []) : [],
                 ms_defaults_version:item.id === 'modelscope' ? (item.ms_defaults_version || 1) : 0,
                 rh_apps:item.id === 'runninghub' ? (item.rh_apps || []) : [],

@@ -357,6 +357,7 @@ let settings = {
     quality:'auto',
     count:1,
     imageCapabilityKey:'',
+    msCapabilityKey:'',
     imageCapabilitySize:'',
     imageCapabilityWidth:'',
     imageCapabilityHeight:'',
@@ -2979,7 +2980,7 @@ function imageModelsForCurrentInputs(providerId, models=providerImageModels(prov
     return {models:filtered, hasReference};
 }
 function syncImageModelForCurrentInputs(node=imageModelSelectionNode()){
-    if(settings.engine !== 'api' || settings.apiKind === 'video' || !settings.provider_id) return {models:[], hasReference:false, changed:false};
+    if(!['api','volcengine'].includes(settings.engine) || settings.apiKind === 'video' || !settings.provider_id) return {models:[], hasReference:false, changed:false};
     const selection = imageModelsForCurrentInputs(settings.provider_id, providerImageModels(settings.provider_id), node);
     const {models, hasReference} = selection;
     if(models.includes(settings.model)){
@@ -3279,10 +3280,36 @@ function applyImageCapabilityDefaults(capability, key){
 function currentImageModelCapability(){
     return imageModelCapabilityCache.get(imageCapabilityCacheKey(settings.provider_id, settings.model)) || null;
 }
+function modelscopeSelectedImageModel(source=settings){
+    const modelKey = source?.msgenModel || 'zimage';
+    const definition = MS_GEN_MODELS[modelKey] || MS_GEN_MODELS.zimage;
+    return modelKey === 'custom'
+        ? String(source?.msCustomModel || modelscopeImageModels()[0] || '').trim()
+        : String(definition.modelId || '').trim();
+}
+function currentModelscopeCapability(){
+    const model = modelscopeSelectedImageModel();
+    return imageModelCapabilityCache.get(imageCapabilityCacheKey('modelscope', model)) || null;
+}
+function applyModelscopeCapabilityDefaults(capability, key){
+    if(!capability?.discovered || settings.msCapabilityKey === key) return;
+    const ratioField = videoCapabilityField(capability, 'aspectRatio', 'aspect_ratio', 'ratio');
+    const resolutionField = videoCapabilityField(capability, 'resolution');
+    if(ratioField){
+        const values = videoCapabilityOptions(ratioField).map(option => imageRatioSettingValue(option.value));
+        const fallback = imageRatioSettingValue(ratioField.default ?? values[0] ?? 'square');
+        settings.msRatio = values.includes(settings.msRatio) ? settings.msRatio : fallback;
+    }
+    if(resolutionField){
+        const values = videoCapabilityOptions(resolutionField).map(option => String(option.value));
+        const fallback = String(resolutionField.default ?? values[0] ?? '1k');
+        settings.msResolution = values.includes(String(settings.msResolution || '')) ? String(settings.msResolution) : fallback;
+    }
+    settings.msCapabilityKey = key;
+}
 async function preloadImageModelCapabilities(){
     const providers = (apiProviders || []).filter(provider =>
         provider?.enabled !== false
-        && isRunningHubVideoProvider(provider.id)
         && Array.isArray(provider.image_models)
         && provider.image_models.length
     );
@@ -3314,7 +3341,7 @@ async function preloadImageModelCapabilities(){
 }
 async function ensureImageModelCapability(providerId, model){
     const key = imageCapabilityCacheKey(providerId, model);
-    if(!providerId || !model || !isRunningHubVideoProvider(providerId) || imageModelCapabilityCache.has(key)) return imageModelCapabilityCache.get(key) || null;
+    if(!providerId || !model || imageModelCapabilityCache.has(key)) return imageModelCapabilityCache.get(key) || null;
     const providerRequest = imageProviderCapabilityRequests.get(providerId);
     if(providerRequest){
         await providerRequest;
@@ -3423,7 +3450,6 @@ function currentVideoModelCapability(){
 async function preloadVideoModelCapabilities(){
     const providers = (apiProviders || []).filter(provider =>
         provider?.enabled !== false
-        && isRunningHubVideoProvider(provider.id)
         && Array.isArray(provider.video_models)
         && provider.video_models.length
     );
@@ -3455,7 +3481,7 @@ async function preloadVideoModelCapabilities(){
 }
 async function ensureVideoModelCapability(providerId, model){
     const key = videoCapabilityCacheKey(providerId, model);
-    if(!providerId || !model || !isRunningHubVideoProvider(providerId) || videoModelCapabilityCache.has(key)) return videoModelCapabilityCache.get(key) || null;
+    if(!providerId || !model || videoModelCapabilityCache.has(key)) return videoModelCapabilityCache.get(key) || null;
     const providerRequest = videoProviderCapabilityRequests.get(providerId);
     if(providerRequest){
         await providerRequest;
@@ -3664,6 +3690,7 @@ function dynamicParamsStateKey(){
         (provider.image_models || []).join('|'),
         (provider.video_models || []).join('|'),
         (provider.chat_models || []).join('|'),
+        JSON.stringify(provider.model_capabilities || {}),
         (provider.rh_apps || []).map(item => item?.appId || item?.webappId || item?.id || '').join('|'),
         (provider.rh_workflows || []).map(item => item?.workflowId || item?.id || '').join('|')
     ].join('~')).join('||');
@@ -3774,13 +3801,11 @@ function renderApiParams(){
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
     const runningHub = isRunningHubVideoProvider(settings.provider_id);
     const capabilityKey = imageCapabilityCacheKey(settings.provider_id, settings.model);
-    const capability = runningHub ? currentImageModelCapability() : null;
-    if(runningHub && capability?.discovered) applyImageCapabilityDefaults(capability, capabilityKey);
-    if(runningHub && !capability) ensureImageModelCapability(settings.provider_id, settings.model);
+    const capability = currentImageModelCapability();
+    if(capability?.discovered) applyImageCapabilityDefaults(capability, capabilityKey);
+    if(!capability) ensureImageModelCapability(settings.provider_id, settings.model);
     const capabilityField = (...names) => videoCapabilityField(capability, ...names);
-    // 切换平台/模型时保留用户已选的分辨率（记忆），normalizeApiSizeSettings 只会修正非法的 auto。
-    if(!runningHub) normalizeApiSizeSettings('');
-    const runningHubParams = !runningHub ? '' : !capability
+    const capabilityParams = !capability
         ? `<div class="muted-note">${escapeHtml(tr('smart.imageCapabilityLoading'))}</div>`
         : capability.error
         ? `<div class="muted-note">${escapeHtml(capability.error)}</div>`
@@ -3799,11 +3824,7 @@ function renderApiParams(){
     dynamicParams.innerHTML = `
         ${runningHub ? renderRhCapabilityControl('model') : ''}
         ${renderModelControl(models)}
-        ${runningHub ? runningHubParams : `
-            ${renderSizePickerControl('', true)}
-            ${renderQualityControl()}
-            ${renderCountVisualControl()}
-        `}
+        ${capabilityParams}
         ${isJimengProviderId(settings.provider_id) ? renderJimengUpscaleControl() : ''}
     `;
 }
@@ -3829,11 +3850,11 @@ function renderApiVideoParams(){
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || '';
     const runningHub = isRunningHubVideoProvider(settings.videoProvider);
     const capabilityKey = videoCapabilityCacheKey(settings.videoProvider, settings.videoModel);
-    const capability = runningHub ? currentVideoModelCapability() : null;
-    if(runningHub && capability?.discovered) applyVideoCapabilityDefaults(capability, capabilityKey);
-    if(runningHub && !capability) ensureVideoModelCapability(settings.videoProvider, settings.videoModel);
+    const capability = currentVideoModelCapability();
+    if(capability?.discovered) applyVideoCapabilityDefaults(capability, capabilityKey);
+    if(!capability) ensureVideoModelCapability(settings.videoProvider, settings.videoModel);
     const capabilityField = (...names) => videoCapabilityField(capability, ...names);
-    const runningHubParams = !runningHub ? '' : !capability
+    const capabilityParams = !capability
         ? `<div class="muted-note">${escapeHtml(tr('smart.videoCapabilityLoading'))}</div>`
         : capability.error
         ? `<div class="muted-note">${escapeHtml(capability.error)}</div>`
@@ -3849,60 +3870,79 @@ function renderApiVideoParams(){
             ${capabilityField('generateAudio', 'generate_audio') ? renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio')) : ''}
             ${capabilityField('cameraFixed', 'camerafixed') ? renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed')) : ''}
             ${capabilityField('watermark') ? renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark')) : ''}
+            ${capabilityField('returnLastFrame', 'return_last_frame') ? renderVideoToggleControl('videoReturnLastFrame', tr('smart.videoReturnLastFrame')) : ''}
             ${capabilityField('lastFrameUrl', 'last_frame_url', 'lastFrameImage', 'last_frame_image') ? renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles')) : ''}
         `;
     dynamicParams.innerHTML = `
         ${runningHub ? renderRhCapabilityControl('model') : ''}
         ${renderVideoModelControl(models)}
-        ${runningHub ? runningHubParams : `
-            ${renderVideoResolutionControl()}
-            ${renderVideoAspectControl()}
-            ${renderVideoDurationControl()}
-            ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-            ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-            ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-            ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-            ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-            ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-            ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
-            ${isJimengProviderId(settings.videoProvider) ? '' : renderVideoTrustedAssetControl()}
-        `}
+        ${capabilityParams}
+        ${isJimengProviderId(settings.videoProvider) ? '' : renderVideoTrustedAssetControl()}
     `;
 }
 function renderVolcengineParams(){
-    const provider = volcengineProvider();
-    const providers = [provider];
-    const models = providerImageModels('volcengine');
     settings.provider_id = 'volcengine';
+    const inputSelection = syncImageModelForCurrentInputs();
+    const models = inputSelection.models;
     if(!settings.model || !models.includes(settings.model)) settings.model = models[0] || '';
-    normalizeApiSizeSettings('');
-    const outpaintLocked = settings.outpaintResolutionLocked === true;
+    const capabilityKey = imageCapabilityCacheKey(settings.provider_id, settings.model);
+    const capability = currentImageModelCapability();
+    if(capability?.discovered) applyImageCapabilityDefaults(capability, capabilityKey);
+    if(!capability) ensureImageModelCapability(settings.provider_id, settings.model);
+    const capabilityField = (...names) => videoCapabilityField(capability, ...names);
+    const capabilityParams = !capability
+        ? `<div class="muted-note">${escapeHtml(tr('smart.imageCapabilityLoading'))}</div>`
+        : capability.error
+        ? `<div class="muted-note">${escapeHtml(capability.error)}</div>`
+        : !capability.discovered
+        ? `<div class="muted-note">${escapeHtml(tr('smart.imageCapabilityUnavailable'))}</div>`
+        : `
+            ${renderImageInputCapabilityNote(capability)}
+            ${capabilityField('aspectRatio', 'aspect_ratio', 'ratio') && videoCapabilityOptions(capabilityField('aspectRatio', 'aspect_ratio', 'ratio')).length ? renderImageCapabilityRatioControl(capabilityField('aspectRatio', 'aspect_ratio', 'ratio')) : ''}
+            ${capabilityField('resolution') && videoCapabilityOptions(capabilityField('resolution')).length ? renderImageCapabilityResolutionControl(capabilityField('resolution')) : ''}
+            ${capabilityField('size') && videoCapabilityOptions(capabilityField('size')).length ? renderImageCapabilitySizeControl(capabilityField('size')) : ''}
+            ${(capabilityField('width') || capabilityField('height')) && !settings.resolution ? renderImageCapabilityDimensionControls(capabilityField('width'), capabilityField('height')) : ''}
+            ${capabilityField('quality') && videoCapabilityOptions(capabilityField('quality')).length ? renderImageCapabilityQualityControl(capabilityField('quality')) : ''}
+            ${imageCapabilityExtraFields(capability).map(renderImageCapabilityExtraControl).join('')}
+            ${renderCountVisualControl()}
+        `;
     dynamicParams.innerHTML = `
         ${renderModelControl(models)}
-        ${renderSizePickerControl('', true)}
-        ${renderQualityControl()}
-        ${renderCountVisualControl()}
+        ${capabilityParams}
     `;
 }
 function renderVolcengineVideoParams(){
-    const provider = volcengineProvider();
-    const providers = [provider];
     settings.videoProvider = 'volcengine';
     const inputSelection = syncVideoModelForCurrentInputs();
     const models = inputSelection.models;
     if(!settings.videoModel || !models.includes(settings.videoModel)) settings.videoModel = models[0] || '';
+    const capabilityKey = videoCapabilityCacheKey(settings.videoProvider, settings.videoModel);
+    const capability = currentVideoModelCapability();
+    if(capability?.discovered) applyVideoCapabilityDefaults(capability, capabilityKey);
+    if(!capability) ensureVideoModelCapability(settings.videoProvider, settings.videoModel);
+    const capabilityField = (...names) => videoCapabilityField(capability, ...names);
+    const capabilityParams = !capability
+        ? `<div class="muted-note">${escapeHtml(tr('smart.videoCapabilityLoading'))}</div>`
+        : capability.error
+        ? `<div class="muted-note">${escapeHtml(capability.error)}</div>`
+        : !capability.discovered
+        ? `<div class="muted-note">${escapeHtml(tr('smart.videoCapabilityUnavailable'))}</div>`
+        : `
+            ${renderVideoInputCapabilityNote(capability)}
+            ${capabilityField('resolution') ? renderVideoResolutionControl(capabilityField('resolution')) : ''}
+            ${capabilityField('ratio', 'aspectRatio', 'aspect_ratio') ? renderVideoAspectControl(capabilityField('ratio', 'aspectRatio', 'aspect_ratio')) : ''}
+            ${capabilityField('duration') ? renderVideoDurationControl(capabilityField('duration')) : ''}
+            ${capabilityField('enhancePrompt', 'enhance_prompt') ? renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt')) : ''}
+            ${capabilityField('enableUpsample', 'enable_upsample') ? renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample')) : ''}
+            ${capabilityField('generateAudio', 'generate_audio') ? renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio')) : ''}
+            ${capabilityField('cameraFixed', 'camerafixed') ? renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed')) : ''}
+            ${capabilityField('watermark') ? renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark')) : ''}
+            ${capabilityField('returnLastFrame', 'return_last_frame') ? renderVideoToggleControl('videoReturnLastFrame', tr('smart.videoReturnLastFrame')) : ''}
+            ${capabilityField('lastFrameUrl', 'last_frame_url', 'lastFrameImage', 'last_frame_image') ? renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles')) : ''}
+        `;
     dynamicParams.innerHTML = `
         ${renderVideoModelControl(models)}
-        ${renderVideoResolutionControl()}
-        ${renderVideoAspectControl()}
-        ${renderVideoDurationControl()}
-        ${renderVideoToggleControl('videoEnhancePrompt', tr('smart.videoEnhancePrompt'))}
-        ${renderVideoToggleControl('videoEnableUpsample', tr('smart.videoUpsample'))}
-        ${renderVideoToggleControl('videoGenerateAudio', tr('smart.videoGenerateAudio'))}
-        ${renderVideoToggleControl('videoCameraFixed', tr('smart.videoCameraFixed'))}
-        ${renderVideoToggleControl('videoWatermark', tr('smart.videoWatermark'))}
-        ${renderVideoToggleControl('videoMultimodal', tr('smart.videoMultimodal'))}
-        ${renderVideoToggleControl('videoUseFrameRoles', tr('smart.videoUseFrameRoles'))}
+        ${capabilityParams}
         ${renderVideoTrustedAssetControl()}
     `;
 }
@@ -4002,12 +4042,28 @@ function renderRhMachineControl(){
 function renderMsParams(){
     settings.msgenModel = MS_GEN_MODELS[settings.msgenModel] ? settings.msgenModel : 'zimage';
     if(!settings.msCustomModel) settings.msCustomModel = modelscopeImageModels()[0] || 'Tongyi-MAI/Z-Image-Turbo';
-    normalizeApiSizeSettings('ms');
+    const model = modelscopeSelectedImageModel();
+    const capabilityKey = imageCapabilityCacheKey('modelscope', model);
+    const capability = currentModelscopeCapability();
+    if(capability?.discovered) applyModelscopeCapabilityDefaults(capability, capabilityKey);
+    if(!capability && model) ensureImageModelCapability('modelscope', model).then(() => renderDynamicParams());
+    const capabilityField = (...names) => videoCapabilityField(capability, ...names);
+    const capabilityParams = !capability
+        ? `<div class="muted-note">${escapeHtml(tr('smart.imageCapabilityLoading'))}</div>`
+        : capability.error
+        ? `<div class="muted-note">${escapeHtml(capability.error)}</div>`
+        : !capability.discovered
+        ? `<div class="muted-note">${escapeHtml(tr('smart.imageCapabilityUnavailable'))}</div>`
+        : `
+            ${renderImageInputCapabilityNote(capability)}
+            ${capabilityField('aspectRatio', 'aspect_ratio', 'ratio') ? renderModelscopeCapabilityRatioControl(capabilityField('aspectRatio', 'aspect_ratio', 'ratio')) : ''}
+            ${capabilityField('resolution') ? renderModelscopeCapabilityResolutionControl(capabilityField('resolution')) : ''}
+            ${renderCountVisualControl()}
+        `;
     dynamicParams.innerHTML = `
         ${renderMsFunctionControl()}
         ${renderMsCustomModelPill()}
-        ${renderSizePickerControl('ms', false)}
-        ${renderCountVisualControl()}
+        ${capabilityParams}
     `;
 }
 function renderComfyParams(){
@@ -4195,6 +4251,9 @@ function renderImageInputCapabilityNote(capability){
     return `<div class="muted-note" title="${escapeAttr(text)}"><i data-lucide="circle-help"></i><span>${escapeHtml(text)}</span></div>`;
 }
 function renderImageCapabilityRatioControl(field){
+    // 参考图在选择“适配输入”之后才加入时，也要在下一次 Composer 渲染中
+    // 刷新实际比例，避免提交空的 customRatio。
+    if(settings.ratio === 'source') applySourceRatioToSettings('');
     const options = videoCapabilityOptions(field).map(option => ({
         value:imageRatioSettingValue(option.value),
         label:isAdaptiveImageAspectValue(option.value) ? tr('smart.ratioAdaptive') : option.label
@@ -4228,6 +4287,43 @@ function renderImageCapabilityResolutionControl(field){
                 ${options.map(option => {
                     const value = String(option.value);
                     return `<button type="button" class="${value === current ? 'active' : ''}" data-smart-param="resolution" data-smart-value="${escapeHtml(value)}">${escapeHtml(option.label)}</button>`;
+                }).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+function renderModelscopeCapabilityRatioControl(field){
+    if(settings.msRatio === 'source') applySourceRatioToSettings('ms');
+    const options = videoCapabilityOptions(field).map(option => ({
+        value:imageRatioSettingValue(option.value),
+        label:isAdaptiveImageAspectValue(option.value) ? tr('smart.ratioAdaptive') : option.label
+    }));
+    const current = settings.msRatio || imageRatioSettingValue(field?.default);
+    const label = isAdaptiveImageAspectValue(current)
+        ? tr('smart.ratioAdaptive')
+        : (options.find(option => option.value === current)?.label || ratioLabel('ms'));
+    return `<div class="smart-control ratio-control">
+        <button class="smart-pill" type="button"><i data-lucide="scan"></i><span>${escapeHtml(label)}</span></button>
+        <div class="smart-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.ratio'))}</div>
+            <div class="ratio-grid">
+                ${options.map(option => `<button type="button" class="ratio-option ${option.value === current ? 'active' : ''}" data-smart-param="msRatio" data-smart-value="${escapeHtml(option.value)}"><span class="ratio-icon ${ratioIconClass(option.value) || (['auto','adaptive','empty'].includes(option.value) ? 'r-source' : '')}"></span><span>${escapeHtml(option.label)}</span></button>`).join('')}
+            </div>
+        </div>
+    </div>`;
+}
+function renderModelscopeCapabilityResolutionControl(field){
+    const options = videoCapabilityOptions(field);
+    const current = String(settings.msResolution || field?.default || options[0]?.value || '1k');
+    const label = options.find(option => String(option.value) === current)?.label || current.toUpperCase();
+    return `<div class="smart-control resolution-control">
+        <button class="smart-pill" type="button"><i data-lucide="monitor"></i><span>${escapeHtml(label)}</span></button>
+        <div class="smart-popover compact-popover">
+            <div class="smart-popover-title">${escapeHtml(tr('smart.resolution'))}</div>
+            <div class="seg-row">
+                ${options.map(option => {
+                    const value = String(option.value);
+                    return `<button type="button" class="${value === current ? 'active' : ''}" data-smart-param="msResolution" data-smart-value="${escapeHtml(value)}">${escapeHtml(option.label)}</button>`;
                 }).join('')}
             </div>
         </div>
@@ -5143,13 +5239,16 @@ function setDynamicSetting(key, value){
         settings.imageModelParams = {};
         rememberImageModelForMode(settings.provider_id, imageModelUsesReferenceInput(), settings.model);
     }
+    if(key === 'msgenModel' || key === 'msCustomModel'){
+        settings.msCapabilityKey = '';
+    }
     if(key === 'videoProvider'){
         settings.videoModel = '';
         settings.videoCapabilityKey = '';
     }
     if(key === 'videoModel'){
         settings.videoCapabilityKey = '';
-        rememberVideoModelForMode(settings.videoProvider, videoModelUsesImageReferenceInput(), settings.videoModel);
+        rememberVideoModelForMode(settings.videoProvider, videoModelUsesImageReference(), settings.videoModel);
     }
     if(key === 'videoMultimodal') settings._videoMultimodalUserSet = true;
     if(key === 'videoMultimodal' && settings.videoMultimodal) settings.videoUseFrameRoles = false;
@@ -18427,15 +18526,15 @@ async function runApiGeneration(prompt, refs, runSettings=settings){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const runningHub = isRunningHubVideoProvider(runSettings.provider_id);
-    const aspectRatio = runningHub
-        ? imageAspectValueForRun(runSettings)
-        : (runSettings.ratio === 'custom' ? (runSettings.customRatio || '') : (runSettings.ratio || ''));
-    const capability = runningHub ? imageModelCapabilityCache.get(imageCapabilityCacheKey(runSettings.provider_id, runSettings.model)) : null;
+    // 所有 API 平台从同一份能力缓存读取比例、尺寸和显式宽高；RunningHub
+    // 只在扩展参数序列化时保留其上游 schema 的专有通道。
+    const aspectRatio = imageAspectValueForRun(runSettings);
+    const capability = imageModelCapabilityCache.get(imageCapabilityCacheKey(runSettings.provider_id, runSettings.model)) || null;
     const hasDimensions = Boolean(videoCapabilityField(capability, 'width') || videoCapabilityField(capability, 'height'));
     const dimensionSize = hasDimensions && !runSettings.resolution && runSettings.imageCapabilityWidth && runSettings.imageCapabilityHeight
         ? `${Math.round(Number(runSettings.imageCapabilityWidth))}x${Math.round(Number(runSettings.imageCapabilityHeight))}`
         : '';
-    const requestSize = runningHub && runSettings.imageCapabilitySize
+    const requestSize = runSettings.imageCapabilitySize
         ? runSettings.imageCapabilitySize
         : (dimensionSize || sizeForRun(runSettings));
     const payload = {

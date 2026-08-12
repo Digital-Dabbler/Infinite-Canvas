@@ -1451,6 +1451,7 @@ def normalize_provider(item):
         "video_models": video_models,
         "model_names": normalize_model_name_map(item.get("model_names")),
         "model_protocols": normalize_model_protocols(item.get("model_protocols")),
+        "model_capabilities": normalize_model_capability_overrides(item.get("model_capabilities")),
         "ms_loras": normalize_ms_loras(item.get("ms_loras") or []),
         "ms_defaults_version": int(item.get("ms_defaults_version") or 0),
         "rh_apps": normalize_runninghub_entries(item.get("rh_apps") or [], "app"),
@@ -5328,6 +5329,7 @@ class ApiProviderPayload(BaseModel):
     video_models: List[str] = []
     model_names: Dict[str, str] = {}
     model_protocols: Dict[str, str] = {}
+    model_capabilities: Dict[str, Any] = {}
     ms_loras: List[Dict[str, Any]] = []
     ms_defaults_version: int = 0
     rh_apps: List[Dict[str, Any]] = []
@@ -14325,7 +14327,207 @@ def public_runninghub_model_capabilities(model_def):
         "output_type": str(model_def.get("output_type") or "").strip().lower(),
         "fields": fields,
         "discovered": bool(fields),
+        "source": "provider-schema",
     }
+
+# 图片、视频 Composer 都使用这一份规范化能力结构。RunningHub 仍可从上游
+# schema 自动发现；其他平台先返回经过验证的适配器能力，再安全回退到其既有
+# 通用请求能力。新平台只需要扩展本段适配器或在 provider 配置中补充声明，
+# 前端不再按平台名称维护另一套参数面板。
+CAPABILITY_IMAGE_RATIO_OPTIONS = [
+    ("1:1", "1:1"), ("2:3", "2:3"), ("3:2", "3:2"),
+    ("3:4", "3:4"), ("4:3", "4:3"), ("9:16", "9:16"),
+    ("16:9", "16:9"), ("21:9", "21:9"), ("9:21", "9:21"),
+    ("source", "适配输入"),
+]
+CAPABILITY_VIDEO_RATIO_OPTIONS = [
+    ("16:9", "16:9"), ("9:16", "9:16"), ("1:1", "1:1"),
+    ("4:3", "4:3"), ("3:4", "3:4"), ("21:9", "21:9"),
+    ("9:21", "9:21"), ("adaptive", "自适应"),
+]
+CAPABILITY_FIELD_TYPES = {
+    "IMAGE", "VIDEO", "AUDIO", "BOOLEAN", "INT", "INTEGER", "FLOAT",
+    "NUMBER", "TEXT", "TEXTAREA", "STRING", "ENUM",
+}
+CAPABILITY_FIELD_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,79}$")
+CAPABILITY_CONFIGURABLE_FIELD_KEYS = {
+    "image": {"image", "aspectRatio", "aspect_ratio", "ratio", "resolution", "size", "width", "height", "quality"},
+    "video": {"image", "video", "audio", "firstFrameUrl", "lastFrameUrl", "first_frame_url", "last_frame_url", "resolution", "aspectRatio", "aspect_ratio", "ratio", "duration", "generateAudio", "generate_audio", "watermark", "cameraFixed", "camerafixed", "enhancePrompt", "enhance_prompt", "enableUpsample", "enable_upsample", "returnLastFrame", "return_last_frame"},
+}
+
+def capability_options(values):
+    result = []
+    for value, label in values or []:
+        if isinstance(value, (str, int, float, bool)):
+            result.append({"value": value, "label": str(label if label is not None else value)[:120]})
+    return result
+
+def capability_field(key, field_type, label, *, required=False, default=None, options=None, **extra):
+    item = {
+        "key": str(key), "type": str(field_type).upper(), "label": str(label)[:120],
+        "required": bool(required),
+    }
+    if default is not None:
+        item["default"] = default
+    option_items = capability_options(options)
+    if option_items:
+        item["options"] = option_items
+    for name in ("min", "max", "step", "maxInputNum", "maxLength", "description"):
+        value = extra.get(name)
+        if isinstance(value, (str, int, float)) and str(value) != "":
+            item[name] = value if name != "description" else str(value)[:500]
+    return item
+
+def capability_result(provider, model, kind, fields, *, source="fallback", discovered=True, display_name=""):
+    return {
+        "provider": str((provider or {}).get("id") or ""),
+        "model": str(model or ""),
+        "display_name": str(display_name or ""),
+        "output_type": "video" if kind == "video" else "image",
+        "kind": "video" if kind == "video" else "image",
+        "fields": fields,
+        "discovered": bool(discovered),
+        "source": source,
+    }
+
+def normalize_model_capability_overrides(value):
+    """Keep only a small, declarative, non-sensitive schema supplied by admins."""
+    if not isinstance(value, dict):
+        return {}
+    output = {}
+    for kind in ("image", "video"):
+        raw_models = value.get(kind)
+        if not isinstance(raw_models, dict):
+            continue
+        models = {}
+        for raw_model, raw_capability in list(raw_models.items())[:200]:
+            model = str(raw_model or "").strip()[:200]
+            if not model or not isinstance(raw_capability, dict):
+                continue
+            fields = []
+            for raw_field in list(raw_capability.get("fields") or [])[:64]:
+                if not isinstance(raw_field, dict):
+                    continue
+                key = str(raw_field.get("key") or "").strip()
+                field_type = str(raw_field.get("type") or "").upper().strip()
+                if (
+                    not CAPABILITY_FIELD_KEY_RE.fullmatch(key)
+                    or field_type not in CAPABILITY_FIELD_TYPES
+                    or key not in CAPABILITY_CONFIGURABLE_FIELD_KEYS[kind]
+                ):
+                    continue
+                options = []
+                for raw_option in list(raw_field.get("options") or [])[:100]:
+                    if isinstance(raw_option, dict):
+                        option_value = raw_option.get("value")
+                        option_label = raw_option.get("label", option_value)
+                    else:
+                        option_value = raw_option
+                        option_label = raw_option
+                    if isinstance(option_value, (str, int, float, bool)):
+                        options.append((option_value, str(option_label or option_value)[:120]))
+                default = raw_field.get("default")
+                if not isinstance(default, (str, int, float, bool)):
+                    default = None
+                fields.append(capability_field(
+                    key, field_type, raw_field.get("label") or key,
+                    required=raw_field.get("required") is True,
+                    default=default,
+                    options=options,
+                    min=raw_field.get("min"), max=raw_field.get("max"), step=raw_field.get("step"),
+                    maxInputNum=raw_field.get("maxInputNum"), maxLength=raw_field.get("maxLength"),
+                    description=raw_field.get("description"),
+                ))
+            if fields:
+                models[model] = {"fields": fields}
+        if models:
+            output[kind] = models
+    return output
+
+def merge_declared_model_capability(capability, provider, model, kind):
+    declared = (provider or {}).get("model_capabilities") or {}
+    override = declared.get(kind, {}).get(str(model or "")) if isinstance(declared, dict) else None
+    if not isinstance(override, dict) or not isinstance(override.get("fields"), list):
+        return capability
+    merged = dict(capability)
+    by_key = {str(field.get("key") or ""): dict(field) for field in capability.get("fields") or []}
+    for field in override["fields"]:
+        key = str(field.get("key") or "")
+        if key:
+            by_key[key] = dict(field)
+    merged["fields"] = list(by_key.values())
+    merged["discovered"] = True
+    merged["source"] = "configured" if capability.get("source") == "fallback" else f"{capability.get('source') or 'adapter'}+configured"
+    return merged
+
+def generic_image_model_capability(provider, model):
+    is_apimart = is_apimart_provider(provider)
+    provider_id = str((provider or {}).get("id") or "").strip().lower()
+    model_key = str(model or "").strip().lower()
+    resolutions = [("1k", "1K"), ("2k", "2K"), ("4k", "4K")]
+    if not is_apimart and is_gpt_image_2_model(model):
+        resolutions.insert(0, ("auto", "自动"))
+    # ModelScope 在 Composer 中保留专用提交端点，但能力描述必须反映其
+    # 文生图/编辑图的真实输入要求，不能回退成泛化的可选参考图。
+    if provider_id == "modelscope":
+        is_edit_model = any(token in model_key for token in ("qwen-image-edit", "flux.2-klein", "klein"))
+        fields = []
+        if is_edit_model:
+            fields.append(capability_field("image", "IMAGE", "参考图", required=True, maxInputNum=ONLINE_IMAGE_REFERENCE_MAX))
+        elif not model_key.startswith("tongyi-mai/z-image"):
+            fields.append(capability_field("image", "IMAGE", "参考图", required=False, maxInputNum=ONLINE_IMAGE_REFERENCE_MAX))
+        fields.extend([
+            capability_field("aspectRatio", "ENUM", "比例", default="1:1", options=CAPABILITY_IMAGE_RATIO_OPTIONS),
+            capability_field("resolution", "ENUM", "分辨率", default="1k", options=resolutions),
+        ])
+        return capability_result(provider, model, "image", fields, source="adapter", discovered=True)
+    fields = [
+        capability_field("image", "IMAGE", "参考图", required=False, maxInputNum=ONLINE_IMAGE_REFERENCE_MAX),
+        capability_field("aspectRatio", "ENUM", "比例", default="1:1", options=CAPABILITY_IMAGE_RATIO_OPTIONS),
+        capability_field("resolution", "ENUM", "分辨率", default=resolutions[0][0], options=resolutions),
+    ]
+    # APIMART 图片接口当前只消费尺寸/参考图；不再展示会被后端忽略的质量选项。
+    if not is_apimart:
+        fields.append(capability_field(
+            "quality", "ENUM", "质量", default="auto",
+            options=[("auto", "自动"), ("low", "低"), ("medium", "中"), ("high", "高")],
+        ))
+    source = "adapter" if is_apimart else "fallback"
+    return capability_result(provider, model, "image", fields, source=source, discovered=True)
+
+def generic_video_model_capability(provider, model):
+    is_apimart = is_apimart_provider(provider)
+    is_veo31 = is_apimart and is_apimart_veo31_model(model)
+    apimart_model = apimart_veo31_model(model) if is_veo31 else ""
+    image_limit = 0 if apimart_model == "veo3.1-lite" else (3 if is_veo31 else 9)
+    ratio_options = [("16:9", "16:9"), ("9:16", "9:16")] if is_veo31 else CAPABILITY_VIDEO_RATIO_OPTIONS
+    resolution_options = [("720p", "720P"), ("1080p", "1080P"), ("4k", "4K")] if is_veo31 else [("", "自动"), ("720p", "720P"), ("1080p", "1080P"), ("4k", "4K")]
+    duration_options = [(str(value), f"{value}s") for value in (range(4, 9) if is_veo31 else (3, 4, 5, 6, 8, 10, 12, 15))]
+    fields = [
+        capability_field("image", "IMAGE", "参考图", required=False, maxInputNum=image_limit),
+        capability_field("resolution", "ENUM", "分辨率", default=resolution_options[0][0], options=resolution_options),
+        capability_field("aspectRatio", "ENUM", "画面比例", default="16:9", options=ratio_options),
+        capability_field("duration", "ENUM", "时长", default="8" if is_veo31 else "5", options=duration_options),
+    ]
+    if not is_veo31:
+        fields.extend([
+            capability_field("video", "VIDEO", "参考视频", required=False, maxInputNum=3),
+            capability_field("audio", "AUDIO", "参考音频", required=False, maxInputNum=3),
+            capability_field("generateAudio", "BOOLEAN", "生成音频", default=False),
+            capability_field("returnLastFrame", "BOOLEAN", "返回尾帧", default=False),
+        ])
+    return capability_result(provider, model, "video", fields, source="adapter" if is_apimart else "fallback", discovered=True)
+
+async def provider_model_capability(provider, model, kind):
+    """Return one Composer-safe capability object for every configured provider/model."""
+    kind = "video" if str(kind).lower() == "video" else "image"
+    if is_runninghub_provider(provider):
+        model_def = await runninghub_model_definition(provider, model)
+        result = public_runninghub_model_capabilities(model_def)
+        result.update({"provider": provider.get("id"), "model": model, "kind": kind, "output_type": kind})
+        return merge_declared_model_capability(result, provider, model, kind)
+    base = generic_video_model_capability(provider, model) if kind == "video" else generic_image_model_capability(provider, model)
+    return merge_declared_model_capability(base, provider, model, kind)
 
 def runninghub_schema_options(field):
     values = []
@@ -17582,43 +17784,9 @@ async def video_model_capabilities(request: Request, provider_id: str = "", mode
     if requested_model and requested_model not in configured_models:
         raise HTTPException(status_code=400, detail="该视频模型不属于当前账号的 API 配置组。")
     if not requested_model:
-        if not is_runninghub_provider(provider):
-            return {
-                "provider": provider.get("id"),
-                "models": [
-                    {
-                        "provider": provider.get("id"),
-                        "model": item,
-                        "display_name": "",
-                        "output_type": "video",
-                        "fields": [],
-                        "discovered": False,
-                    }
-                    for item in configured_models
-                ],
-            }
-        models = []
-        for item in configured_models:
-            model_def = await runninghub_model_definition(provider, item)
-            result = public_runninghub_model_capabilities(model_def)
-            result["provider"] = provider.get("id")
-            result["model"] = item
-            models.append(result)
-        return {"provider": provider.get("id"), "models": models}
-    if not is_runninghub_provider(provider):
-        return {
-            "provider": provider.get("id"),
-            "model": requested_model,
-            "display_name": "",
-            "output_type": "video",
-            "fields": [],
-            "discovered": False,
-        }
-    model_def = await runninghub_model_definition(provider, requested_model)
-    result = public_runninghub_model_capabilities(model_def)
-    result["provider"] = provider.get("id")
-    result["model"] = requested_model
-    return result
+        models = [await provider_model_capability(provider, item, "video") for item in configured_models]
+        return {"provider": provider.get("id"), "kind": "video", "models": models}
+    return await provider_model_capability(provider, requested_model, "video")
 
 @app.get("/api/image-model-capabilities")
 async def image_model_capabilities(request: Request, provider_id: str = "", model: str = ""):
@@ -17629,43 +17797,9 @@ async def image_model_capabilities(request: Request, provider_id: str = "", mode
     if requested_model and requested_model not in configured_models:
         raise HTTPException(status_code=400, detail="该图片模型不属于当前账号的 API 配置组。")
     if not requested_model:
-        if not is_runninghub_provider(provider):
-            return {
-                "provider": provider.get("id"),
-                "models": [
-                    {
-                        "provider": provider.get("id"),
-                        "model": item,
-                        "display_name": "",
-                        "output_type": "image",
-                        "fields": [],
-                        "discovered": False,
-                    }
-                    for item in configured_models
-                ],
-            }
-        models = []
-        for item in configured_models:
-            model_def = await runninghub_model_definition(provider, item)
-            result = public_runninghub_model_capabilities(model_def)
-            result["provider"] = provider.get("id")
-            result["model"] = item
-            models.append(result)
-        return {"provider": provider.get("id"), "models": models}
-    if not is_runninghub_provider(provider):
-        return {
-            "provider": provider.get("id"),
-            "model": requested_model,
-            "display_name": "",
-            "output_type": "image",
-            "fields": [],
-            "discovered": False,
-        }
-    model_def = await runninghub_model_definition(provider, requested_model)
-    result = public_runninghub_model_capabilities(model_def)
-    result["provider"] = provider.get("id")
-    result["model"] = requested_model
-    return result
+        models = [await provider_model_capability(provider, item, "image") for item in configured_models]
+        return {"provider": provider.get("id"), "kind": "image", "models": models}
+    return await provider_model_capability(provider, requested_model, "image")
 
 @app.get("/api/models")
 async def ai_models(request: Request):
