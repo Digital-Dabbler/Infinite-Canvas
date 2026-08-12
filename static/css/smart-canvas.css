@@ -925,12 +925,12 @@ body.smart-canvas-interacting .composer .smart-popover { opacity:0 !important; v
 body.smart-canvas-interacting .smart-node-floating-menu { box-shadow:0 6px 16px rgba(15,23,42,.08); }
 .input-thumbs-row { grid-area:thumbs; display:none; align-items:center; justify-content:space-between; gap:8px; padding:2px 2px 4px; min-width:0; }
 .input-thumbs-row.has-items { display:flex; }
-.input-prompt-preview { grid-area:prompt-preview; display:none; min-width:0; padding:8px 10px; border:1px dashed rgba(148,163,184,.34); border-radius:12px; background:var(--soft); }
+.input-prompt-preview { position:relative; grid-area:prompt-preview; display:none; min-width:0; padding:8px 10px; border:1px dashed rgba(148,163,184,.34); border-radius:12px; background:var(--soft); }
 .input-prompt-preview.has-text { display:flex; flex-direction:column; gap:4px; }
 .input-prompt-preview-label { color:var(--faint); font-size:9.5px; font-weight:850; line-height:1.2; }
 .input-prompt-preview-text { color:var(--muted); font-size:11px; line-height:1.42; max-height:148px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; scrollbar-width:thin; }
 .composer-card.has-upstream-prompt .prompt-row { display:none; }
-.composer-card.has-upstream-prompt .input-prompt-preview { grid-area:prompt; min-height:var(--prompt-h, 124px); max-height:380px; padding:10px 12px; border-style:solid; background:var(--card); }
+.composer-card.has-upstream-prompt .input-prompt-preview { grid-area:prompt; min-height:var(--prompt-h, 124px); max-height:380px; padding:10px 12px 44px; border-style:solid; background:var(--card); }
 .composer-card.has-upstream-prompt .input-prompt-preview-text { flex:1 1 auto; max-height:none; }
 .input-thumb-list { display:flex; align-items:center; gap:6px; min-width:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; padding:5px 0 0 5px; }
 .input-thumb-list.empty { flex:1 1 auto; min-height:42px; padding-top:0; }
@@ -1019,6 +1019,10 @@ body.smart-canvas-interacting .smart-node-floating-menu { box-shadow:0 6px 16px 
 .smart-text-copy-btn.is-copied { color:var(--strong-text); background:var(--strong); border-color:var(--strong); }
 .smart-text-copy-btn i,.smart-text-copy-btn svg { width:14px !important; height:14px !important; pointer-events:none; }
 .smart-text-copy-composer { position:absolute; right:8px; bottom:8px; z-index:4; }
+.smart-text-copy-upstream { position:absolute; right:8px; bottom:8px; z-index:4; }
+.smart-media-unavailable { width:100%; height:100%; min-width:72px; min-height:72px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; padding:10px; box-sizing:border-box; color:var(--muted); background:var(--soft); font-size:11px; font-weight:750; text-align:center; }
+.smart-media-unavailable button { min-height:26px; padding:0 9px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--text); font-size:10px; font-weight:850; }
+.smart-media-unavailable button:hover,.smart-media-unavailable button:focus-visible { border-color:var(--text); background:var(--strong); color:var(--strong-text); }
 .composer-prompt-library { position:absolute; top:7px; right:7px; z-index:4; width:28px; height:28px; }
 .prompt-node-text-wrap > .smart-text-copy-btn { position:absolute; right:7px; bottom:7px; z-index:3; }
 .prompt-node-text-wrap > .text-node-library-inline {

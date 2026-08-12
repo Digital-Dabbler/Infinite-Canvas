@@ -496,7 +496,7 @@ function smartTextCopyTarget(button){
     const selector = button?.dataset?.copyTextTarget || '';
     if(!selector) return null;
     if(selector.startsWith('#')) return document.querySelector(selector);
-    return button.closest('.image-node, .prompt-row')?.querySelector(selector) || null;
+    return button.closest('.image-node, .prompt-row, .input-prompt-preview')?.querySelector(selector) || null;
 }
 function smartTextCopyValue(target){
     if(!target) return '';
@@ -563,9 +563,12 @@ function smartMediaPreviewUrl(itemOrUrl, size=512){
 function smartPreviewImgHtml(itemOrUrl, size=512, attrs=''){
     const original = smartOriginalMediaUrl(itemOrUrl);
     const preview = smartMediaPreviewUrl(itemOrUrl, size);
+    const retryUrl = typeof itemOrUrl === 'object' && itemOrUrl
+        ? (itemOrUrl.source_url || itemOrUrl.sourceUrl || original)
+        : original;
     const loadingAttr = /\bloading\s*=/.test(attrs) ? '' : ' loading="lazy"';
     const decodingAttr = /\bdecoding\s*=/.test(attrs) ? '' : ' decoding="async"';
-    return `<img src="${escapeHtml(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}"${loadingAttr}${decodingAttr}${attrs ? ` ${attrs}` : ''}>`;
+    return `<img src="${escapeHtml(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}" data-media-retry-url="${escapeAttr(retryUrl)}"${loadingAttr}${decodingAttr}${attrs ? ` ${attrs}` : ''}>`;
 }
 function loadSmartOriginalImageDimensions(url){
     const src = displayMediaUrl({url:smartOriginalMediaUrl(url)});
@@ -644,10 +647,69 @@ function bindSmartPreviewImageFallbacks(root=document){
                 img.replaceWith(tpl.content.firstElementChild);
                 return;
             }
-            if(original && img.getAttribute('src') !== original) img.src = original;
+            if(original && img.getAttribute('src') !== original){
+                img.src = original;
+                return;
+            }
+            const retryUrl = img.dataset.mediaRetryUrl || original;
+            const unavailable = document.createElement('div');
+            unavailable.className = 'smart-media-unavailable';
+            unavailable.innerHTML = `<span>${escapeHtml(tr('smart.mediaUnavailable'))}</span>${retryUrl ? `<button type="button" data-media-retry-url="${escapeAttr(retryUrl)}">${escapeHtml(tr('smart.retryMediaLoad'))}</button>` : ''}`;
+            img.replaceWith(unavailable);
         });
     });
 }
+function replaceRetriedMediaReferences(sourceUrl, item){
+    const source = String(sourceUrl || '');
+    const replacement = item && typeof item === 'object' ? item : null;
+    if(!source || !replacement?.url) return 0;
+    let changed = 0;
+    const matches = value => [value?.source_url, value?.sourceUrl, value?.url].some(url => String(url || '') === source);
+    const apply = value => {
+        if(!value || typeof value !== 'object' || !matches(value)) return value;
+        changed++;
+        return {...value, ...replacement, source_url:value.source_url || value.sourceUrl || source};
+    };
+    nodes.forEach(node => {
+        if(Array.isArray(node?.images)) node.images = node.images.map(apply);
+    });
+    (canvas?.logs || []).forEach(log => {
+        if(Array.isArray(log?.outputs)) log.outputs = log.outputs.map(apply);
+    });
+    return changed;
+}
+async function retryRemoteMediaLoad(button){
+    const sourceUrl = String(button?.dataset?.mediaRetryUrl || '').trim();
+    if(!sourceUrl || button.dataset.loading === '1') return;
+    button.dataset.loading = '1';
+    button.disabled = true;
+    button.textContent = tr('smart.retryingMediaLoad');
+    try {
+        const response = await fetch('/api/media/retry-download', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:sourceUrl})
+        });
+        const data = await response.json().catch(() => ({}));
+        if(!response.ok) throw new Error(data.detail || tr('smart.retryMediaFailed'));
+        const changed = replaceRetriedMediaReferences(sourceUrl, data.item);
+        if(!changed) throw new Error(tr('smart.retryMediaNoReference'));
+        render();
+        renderSmartCanvasLog();
+        scheduleSave();
+        toast(tr('smart.retryMediaSuccess'));
+    } catch(error) {
+        button.disabled = false;
+        button.dataset.loading = '';
+        button.textContent = tr('smart.retryMediaLoad');
+        toast(error?.message || tr('smart.retryMediaFailed'));
+    }
+}
+document.addEventListener('click', event => {
+    const button = event.target.closest?.('[data-media-retry-url]');
+    if(!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    retryRemoteMediaLoad(button);
+}, true);
 let smartImageResolutionSyncTimer = 0;
 function smartNodeElementsByIds(ids){
     const wanted = ids instanceof Set ? ids : new Set(ids || []);
@@ -2058,6 +2120,8 @@ function copyMediaSizeFields(source, target={}){
         const n = Number(source[key]);
         if(Number.isFinite(n) && n > 0) target[key] = n;
     });
+    const sourceUrl = source.source_url || source.sourceUrl || source.original_url || source.originalUrl || '';
+    if(sourceUrl) target.source_url = sourceUrl;
     return target;
 }
 function singleImageLayout(image, node, scale){
@@ -8573,6 +8637,8 @@ function resultMediaUrls(result){
                 const url = value.url || value.path || value.src || value.uri;
                 if(url){
                     const item = {url, kind:value.kind || value.type || value.mediaKind || '', name:value.name || value.filename || ''};
+                    const sourceUrl = value.source_url || value.sourceUrl || value.original_url || value.originalUrl || '';
+                    if(sourceUrl) item.source_url = sourceUrl;
                     ['natural_w','natural_h','width','height','w','h','layout_w','layout_h'].forEach(key => {
                         const n = Number(value[key]);
                         if(Number.isFinite(n) && n > 0) item[key] = n;
@@ -15084,7 +15150,7 @@ function renderInputPromptPreview(node){
     const text = node ? [groupText, inputPromptTextFor(node).trim()].filter(Boolean).join('\n\n') : '';
     inputPromptPreview.classList.toggle('has-text', Boolean(text));
     inputPromptPreview.innerHTML = text
-        ? `<div class="input-prompt-preview-label">${escapeHtml(tr('smart.inputUpstream'))}</div><div class="input-prompt-preview-text">${escapeHtml(text)}</div>`
+        ? `<div class="input-prompt-preview-label">${escapeHtml(tr('smart.inputUpstream'))}</div><div class="input-prompt-preview-text">${escapeHtml(text)}</div>${smartTextCopyButtonHtml('.input-prompt-preview-text', 'smart-text-copy-upstream')}`
         : '';
 }
 function renderInputThumbsRow(node){

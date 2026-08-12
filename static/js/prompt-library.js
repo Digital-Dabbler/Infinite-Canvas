@@ -30,7 +30,7 @@ const PromptLibrary = {
         if (options.targetId) window.__promptLibraryTargetId = String(options.targetId);
         else window.clearPromptLibraryTarget?.();
         this.tab = options.tab || this.tab || 'inspiration';
-        this.category = 'all'; this.subcategory = 'all'; this.editorId = ''; this.detailId = '';
+        this.category = 'all'; this.subcategory = 'real'; this.editorId = ''; this.detailId = '';
         LibraryModalManager.open('prompts');
         await this.load();
     },
@@ -103,7 +103,7 @@ const PromptLibrary = {
             .map(([id,label]) => `<button type="button" class="library-category ${this.category===id?'active':''}" data-pl-category="${id}">${label}</button>`).join('');
     },
     styleSidebarHtml() {
-        return `<aside class="prompt-library-sidebar" aria-label="风格筛选">${[['all','全部'],['real','真人风格'],['2d','2D 风格'],['3d','3D 风格']].map(([id,label]) => `<button type="button" class="${this.subcategory===id?'active':''}" data-pl-subcategory="${id}">${label}</button>`).join('')}</aside>`;
+        return `<aside class="prompt-library-sidebar" aria-label="风格筛选">${[['real','真人风格'],['2d','2D 风格'],['3d','3D 风格']].map(([id,label]) => `<button type="button" class="${this.subcategory===id?'active':''}" data-pl-subcategory="${id}">${label}</button>`).join('')}</aside>`;
     },
 
     cardHtml(item) {
@@ -207,8 +207,8 @@ const PromptLibrary = {
 
     async handleClick(event) {
         const close = event.target.closest('.library-close-btn'); if (close) { LibraryModalManager.closeAll(); window.clearPromptLibraryTarget?.(); return; }
-        const tab = event.target.closest('[data-pl-tab]'); if(tab){ this.tab=tab.dataset.plTab; this.category='all'; this.subcategory='all'; this.editorId=''; this.detailId=''; this.render(); return; }
-        const category=event.target.closest('[data-pl-category]'); if(category){ this.category=category.dataset.plCategory; this.subcategory='all'; this.render(); return; }
+        const tab = event.target.closest('[data-pl-tab]'); if(tab){ this.tab=tab.dataset.plTab; this.category='all'; this.subcategory='real'; this.editorId=''; this.detailId=''; this.render(); return; }
+        const category=event.target.closest('[data-pl-category]'); if(category){ this.category=category.dataset.plCategory; this.subcategory=this.category==='style'?'real':'all'; this.render(); return; }
         const sub=event.target.closest('[data-pl-subcategory]'); if(sub){this.subcategory=sub.dataset.plSubcategory;this.render();return;}
         const detail=event.target.closest('[data-pl-detail]'); if(detail){event.stopPropagation();this.detailId=detail.dataset.plDetail;this.renderContent();return;}
         const back=event.target.closest('[data-pl-back]'); if(back){this.editorId='';this.detailId='';this.render();return;}

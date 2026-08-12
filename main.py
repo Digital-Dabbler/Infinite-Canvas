@@ -5099,6 +5099,9 @@ class ImageTaskQueryRequest(BaseModel):
     provider_id: str = "comfly"
     task_id: str = Field(min_length=1, max_length=240)
 
+class RemoteMediaRetryRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=4000)
+
 CANVAS_TASKS: Dict[str, Dict[str, Any]] = {}
 CANVAS_TASK_LOCK = RLock()
 CANVAS_TASKS_LOADED = False
@@ -13042,6 +13045,15 @@ def image_output_meta(url, source_item=None):
     if parsed_name:
         meta["name"] = parsed_name
     if isinstance(source_item, dict):
+        source_url = str(
+            source_item.get("value")
+            or source_item.get("source_url")
+            or source_item.get("sourceUrl")
+            or source_item.get("url")
+            or ""
+        ).strip()
+        if source_url.startswith(("http://", "https://")):
+            meta["source_url"] = rewrite_runninghub_file_url(source_url)
         for key in ("natural_w", "natural_h", "width", "height", "w", "h", "layout_w", "layout_h"):
             try:
                 value = int(float(source_item.get(key) or 0))
@@ -13064,6 +13076,19 @@ def image_output_meta(url, source_item=None):
         except Exception:
             pass
     return meta
+
+@app.post("/api/media/retry-download")
+async def retry_remote_media_download(payload: RemoteMediaRetryRequest, request: Request):
+    """再次拉取已生成但尚未成功落盘的远程图片，不会重新提交生成任务。"""
+    require_authenticated(request)
+    source_url = rewrite_runninghub_file_url(str(payload.url or "").strip())
+    parsed = urllib.parse.urlparse(source_url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="只能重试下载远程图片")
+    local_url = await save_ai_image_to_output({"type": "url", "value": source_url}, prefix="retry_")
+    if not str(local_url or "").startswith(("/output/", "/assets/")):
+        raise HTTPException(status_code=502, detail="远程图片暂不可下载，请稍后重试。")
+    return {"item": image_output_meta(local_url, {"value": source_url})}
 
 async def save_remote_video_to_output(url, prefix="video_", category="output"):
     if not url:
