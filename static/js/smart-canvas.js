@@ -568,7 +568,9 @@ function smartPreviewImgHtml(itemOrUrl, size=512, attrs=''){
         : original;
     const loadingAttr = /\bloading\s*=/.test(attrs) ? '' : ' loading="lazy"';
     const decodingAttr = /\bdecoding\s*=/.test(attrs) ? '' : ' decoding="async"';
-    return `<img src="${escapeHtml(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}" data-media-retry-url="${escapeAttr(retryUrl)}"${loadingAttr}${decodingAttr}${attrs ? ` ${attrs}` : ''}>`;
+    // 普通预览只保存来源信息，不能带“重试按钮”选择器属性；否则全局点击
+    // 委托会把缩略图点击误判成下载重试，吞掉原本的节点交互。
+    return `<img src="${escapeHtml(preview)}" data-preview-src="${escapeAttr(preview)}" data-original-src="${escapeAttr(original)}" data-media-source-url="${escapeAttr(retryUrl)}"${loadingAttr}${decodingAttr}${attrs ? ` ${attrs}` : ''}>`;
 }
 function loadSmartOriginalImageDimensions(url){
     const src = displayMediaUrl({url:smartOriginalMediaUrl(url)});
@@ -651,10 +653,10 @@ function bindSmartPreviewImageFallbacks(root=document){
                 img.src = original;
                 return;
             }
-            const retryUrl = img.dataset.mediaRetryUrl || original;
+            const retryUrl = img.dataset.mediaSourceUrl || original;
             const unavailable = document.createElement('div');
             unavailable.className = 'smart-media-unavailable';
-            unavailable.innerHTML = `<span>${escapeHtml(tr('smart.mediaUnavailable'))}</span>${retryUrl ? `<button type="button" data-media-retry-url="${escapeAttr(retryUrl)}">${escapeHtml(tr('smart.retryMediaLoad'))}</button>` : ''}`;
+            unavailable.innerHTML = `<span>${escapeHtml(tr('smart.mediaUnavailable'))}</span>${retryUrl ? `<button type="button" class="smart-media-retry-button" data-media-retry-button="1" data-media-retry-url="${escapeAttr(retryUrl)}">${escapeHtml(tr('smart.retryMediaLoad'))}</button>` : ''}`;
             img.replaceWith(unavailable);
         });
     });
@@ -704,7 +706,9 @@ async function retryRemoteMediaLoad(button){
     }
 }
 document.addEventListener('click', event => {
-    const button = event.target.closest?.('[data-media-retry-url]');
+    // 只响应不可用占位区内的明确重试按钮；媒体缩略图、日志预览和提示词
+    // 引用图都可能带来源 URL，但点击它们必须保留各自的交互逻辑。
+    const button = event.target.closest?.('button[data-media-retry-button="1"][data-media-retry-url]');
     if(!button) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1463,6 +1467,16 @@ function normalizeLegacySmartNode(node){
     if(node.type === 'smart-image') node.type = legacyNodeLooksGenerated(node) ? legacyGenerationNodeType(node) : 'smart-image-upload';
     if(isSmartImageNode(node)){
         delete node.imageMode;
+        // 旧画布曾会把同一个远程输出在轮询、恢复或同步时重复写入。生成节点
+        // 只保留一份同源媒体；上传节点和普通素材分组不在这里合并，避免改变用户素材。
+        if(isSmartGenerationNode(node) && Array.isArray(node.images)){
+            const active = node.images[Math.max(0, Math.min(node.images.length - 1, Number(node.activeImageIndex) || 0))];
+            const images = dedupeOutputMedia(node.images);
+            if(images.length !== node.images.length) node.images = images;
+            const activeKey = mediaOutputIdentity(active);
+            const activeIndex = activeKey ? node.images.findIndex(img => mediaOutputIdentity(img) === activeKey) : -1;
+            node.activeImageIndex = activeIndex >= 0 ? activeIndex : 0;
+        }
         const count = (node.images || []).length;
         const index = Math.max(0, Math.min(count - 1, Number(node.activeImageIndex) || 0));
         node.activeImageIndex = count ? index : 0;
@@ -6539,15 +6553,15 @@ function mergeSmartImageLists(localImgs, remoteImgs){
     const out = [];
     const seen = new Set();
     (localImgs || []).forEach(img => {
-        const u = img && img.url;
-        if(u && seen.has(u)) return;
-        if(u) seen.add(u);
+        const key = mediaOutputIdentity(img);
+        if(key && seen.has(key)) return;
+        if(key) seen.add(key);
         out.push(img);
     });
     (remoteImgs || []).forEach(img => {
-        const u = img && img.url;
-        if(!u || seen.has(u)) return;
-        seen.add(u);
+        const key = mediaOutputIdentity(img);
+        if(!key || seen.has(key)) return;
+        seen.add(key);
         out.push(img);
     });
     return out;
@@ -9524,12 +9538,7 @@ function nodeBodyHtml(node, layout){
         const isAppending = Boolean(node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length);
         const stack = Math.min(3, Math.max(0, imgs.length - 1));
         const mediaHeight = Number(layout.mediaHeight) || layout.height;
-        const thumbStart = Math.max(0, Math.min(activeIndex - 4, imgs.length - 9));
-        const thumbEnd = Math.min(imgs.length, thumbStart + 9);
-        const thumbHtml = imgs.slice(thumbStart, thumbEnd).map((img, offset) => {
-            const index = thumbStart + offset;
-            return `<button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img)}</button>`;
-        }).join('');
+        const thumbHtml = generationResultThumbnailHtml(imgs, activeIndex);
         return `<div class="generation-result-card" data-generation-results="1">
             <div class="generation-result-stack" style="--result-stack:${stack}">
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer layer-${index + 1}"></span>`).join('')}
@@ -11233,6 +11242,85 @@ function pickMediaForSmartNode(nodeId='', options={}){
     document.body.appendChild(input);
     input.click();
 }
+function generationResultThumbnailHtml(images, activeIndex){
+    const thumbStart = Math.max(0, Math.min(activeIndex - 4, images.length - 9));
+    const thumbEnd = Math.min(images.length, thumbStart + 9);
+    return images.slice(thumbStart, thumbEnd).map((img, offset) => {
+        const index = thumbStart + offset;
+        return `<button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img)}</button>`;
+    }).join('');
+}
+function bindGenerationResultControls(nodeEl, nodeId){
+    if(!nodeEl || !nodeId) return;
+    nodeEl.querySelectorAll('[data-generation-result-index]').forEach(btn => {
+        if(btn.dataset.generationResultBound === '1') return;
+        btn.dataset.generationResultBound = '1';
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            selectGenerationResult(nodeId, Number(btn.dataset.generationResultIndex) || 0);
+        });
+    });
+    nodeEl.querySelectorAll('[data-generation-result-nav]').forEach(btn => {
+        if(btn.dataset.generationResultBound === '1') return;
+        btn.dataset.generationResultBound = '1';
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const node = nodes.find(item => item.id === nodeId);
+            const count = node?.images?.length || 0;
+            if(!isSmartGenerationNode(node) || count < 2) return;
+            selectGenerationResult(nodeId, (Math.max(0, Number(node.activeImageIndex) || 0) + Number(btn.dataset.generationResultNav || 0) + count) % count);
+        });
+    });
+}
+function selectGenerationResult(nodeId, requestedIndex){
+    const node = nodes.find(item => item.id === nodeId);
+    const count = node?.images?.length || 0;
+    if(!isSmartGenerationNode(node) || count < 1) return;
+    const activeIndex = Math.max(0, Math.min(count - 1, Number(requestedIndex) || 0));
+    node.activeImageIndex = activeIndex;
+    selectedId = nodeId;
+    selectedIds = [];
+    selectedImage = {nodeId, index:activeIndex};
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId)}"]`);
+    const main = nodeEl?.querySelector('.generation-result-main');
+    if(!nodeEl || !main){
+        render();
+        scheduleSave();
+        return;
+    }
+    const layout = imageLayout(node.images || [], nodeScale(node), node);
+    const active = node.images[activeIndex];
+    const mediaHeight = Number(layout.mediaHeight) || layout.height;
+    nodeEl.style.width = `${layout.width}px`;
+    nodeEl.style.height = `${layout.height}px`;
+    main.dataset.imageIndex = String(activeIndex);
+    main.dataset.mediaSignature = `${mediaKindForItem(active)}:${active?.url || ''}`;
+    main.style.setProperty('--node-img-w', `${layout.width}px`);
+    main.style.setProperty('--node-img-h', `${mediaHeight}px`);
+    main.classList.add('image-selected');
+    main.innerHTML = `${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}`;
+    const strip = nodeEl.querySelector('.generation-result-strip');
+    if(strip){
+        strip.innerHTML = generationResultThumbnailHtml(node.images, activeIndex);
+        bindGenerationResultControls(nodeEl, nodeId);
+    }
+    main.querySelectorAll('.smart-video-play').forEach(btn => {
+        btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            smartActivateVideoPreview(main);
+        });
+    });
+    bindSmartPreviewImageFallbacks(main);
+    refreshIcons();
+    syncSelectionUi();
+    renderMinimap();
+    scheduleSmartPostRenderMediaWork();
+    scheduleSave();
+}
 function bindNodeEvents(){
     world.querySelectorAll('.image-node').forEach(el => {
         const id = el.dataset.id;
@@ -11332,33 +11420,7 @@ function bindNodeEvents(){
                 runSmartNodeToolbarAction(btn.dataset.nodeId || id, btn.dataset.smartNodeAction);
             });
         });
-        el.querySelectorAll('[data-generation-result-index]').forEach(btn => {
-            btn.addEventListener('click', e => {
-                e.preventDefault(); e.stopPropagation();
-                const node = nodes.find(n => n.id === id);
-                if(!isSmartGenerationNode(node)) return;
-                node.activeImageIndex = Math.max(0, Math.min((node.images || []).length - 1, Number(btn.dataset.generationResultIndex) || 0));
-                selectedId = id;
-                selectedIds = [];
-                selectedImage = {nodeId:id, index:node.activeImageIndex};
-                render();
-                scheduleSave();
-            });
-        });
-        el.querySelectorAll('[data-generation-result-nav]').forEach(btn => {
-            btn.addEventListener('click', e => {
-                e.preventDefault(); e.stopPropagation();
-                const node = nodes.find(n => n.id === id);
-                const count = node?.images?.length || 0;
-                if(!isSmartGenerationNode(node) || count < 2) return;
-                node.activeImageIndex = (Math.max(0, Number(node.activeImageIndex) || 0) + Number(btn.dataset.generationResultNav || 0) + count) % count;
-                selectedId = id;
-                selectedIds = [];
-                selectedImage = {nodeId:id, index:node.activeImageIndex};
-                render();
-                scheduleSave();
-            });
-        });
+        bindGenerationResultControls(el, id);
         el.querySelectorAll('[data-smart-group-action]').forEach(btn => {
             btn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); }, true);
             btn.addEventListener('click', e => {
@@ -17084,9 +17146,10 @@ function finalizePendingNode(pendingNode, urls, meta, kind='image'){
         const itemKind = (typeof item === 'object' && item.kind) || kind;
         return copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true});
     }).filter(img => img.url));
-    const previousResults = isSmartGenerationNode(pendingNode) ? (pendingNode.images || []).filter(img => img?.url) : [];
+    const previousResults = isSmartGenerationNode(pendingNode) ? cleanHistoryImages(pendingNode.images || []) : [];
+    const nextResults = isSmartGenerationNode(pendingNode) ? distinctOutputMedia(previousResults, imgs) : imgs;
     const appendedAt = previousResults.length;
-    pendingNode.images = isSmartGenerationNode(pendingNode) ? [...previousResults, ...imgs] : imgs;
+    pendingNode.images = isSmartGenerationNode(pendingNode) ? [...previousResults, ...nextResults] : imgs;
     pendingNode.activeImageIndex = pendingNode.images.length ? Math.max(0, Math.min(pendingNode.images.length - 1, isSmartGenerationNode(pendingNode) ? appendedAt : 0)) : 0;
     markSmartNodeComplete(pendingNode, meta);
     pendingNode.outputKind = kind;
@@ -17462,15 +17525,31 @@ function nonPreviewOutputImages(images=[]){
     return (images || []).filter(img => img?.url && !img.loopInputPreview);
 }
 function cleanHistoryImages(images=[]){
+    return dedupeOutputMedia(nonPreviewOutputImages(images));
+}
+function mediaOutputIdentity(item){
+    if(!item) return '';
+    if(typeof item === 'string') return item;
+    const source = item.source_url || item.sourceUrl || item.original_url || item.originalUrl || item.url || '';
+    return String(source || '');
+}
+function dedupeOutputMedia(images=[]){
     const seen = new Set();
-    return nonPreviewOutputImages(images)
-        .map(img => stripImageGenerationMeta({...img}))
-        .filter(img => {
-            const key = `${img.kind || ''}|${img.url || ''}`;
-            if(seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
+    return (images || []).map(img => stripImageGenerationMeta({...img})).filter(img => {
+        const key = mediaOutputIdentity(img);
+        if(!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+function distinctOutputMedia(existing=[], additions=[]){
+    const seen = new Set(dedupeOutputMedia(existing).map(item => mediaOutputIdentity(item)));
+    return dedupeOutputMedia(additions).filter(img => {
+        const key = mediaOutputIdentity(img);
+        if(!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
 }
 function hasHistoryConnection(nodeId, groupId){
     return Boolean(nodeId && groupId && (canvas?.connections || []).some(conn => conn.from === nodeId && conn.to === groupId && (conn.kind || 'flow') === 'history'));
@@ -17538,7 +17617,8 @@ function replaceOutputsToNodeWithHistory(node, additions, kind='image', meta=nul
     // 图片生成节点把重跑结果保存在同一结果集内；不再创建旧的输出历史分组。
     if(isSmartGenerationResultKind(node, kind)){
         const existing = cleanHistoryImages(node.images || []);
-        const next = cleanHistoryImages(additions);
+        const next = distinctOutputMedia(existing, additions);
+        node.images = existing;
         if(!next.length) return [];
         node.images = [...existing, ...next];
         node.activeImageIndex = existing.length;
@@ -17582,13 +17662,8 @@ function appendOutputsToNode(node, additions, kind='image', options={}){
     node = liveSmartNode(node);
     const beforeRight = (Number(node.x) || 0) + nodeRect(node).width;
     const existing = cleanHistoryImages(node.images || []);
-    const seen = new Set(existing.map(img => `${img.kind || ''}|${img.url || ''}`));
-    const next = cleanHistoryImages(additions).filter(img => {
-        const key = `${img.kind || ''}|${img.url || ''}`;
-        if(seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+    const next = distinctOutputMedia(existing, additions);
+    node.images = existing;
     if(!next.length) return [];
     node.images = [...existing, ...next];
     markSmartNodeComplete(node);
@@ -19214,26 +19289,24 @@ async function pollSmartCanvasTask(taskId, kind='image'){
 }
 function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     if(!node || !taskId) return;
+    // 同一 task 可能同时被自动恢复轮询和用户手动查询拿到成功结果；只有仍在
+    // pendingTasks 中的第一次完成回调可以落盘，后续回调直接忽略。
+    if(!smartPendingTasks(node).some(task => task.taskId === taskId)) return false;
     node.pendingTasks = smartPendingTasks(node).filter(task => task.taskId !== taskId);
     node.pending = Math.max(0, Number(node.pending || 0) - 1);
     const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
     const mediaItems = resultMediaUrls(images);
     const existing = cleanHistoryImages(node.images || []);
-    const seen = new Set(existing.map(img => `${img.kind || ''}|${img.url || ''}`));
     const additions = cleanHistoryImages((mediaItems || []).map((item, i) => {
         const url = typeof item === 'string' ? item : item?.url || '';
         const itemKind = (typeof item === 'object' && item.kind) || kind;
         return stripImageGenerationMeta(copyMediaSizeFields(item, {url, name:(typeof item === 'object' && item.name) || `output-${i + 1}.${ext}`, kind:itemKind, generatedResult:true}));
-    }).filter(item => item.url)).filter(item => {
-        const key = `${item.kind || ''}|${item.url || ''}`;
-        if(seen.has(key)) return false;
-        seen.add(key);
-        return true;
-    });
+    }).filter(item => item.url));
+    const uniqueAdditions = distinctOutputMedia(existing, additions);
     const additionStart = existing.length;
-    node.images = [...existing, ...additions];
-    if(isSmartGenerationResultKind(node, kind) && additions.length) node.activeImageIndex = additionStart;
-    if(additions.length) node.outputKind = kind;
+    node.images = [...existing, ...uniqueAdditions];
+    if(isSmartGenerationResultKind(node, kind) && uniqueAdditions.length) node.activeImageIndex = additionStart;
+    if(uniqueAdditions.length) node.outputKind = kind;
     if(!node.pending && smartPendingTasks(node).length === 0){
         delete node.pendingTasks;
         node.runFinishedAt = nowMs();
