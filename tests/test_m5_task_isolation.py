@@ -85,7 +85,35 @@ class M5TaskPersistenceTests(unittest.TestCase):
         self.assertEqual(restored["status"], "failed")
         self.assertTrue(restored["interrupted"])
         self.assertEqual(restored["upstream_task_id"], "upstream-b")
+        self.assertTrue(restored["recovery_available"])
         self.assertIn("未自动重提", restored["error"])
+
+    def test_terminal_failure_with_upstream_id_is_not_marked_recoverable(self):
+        main.canvas_task_create({
+            "id": "canvas_img_terminal",
+            "type": "online-image",
+            "status": "running",
+            "created_at": time.time(),
+            "updated_at": time.time(),
+            "user_id": "user-a",
+        })
+
+        async def fail_terminal(*_args, **_kwargs):
+            error = main.HTTPException(status_code=502, detail="上游已拒绝任务")
+            error.upstream_task_id = "upstream-rejected"
+            raise error
+
+        async def run_case():
+            with patch.object(main, "build_online_image_result", side_effect=fail_terminal):
+                await main.run_canvas_image_task(
+                    "canvas_img_terminal", SimpleNamespace(provider_id="apimart", model="gpt-image-2"), None, ""
+                )
+
+        asyncio.run(run_case())
+        task = main.canvas_task_get("canvas_img_terminal")
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(task["upstream_task_id"], "upstream-rejected")
+        self.assertFalse(task["recovery_available"])
 
 
 class M5TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):

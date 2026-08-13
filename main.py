@@ -443,6 +443,9 @@ RUNNINGHUB_OPENAPI_BASE_URL = "https://www.runninghub.cn/openapi/v2"
 RUNNINGHUB_MODEL_REGISTRY_URL = "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
 RUNNINGHUB_MODEL_REGISTRY_CACHE_TTL = 300
 RUNNINGHUB_MODEL_REGISTRY_CACHE = {}
+# RunningHub's registry calls both single-choice enums and JSON arrays `LIST`.
+# Keep the array contract explicit rather than coercing every LIST into an array.
+RUNNINGHUB_ARRAY_FIELD_KEYS = frozenset({"conversionslots"})
 RUNNINGHUB_REMOTE_REFERENCE_CACHE_TTL = 10 * 60
 RUNNINGHUB_REFERENCE_CACHE_MAX = 256
 RUNNINGHUB_REFERENCE_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -5187,9 +5190,11 @@ def recover_canvas_tasks_after_restart():
         for task in CANVAS_TASKS.values():
             if task.get("status") not in {"queued", "running"}:
                 continue
+            recovery_available = bool(str(task.get("upstream_task_id") or "").strip())
             task.update({
                 "status": "failed",
                 "interrupted": True,
+                "recovery_available": recovery_available,
                 "error": "服务重启中断了本地等待；任务未自动重提，以避免重复计费。",
                 "updated_at": now,
             })
@@ -14323,12 +14328,12 @@ def public_runninghub_model_capabilities(model_def):
             "required": bool(raw.get("required")),
             "label": str(raw.get("label") or key).strip()[:120],
             "description": str(raw.get("description") or "").strip()[:500],
-            "multiple": bool(raw.get("multipleInputs")),
+            "multiple": runninghub_schema_is_multiple(raw),
         }
         default = raw.get("defaultValue")
         if isinstance(default, (str, int, float, bool)) or default is None:
             item["default"] = default
-        for numeric_key in ("min", "max", "step", "maxInputNum", "maxSize", "maxLength"):
+        for numeric_key in ("min", "max", "step", "maxInputNum", "maxCount", "maxSize", "maxLength"):
             value = raw.get(numeric_key)
             if isinstance(value, (int, float)):
                 item[numeric_key] = value
@@ -14565,6 +14570,62 @@ def runninghub_schema_options(field):
             values.append(str(value))
     return values
 
+def runninghub_schema_key(field):
+    return str((field or {}).get("fieldKey") or "").strip()
+
+def runninghub_schema_is_multiple(field):
+    """Return whether this standard-model media field accepts multiple values."""
+    field = field if isinstance(field, dict) else {}
+    for flag in ("multipleInputs", "multiple"):
+        value = field.get(flag)
+        if value is True or (isinstance(value, str) and value.strip().lower() in {"true", "1", "yes", "on"}):
+            return True
+    for key in ("maxInputNum", "maxCount"):
+        try:
+            if int(field.get(key) or 0) > 1:
+                return True
+        except (TypeError, ValueError):
+            continue
+    media_type = str(field.get("type") or "").strip().upper()
+    key = runninghub_schema_key(field).lower()
+    if media_type in {"IMAGE", "VIDEO", "AUDIO"} and key.endswith(("urls", "images", "videos", "audios")):
+        return True
+    return False
+
+def runninghub_schema_value_shape(field):
+    """Return the JSON transport shape for a standard-model field."""
+    field = field if isinstance(field, dict) else {}
+    explicit = str(field.get("jsonType") or field.get("valueShape") or field.get("valueType") or "").strip().lower()
+    if explicit in {"array", "list", "array<string>", "string[]"}:
+        return "array"
+    if runninghub_schema_key(field).lower() in RUNNINGHUB_ARRAY_FIELD_KEYS:
+        return "array"
+    return "scalar"
+
+def runninghub_schema_encode_value(field, value):
+    """Encode a RunningHub standard-model field as typed JSON."""
+    field = field if isinstance(field, dict) else {}
+    ftype = str(field.get("type") or "").strip().upper()
+    if runninghub_schema_value_shape(field) == "array":
+        if isinstance(value, (tuple, set)):
+            value = list(value)
+        if not isinstance(value, list):
+            value = [value]
+        return [item for item in value if item is not None and str(item) != ""]
+    if ftype == "BOOLEAN":
+        return value.strip().lower() in {"true", "1", "yes", "on"} if isinstance(value, str) else bool(value)
+    if ftype in {"INT", "INTEGER"}:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+    if ftype in {"FLOAT", "NUMBER"}:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return value
+    return value
+
 def runninghub_schema_value(field, preferred=None):
     preferred = "" if preferred is None else str(preferred).strip()
     options = runninghub_schema_options(field)
@@ -14627,7 +14688,7 @@ def runninghub_apply_schema_defaults(body, params, skip_keys=None):
     for field in params or []:
         if not isinstance(field, dict):
             continue
-        key = str(field.get("fieldKey") or "").strip()
+        key = runninghub_schema_key(field)
         if not key or key in body or key in skipped:
             continue
         default = field.get("defaultValue")
@@ -14637,21 +14698,7 @@ def runninghub_apply_schema_defaults(body, params, skip_keys=None):
                 default = options[0]
             else:
                 continue
-        ftype = str(field.get("type") or "").upper()
-        if ftype == "BOOLEAN":
-            body[key] = bool(default) if not isinstance(default, str) else default.lower() == "true"
-        elif ftype in {"INT", "INTEGER"}:
-            try:
-                body[key] = int(default)
-            except Exception:
-                body[key] = default
-        elif ftype == "FLOAT":
-            try:
-                body[key] = float(default)
-            except Exception:
-                body[key] = default
-        else:
-            body[key] = default
+        body[key] = runninghub_schema_encode_value(field, default)
     return body
 
 def runninghub_apply_image_aspect(body, params, aspect_ratio="", size=""):
@@ -14697,28 +14744,31 @@ def runninghub_image_model_params(params, values):
         if key.lower() in reserved or field_type in {"IMAGE", "VIDEO", "AUDIO"}:
             continue
         options = runninghub_schema_options(field)
-        if options:
+        if runninghub_schema_value_shape(field) == "array":
+            raw_items = raw_value if isinstance(raw_value, list) else [raw_value]
+            values = [str(item).strip() for item in raw_items if item is not None and str(item).strip()]
+            if options and any(item not in options for item in values):
+                raise HTTPException(status_code=400, detail=f"参数 {key} 的值不在模型允许范围内。")
+            value = runninghub_schema_encode_value(field, values)
+        elif options:
             text_value = str(raw_value)
             if text_value not in options:
                 raise HTTPException(status_code=400, detail=f"参数 {key} 的值不在模型允许范围内。")
             value = text_value
         elif field_type == "BOOLEAN":
-            if isinstance(raw_value, bool):
-                value = raw_value
-            elif str(raw_value).strip().lower() in {"true", "1", "yes", "on"}:
-                value = True
-            elif str(raw_value).strip().lower() in {"false", "0", "no", "off"}:
-                value = False
+            raw_bool = str(raw_value).strip().lower()
+            if isinstance(raw_value, bool) or raw_bool in {"true", "1", "yes", "on", "false", "0", "no", "off"}:
+                value = runninghub_schema_encode_value(field, raw_value)
             else:
                 raise HTTPException(status_code=400, detail=f"参数 {key} 必须是开关值。")
         elif field_type in {"INT", "INTEGER"}:
             try:
-                value = int(raw_value)
+                value = runninghub_schema_encode_value(field, raw_value)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail=f"参数 {key} 必须是整数。")
         elif field_type in {"FLOAT", "NUMBER"}:
             try:
-                value = float(raw_value)
+                value = runninghub_schema_encode_value(field, raw_value)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail=f"参数 {key} 必须是数字。")
         else:
@@ -15499,7 +15549,7 @@ async def generate_runninghub_provider_image(
         image_multiple = False
         if image_urls:
             image_key = str((image_field or {}).get("fieldKey") or "imageUrls")
-            image_multiple = image_key.endswith("s") or (image_field or {}).get("multipleInputs") is True
+            image_multiple = runninghub_schema_is_multiple(image_field)
             if image_multiple:
                 body[image_key] = image_urls
             else:
@@ -15624,7 +15674,7 @@ async def generate_runninghub_video(payload, provider):
             key = str((image_field or {}).get("fieldKey") or "")
             if key and key in body:
                 pass
-            elif key and (key.endswith("s") or (image_field or {}).get("multipleInputs") is True):
+            elif key and runninghub_schema_is_multiple(image_field):
                 body[key] = image_urls
             elif key:
                 body[key] = image_urls[0]
@@ -15644,7 +15694,7 @@ async def generate_runninghub_video(payload, provider):
                     uploaded.append(value)
             key = str(field.get("fieldKey") or "")
             if key and uploaded:
-                body[key] = uploaded if key.endswith("s") or field.get("multipleInputs") is True else uploaded[0]
+                body[key] = uploaded if runninghub_schema_is_multiple(field) else uploaded[0]
         first_required = runninghub_schema_field(params, "firstFrameUrl", "first_frame_url", "firstFrameImage", "first_frame_image")
         if first_required and not body.get(str(first_required.get("fieldKey") or "")):
             raise HTTPException(status_code=400, detail="当前 RunningHub 模型是图生视频，需要连接一张首帧图片后再生成。")
@@ -18918,6 +18968,7 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
         detail = getattr(exc, "detail", None) or str(exc)
         status_code = getattr(exc, "status_code", 500)
         upstream_task_id = getattr(exc, "upstream_task_id", "") or extract_task_id_from_text(detail)
+        recovery_available = bool(upstream_task_id) and int(status_code or 0) in {408, 504}
         if upstream_task_id:
             try:
                 context = upstream_context_for_profile_id(
@@ -18948,6 +18999,7 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
             "error": str(detail),
             "status_code": status_code,
             "upstream_task_id": upstream_task_id,
+            "recovery_available": recovery_available,
         })
     finally:
         ACTIVE_CANVAS_TASK_ID.reset(capture_token)
@@ -20629,11 +20681,13 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
             getattr(exc, "upstream_task_id", "")
             or extract_task_id_from_text(detail)
         )
+        recovery_available = bool(upstream_task_id) and int(getattr(exc, "status_code", 500) or 0) in {408, 504}
         canvas_task_update(task_id, {
             "status": "failed",
             "error": str(detail),
             "status_code": getattr(exc, "status_code", 500),
             "upstream_task_id": upstream_task_id,
+            "recovery_available": recovery_available,
         })
     finally:
         ACTIVE_CANVAS_TASK_ID.reset(capture_token)
