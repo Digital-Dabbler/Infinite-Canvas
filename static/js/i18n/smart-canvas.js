@@ -63,6 +63,7 @@
         "canvas.modeGrid": { zh: "宫格切分", en: "Grid Split" },
         "canvas.modeMask": { zh: "遮罩", en: "Mask" },
         "canvas.modeOutpaint": { zh: "扩图", en: "Expand" },
+        "canvas.runOutpaint": { zh: "运行扩图", en: "Run Expand" },
         "canvas.noLogs": { zh: "还没有生成日志", en: "No generation logs yet" },
         "canvas.noPromptMeta": { zh: "没有记录提示词", en: "No prompt recorded" },
         "canvas.smartCanvas": { zh: "智能画布", en: "Smart Canvas" },

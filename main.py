@@ -14691,7 +14691,7 @@ def runninghub_apply_schema_defaults(body, params, skip_keys=None):
         body[key] = runninghub_schema_encode_value(field, default)
     return body
 
-def runninghub_apply_image_aspect(body, params, aspect_ratio="", size=""):
+def runninghub_apply_image_aspect(body, params, aspect_ratio="", size="", preserve_adaptive=False):
     field = runninghub_schema_field(params, "aspectRatio")
     if not field:
         field = runninghub_schema_field(params, "ratio")
@@ -14702,10 +14702,12 @@ def runninghub_apply_image_aspect(body, params, aspect_ratio="", size=""):
         return set()
     requested = str(aspect_ratio or "").strip()
     adaptive = requested.lower() in {"", "empty", "auto", "adaptive", "source", "keep_ratio"}
-    if adaptive and field.get("required") is not True:
+    if adaptive and field.get("required") is not True and not preserve_adaptive:
         body.pop(key, None)
         return {key}
-    aspect = runninghub_aspect_from_size(size, "1:1") if adaptive else requested
+    # 扩图的自适应模型必须保留 schema 声明的 auto/source/adaptive 值；
+    # 常规生图仍保持“可选自适应字段省略”的历史行为。
+    aspect = requested if adaptive and preserve_adaptive else (runninghub_aspect_from_size(size, "1:1") if adaptive else requested)
     body[key] = runninghub_schema_value(field, aspect)
     return set()
 
@@ -15494,7 +15496,11 @@ async def generate_runninghub_provider_image(
     explicit_dimensions = str(resolution or "").strip() == "__custom_dimensions__"
     requested_resolution = "" if explicit_dimensions else (str(resolution or "").strip() or runninghub_resolution_from_size(size, "2k"))
     body = {"prompt": prompt}
-    skipped_default_keys = runninghub_apply_image_aspect(body, params, aspect_ratio, size)
+    force_outpaint_adaptive_aspect = isinstance(model_params, dict) and bool(model_params.get("__force_outpaint_adaptive_aspect"))
+    skipped_default_keys = runninghub_apply_image_aspect(
+        body, params, aspect_ratio, size,
+        preserve_adaptive=force_outpaint_adaptive_aspect,
+    )
     if runninghub_schema_field(params, "resolution") and not explicit_dimensions:
         field = runninghub_schema_field(params, "resolution")
         body["resolution"] = runninghub_schema_value(field, requested_resolution)
@@ -18646,11 +18652,16 @@ async def fetch_upstream_models(provider_id: str, request: Request):
         raise HTTPException(status_code=400, detail=f"{provider.get('name') or provider_id} 未配置 API Key")
     return await fetch_models_from_upstream(provider.get("base_url") or "", api_key, provider_protocol(provider), provider.get("image_request_mode") or "openai")
 
+def online_image_request_size(payload: OnlineImageRequest):
+    """Keep exact dimensions only for a model that has declared arbitrary-size outpaint support."""
+    preserve_outpaint_dimensions = isinstance(payload.model_params, dict) and bool(payload.model_params.get("__preserve_outpaint_dimensions"))
+    return str(payload.size or "").strip() if preserve_outpaint_dimensions else snap_size_to_multiple(payload.size, 16)
+
 async def build_online_image_result(payload: OnlineImageRequest, api_profile_id="", user_id=""):
     provider = get_api_provider(payload.provider_id, api_profile_id)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
     model = selected_model(payload.model, default_model)
-    request_size = snap_size_to_multiple(payload.size, 16)
+    request_size = online_image_request_size(payload)
     refs = [ref.dict() for ref in payload.reference_images if ref.url]
     image_refs = image_references(refs)
     count = max(1, min(8, int(payload.n or 1)))

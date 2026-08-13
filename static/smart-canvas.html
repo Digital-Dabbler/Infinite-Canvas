@@ -16,16 +16,16 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=2026.07.29.1783969806"></script>
-    <script src="/static/js/theme.js?v=2026.07.29.1783969806"></script>
-    <script src="/static/js/touch-mouse.js?v=2026.07.29.1783969806"></script>
-    <script src="/static/js/i18n.js?v=2026.07.29.1786550167"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1786590597">
-    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1786157098">
-    <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.1786292093">
-    <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.1786350155">
-    <link rel="stylesheet" href="/static/css/prompt-presets.css?v=2026.07.29.1786459930">
-    <link rel="stylesheet" href="/static/css/workflow-library.css?v=2026.07.29.1786298327">
+    <script src="/static/vendor/js/lucide.js?v=2026.07.29.1785819149"></script>
+    <script src="/static/js/theme.js?v=2026.07.29.1785819149"></script>
+    <script src="/static/js/touch-mouse.js?v=2026.07.29.1785819149"></script>
+    <script src="/static/js/i18n.js?v=2026.07.29.1786605608"></script>
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1786615753">
+    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1786080775">
+    <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.1786416506">
+    <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.1786416506">
+    <link rel="stylesheet" href="/static/css/prompt-presets.css?v=2026.07.29.1786447564">
+    <link rel="stylesheet" href="/static/css/workflow-library.css?v=2026.07.29.1786416506">
 </head>
 <body>
     <div id="shell" class="shell">
@@ -412,7 +412,10 @@
                                 <div class="outpaint-handle" data-outpaint-handle="right"></div>
                                 <div class="outpaint-handle" data-outpaint-handle="bottom"></div>
                                 <div class="outpaint-handle" data-outpaint-handle="left"></div>
-                                <div class="outpaint-handle" data-outpaint-handle="corner"></div>
+                                <div class="outpaint-handle" data-outpaint-handle="top-left"></div>
+                                <div class="outpaint-handle" data-outpaint-handle="top-right"></div>
+                                <div class="outpaint-handle" data-outpaint-handle="bottom-left"></div>
+                                <div class="outpaint-handle" data-outpaint-handle="bottom-right"></div>
                             </div>
                             <div id="outpaintResolution" class="outpaint-resolution"></div>
                             <div id="resizeResolutionOverlay" class="resize-resolution-overlay"></div>
@@ -447,6 +450,14 @@
                 </div>
                 <div class="image-edit-actions">
                     <span id="imageEditZoomLabel" style="color:#94a3b8;font-size:11px;font-weight:800;padding:0 4px;margin-right:auto;cursor:pointer;user-select:none" title="双击重置缩放" ondblclick="resetImageEditZoom()">100%</span>
+                    <div id="outpaintRunControls" class="outpaint-run-controls" hidden>
+                        <span id="outpaintTargetSize" class="outpaint-target-size">-</span>
+                        <span id="outpaintCapabilityNote" class="outpaint-capability-note">-</span>
+                        <label id="outpaintResolutionField" class="outpaint-run-field"><span data-i18n="smart.resolution">分辨率</span><select id="outpaintResolutionSelect" aria-label="扩图分辨率"></select></label>
+                        <label class="outpaint-run-field"><span data-i18n="smart.count">张数</span><select id="outpaintCountSelect" aria-label="扩图张数"></select></label>
+                        <label class="outpaint-run-field outpaint-model-field"><span data-i18n="smart.imageModel">模型</span><select id="outpaintModelSelect" aria-label="扩图模型"></select></label>
+                        <button id="outpaintRunBtn" class="image-edit-btn primary outpaint-run-btn" type="button" onclick="runImageOutpaint()"><i data-lucide="play" class="w-4 h-4"></i><span data-i18n="canvas.runOutpaint">运行扩图</span></button>
+                    </div>
                     <div id="videoFrameTools" class="video-frame-tools" style="display:none">
                         <div class="video-frame-tool-row">
                             <button class="image-edit-btn secondary" type="button" onclick="exportVideoFrame('first')"><i data-lucide="skip-back" class="w-4 h-4"></i><span data-i18n="smart.videoExportFirstFrame">导出首帧</span></button>
@@ -471,12 +482,12 @@
         <div id="toast" class="toast"></div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1786590717"></script>
-    <script src="/static/js/prompt-presets.js?v=2026.07.29.1786459930"></script>
-    <script src="/static/js/library-shared.js?v=2026.07.29.1786289963"></script>
-    <script src="/static/js/asset-library.js?v=2026.07.29.1786291936"></script>
-    <script src="/static/js/prompt-library.js?v=2026.07.29.1786544949"></script>
-    <script src="/static/js/workflow-library.js?v=2026.07.29.1786298446"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1786619065"></script>
+    <script src="/static/js/prompt-presets.js?v=2026.07.29.1786447561"></script>
+    <script src="/static/js/library-shared.js?v=2026.07.29.1786416506"></script>
+    <script src="/static/js/asset-library.js?v=2026.07.29.1786416506"></script>
+    <script src="/static/js/prompt-library.js?v=2026.07.29.1786502826"></script>
+    <script src="/static/js/workflow-library.js?v=2026.07.29.1786416506"></script>
 
     <!-- 资产库弹窗 -->
     <div id="assets-library-overlay" class="library-modal-overlay">
@@ -647,6 +658,6 @@
             </div>
         </div>
     </div>
-    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1786210672"></script>
+    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1786416506"></script>
 </body>
 </html>
