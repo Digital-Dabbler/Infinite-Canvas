@@ -25,6 +25,7 @@ const minimapContent = document.getElementById('minimapContent');
 const smartArrangeBtn = document.getElementById('smartArrangeBtn');
 const imageEditModal = document.getElementById('imageEditModal');
 let outpaintRunSettings = null;
+let outpaintFillColor = '#ffffff';
 const imageActionToolbar = document.getElementById('imageActionToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const photoshopInstallModal = document.getElementById('photoshopInstallModal');
@@ -1021,6 +1022,7 @@ function clearSmartNodeTransientRunState(node, options={}){
     node.running = false;
     node.pending = 0;
     node.queued = false;
+    delete node.submitting;
     delete node.jimengPending;
     delete node.pendingTasks;
     delete node._runMetaTargetId;
@@ -1337,16 +1339,8 @@ function recentSmartSettingsForMode(modeKey=''){
     return saved && typeof saved === 'object' ? cloneSmartSettings(saved) : {};
 }
 function rememberRecentSmartSettings(source=settings, node=null){
-    const clean = stripOutpaintDisplaySettings(settingsForStorage(source), node);
+    const clean = settingsForStorage(source);
     sanitizeSmartApiSelection(clean);
-    if(clean.outpaintResolutionLocked === true && clean.resolution === 'custom'){
-        clean.resolution = '1k';
-        clean.ratio = clean.ratio || 'square';
-        clean.customWidth = '';
-        clean.customHeight = '';
-        clean.customSize = '';
-    }
-    delete clean.outpaintResolutionLocked;
     const key = smartSettingsModeKey(clean);
     recentSmartSettingsByMode[key] = settingsForStorage(clean);
     recentSmartSettingsByMode.__lastKey = key;
@@ -1545,11 +1539,6 @@ function migrateLegacySmartCanvasNodes(rawNodes=[], rawConnections=[]){
     });
     return {nodes:migrated, connections, changed};
 }
-function validOutpaintSize(node){
-    const w = Math.round(Number(node?.outpaintSize?.width || 0));
-    const h = Math.round(Number(node?.outpaintSize?.height || 0));
-    return w > 0 && h > 0 ? {width:w, height:h} : null;
-}
 function parseSizePair(value){
     const match = String(value || '').match(/(\d+)\s*x\s*(\d+)/i);
     return match ? {width:Number(match[1]), height:Number(match[2])} : null;
@@ -1572,61 +1561,8 @@ function exceedsFourKStandard(width, height){
     if(!standard) return false;
     return Number(width) > standard.width || Number(height) > standard.height;
 }
-function withOutpaintDisplaySettings(node, baseSettings){
-    const size = validOutpaintSize(node);
-    if(!size) return baseSettings;
-    const engine = ['api','volcengine','modelscope','comfy','runninghub'].includes(baseSettings?.engine) ? baseSettings.engine : 'api';
-    const next = {
-        ...baseSettings,
-        resolution:'custom',
-        ratio:'',
-        customWidth:size.width,
-        customHeight:size.height,
-        customSize:`${size.width}x${size.height}`,
-        outpaintResolutionLocked:true
-    };
-    if(isApiLikeEngine(engine)) next.apiKind = 'image';
-    if(engine === 'modelscope'){
-        next.msResolution = 'custom';
-        next.msRatio = '';
-        next.msCustomWidth = size.width;
-        next.msCustomHeight = size.height;
-        next.msCustomSize = `${size.width}x${size.height}`;
-    }
-    if(engine === 'comfy'){
-        next.width = size.width;
-        next.height = size.height;
-    }
-    return next;
-}
-function stripOutpaintDisplaySettings(settingsObj, node=null){
-    const clean = cloneSmartSettings(settingsObj);
-    const size = validOutpaintSize(node);
-    const matchesOutpaintSize = size && clean.resolution === 'custom' && String(clean.customSize || '') === `${size.width}x${size.height}`;
-    if(matchesOutpaintSize){
-        clean.resolution = '1k';
-        clean.ratio = clean.ratio || 'square';
-        clean.customWidth = '';
-        clean.customHeight = '';
-        clean.customSize = '';
-    }
-    const matchesMsOutpaintSize = size && clean.msResolution === 'custom' && String(clean.msCustomSize || '') === `${size.width}x${size.height}`;
-    if(matchesMsOutpaintSize){
-        clean.msResolution = '1k';
-        clean.msRatio = clean.msRatio || 'square';
-        clean.msCustomWidth = '';
-        clean.msCustomHeight = '';
-        clean.msCustomSize = '';
-    }
-    if(size && Number(clean.width) === size.width && Number(clean.height) === size.height){
-        clean.width = 1024;
-        clean.height = 1024;
-    }
-    delete clean.outpaintResolutionLocked;
-    return clean;
-}
 function smartSettingsForNode(node){
-    const nodeSettings = stripOutpaintDisplaySettings(node?.runSettings || {}, node);
+    const nodeSettings = cloneSmartSettings(node?.runSettings || {});
     const recentSettings = Object.keys(nodeSettings).length ? {} : recentSmartSettingsForMode();
     const base = {
         ...cloneSmartSettings(canvasDefaultSmartSettings || initialSmartSettings),
@@ -1634,7 +1570,7 @@ function smartSettingsForNode(node){
         ...nodeSettings
     };
     normalizeSmartVideoModeSettings(base, true);
-    return withOutpaintDisplaySettings(node, base);
+    return base;
 }
 function activeSettingsSubject(){
     const active = activeComposerSubject?.id
@@ -3324,9 +3260,9 @@ function imageAspectValueForRun(source=settings){
     };
     return raw === 'custom' ? String(source?.customRatio || '').trim() : (map[raw] || raw);
 }
-function applyImageCapabilityDefaults(capability, key){
-    if(!capability?.discovered || settings.imageCapabilityKey === key) return;
-    settings.imageModelParams = {};
+function applyImageCapabilityDefaultsTo(target, capability, key){
+    if(!target || !capability?.discovered || target.imageCapabilityKey === key) return;
+    target.imageModelParams = {};
     const ratioField = videoCapabilityField(capability, 'aspectRatio', 'aspect_ratio', 'ratio');
     const resolutionField = videoCapabilityField(capability, 'resolution');
     const sizeField = videoCapabilityField(capability, 'size');
@@ -3341,25 +3277,28 @@ function applyImageCapabilityDefaults(capability, key){
         if(optionValues.includes(transformedCurrent)) return transformedCurrent;
         return transform(field.default ?? options[0]?.value ?? current);
     };
-    if(ratioField) settings.ratio = choose(settings.ratio, ratioField, imageRatioSettingValue);
+    if(ratioField) target.ratio = choose(target.ratio, ratioField, imageRatioSettingValue);
     if(resolutionField){
         const resolutionOptions = videoCapabilityOptions(resolutionField).map(option => option.value);
-        const currentResolution = String(settings.resolution || '');
-        settings.resolution = resolutionOptions.includes(currentResolution)
+        const currentResolution = String(target.resolution || '');
+        target.resolution = resolutionOptions.includes(currentResolution)
             ? currentResolution
             : String(resolutionField.default ?? (resolutionField.required ? (resolutionOptions[0] || '') : ''));
     }
-    settings.imageCapabilitySize = sizeField ? String(choose(settings.imageCapabilitySize, sizeField, value => String(value || ''))) : '';
-    settings.imageCapabilityWidth = widthField ? Number(widthField.default ?? widthField.min ?? (settings.imageCapabilityWidth || 1024)) : '';
-    settings.imageCapabilityHeight = heightField ? Number(heightField.default ?? heightField.min ?? (settings.imageCapabilityHeight || 1024)) : '';
-    if(qualityField) settings.quality = String(choose(settings.quality, qualityField, value => String(value || '')));
+    target.imageCapabilitySize = sizeField ? String(choose(target.imageCapabilitySize, sizeField, value => String(value || ''))) : '';
+    target.imageCapabilityWidth = widthField ? Number(widthField.default ?? widthField.min ?? (target.imageCapabilityWidth || 1024)) : '';
+    target.imageCapabilityHeight = heightField ? Number(heightField.default ?? heightField.min ?? (target.imageCapabilityHeight || 1024)) : '';
+    if(qualityField) target.quality = String(choose(target.quality, qualityField, value => String(value || '')));
     imageCapabilityExtraFields(capability).forEach(field => {
         const options = videoCapabilityOptions(field);
         let value = field.default;
         if((value === undefined || value === null || value === '') && field.required && options.length) value = options[0].value;
-        if(value !== undefined && value !== null) settings.imageModelParams[field.key] = imageCapabilityTypedValue(field, value);
+        if(value !== undefined && value !== null) target.imageModelParams[field.key] = imageCapabilityTypedValue(field, value);
     });
-    settings.imageCapabilityKey = key;
+    target.imageCapabilityKey = key;
+}
+function applyImageCapabilityDefaults(capability, key){
+    applyImageCapabilityDefaultsTo(settings, capability, key);
 }
 function currentImageModelCapability(){
     return imageModelCapabilityCache.get(imageCapabilityCacheKey(settings.provider_id, settings.model)) || null;
@@ -5366,13 +5305,6 @@ function setDynamicSetting(key, value){
         settings.msCustomSize = settings.msCustomWidth && settings.msCustomHeight ? `${settings.msCustomWidth}x${settings.msCustomHeight}` : '';
         settings.msResolution = 'custom';
     }
-    const sizeKeys = new Set(['resolution','ratio','customRatio','customRatioWidth','customRatioHeight','customWidth','customHeight','customSize']);
-    const unlockOutpaintSize = settings.outpaintResolutionLocked && sizeKeys.has(key);
-    if(unlockOutpaintSize){
-        delete settings.outpaintResolutionLocked;
-        const subject = activeSettingsSubject();
-        if(subject) delete subject.outpaintSize;
-    }
     if(key === 'comfyWorkflow') {
         settings.comfyParams = {};
         ensureComfyWorkflow(settings.comfyWorkflow).then(renderDynamicParams);
@@ -6576,7 +6508,7 @@ function mergeSmartImageLists(localImgs, remoteImgs){
 }
 function smartNodeInFlight(node){
     if(smartNodeHasCompletedResult(node)) return false;
-    return Boolean(node && (node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
+    return Boolean(node && (node.submitting || node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
 }
 function smartNodeHasDisplayResult(node){
     return Boolean((node?.images || []).some(img => img?.url && !img.loopInputPreview));
@@ -6596,6 +6528,7 @@ function clearSmartNodeBusyState(node){
     node.running = false;
     node.pending = 0;
     node.queued = false;
+    delete node.submitting;
     delete node.jimengPending;
     delete node.pendingTasks;
     return node;
@@ -7876,8 +7809,10 @@ function createMediaGenerationNode(kind='image', point=viewportCenter(), options
     node.scale = MEDIA_NODE_DEFAULT_SCALE;
     nodes.push(node);
     if(options.select !== false) selectedId = node.id;
-    render();
-    scheduleSave();
+    // 复合创建流程（如扩图）需要先写完提示词、参考图和运行参数，
+    // 再让 Composer 读取节点，避免默认配置短暂覆盖专用配置。
+    if(!options.deferRender) render();
+    if(!options.deferSave) scheduleSave();
     return node;
 }
 function createImageGenerationNode(point=viewportCenter(), options={}){
@@ -9543,6 +9478,9 @@ function nodeBodyHtml(node, layout){
     if(recoverTask && imgs.length === 0){
         return imageTaskRecoverBodyHtml(node, recoverTask, layout);
     }
+    if(node.submitting && imgs.length === 0 && !node.pending){
+        return generationPendingCellHtml({submitting:true, single:true, width:layout.width, height:layout.height});
+    }
     if(node.queued && imgs.length === 0 && !node.pending){
         return generationPendingCellHtml({queued:true, single:true, width:layout.width, height:layout.height});
     }
@@ -9553,13 +9491,16 @@ function nodeBodyHtml(node, layout){
         const rows = Math.ceil(count / cols);
         return `<div class="loading-skeleton generation-pending-grid" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => generationPendingCellHtml({compact:true})).join('')}</div>`;
     }
+    if(node.lastRunError && imgs.length === 0){
+        return failedGenerationCellHtml(node, layout);
+    }
     if(isSmartGenerationNode(node) && imgs.length){
         const resultIndexes = generationResultIndexes(imgs);
         const requestedIndex = Number(node.activeImageIndex) || 0;
         const activeIndex = Math.max(0, Math.min(imgs.length - 1, requestedIndex));
         node.activeImageIndex = activeIndex;
         const active = imgs[activeIndex];
-        const isAppending = Boolean(node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length);
+        const isAppending = Boolean(node.submitting || node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length);
         const stack = Math.min(3, Math.max(0, imgs.length - 1));
         const mediaHeight = Number(layout.mediaHeight) || layout.height;
         const thumbHtml = generationResultThumbnailHtml(imgs, activeIndex);
@@ -9567,7 +9508,7 @@ function nodeBodyHtml(node, layout){
             <div class="generation-result-stack" style="--result-stack:${stack}">
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer layer-${index + 1}"></span>`).join('')}
                 <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${mediaHeight}px">${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}</div>
-                ${isAppending ? generationPendingCellHtml({overlay:true, queued:Boolean(node.queued && !node.pending)}) : (node.lastRunError ? failedGenerationOverlayHtml(node) : '')}
+                ${isAppending ? generationPendingCellHtml({overlay:true, submitting:Boolean(node.submitting && !node.pending), queued:Boolean(node.queued && !node.pending)}) : (node.lastRunError ? failedGenerationOverlayHtml(node) : '')}
                 ${resultIndexes.length > 1 ? `<div class="generation-result-count">${resultIndexes.length} 个结果</div><button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
             </div>
             ${resultIndexes.length > 1 || imgs.some(isReturnedVideoLastFrame) ? `<div class="generation-result-strip">${thumbHtml}</div>` : ''}
@@ -9587,9 +9528,9 @@ function nodeBodyHtml(node, layout){
     </div>`;
 }
 function generationPendingCellHtml(options={}){
-    const label = options.queued ? tr('smart.waitQueued') : tr('smart.waitCreating');
+    const label = options.submitting ? tr('smart.waitSubmitting') : (options.queued ? tr('smart.waitQueued') : tr('smart.waitCreating'));
     const style = options.single ? ` style="width:${options.width}px;height:${options.height}px"` : '';
-    return `<div class="loading-cell generation-pending-cell${options.single ? ' single' : ''}${options.compact ? ' compact' : ''}${options.overlay ? ' overlay' : ''}${options.queued ? ' queued' : ''}"${style} aria-label="${escapeAttr(label)}" role="status">
+    return `<div class="loading-cell generation-pending-cell${options.single ? ' single' : ''}${options.compact ? ' compact' : ''}${options.overlay ? ' overlay' : ''}${options.submitting ? ' submitting' : ''}${options.queued ? ' queued' : ''}"${style} aria-label="${escapeAttr(label)}" role="status">
         <span class="generation-pending-beam"></span>
         <span class="generation-pending-orbit"><span class="generation-pending-core"></span></span>
         <span class="generation-pending-copy"><strong>${escapeHtml(label)}</strong>${options.compact ? '' : `<small>${escapeHtml(tr('smart.waitSub'))}</small>`}</span>
@@ -10249,13 +10190,14 @@ function render(){
         const isCompactMember = isSmartGroupCompactMember(node);
         const isImageNode = isSmartImageNode(node);
         const isJimengPending = Boolean(node.jimengPending && node.jimengPending.submitId && imgs.length === 0);
+        const isSubmitting = Boolean(node.submitting && imgs.length === 0 && !node.pending && !isJimengPending);
         const isQueued = Boolean(node.queued && imgs.length === 0 && !node.pending && !isJimengPending);
-        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isQueued && !isJimengPending;
+        const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
         const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartImageUploadNode(node) ? 'upload-cloud' : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
-        const isPending = ((node.pending || isQueued || isJimengPending) && imgs.length === 0);
+        const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
@@ -12568,7 +12510,9 @@ function setImageEditMode(mode, userTouched=false){
     const isPreview = imageEditMode === 'preview';
     outpaintRunSettings = imageEditMode === 'outpaint' ? cloneSmartSettings(smartSettingsForNode(currentEditImage().node) || settings) : null;
     const outpaintControls = document.getElementById('outpaintRunControls');
+    const outpaintColorControl = document.getElementById('outpaintColorControl');
     if(outpaintControls) outpaintControls.hidden = imageEditMode !== 'outpaint';
+    if(outpaintColorControl) outpaintColorControl.hidden = imageEditMode !== 'outpaint';
     if(!isPreview && panoramaState.enabled) disposePanoramaPreview();
     cropCanvasEl.style.display = isPreview ? 'none' : '';
     previewStageEl.style.display = isPreview ? 'inline-flex' : 'none';
@@ -12589,6 +12533,7 @@ function setImageEditMode(mode, userTouched=false){
     cropCanvasEl.classList.toggle('resize-mode', imageEditMode === 'resize');
     cropCanvasEl.classList.toggle('grid-mode', imageEditMode === 'grid');
     cropCanvasEl.classList.toggle('outpaint-mode', imageEditMode === 'outpaint');
+    if(imageEditMode === 'outpaint') syncOutpaintFillColor();
     syncGridCustomCursor();
     document.querySelectorAll('[data-image-edit-mode]').forEach(btn => btn.classList.toggle('active', btn.dataset.imageEditMode === imageEditMode));
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
@@ -14527,39 +14472,99 @@ function updateOutpaintResolutionLabel(){
     const target = document.getElementById('outpaintTargetSize');
     if(target) target.textContent = label.textContent;
 }
+function failedGenerationCellHtml(node, layout){
+    const error = String(node?.lastRunError || tr('smart.errRunFailed')).replace(/\s+/g, ' ').trim();
+    return `<div class="generation-failed-cell" style="width:${layout.width}px;height:${layout.height}px" role="status">
+        <i data-lucide="circle-alert"></i>
+        <strong>${escapeHtml(tr('smart.errRunFailed'))}</strong>
+        <small title="${escapeAttr(error)}">${escapeHtml(error)}</small>
+    </div>`;
+}
+function outpaintFillColorName(color=outpaintFillColor){
+    return ({
+        '#ef4444':'红色', '#22c55e':'绿色', '#3b82f6':'蓝色',
+        '#ffffff':'白色', '#94a3b8':'灰色', '#111827':'黑色'
+    })[String(color || '').toLowerCase()] || '白色';
+}
+function syncOutpaintFillColor(){
+    const color = String(outpaintFillColor || '#ffffff').toLowerCase();
+    document.querySelectorAll('[data-outpaint-color]').forEach(button => {
+        button.classList.toggle('active', String(button.dataset.outpaintColor || '').toLowerCase() === color);
+    });
+    document.getElementById('cropCanvas')?.style.setProperty('--outpaint-fill', color);
+}
+function setOutpaintFillColor(color){
+    const allowed = new Set(['#ef4444','#22c55e','#3b82f6','#ffffff','#94a3b8','#111827']);
+    outpaintFillColor = allowed.has(String(color || '').toLowerCase()) ? String(color).toLowerCase() : '#ffffff';
+    syncOutpaintFillColor();
+}
 function outpaintSettingsForEditor(){
     if(!outpaintRunSettings) outpaintRunSettings = cloneSmartSettings(smartSettingsForNode(currentEditImage().node) || settings);
     const next = cloneSmartSettings(outpaintRunSettings);
     next.apiKind = 'image';
     return next;
 }
-function outpaintModelPlan(providerId, model){
-    const capability = imageModelCapabilityCache.get(imageCapabilityCacheKey(providerId, model));
-    // 通用回退能力并不能证明某个具体模型真的接受这些参数；只展示
-    // provider schema、适配器或管理员显式配置已声明的模型。
-    if(!capability?.discovered || capability?.error || String(capability?.source || '').toLowerCase() === 'fallback') return null;
-    const imageField = (capability.fields || []).find(field => String(field?.type || '').toUpperCase() === 'IMAGE');
-    if(!imageField) return null;
+function outpaintReferenceSelection(providerId){
+    // 与标准图片生成节点一致：扩图上传的底图就是一张普通参考图。
+    return imageModelsForCurrentInputs(providerId, providerImageModels(providerId), {
+        type:'smart-image-generation',
+        manualInputRefs:[{url:'outpaint://reference', kind:'image'}]
+    });
+}
+function outpaintModelCapabilityMode(capability){
+    if(!capability?.discovered || capability?.error) return '';
+    const support = (capability.fields || []).filter(field => String(field?.type || '').toUpperCase() === 'IMAGE');
+    if(!support.length) return '';
+    const width = videoCapabilityField(capability, 'width');
+    const height = videoCapabilityField(capability, 'height');
+    if(width && height) return 'dimensions';
+    const ratio = videoCapabilityField(capability, 'aspectRatio', 'aspect_ratio', 'ratio');
+    return videoCapabilityOptions(ratio).some(option => isAdaptiveImageAspectValue(option.value))
+        || isAdaptiveImageAspectValue(ratio?.default)
+        ? 'adaptive'
+        : '';
+}
+function outpaintAdaptiveRatioSetting(capability){
+    const ratio = videoCapabilityField(capability, 'aspectRatio', 'aspect_ratio', 'ratio');
+    const adaptive = videoCapabilityOptions(ratio).find(option => isAdaptiveImageAspectValue(option.value));
+    return imageRatioSettingValue(adaptive?.value ?? ratio?.default ?? '');
+}
+function compatibleOutpaintModels(providerId, models=providerImageModels(providerId)){
+    const referenceSelection = outpaintReferenceSelection(providerId);
+    return {
+        loading:referenceSelection.models.some(model => !imageModelCapabilityCache.has(imageCapabilityCacheKey(providerId, model))),
+        models:referenceSelection.models.map(model => {
+            const capability = imageModelCapabilityFor(providerId, model);
+            return {model, capability, mode:outpaintModelCapabilityMode(capability)};
+        }).filter(item => item.mode)
+    };
+}
+function applyOutpaintFrameToImageSettings(target, capability, frame){
+    if(!target || !frame) return target;
+    const width = Math.max(1, Math.round(Number(frame.width) || 1));
+    const height = Math.max(1, Math.round(Number(frame.height) || 1));
     const widthField = videoCapabilityField(capability, 'width');
     const heightField = videoCapabilityField(capability, 'height');
-    const numeric = field => ['INT','INTEGER','FLOAT','NUMBER'].includes(String(field?.type || '').toUpperCase());
-    if(widthField && heightField && numeric(widthField) && numeric(heightField)){
-        return {kind:'dimensions', capability, label:'支持任意分辨率'};
+    if(widthField && heightField){
+        // 与普通图片节点手工填写宽高一致：用标准 dimensions 字段表达
+        // 扩图后的画布，不把它伪装成模型参数或独立的扩图尺寸协议。
+        const clamp = (value, field) => {
+            const min = Number(field?.min);
+            const max = Number(field?.max);
+            let next = Math.max(1, Math.round(Number(value) || 1));
+            if(Number.isFinite(min)) next = Math.max(Math.ceil(min), next);
+            if(Number.isFinite(max)) next = Math.min(Math.floor(max), next);
+            return next;
+        };
+        target.imageCapabilityWidth = clamp(width, widthField);
+        target.imageCapabilityHeight = clamp(height, heightField);
+        target.imageCapabilitySize = '';
+        target.resolution = '';
+        return target;
     }
-    const ratioField = videoCapabilityField(capability, 'aspectRatio', 'aspect_ratio', 'ratio');
-    const adaptiveOption = videoCapabilityOptions(ratioField).find(option => isAdaptiveImageAspectValue(option.value));
-    const resolutionField = videoCapabilityField(capability, 'resolution');
-    const resolutions = videoCapabilityOptions(resolutionField);
-    if(ratioField && adaptiveOption && resolutions.length){
-        return {kind:'adaptive', capability, adaptiveValue:adaptiveOption.value, resolutionField, resolutions, label:'支持自适应比例'};
-    }
-    return null;
-}
-function outpaintAvailableModels(providerId){
-    return providerImageModels(providerId).map(model => ({model, plan:outpaintModelPlan(providerId, model)})).filter(item => item.plan);
-}
-function outpaintAdaptiveSizeForFrame(resolution, width, height){
-    return apiImageSize('custom', resolution, `${Math.max(1, Math.round(width))}:${Math.max(1, Math.round(height))}`);
+    // Auto / adaptive 模型的比例语义由其标准 capability 默认值决定；
+    // 不把浮窗画布比例降级映射为某个“最接近”的固定比例。
+    return target;
 }
 function syncOutpaintRunControls(){
     const controls = document.getElementById('outpaintRunControls');
@@ -14567,8 +14572,9 @@ function syncOutpaintRunControls(){
     const modelSelect = document.getElementById('outpaintModelSelect');
     const resolutionSelect = document.getElementById('outpaintResolutionSelect');
     const resolutionField = document.getElementById('outpaintResolutionField');
-    const note = document.getElementById('outpaintCapabilityNote');
-    if(!controls || !countSelect || !modelSelect || !resolutionSelect || !resolutionField || !note) return;
+    const targetSize = document.getElementById('outpaintTargetSize');
+    const status = document.getElementById('outpaintCapabilityStatus');
+    if(!controls || !countSelect || !modelSelect || !resolutionSelect || !resolutionField || !targetSize || !status) return;
     const visible = imageEditMode === 'outpaint';
     controls.hidden = !visible;
     if(!visible) return;
@@ -14576,29 +14582,44 @@ function syncOutpaintRunControls(){
     const count = Math.max(1, Math.min(8, Number(editorSettings.count) || 1));
     countSelect.innerHTML = [1,2,3,4,5,6,7,8].map(n => `<option value="${n}" ${n === count ? 'selected' : ''}>${n} 张</option>`).join('');
     const providerId = editorSettings.provider_id || '';
-    const available = isApiLikeEngine(editorSettings.engine) && providerId ? outpaintAvailableModels(providerId) : [];
-    const selected = available.find(item => item.model === editorSettings.model) || available[0] || null;
+    const compatibility = isApiLikeEngine(editorSettings.engine) && providerId
+        ? compatibleOutpaintModels(providerId)
+        : {models:[], loading:false};
+    const available = compatibility.models;
+    if(compatibility.loading){
+        outpaintReferenceSelection(providerId).models.forEach(model => ensureImageModelCapability(providerId, model));
+    }
+    const remembered = String(editorSettings.imageModelSelections?.[imageModelModeKey(providerId, true)] || '').trim();
+    const selected = available.find(item => item.model === editorSettings.model)
+        || available.find(item => item.model === remembered)
+        || available[0]
+        || null;
     const selectedModel = selected?.model || '';
     if(selectedModel) editorSettings.model = selectedModel;
-    const plan = selected?.plan || null;
+    const capability = selected?.capability || null;
+    const mode = selected?.mode || '';
+    if(capability?.discovered) applyImageCapabilityDefaultsTo(editorSettings, capability, imageCapabilityCacheKey(providerId, selectedModel));
+    if(mode === 'adaptive') editorSettings.ratio = outpaintAdaptiveRatioSetting(capability);
     outpaintRunSettings = editorSettings;
     modelSelect.innerHTML = available.length
-        ? available.map(item => `<option value="${escapeAttr(item.model)}" ${item.model === selectedModel ? 'selected' : ''}>${escapeHtml(item.model)} · ${escapeHtml(item.plan.label)}</option>`).join('')
-        : `<option value="">${escapeHtml(tr('smart.noImageModel') || '无可用图片模型')}</option>`;
-    modelSelect.disabled = !available.length;
-    note.textContent = plan?.label || '正在读取可用扩图模型';
-    resolutionField.hidden = plan?.kind !== 'adaptive';
-    if(plan?.kind === 'adaptive'){
-        const resolution = plan.resolutions.some(option => option.value === String(editorSettings.resolution || ''))
-            ? String(editorSettings.resolution)
-            : String(plan.resolutionField.default ?? plan.resolutions[0]?.value ?? '');
-        editorSettings.resolution = resolution;
-        resolutionSelect.innerHTML = plan.resolutions.map(option => `<option value="${escapeAttr(option.value)}" ${option.value === resolution ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('');
-    } else {
-        resolutionSelect.innerHTML = '';
-    }
+        ? available.map(item => `<option value="${escapeAttr(item.model)}" ${item.model === selectedModel ? 'selected' : ''}>${escapeHtml(item.model)}</option>`).join('')
+        : `<option value="">${escapeHtml(compatibility.loading ? tr('canvas.outpaintCapabilityLoading') : tr('canvas.outpaintNoCompatibleModel'))}</option>`;
+    modelSelect.disabled = !available.length || compatibility.loading;
+    const resolution = videoCapabilityField(capability, 'resolution');
+    const resolutions = videoCapabilityOptions(resolution);
+    targetSize.hidden = mode !== 'dimensions';
+    resolutionField.hidden = mode !== 'adaptive' || !resolutions.length;
+    resolutionSelect.innerHTML = resolutions.map(option => `<option value="${escapeAttr(option.value)}" ${option.value === String(editorSettings.resolution || '') ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('');
+    status.className = `outpaint-capability-status${compatibility.loading ? ' is-loading' : (!mode ? ' is-empty' : '')}`;
+    status.textContent = compatibility.loading
+        ? tr('canvas.outpaintCapabilityLoading')
+        : mode === 'dimensions'
+            ? tr('canvas.outpaintDimensionMode')
+            : mode === 'adaptive'
+                ? tr('canvas.outpaintAdaptiveMode')
+                : tr('canvas.outpaintNoCompatibleModel');
     const runBtn = document.getElementById('outpaintRunBtn');
-    if(runBtn) runBtn.disabled = !plan;
+    if(runBtn) runBtn.disabled = !selectedModel || compatibility.loading;
     updateOutpaintResolutionLabel();
 }
 function clampOutpaint(){
@@ -14893,19 +14914,32 @@ function beginCropDrag(event, mode){
 function resizeOutpaintFromDrag(dx, dy){
     const start = cropDrag?.start;
     if(!start) return;
-    let growX = 0, growY = 0;
     const mode = String(cropDrag.mode || '');
-    if(mode.includes('left')) growX = -dx;
-    else if(mode.includes('right')) growX = dx;
-    if(mode.includes('top')) growY = -dy;
-    else if(mode.includes('bottom')) growY = dy;
     const {w, h} = cropBounds();
-    const nextW = Math.max(w, start.w + growX * 2);
-    const nextH = Math.max(h, start.h + growY * 2);
+    // 扩图框的 x/y 是原图在扩图画布中的位置：只扩被拖动的一侧，
+    // 并让左/上扩展推动原图，而不是将画布强制从中心对称地放大。
+    let nextW = start.w;
+    let nextH = start.h;
+    let nextX = start.x;
+    let nextY = start.y;
+    if(mode.includes('left')){
+        const delta = Math.max(-start.x, -dx);
+        nextW = Math.max(w, start.w + delta);
+        nextX = start.x + (nextW - start.w);
+    } else if(mode.includes('right')){
+        nextW = Math.max(w, start.w + dx);
+    }
+    if(mode.includes('top')){
+        const delta = Math.max(-start.y, -dy);
+        nextH = Math.max(h, start.h + delta);
+        nextY = start.y + (nextH - start.h);
+    } else if(mode.includes('bottom')){
+        nextH = Math.max(h, start.h + dy);
+    }
     cropState.w = nextW;
     cropState.h = nextH;
-    cropState.x = start.x + Math.round((nextW - start.w) / 2);
-    cropState.y = start.y + Math.round((nextH - start.h) / 2);
+    cropState.x = nextX;
+    cropState.y = nextY;
     clampOutpaint();
 }
 function clampAspectCropToBounds(anchorX, anchorY, movingX, movingY, ratio, handle){
@@ -15010,19 +15044,6 @@ function replaceEditedImage(file, extra={}){
     selectedImage = {nodeId:created.id, index:0};
     return created;
 }
-function applyOutpaintSizeToSmartParams(width, height){
-    const w = Math.max(1, Math.round(Number(width) || 0));
-    const h = Math.max(1, Math.round(Number(height) || 0));
-    if(!w || !h) return;
-    const subject = currentEditImage().node;
-    if(!subject || !isSmartImageNode(subject)) return;
-    subject.outpaintSize = {width:w, height:h};
-    subject.runSettings = withOutpaintDisplaySettings(subject, cloneSmartSettings(subject.runSettings || settings));
-    if(activeSettingsSubject()?.id === subject.id){
-        settings = smartSettingsForNode(subject);
-        renderDynamicParams();
-    }
-}
 async function applyImageCrop(){
     if(!cropState) return;
     const {node, image} = currentEditImage();
@@ -15075,43 +15096,36 @@ async function runImageOutpaint(){
     selectedSettings.count = Math.max(1, Math.min(8, Number(document.getElementById('outpaintCountSelect')?.value) || 1));
     const selectedModel = String(document.getElementById('outpaintModelSelect')?.value || '').trim();
     if(selectedModel) selectedSettings.model = selectedModel;
-    const plan = isApiLikeEngine(selectedSettings.engine)
-        ? outpaintModelPlan(selectedSettings.provider_id, selectedSettings.model)
-        : null;
-    if(!plan){
-        toast('请选择已声明扩图能力的模型');
+    const compatibility = isApiLikeEngine(selectedSettings.engine) && selectedSettings.provider_id
+        ? compatibleOutpaintModels(selectedSettings.provider_id)
+        : {models:[], loading:false};
+    const selected = compatibility.models.find(item => item.model === selectedModel);
+    if(!selected || compatibility.loading){
+        toast(tr('canvas.outpaintNoCompatibleModel'));
         return;
     }
+    const capability = selected.capability;
+    if(capability?.discovered) applyImageCapabilityDefaultsTo(selectedSettings, capability, imageCapabilityCacheKey(selectedSettings.provider_id, selectedModel));
+    if(selected.mode === 'adaptive') selectedSettings.ratio = outpaintAdaptiveRatioSetting(capability);
+    const resolution = String(document.getElementById('outpaintResolutionSelect')?.value || selectedSettings.resolution || '');
+    const resolutionField = videoCapabilityField(capability, 'resolution');
+    const resolutionOptions = videoCapabilityOptions(resolutionField).map(option => option.value);
+    if(resolutionOptions.length && resolutionOptions.includes(resolution)) selectedSettings.resolution = resolution;
     clampOutpaint();
     const scaleX = img.naturalWidth / Math.max(1, img.clientWidth);
     const scaleY = img.naturalHeight / Math.max(1, img.clientHeight);
     const outW = Math.max(img.naturalWidth, Math.round(cropState.w * scaleX));
     const outH = Math.max(img.naturalHeight, Math.round(cropState.h * scaleY));
-    if(plan.kind === 'adaptive'){
-        const resolution = String(document.getElementById('outpaintResolutionSelect')?.value || plan.resolutionField.default || plan.resolutions[0]?.value || '');
-        if(!plan.resolutions.some(option => option.value === resolution)){
-            toast('请选择模型支持的分辨率');
-            return;
-        }
-        selectedSettings.resolution = resolution;
-        selectedSettings.ratio = imageRatioSettingValue(plan.adaptiveValue);
-        selectedSettings.customRatio = '';
-        selectedSettings.outpaintAdaptiveAspectRatio = plan.adaptiveValue;
-        selectedSettings.outpaintAdaptiveSize = outpaintAdaptiveSizeForFrame(resolution, outW, outH);
-        delete selectedSettings.outpaintExplicitSize;
-    } else {
-        selectedSettings.resolution = '';
-        selectedSettings.ratio = '';
-        selectedSettings.outpaintExplicitSize = `${outW}x${outH}`;
-        delete selectedSettings.outpaintAdaptiveSize;
-        delete selectedSettings.outpaintAdaptiveAspectRatio;
-    }
+    const sourceX = Math.round(cropState.x * scaleX);
+    const sourceY = Math.round(cropState.y * scaleY);
+    applyOutpaintFrameToImageSettings(selectedSettings, capability, {width:outW, height:outH});
     const canvasEl = document.createElement('canvas');
     canvasEl.width = outW;
     canvasEl.height = outH;
     const ctx = canvasEl.getContext('2d');
-    ctx.clearRect(0, 0, outW, outH);
-    ctx.drawImage(img, Math.round(cropState.x * scaleX), Math.round(cropState.y * scaleY), img.naturalWidth, img.naturalHeight);
+    ctx.fillStyle = outpaintFillColor;
+    ctx.fillRect(0, 0, outW, outH);
+    ctx.drawImage(img, sourceX, sourceY, img.naturalWidth, img.naturalHeight);
     const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
     const base = safeExportFileName((image.name || 'image').replace(/\.[^.]+$/, ''), 'image');
     if(runBtn) runBtn.disabled = true;
@@ -15120,27 +15134,33 @@ async function runImageOutpaint(){
         if(!file) throw new Error('扩图参考图上传失败');
         pushUndo();
         const rect = nodeRect(node);
-        const source = createImageNodeAt({x:rect.x + rect.width + 210, y:rect.y + rect.height / 2}, [{
-            url:file.url, name:file.name, kind:'image', natural_w:outW, natural_h:outH, role:'outpaint_source'
-        }], {skipUndo:true, select:false});
-        source.title = '扩图参考';
-        const output = createImageGenerationNode({x:source.x + nodeRect(source).width + 220, y:source.y + 118}, {skipUndo:true, select:true});
+        const output = createImageGenerationNode(
+            {x:rect.x + rect.width + 260, y:rect.y + rect.height / 2},
+            {skipUndo:true, select:true, deferRender:true, deferSave:true}
+        );
         output.title = '扩图生成';
-        const inheritedPrompt = String(node.promptDraftText || node.runPrompt || '').trim();
-        const outpaintPrompt = inheritedPrompt || '自然延展画面，补全透明扩展区域，保持原图主体、构图、风格和光照一致。';
+        const colorName = outpaintFillColorName();
+        const outpaintPrompt = `在${colorName}色区域自然延展原有场景；保持主体位置、透视、光照与边缘衔接一致；不要修改原图中已有内容。`;
         output.promptDraftText = outpaintPrompt;
         output.promptDraftHtml = escapeHtml(outpaintPrompt);
         output.promptDraftTouched = true;
         output.runSettings = {...cloneSmartSettings(selectedSettings), apiKind:'image'};
-        connectInputNode(source.id, output.id);
+        output.manualInputRefs = [{url:file.url, name:file.name, kind:'image', imageIndex:0, role:'outpaint_source'}];
+        // 仅保留浮窗布局的可追溯信息；真正的请求参数仍完全由标准图片节点生成。
+        output.outpaintFrame = {
+            width:outW, height:outH, sourceX, sourceY,
+            sourceWidth:img.naturalWidth, sourceHeight:img.naturalHeight,
+            fillColor:outpaintFillColor
+        };
         selectedId = output.id;
         selectedIds = [];
-        selectedImage = {nodeId:source.id, index:0};
+        selectedImage = {nodeId:'', index:-1};
         outpaintRunSettings = null;
-        closeImageEditor();
+        // 扩图只预填标准图片节点；接下来完全复用手工图片生成的运行链路。
         render();
         updateComposer();
         scheduleSave();
+        closeImageEditor();
         await runGeneration();
     } catch(error) {
         toast((error?.message || '扩图运行失败').slice(0, 180));
@@ -16125,8 +16145,6 @@ async function handleSmartImageDropPayload(payload, targetId='', opts={}){
     }
 }
 function sizeForRun(sourceSettings=settings){
-    if(sourceSettings?.outpaintExplicitSize) return String(sourceSettings.outpaintExplicitSize);
-    if(sourceSettings?.outpaintAdaptiveSize) return String(sourceSettings.outpaintAdaptiveSize);
     const fallbackResolution = sourceSettings.engine === 'api' && isGptImageAutoSizeModel(sourceSettings.model)
         ? defaultSmartApiResolution(sourceSettings.model)
         : '1k';
@@ -18158,7 +18176,6 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     const previousSettings = cloneSmartSettings(settings);
     const runSettings = smartLoopRoundSettings({...cloneSmartSettings(settings), ...cloneSmartSettings(smartSettingsForNode(requestNode) || {})}, ctx);
     settings = runSettings;
-    const outpaintSize = validOutpaintSize(requestNode);
     const selfRefs = sourceNode?.type === 'smart-loop' ? [] : selfReferenceImagesForNode(sourceNode, false, ctx).filter(img => img?.url);
     const sourceRefs = (selfRefs.length ? selfRefs : defaultReferenceImagesFor(requestNode, false, ctx)).filter(img => img?.url);
     const refsForRequest = sourceRefs.length
@@ -18213,7 +18230,6 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     try {
         const result = await generateUrlsForCurrentSettings(outputNode, prompt, request.refs || [], runSettings);
         if(!result.urls?.length) throw new Error(result.kind === 'video' ? tr('smart.errNoOutVideos') : tr('smart.errNoOutImages'));
-        if(outpaintSize) delete requestNode.outpaintSize;
         addSmartGenerationLog({run:{...runLog, kind:result.kind || logKind}, outputs:result.urls, runMs:nowMs() - runLogStart});
         const ext = result.kind === 'video' ? 'mp4' : result.kind === 'audio' ? 'mp3' : result.kind === 'text' ? 'txt' : 'png';
         const additions = result.urls.map((item, i) => {
@@ -18680,9 +18696,6 @@ async function runGeneration(){
         toast(tr('smart.toastNeedPrompt'));
         return;
     }
-    const outpaintSize = node?.outpaintSize && Number(node.outpaintSize.width) > 0 && Number(node.outpaintSize.height) > 0
-        ? {width:Math.round(Number(node.outpaintSize.width)), height:Math.round(Number(node.outpaintSize.height))}
-        : null;
     const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs);
     const logKind = isApiLikeEngine(settings.engine) && settings.apiKind === 'video' ? 'video' : 'image';
     const runLog = smartRunSnapshot(node, prompt, refs, logKind);
@@ -18771,6 +18784,7 @@ async function runGeneration(){
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
             const submittedTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
             const existingTaskIds = new Set(smartPendingTasks(pendingNode).map(task => task.taskId));
+            delete pendingNode.submitting;
             pendingNode.pendingTasks = [...smartPendingTasks(pendingNode), ...submittedTasks.filter(task => !existingTaskIds.has(task.taskId))];
             pendingNode.pending = pendingNode.pendingTasks.length;
             if(!pendingNode.runStartedAt) pendingNode.runStartedAt = nowMs();
@@ -18790,14 +18804,12 @@ async function runGeneration(){
                 return;
             }
             if(!(pendingNode.images || []).length) throw new Error(tr('smart.errNoOutImages'));
-            if(outpaintSize) delete node.outpaintSize;
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
             scheduleSave();
             return;
         }
         if(!outImages.length) throw new Error(tr('smart.errNoOutImages'));
-        if(outpaintSize) delete node.outpaintSize;
         finalizePendingNode(pendingNode, outImages, pendingMeta);
         if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
         addSmartGenerationLog({run:runLog, outputs:outImages, runMs:nowMs() - runLogStart});
@@ -18806,6 +18818,7 @@ async function runGeneration(){
         scheduleSave();
     } catch(e) {
         if(!serverTasksSubmitted) settings = previousSettings;
+        pendingNode.lastRunError = e?.message || String(e || tr('smart.errRunFailed'));
         if(handleJimengPendingSignal(pendingNode, e)){
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             delete pendingNode._runMetaTargetId;
@@ -18937,15 +18950,13 @@ async function runApiGeneration(prompt, refs, runSettings=settings){
     const runningHub = isRunningHubVideoProvider(runSettings.provider_id);
     // 所有 API 平台从同一份能力缓存读取比例、尺寸和显式宽高；RunningHub
     // 只在扩展参数序列化时保留其上游 schema 的专有通道。
-    const aspectRatio = String(runSettings.outpaintAdaptiveAspectRatio || '').trim() || imageAspectValueForRun(runSettings);
+    const aspectRatio = imageAspectValueForRun(runSettings);
     const capability = imageModelCapabilityCache.get(imageCapabilityCacheKey(runSettings.provider_id, runSettings.model)) || null;
     const hasDimensions = Boolean(videoCapabilityField(capability, 'width') || videoCapabilityField(capability, 'height'));
-    const dimensionSize = hasDimensions && !runSettings.resolution && !runSettings.outpaintExplicitSize && runSettings.imageCapabilityWidth && runSettings.imageCapabilityHeight
+    const dimensionSize = hasDimensions && !runSettings.resolution && runSettings.imageCapabilityWidth && runSettings.imageCapabilityHeight
         ? `${Math.round(Number(runSettings.imageCapabilityWidth))}x${Math.round(Number(runSettings.imageCapabilityHeight))}`
         : '';
-    const requestSize = runSettings.outpaintExplicitSize
-        || runSettings.outpaintAdaptiveSize
-        || runSettings.imageCapabilitySize
+    const requestSize = runSettings.imageCapabilitySize
         || dimensionSize
         || sizeForRun(runSettings);
     const payload = {
@@ -18958,17 +18969,32 @@ async function runApiGeneration(prompt, refs, runSettings=settings){
         quality:runSettings.quality || 'auto',
         n:1,
         reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX),
-        model_params:{
-            ...(runningHub && runSettings.imageModelParams && typeof runSettings.imageModelParams === 'object' ? runSettings.imageModelParams : {}),
-            ...(runSettings.outpaintAdaptiveAspectRatio ? {__force_outpaint_adaptive_aspect:true} : {}),
-            ...(runSettings.outpaintExplicitSize ? {__preserve_outpaint_dimensions:true} : {})
-        }
+        model_params:runningHub && runSettings.imageModelParams && typeof runSettings.imageModelParams === 'object' ? runSettings.imageModelParams : {}
     };
-    const tasks = await Promise.all(Array.from({length:count}, () => fetch('/api/canvas-image-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
-        if(!r.ok) throw new Error(await r.text());
-        return r.json();
-    })));
+    const tasks = await Promise.all(Array.from({length:count}, () => submitCanvasImageTask(payload)));
     return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+}
+const SMART_IMAGE_SUBMIT_TIMEOUT_MS = 20000;
+async function submitCanvasImageTask(payload){
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SMART_IMAGE_SUBMIT_TIMEOUT_MS);
+    try {
+        const response = await fetch('/api/canvas-image-tasks', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload),
+            signal:controller.signal
+        });
+        if(!response.ok) throw new Error(await smartResponseErrorMessage(response, tr('smart.errRunFailed')));
+        const task = await response.json();
+        if(!task?.task_id) throw new Error(tr('smart.errTaskSubmitNoId'));
+        return task;
+    } catch(error) {
+        if(error?.name === 'AbortError') throw new Error(tr('smart.errTaskSubmitTimeout'));
+        throw error;
+    } finally {
+        clearTimeout(timeout);
+    }
 }
 async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     const ref = selectedRunningHubRef(runSettings);
@@ -21291,6 +21317,12 @@ document.querySelectorAll('[data-image-edit-mode]').forEach(btn => {
     btn.addEventListener('click', event => {
         event.stopPropagation();
         setImageEditMode(btn.dataset.imageEditMode || 'crop', true);
+    });
+});
+document.querySelectorAll('[data-outpaint-color]').forEach(button => {
+    button.addEventListener('click', event => {
+        event.stopPropagation();
+        setOutpaintFillColor(button.dataset.outpaintColor || '#ffffff');
     });
 });
 document.getElementById('outpaintCountSelect')?.addEventListener('change', event => {

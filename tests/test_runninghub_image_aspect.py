@@ -7,14 +7,19 @@ import main
 
 
 class RunningHubImageAspectTests(unittest.TestCase):
-    def test_explicit_outpaint_dimensions_are_not_snapped(self):
+    def test_image_request_dimensions_follow_standard_dimension_mode(self):
         self.assertEqual(main.snap_size_to_multiple("1234x2345", 16), "1248x2352")
         payload = main.OnlineImageRequest(
-            prompt="outpaint",
+            prompt="image",
             size="1234x2345",
-            model_params={"__preserve_outpaint_dimensions": True},
         )
-        self.assertEqual(main.online_image_request_size(payload), "1234x2345")
+        self.assertEqual(main.online_image_request_size(payload), "1248x2352")
+        custom_dimension_payload = main.OnlineImageRequest(
+            prompt="image",
+            size="2047x1711",
+            resolution="__custom_dimensions__",
+        )
+        self.assertEqual(main.online_image_request_size(custom_dimension_payload), "2048x1712")
 
     def test_empty_optional_aspect_is_omitted_for_source_adaptation(self):
         params = [{
@@ -43,20 +48,18 @@ class RunningHubImageAspectTests(unittest.TestCase):
 
         self.assertEqual(body["aspectRatio"], "2:3")
 
-    def test_optional_adaptive_aspect_is_preserved_for_outpaint(self):
-        params = [{
-            "fieldKey": "aspectRatio",
-            "required": False,
-            "options": [{"value": "source"}, {"value": "1:1"}],
-        }]
-        body = {"prompt": "outpaint"}
+    def test_internal_control_keys_are_not_serialized_as_model_params(self):
+        params = [{"fieldKey": "seed", "type": "INT"}]
 
-        skipped = main.runninghub_apply_image_aspect(
-            body, params, "source", "1536x1024", preserve_adaptive=True,
+        result = main.runninghub_image_model_params(
+            params,
+            {
+                "__internal_control": True,
+                "seed": "42",
+            },
         )
-        main.runninghub_apply_schema_defaults(body, params, skip_keys=skipped)
 
-        self.assertEqual(body["aspectRatio"], "source")
+        self.assertEqual(result, {"seed": 42})
 
     def test_required_aspect_uses_size_fallback(self):
         params = [{
