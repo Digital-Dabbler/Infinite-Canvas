@@ -635,10 +635,16 @@ body.smart-node-resize .smart-node-floating-menu,
 .generation-result-nav:hover { background:rgba(15,23,42,.86); }
 .generation-result-nav.prev { left:8px; }.generation-result-nav.next { right:8px; }
 .generation-result-nav svg { width:16px; height:16px; }
-.generation-result-strip { width:100%; display:flex; align-items:center; gap:7px; overflow-x:auto; padding:2px 1px 4px; box-sizing:border-box; scrollbar-width:thin; }
-.generation-result-thumb { position:relative; flex:0 0 38px; width:38px; height:38px; padding:2px; border:1px solid var(--line); border-radius:9px; overflow:hidden; background:var(--soft); opacity:.7; }
+.generation-result-strip { width:100%; display:flex; flex-direction:row; flex-wrap:nowrap; align-items:center; gap:7px; overflow-x:auto; padding:2px 1px 4px; box-sizing:border-box; scrollbar-width:thin; }
+.generation-result-thumb-pair { flex:0 0 38px; width:38px; display:flex; flex-direction:column; gap:5px; }
+.generation-result-thumb { position:relative; display:block; flex:0 0 38px; width:38px; min-width:38px; height:38px; padding:2px; border:1px solid var(--line); border-radius:9px; overflow:hidden; background:var(--soft); opacity:.7; }
 .generation-result-thumb.active { border-color:var(--strong); box-shadow:0 0 0 2px color-mix(in srgb, var(--strong) 22%, transparent); opacity:1; }
+.generation-result-thumb .media-thumb { width:100%; height:100%; }
 .generation-result-thumb img,.generation-result-thumb video { width:100%; height:100%; max-height:none; object-fit:cover; border-radius:6px; }
+.generation-result-tail-frame { width:38px; height:28px; padding:0; overflow:hidden; border:1px solid rgba(148,163,184,.42); border-radius:7px; background:var(--soft); opacity:.92; cursor:pointer; }
+.generation-result-tail-frame:hover,.generation-result-tail-frame.active { border-color:var(--strong); box-shadow:0 0 0 2px color-mix(in srgb, var(--strong) 18%, transparent); opacity:1; }
+.generation-result-tail-frame:focus-visible { outline:2px solid var(--strong); outline-offset:2px; }
+.generation-result-tail-frame .media-thumb,.generation-result-tail-frame img { display:block; width:100%; height:100%; object-fit:cover; }
 .image-edit-mode { display:none !important; }
 @media (max-width: 760px){
     .image-action-toolbar { max-width:calc(100vw - 28px); }

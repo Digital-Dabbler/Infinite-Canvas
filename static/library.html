@@ -16,10 +16,10 @@
             } catch(e) {}
         })();
     </script>
-    <script src="/static/vendor/js/lucide.js?v=2026.07.29.1785819149"></script>
-    <script src="/static/js/theme.js?v=2026.07.29.1785819149"></script>
-    <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1785819149">
-    <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.1786416506">
+    <script src="/static/vendor/js/lucide.js?v=2026.07.29.1783969806"></script>
+    <script src="/static/js/theme.js?v=2026.07.29.1783969806"></script>
+    <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1783969806">
+    <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.1786292093">
     <style>
         html, body { height: 100%; margin: 0; overflow: hidden; background: var(--panel); }
         .library-standalone-bar {
@@ -62,10 +62,15 @@
             width: calc(100vw - 128px);
             height: calc(100vh - 120px);
         }
+        .library-standalone-bar { display: none; }
+        .library-standalone-bar[hidden] { display: none !important; }
+        .library-standalone .library-modal { height: calc(100vh - 128px); }
+        html.library-direct .library-standalone-bar { display: flex; }
+        html.library-direct .library-standalone .library-modal { height: calc(100vh - 120px); }
     </style>
 </head>
 <body class="library-standalone">
-    <div class="library-standalone-bar">
+    <div class="library-standalone-bar" id="libraryStandaloneBar">
         <button class="library-standalone-back" type="button" id="libraryBackBtn">
             <i data-lucide="arrow-left"></i><span>返回工作台</span>
         </button>
@@ -107,10 +112,14 @@
         </div>
     </div>
 
-    <script src="/static/js/i18n.js?v=2026.07.29.1786416506"></script>
-    <script src="/static/js/library-shared.js?v=2026.07.29.1786416506"></script>
-    <script src="/static/js/asset-library.js?v=2026.07.29.1786416506"></script>
+    <script src="/static/js/i18n.js?v=2026.07.29.1786550167"></script>
+    <script src="/static/js/library-shared.js?v=2026.07.29.1786289963"></script>
+    <script src="/static/js/asset-library.js?v=2026.07.29.1786291936"></script>
     <script>
+        if(window.self === window.top) {
+            document.documentElement.classList.add('library-direct');
+            document.getElementById('libraryStandaloneBar').removeAttribute('hidden');
+        }
         document.getElementById('libraryBackBtn').addEventListener('click', () => {
             try {
                 parent.postMessage({type:'studio:close-panel'}, location.origin);

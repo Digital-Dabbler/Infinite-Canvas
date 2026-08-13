@@ -2136,6 +2136,9 @@ function copyMediaSizeFields(source, target={}){
     });
     const sourceUrl = source.source_url || source.sourceUrl || source.original_url || source.originalUrl || '';
     if(sourceUrl) target.source_url = sourceUrl;
+    ['role','last_frame_for','lastFrameFor'].forEach(key => {
+        if(source[key]) target[key] = source[key];
+    });
     return target;
 }
 function singleImageLayout(image, node, scale){
@@ -2423,12 +2426,14 @@ function imageLayout(images, scale=1, node=null){
     }
     const count = (images || []).length;
     if(isSmartGenerationNode(node) && count){
-        const index = Math.max(0, Math.min(count - 1, Number(node.activeImageIndex) || 0));
+        const requestedIndex = Number(node.activeImageIndex) || 0;
+        const index = Math.max(0, Math.min(count - 1, requestedIndex));
         const mediaLayout = singleImageLayout(images[index], node, mediaNodeDefaultScale(node));
+        const hasReturnedTailFrame = images.some(isReturnedVideoLastFrame);
         return {
             ...mediaLayout,
             mediaHeight:mediaLayout.height,
-            height:mediaLayout.height + (count > 1 ? 52 : 0)
+            height:mediaLayout.height + (hasReturnedTailFrame ? 84 : count > 1 ? 52 : 0)
         };
     }
     const s = isSmartImageNode(node) ? mediaNodeDefaultScale(node) : (Number.isFinite(scale) && scale > 0 ? scale : 1);
@@ -6596,7 +6601,10 @@ function markSmartNodeComplete(node, meta=null){
     if(!node) return node;
     const keepHidden = node.runTimerHidden === true;
     clearSmartNodeBusyState(node);
-    if(meta?.preserveError !== true) delete node.lastRunError;
+    // A completed result supersedes any earlier failed attempt.  Keeping the
+    // old error here made it appear as though the currently visible result had
+    // failed after a save/reload normalization pass.
+    delete node.lastRunError;
     node.runFinishedAt = Number(node.runFinishedAt || 0) || nowMs();
     if(!node.runStartedAt) node.runStartedAt = meta?.createdAt || node.runFinishedAt;
     node.runElapsedMs = Math.max(0, Number(node.runFinishedAt || nowMs()) - Number(node.runStartedAt || node.runFinishedAt || nowMs()));
@@ -7732,7 +7740,7 @@ async function loadCanvas(){
                 n.pending = pendingTasks.length;
                 n.running = false;
             } else if(smartNodeHasDisplayResult(n)){
-                markSmartNodeComplete(n, {hideTimer:true, preserveError:Boolean(n.lastRunError)});
+                markSmartNodeComplete(n, {hideTimer:true});
             } else if(n.pending || n.queued){
                 clearSmartNodeBusyState(n);
             }
@@ -8654,6 +8662,9 @@ function resultMediaUrls(result){
                 const url = value.url || value.path || value.src || value.uri;
                 if(url){
                     const item = {url, kind:value.kind || value.type || value.mediaKind || '', name:value.name || value.filename || ''};
+                    ['role','last_frame_for','lastFrameFor'].forEach(key => {
+                        if(value[key]) item[key] = value[key];
+                    });
                     const sourceUrl = value.source_url || value.sourceUrl || value.original_url || value.originalUrl || '';
                     if(sourceUrl) item.source_url = sourceUrl;
                     ['natural_w','natural_h','width','height','w','h','layout_w','layout_h'].forEach(key => {
@@ -8707,10 +8718,15 @@ function isRemoteVideoReferenceUrl(url){
 function audioRefsOnly(refs){
     return (refs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'audio');
 }
-function thumbMediaHtml(img){
+function thumbMediaHtml(img, options={}){
     if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="media-thumb file-thumb" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="${escapeAttr(mediaKindForItem(img))}"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i><span>${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</span></div>`;
     if(isAudioMediaItem(img)) return `<div class="media-thumb audio-thumb" data-media-url="${escapeAttr(img.url || '')}" data-media-kind="audio"><i data-lucide="file-audio"></i><span>${escapeHtml(img.name || 'Audio')}</span></div>`;
-    if(isVideoMediaItem(img)) return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
+    if(isVideoMediaItem(img)){
+        // Generation-result thumbnails select a result; they are not separate
+        // video players.  Only the main result keeps the playable control.
+        if(options.selectOnly) return `<div class="media-thumb video-thumb">${smartVideoPreviewHtml(img, 512, 'alt=""')}</div>`;
+        return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
+    }
     return smartPreviewImgHtml(img, 512, 'draggable="false"');
 }
 function imageResolutionLabel(img){
@@ -9535,7 +9551,9 @@ function nodeBodyHtml(node, layout){
         return `<div class="loading-skeleton generation-pending-grid" style="grid-template-columns:repeat(${cols}, 1fr);grid-template-rows:repeat(${rows}, 1fr);width:${layout.width}px;height:${layout.height}px;padding:8px;box-sizing:border-box">${Array.from({length:count}).map(() => generationPendingCellHtml({compact:true})).join('')}</div>`;
     }
     if(isSmartGenerationNode(node) && imgs.length){
-        const activeIndex = Math.max(0, Math.min(imgs.length - 1, Number(node.activeImageIndex) || 0));
+        const resultIndexes = generationResultIndexes(imgs);
+        const requestedIndex = Number(node.activeImageIndex) || 0;
+        const activeIndex = Math.max(0, Math.min(imgs.length - 1, requestedIndex));
         node.activeImageIndex = activeIndex;
         const active = imgs[activeIndex];
         const isAppending = Boolean(node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length);
@@ -9547,9 +9565,9 @@ function nodeBodyHtml(node, layout){
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer layer-${index + 1}"></span>`).join('')}
                 <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${mediaHeight}px">${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}</div>
                 ${isAppending ? generationPendingCellHtml({overlay:true, queued:Boolean(node.queued && !node.pending)}) : (node.lastRunError ? failedGenerationOverlayHtml(node) : '')}
-                ${imgs.length > 1 ? `<div class="generation-result-count">${imgs.length} 张</div><button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
+                ${resultIndexes.length > 1 ? `<div class="generation-result-count">${resultIndexes.length} 个结果</div><button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
             </div>
-            ${imgs.length > 1 ? `<div class="generation-result-strip">${thumbHtml}</div>` : ''}
+            ${resultIndexes.length > 1 || imgs.some(isReturnedVideoLastFrame) ? `<div class="generation-result-strip">${thumbHtml}</div>` : ''}
         </div>`;
     }
     if(imgs.length > 1){
@@ -11221,16 +11239,10 @@ function handlePortDrop(drag, e){
     if(hit?.closest?.('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
         discardPendingUndo(); render(); return;
     }
-    const p = screenToWorld(e);
-    undoSuppressed = true;
-    const newNode = createImageGenerationNode(p, {select:true, skipUndo:true});
-    undoSuppressed = false;
-    const fromId = drag.fromPort === 'out' ? drag.fromId : newNode.id;
-    const toId = drag.fromPort === 'out' ? newNode.id : drag.fromId;
-    connectInputNode(fromId, toId);
-    commitPendingUndo();
+    // 拖线落在空白处时与点击端口保持同一套功能候选，不再默认创建图片生成节点。
+    discardPendingUndo();
     render();
-    scheduleSave();
+    requestAnimationFrame(() => openPortConnectMenu(drag.fromId, drag.fromPort, e, {worldPoint:screenToWorld(e)}));
 }
 function pickMediaForSmartNode(nodeId='', options={}){
     const input = document.createElement('input');
@@ -11249,12 +11261,22 @@ function pickMediaForSmartNode(nodeId='', options={}){
     document.body.appendChild(input);
     input.click();
 }
+function isReturnedVideoLastFrame(item){
+    return String(item?.role || '').toLowerCase() === 'last_frame';
+}
+function generationResultIndexes(images=[]){
+    const indexes = images.map((_, index) => index).filter(index => !isReturnedVideoLastFrame(images[index]));
+    return indexes.length ? indexes : images.map((_, index) => index);
+}
 function generationResultThumbnailHtml(images, activeIndex){
-    const thumbStart = Math.max(0, Math.min(activeIndex - 4, images.length - 9));
-    const thumbEnd = Math.min(images.length, thumbStart + 9);
-    return images.slice(thumbStart, thumbEnd).map((img, offset) => {
-        const index = thumbStart + offset;
-        return `<button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img)}</button>`;
+    const indexes = generationResultIndexes(images);
+    const activePosition = Math.max(0, indexes.indexOf(activeIndex));
+    const start = Math.max(0, Math.min(activePosition - 4, indexes.length - 9));
+    return indexes.slice(start, start + 9).map(index => {
+        const img = images[index];
+        const tailFrameIndex = images.findIndex(item => isReturnedVideoLastFrame(item) && (item.last_frame_for === img.url || item.lastFrameFor === img.url));
+        const tailFrame = tailFrameIndex >= 0 ? images[tailFrameIndex] : null;
+        return `<div class="generation-result-thumb-pair"><button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img, {selectOnly:true})}</button>${tailFrame ? `<button type="button" class="generation-result-tail-frame ${activeIndex === tailFrameIndex ? 'active' : ''}" data-generation-tail-frame-index="${tailFrameIndex}" title="返回尾帧：${escapeAttr(tailFrame.name || '')}">${thumbMediaHtml(tailFrame, {selectOnly:true})}</button>` : ''}</div>`;
     }).join('');
 }
 function bindGenerationResultControls(nodeEl, nodeId){
@@ -11268,6 +11290,36 @@ function bindGenerationResultControls(nodeEl, nodeId){
             selectGenerationResult(nodeId, Number(btn.dataset.generationResultIndex) || 0);
         });
     });
+    nodeEl.querySelectorAll('[data-generation-tail-frame-index]').forEach(btn => {
+        if(btn.dataset.generationResultBound === '1') return;
+        btn.dataset.generationResultBound = '1';
+        const selectTailFrame = () => {
+            const node = nodes.find(item => item.id === nodeId);
+            const index = Number(btn.dataset.generationTailFrameIndex);
+            if(!node || !isReturnedVideoLastFrame(node.images?.[index])) return null;
+            selectedId = nodeId;
+            selectedIds = [];
+            selectedImage = {nodeId, index};
+            syncSelectionUi();
+            return index;
+        };
+        btn.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            if(Date.now() < suppressImageClickUntil) return;
+            const index = selectTailFrame();
+            if(index != null) selectGenerationResult(nodeId, index);
+        });
+        btn.addEventListener('dblclick', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            const index = selectTailFrame();
+            if(index == null) return;
+            suppressImageClickUntil = Date.now() + 260;
+            openImagePreviewSmart(nodeId, index);
+        });
+    });
     nodeEl.querySelectorAll('[data-generation-result-nav]').forEach(btn => {
         if(btn.dataset.generationResultBound === '1') return;
         btn.dataset.generationResultBound = '1';
@@ -11275,16 +11327,17 @@ function bindGenerationResultControls(nodeEl, nodeId){
             e.preventDefault();
             e.stopPropagation();
             const node = nodes.find(item => item.id === nodeId);
-            const count = node?.images?.length || 0;
-            if(!isSmartGenerationNode(node) || count < 2) return;
-            selectGenerationResult(nodeId, (Math.max(0, Number(node.activeImageIndex) || 0) + Number(btn.dataset.generationResultNav || 0) + count) % count);
+            const indexes = generationResultIndexes(node?.images || []);
+            if(!isSmartGenerationNode(node) || indexes.length < 2) return;
+            const current = Math.max(0, indexes.indexOf(Number(node.activeImageIndex) || 0));
+            selectGenerationResult(nodeId, indexes[(current + Number(btn.dataset.generationResultNav || 0) + indexes.length) % indexes.length]);
         });
     });
 }
 function selectGenerationResult(nodeId, requestedIndex){
     const node = nodes.find(item => item.id === nodeId);
     const count = node?.images?.length || 0;
-    if(!isSmartGenerationNode(node) || count < 1) return;
+    if(!isSmartGenerationNode(node) || !count) return;
     const activeIndex = Math.max(0, Math.min(count - 1, Number(requestedIndex) || 0));
     node.activeImageIndex = activeIndex;
     selectedId = nodeId;
@@ -11775,36 +11828,74 @@ function smartConnectionNodeIcon(node){
     if(node?.type === 'smart-loop') return 'repeat-2';
     return 'circle';
 }
+const PORT_CONNECTION_FUNCTION_TYPES = [
+    'smart-image-upload',
+    'smart-image-generation',
+    'smart-video-generation',
+    'smart-prompt',
+    'smart-loop'
+];
+function smartConnectionFunctionLabel(type){
+    if(type === 'smart-image-upload') return '上传';
+    if(type === 'smart-image-generation') return '图片生成';
+    if(type === 'smart-video-generation') return '视频生成';
+    if(type === 'smart-prompt') return tr('smart.textNode');
+    if(type === 'smart-loop') return '循环';
+    return '节点';
+}
+function smartConnectionFunctionIcon(type){
+    return smartConnectionNodeIcon({type});
+}
+function portConnectionCandidateTypes(node, port){
+    if(!node) return [];
+    return PORT_CONNECTION_FUNCTION_TYPES.filter(type => {
+        // 上传是素材入口，不应作为下游处理功能；其余类型按既有连线规则判断方向兼容性。
+        if(port === 'out' && type === 'smart-image-upload') return false;
+        const candidate = {id:`port-connect-${type}`, type, images:[]};
+        return port === 'in'
+            ? canAutoConnectDraggedNode(candidate, node)
+            : canAutoConnectDraggedNode(node, candidate);
+    });
+}
+function portConnectionPoint(node, port, fallbackPoint){
+    if(Number.isFinite(fallbackPoint?.x) && Number.isFinite(fallbackPoint?.y)) return fallbackPoint;
+    const rect = nodeRect(node);
+    return {
+        x:port === 'out' ? rect.x + rect.width + 180 : rect.x - 180,
+        y:rect.y + rect.height / 2
+    };
+}
+function createPortConnectionNode(type, point){
+    if(type === 'smart-image-upload') return createImageNodeAt(point, [], {skipUndo:true, select:true});
+    if(type === 'smart-image-generation') return createImageGenerationNode(point, {skipUndo:true, select:true});
+    if(type === 'smart-video-generation') return createVideoGenerationNode(point, {skipUndo:true, select:true});
+    if(type === 'smart-prompt') return createPromptNode(Math.round(point.x - 158), Math.round(point.y - 97), {skipUndo:true, select:true});
+    if(type === 'smart-loop') return createLoopNode(Math.round(point.x - 135), Math.round(point.y - 95), {skipUndo:true, select:true});
+    return null;
+}
 function closePortConnectMenu(){
     if(!portConnectMenu) return;
     portConnectMenu.hidden = true;
     portConnectMenu.innerHTML = '';
     delete portConnectMenu.dataset.nodeId;
     delete portConnectMenu.dataset.port;
+    delete portConnectMenu.dataset.worldX;
+    delete portConnectMenu.dataset.worldY;
 }
-function portConnectionCandidates(node, port){
-    if(!node) return [];
-    const existing = new Set((canvas?.connections || []).filter(conn => {
-        const isInput = (conn.kind || 'flow') === 'input';
-        return isInput && (port === 'in' ? conn.to === node.id : conn.from === node.id);
-    }).map(conn => port === 'in' ? conn.from : conn.to));
-    return nodes.filter(candidate => {
-        if(!candidate || existing.has(candidate.id) || isCanvasOrganizerNode(candidate)) return false;
-        return port === 'in'
-            ? canAutoConnectDraggedNode(candidate, node)
-            : canAutoConnectDraggedNode(node, candidate);
-    });
-}
-function openPortConnectMenu(nodeId, port, event){
+function openPortConnectMenu(nodeId, port, event, options={}){
     if(!portConnectMenu) return;
     const node = nodes.find(item => item.id === nodeId);
     if(!node) return;
-    const candidates = portConnectionCandidates(node, port);
+    const candidates = portConnectionCandidateTypes(node, port);
+    // 点击端口使用节点相邻位置；只有拖线落在空白处才使用释放点。
+    const point = portConnectionPoint(node, port, options.worldPoint);
     const direction = port === 'in' ? '选择上游节点' : '选择下游节点';
     portConnectMenu.dataset.nodeId = node.id;
     portConnectMenu.dataset.port = port;
+    portConnectMenu.dataset.worldX = String(point.x);
+    portConnectMenu.dataset.worldY = String(point.y);
     portConnectMenu.innerHTML = `<div class="port-connect-title">${direction}</div>${candidates.length
-        ? candidates.map(candidate => `<button type="button" class="port-connect-option" data-port-connect-node="${escapeAttr(candidate.id)}"><i data-lucide="${smartConnectionNodeIcon(candidate)}"></i><span class="port-connect-option-copy"><span class="port-connect-option-name">${escapeHtml(candidate.title || smartConnectionNodeLabel(candidate))}</span><span class="port-connect-option-type">${escapeHtml(smartConnectionNodeLabel(candidate))}</span></span></button>`).join('')
+        ? candidates.map(type => `<button type="button" class="port-connect-option" data-port-connect-type="${escapeAttr(type)}"><i data-lucide="${smartConnectionFunctionIcon(type)}"></i><span class="port-connect-option-copy"><span class="port-connect-option-name">${escapeHtml(smartConnectionFunctionLabel(type))}</span></span></button>`).join('')
         : '<div class="port-connect-empty">没有可连接的节点</div>'}`;
     portConnectMenu.hidden = false;
     const width = portConnectMenu.offsetWidth || 268;
@@ -11820,13 +11911,19 @@ function openPortConnectMenu(nodeId, port, event){
 portConnectMenu?.addEventListener('mousedown', event => event.stopPropagation());
 portConnectMenu?.addEventListener('click', event => {
     event.stopPropagation();
-    const choice = event.target.closest('[data-port-connect-node]');
+    const choice = event.target.closest('[data-port-connect-type]');
     if(!choice) return;
     const node = nodes.find(item => item.id === portConnectMenu.dataset.nodeId);
-    const candidate = nodes.find(item => item.id === choice.dataset.portConnectNode);
     const port = portConnectMenu.dataset.port;
-    if(!node || !candidate || !port){ closePortConnectMenu(); return; }
+    const type = choice.dataset.portConnectType;
+    if(!node || !type || !port){ closePortConnectMenu(); return; }
     pushUndo();
+    const point = portConnectionPoint(node, port, {
+        x:Number(portConnectMenu.dataset.worldX),
+        y:Number(portConnectMenu.dataset.worldY)
+    });
+    const candidate = createPortConnectionNode(type, point);
+    if(!candidate){ undoStack.pop(); closePortConnectMenu(); return; }
     const connected = port === 'in'
         ? connectInputNode(candidate.id, node.id)
         : connectInputNode(node.id, candidate.id);
@@ -18459,6 +18556,9 @@ async function runGeneration(){
     if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, selectOutput:true, refs});
     undoSuppressed = false;
     const pendingNode = branchNode || node;
+    // Starting a new attempt must immediately retire the message from the
+    // previous one, including on a node that already has earlier results.
+    delete pendingNode.lastRunError;
     const previousPendingCount = appendingToPendingNode ? smartPendingTasks(pendingNode).length : 0;
     if(extracted) pendingNode._runMetaTargetId = extracted.id;
     if(!branchNode){

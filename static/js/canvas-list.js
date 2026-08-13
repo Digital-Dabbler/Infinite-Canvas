@@ -380,8 +380,7 @@ async function deleteProject(pid){
 function updateBoardHeader(){
     const p = currentProject();
     boardProjectName.textContent = p ? p.name : L('默认项目','Default');
-    const live = canvasesInProject(currentProjectId).filter(c => (c.kind || 'classic') === 'smart');
-    boardCanvasCount.textContent = String(live.length);
+    boardCanvasCount.textContent = String(canvasesInProject(currentProjectId).length);
 }
 
 function renderBoard(){
@@ -392,8 +391,7 @@ function renderBoard(){
         const pinned = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
         return pinned || Number(b.updated_at || b.created_at || 0) - Number(a.updated_at || a.created_at || 0);
     });
-    const smartItems = sorted(filtered.filter(c => (c.kind || 'classic') === 'smart'));
-    const legacyItems = sorted(filtered.filter(c => (c.kind || 'classic') !== 'smart'));
+    const smartItems = sorted(filtered);
     boardWorld.innerHTML = '';
     const grid = document.createElement('section');
     grid.className = 'ws-cover-grid';
@@ -405,17 +403,7 @@ function renderBoard(){
     grid.appendChild(create);
     smartItems.forEach(c => grid.appendChild(buildCard(c)));
     boardWorld.appendChild(grid);
-    if(legacyItems.length){
-        const legacy = document.createElement('details');
-        legacy.className = 'ws-legacy-section';
-        legacy.innerHTML = `<summary><span><i data-lucide="archive"></i>${L('旧版画布（只读）','Legacy canvases (read-only)')}</span><b>${legacyItems.length}</b><i data-lucide="chevron-down"></i></summary>`;
-        const legacyGrid = document.createElement('div');
-        legacyGrid.className = 'ws-cover-grid ws-legacy-grid';
-        legacyItems.forEach(c => legacyGrid.appendChild(buildCard(c, true)));
-        legacy.appendChild(legacyGrid);
-        boardWorld.appendChild(legacy);
-    }
-    if(query && !smartItems.length && !legacyItems.length){
+    if(query && !smartItems.length){
         const empty = document.createElement('div');
         empty.className = 'ws-filter-empty';
         empty.innerHTML = `<i data-lucide="search-x"></i><span>${L('没有匹配的画布','No matching canvases')}</span>`;
@@ -426,25 +414,22 @@ function renderBoard(){
     refreshIcons();
 }
 
-function buildCard(c, readOnly=false){
-    const isSmart = (c.kind || 'classic') === 'smart';
+function buildCard(c){
     const card = document.createElement('article');
     card.className = 'ws-card'
         + (String(c.color || '').trim() ? ' cc-marked' : '')
-        + (clipboardCanvasId === c.id ? ' cut' : '')
-        + (readOnly ? ' is-readonly' : '');
+        + (clipboardCanvasId === c.id ? ' cut' : '');
     card.dataset.canvasId = c.id;
     const cover = String(c.cover_url || '').trim();
     card.innerHTML = `
         <div class="ws-card-cover ${cover ? 'has-cover' : ''}">
             ${cover ? `<img src="${escapeAttr(cover)}" alt="" loading="lazy">` : ''}
-            <div class="ws-card-cover-empty"><i data-lucide="${isSmart ? 'wand-sparkles' : 'archive'}"></i></div>
+            <div class="ws-card-cover-empty"><i data-lucide="wand-sparkles"></i></div>
             ${c.pinned ? `<span class="ws-card-pin"><i data-lucide="pin"></i></span>` : ''}
-            ${readOnly ? `<span class="ws-readonly-badge"><i data-lucide="lock"></i>${L('只读','Read only')}</span>` : ''}
         </div>
         <div class="ws-card-body">
             <div class="ws-card-title">${escapeHtml(c.title)}</div>
-            ${readOnly ? '' : `<button class="ws-card-menu" type="button" title="${L('更多','More')}" aria-label="${L('更多','More')}" aria-haspopup="menu" aria-expanded="false"><i data-lucide="more-horizontal"></i></button>`}
+            <button class="ws-card-menu" type="button" title="${L('更多','More')}" aria-label="${L('更多','More')}" aria-haspopup="menu" aria-expanded="false"><i data-lucide="more-horizontal"></i></button>
             <div class="ws-card-meta">
                 <span class="ws-card-nodes">${(c.node_count != null ? c.node_count : 0)} ${L('节点','nodes')}</span>
                 <span class="ws-card-meta-dot"></span>
@@ -460,7 +445,7 @@ function buildCard(c, readOnly=false){
         </div>`;
     card.onclick = e => {
         if(e.target.closest('button,.ws-card-delete-confirm,.ws-card-title-input')) return;
-        openCanvas(c, readOnly);
+        openCanvas(c);
     };
     const menuBtn = card.querySelector('.ws-card-menu');
     if(menuBtn){
@@ -516,16 +501,14 @@ function attachCardDrag(card, c){
     });
 }
 
-function openCanvas(c, readOnly=false){
+function openCanvas(c){
     const enc = encodeURIComponent(c.id);
     const project = encodeURIComponent(c.project || currentProjectId || 'default');
     // 同一套画布代码复用同一版本缓存；只有相关 HTML/JS/CSS/词条变化时，
     // 服务端给出的版本才会改变，从而避免更新后继续复用旧页面。
     const cacheVersion = encodeURIComponent(canvasStaticVersion || 'current');
     rememberProjectId(c.project || currentProjectId || 'default');
-    window.location.href = (c.kind === 'smart')
-        ? `/static/smart-canvas.html?id=${enc}&project=${project}&v=${cacheVersion}`
-        : `/static/canvas.html?id=${enc}&project=${project}&readonly=${readOnly ? '1' : '0'}&v=${cacheVersion}`;
+    window.location.href = `/static/smart-canvas.html?id=${enc}&project=${project}&v=${cacheVersion}`;
 }
 
 /* ===== Card create flow ===== */
@@ -1011,15 +994,14 @@ function renderTrash(){
         return;
     }
     deletedCanvases.forEach(c => {
-        const isSmart = (c.kind || 'classic') === 'smart';
         const projName = (projects.find(p => p.id === (c.project || 'default')) || {}).name || L('默认项目','Default');
         const card = document.createElement('div');
         card.className = 'ws-trash-card';
         card.dataset.canvasId = c.id;
         card.innerHTML = `
             <div class="ws-card-top">
-                <span class="ws-card-icon">${renderCanvasIcon(isSmart && /[^\x00-\x7F]/.test(c.icon || '') ? 'sparkles' : c.icon, 17)}</span>
-                <span class="ws-card-kind ${isSmart ? 'smart' : 'classic'}">${isSmart ? L('智能','Smart') : L('普通','Classic')}</span>
+                <span class="ws-card-icon">${renderCanvasIcon(/[^\x00-\x7F]/.test(c.icon || '') ? 'sparkles' : c.icon, 17)}</span>
+                <span class="ws-card-kind smart">${L('智能','Smart')}</span>
             </div>
             <div class="ws-card-title">${escapeHtml(c.title)}</div>
             <div class="ws-card-meta"><span class="ws-card-nodes">${escapeHtml(projName)}</span><span class="ws-card-meta-dot"></span><span class="ws-card-time">${formatCanvasTime(c.deleted_at)}</span></div>

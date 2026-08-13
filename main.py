@@ -2658,15 +2658,6 @@ def finish_scoped_usage_event(scope, status="succeeded", error="", raw_usage=Non
             scope.get("usage_event_id"), status, error, raw_usage
         )
 
-def is_classic_canvas_page_request(request: Request) -> bool:
-    referer = str(request.headers.get("referer") or "")
-    if not referer:
-        return False
-    try:
-        return urllib.parse.urlparse(referer).path.rstrip("/") == "/static/canvas.html"
-    except Exception:
-        return False
-
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
@@ -2678,16 +2669,6 @@ async def auth_middleware(request: Request, call_next):
             return RedirectResponse("/static/login.html", status_code=307)
         return JSONResponse(status_code=401, content={"detail": "请先登录后再使用本系统。"})
     request.state.user = user
-    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and is_classic_canvas_page_request(request):
-        allowed_archive_action = (
-            path == "/api/canvases"
-            and request.headers.get("x-canvas-archive-action") == "create-smart"
-        )
-        if not allowed_archive_action:
-            return JSONResponse(
-                status_code=410,
-                content={"detail": "普通画布已冻结，仅支持查看。请前往智能画布继续创作。"},
-            )
     if path.startswith("/api/admin/") or (
         request.method in {"POST", "PUT", "PATCH", "DELETE"} and any(path.startswith(prefix) for prefix in ADMIN_WRITE_PREFIXES)
     ):
@@ -3002,16 +2983,12 @@ def parse_prompt_template_markdown(text: str):
 
 def canvas_static_version():
     paths = [
-        os.path.join(STATIC_DIR, "canvas.html"),
         os.path.join(STATIC_DIR, "smart-canvas.html"),
-        os.path.join(STATIC_DIR, "css", "canvas.css"),
         os.path.join(STATIC_DIR, "css", "smart-canvas.css"),
-        os.path.join(STATIC_DIR, "js", "canvas.js"),
         os.path.join(STATIC_DIR, "js", "smart-canvas.js"),
         os.path.join(STATIC_DIR, "js", "i18n.js"),
         os.path.join(STATIC_DIR, "js", "i18n-core.js"),
         os.path.join(STATIC_DIR, "js", "i18n", "common.js"),
-        os.path.join(STATIC_DIR, "js", "i18n", "canvas.js"),
         os.path.join(STATIC_DIR, "js", "i18n", "smart-canvas.js"),
     ]
     revisions = []
@@ -6034,9 +6011,6 @@ def save_canvas(canvas):
         with open(canvas_path(canvas["id"]), 'w', encoding='utf-8') as f:
             json.dump(canvas, f, ensure_ascii=False, indent=2)
 
-def normalize_canvas_kind(kind="classic"):
-    return "smart" if str(kind or "").strip().lower() == "smart" else "classic"
-
 # ===== 项目（按项目分类管理画布）=====
 PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
 DEFAULT_PROJECT_ID = "default"
@@ -6101,14 +6075,13 @@ def list_projects():
         out.append(rec)
     return out
 
-def new_canvas(title="未命名画布", icon="layers", kind="classic", project=None, board_x=None, board_y=None):
+def new_canvas(title="智能画布", icon="sparkles", project=None, board_x=None, board_y=None):
     timestamp = now_ms()
-    canvas_kind = normalize_canvas_kind(kind)
     canvas = {
         "id": uuid.uuid4().hex,
-        "title": (title or ("智能画布" if canvas_kind == "smart" else "未命名画布"))[:80],
-        "icon": (icon or ("sparkles" if canvas_kind == "smart" else "🧩"))[:32],
-        "kind": canvas_kind,
+        "title": (title or "智能画布")[:80],
+        "icon": (icon or "sparkles")[:32],
+        "kind": "smart",
         "owner": "",
         "color": "",
         "pinned": False,
@@ -6139,6 +6112,8 @@ def load_canvas(canvas_id):
         canvas = json.load(f)
     if canvas.get("deleted_at"):
         raise HTTPException(status_code=404, detail="画布已在回收站")
+    if str(canvas.get("kind") or "").strip().lower() != "smart":
+        raise HTTPException(status_code=404, detail="画布不存在")
     return canvas
 
 def load_canvas_any(canvas_id):
@@ -6281,7 +6256,7 @@ def canvas_record(data):
         "id": data.get("id"),
         "title": data.get("title", "未命名画布"),
         "icon": data.get("icon", "🧩"),
-        "kind": normalize_canvas_kind(data.get("kind")),
+        "kind": "smart",
         "owner": str(data.get("owner") or "")[:40],
         "color": normalize_canvas_color(data.get("color")),
         "pinned": bool(data.get("pinned") or False),
@@ -6326,6 +6301,8 @@ def iter_canvas_records(include_deleted=False):
             with open(path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
         except Exception:
+            continue
+        if str(data.get("kind") or "").strip().lower() != "smart":
             continue
         is_deleted = bool(data.get("deleted_at"))
         if include_deleted != is_deleted:
@@ -6436,7 +6413,7 @@ def extract_canvas_assets(canvas):
                 "kind": kind,
                 "canvas_id": canvas_id,
                 "canvas_title": record.get("title") or "未命名画布",
-                "canvas_kind": record.get("kind") or "classic",
+                "canvas_kind": "smart",
                 "canvas_icon": record.get("icon") or "layers",
                 "canvas_owner": record.get("owner") or "",
                 "canvas_color": record.get("color") or "",
@@ -6468,8 +6445,8 @@ def load_canvas_asset_index_cache():
 def canvas_assets_index():
     canvases = []
     items = []
-    canvas_counts = {"all": 0, "smart": 0, "classic": 0}
-    item_counts = {"all": 0, "smart": 0, "classic": 0}
+    canvas_counts = {"all": 0, "smart": 0}
+    item_counts = {"all": 0, "smart": 0}
     cleanup_expired_canvas_trash()
     with CANVAS_ASSET_INDEX_LOCK:
         cache = load_canvas_asset_index_cache()
@@ -6498,6 +6475,9 @@ def canvas_assets_index():
                     with CANVAS_LOCK:
                         with open(path, "r", encoding="utf-8") as f:
                             canvas = json.load(f)
+                    if str(canvas.get("kind") or "").strip().lower() != "smart":
+                        changed = True
+                        continue
                     deleted = bool(canvas.get("deleted_at"))
                     record = canvas_record(canvas)
                     canvas_items = [] if deleted else extract_canvas_assets(canvas)
@@ -6519,7 +6499,7 @@ def canvas_assets_index():
             canvas_items = entry.get("items") or []
             canvases.append(record)
             items.extend(canvas_items)
-            kind = record.get("kind") or "classic"
+            kind = "smart"
             canvas_counts["all"] += 1
             canvas_counts[kind] = canvas_counts.get(kind, 0) + 1
             item_counts["all"] += len(canvas_items)
@@ -6536,7 +6516,6 @@ def canvas_assets_index():
     categories = [
         {"id": "all", "name": "全部画布", "count": item_counts.get("all", 0), "canvas_count": canvas_counts.get("all", 0)},
         {"id": "smart", "name": "智能画布", "count": item_counts.get("smart", 0), "canvas_count": canvas_counts.get("smart", 0)},
-        {"id": "classic", "name": "普通画布", "count": item_counts.get("classic", 0), "canvas_count": canvas_counts.get("classic", 0)},
     ]
     return {"categories": categories, "canvases": canvases, "items": items}
 
@@ -14586,6 +14565,8 @@ def runninghub_schema_is_multiple(field):
                 return True
         except (TypeError, ValueError):
             continue
+    # Older registry records omit cardinality for the conventional plural
+    # media names. Keep that compatibility fallback scoped to media only.
     media_type = str(field.get("type") or "").strip().upper()
     key = runninghub_schema_key(field).lower()
     if media_type in {"IMAGE", "VIDEO", "AUDIO"} and key.endswith(("urls", "images", "videos", "audios")):
@@ -14593,9 +14574,16 @@ def runninghub_schema_is_multiple(field):
     return False
 
 def runninghub_schema_value_shape(field):
-    """Return the JSON transport shape for a standard-model field."""
+    """The JSON transport shape for a standard-model field.
+
+    The upstream registry uses LIST for both enums (which remain scalar) and
+    the Seedance conversionSlots collection. Prefer future explicit registry
+    metadata, then apply the documented field contract as a narrow fallback.
+    """
     field = field if isinstance(field, dict) else {}
-    explicit = str(field.get("jsonType") or field.get("valueShape") or field.get("valueType") or "").strip().lower()
+    explicit = str(
+        field.get("jsonType") or field.get("valueShape") or field.get("valueType") or ""
+    ).strip().lower()
     if explicit in {"array", "list", "array<string>", "string[]"}:
         return "array"
     if runninghub_schema_key(field).lower() in RUNNINGHUB_ARRAY_FIELD_KEYS:
@@ -14613,7 +14601,9 @@ def runninghub_schema_encode_value(field, value):
             value = [value]
         return [item for item in value if item is not None and str(item) != ""]
     if ftype == "BOOLEAN":
-        return value.strip().lower() in {"true", "1", "yes", "on"} if isinstance(value, str) else bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+        return bool(value)
     if ftype in {"INT", "INTEGER"}:
         try:
             return int(value)
@@ -15719,7 +15709,22 @@ async def generate_runninghub_video(payload, provider):
         if not urls:
             raise HTTPException(status_code=502, detail=f"RunningHub 视频生成成功但没有返回视频：{result}")
         local_urls = [await save_remote_video_to_output(url, prefix="rh_video_") for url in urls]
-        return {"videos": local_urls, "task_id": task_id, "raw": result}
+        local_tail_frames = [
+            await save_ai_image_to_output({"type": "url", "value": url}, prefix="rh_last_frame_")
+            for url in video_last_frame_urls(result)
+        ]
+        media_items = [
+            {"url": url, "kind": "video", "name": f"output-{index + 1}.mp4"}
+            for index, url in enumerate(local_urls) if url
+        ]
+        for index, url in enumerate(local_tail_frames):
+            if not url:
+                continue
+            item = {"url": url, "kind": "image", "role": "last_frame", "name": f"last-frame-{index + 1}.png"}
+            if local_urls:
+                item["last_frame_for"] = local_urls[min(index, len(local_urls) - 1)]
+            media_items.append(item)
+        return {"videos": local_urls, "media_items": media_items, "task_id": task_id, "raw": result}
 
 async def generate_ai_image(prompt, size, quality, model, reference_images=None, provider_id="comfly", aspect_ratio="", resolution="", api_profile_id="", model_params=None):
     provider = get_api_provider(provider_id, api_profile_id)
@@ -18968,6 +18973,8 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
         detail = getattr(exc, "detail", None) or str(exc)
         status_code = getattr(exc, "status_code", 500)
         upstream_task_id = getattr(exc, "upstream_task_id", "") or extract_task_id_from_text(detail)
+        # Upstreams can return a task ID together with a terminal rejection (for
+        # example, a safety block). Only a local polling timeout is queryable.
         recovery_available = bool(upstream_task_id) and int(status_code or 0) in {408, 504}
         if upstream_task_id:
             try:
@@ -19186,7 +19193,7 @@ VIDEO_URL_KEYS = (
     "url", "video_url", "videoUrl", "mp4_url", "mp4Url",
     "output", "output_url", "outputUrl", "download_url", "downloadUrl",
     "video", "src", "uri", "preview_url", "previewUrl", "path",
-    "last_frame_url", "lastFrameUrl", "remixed_from_video_id",
+    "remixed_from_video_id",
 )
 
 def _collect_video_url(value, urls):
@@ -19201,6 +19208,10 @@ def _collect_video_url(value, urls):
             _collect_video_url(item, urls)
         return
     if isinstance(value, dict):
+        # A returned tail frame is an image, never a video download.
+        result_name = str(value.get("name") or value.get("key") or "").replace("_", "").lower()
+        if "lastframe" in result_name or "tailframe" in result_name:
+            return
         for key in ("videos", "outputs", "data", "detail", "result", "results", "content"):
             if key in value:
                 _collect_video_url(value.get(key), urls)
@@ -19252,6 +19263,9 @@ def video_output_urls(raw):
     for node in candidates:
         if not isinstance(node, dict):
             continue
+        node_name = str(node.get("name") or node.get("key") or "").replace("_", "").lower()
+        if "lastframe" in node_name or "tailframe" in node_name:
+            continue
         for key in ("videos", "outputs", "results", "content"):
             value = node.get(key)
             if value:
@@ -19264,6 +19278,31 @@ def video_output_urls(raw):
         if isinstance(url, str) and url and url not in deduped:
             deduped.append(url)
     return deduped
+
+def video_last_frame_urls(raw):
+    """Extract provider-returned tail frames separately from video outputs."""
+    found, visited = [], set()
+
+    def visit(value):
+        if isinstance(value, list):
+            for item in value:
+                visit(item)
+            return
+        if not isinstance(value, dict) or id(value) in visited:
+            return
+        visited.add(id(value))
+        name = str(value.get("name") or value.get("key") or "").replace("_", "").lower()
+        direct = value.get("last_frame_url") or value.get("lastFrameUrl")
+        if direct:
+            _collect_video_url(direct, found)
+        if "lastframe" in name or "tailframe" in name:
+            _collect_video_url(value.get("url") or value.get("path") or value.get("src") or value.get("uri"), found)
+        for key in ("data", "detail", "result", "results", "outputs", "content", "items", "media_items"):
+            if key in value:
+                visit(value.get(key))
+
+    visit(raw)
+    return list(dict.fromkeys(url for url in found if isinstance(url, str) and url))
 
 def video_api_root(provider):
     base_url = (provider.get("base_url") or AI_BASE_URL).rstrip("/")
@@ -20937,7 +20976,7 @@ def photoshop_bridge_image_value(value):
     return {}
 
 def photoshop_bridge_source(canvas, node_id, image_index):
-    if normalize_canvas_kind(canvas.get("kind")) != "smart":
+    if str(canvas.get("kind") or "").strip().lower() != "smart":
         raise HTTPException(status_code=400, detail="Photoshop 桥接当前仅支持智能画布。")
     node = next((item for item in (canvas.get("nodes") or []) if str(item.get("id") or "") == node_id), None)
     if not node:
@@ -21011,7 +21050,7 @@ def latest_photoshop_bridge_installer(source_dir=None):
     return {"path": path, "name": name, "size": size}
 
 def create_photoshop_upload_node(canvas, item, export_scope="document", selection_bounds=None):
-    if normalize_canvas_kind(canvas.get("kind")) != "smart":
+    if str(canvas.get("kind") or "").strip().lower() != "smart":
         raise HTTPException(status_code=400, detail="Photoshop 只能发送到智能画布。")
     nodes = canvas.get("nodes") if isinstance(canvas.get("nodes"), list) else []
     content_nodes = [
@@ -21227,8 +21266,6 @@ async def import_photoshop_image_to_canvas(canvas_id: str, payload: PhotoshopBri
     def import_image():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
-            if normalize_canvas_kind(canvas.get("kind")) != "smart":
-                raise HTTPException(status_code=410, detail="普通画布已冻结，仅支持查看。")
             node = create_photoshop_upload_node(
                 canvas,
                 item,
@@ -21373,9 +21410,9 @@ async def trashed_canvases():
 
 @app.post("/api/canvases")
 async def create_canvas(payload: CanvasCreateRequest):
-    if normalize_canvas_kind(payload.kind) != "smart":
-        raise HTTPException(status_code=410, detail="普通画布已停止新建，请使用智能画布。")
-    return {"canvas": new_canvas(payload.title, payload.icon, payload.kind, payload.project, payload.board_x, payload.board_y)}
+    if str(payload.kind or "smart").strip().lower() != "smart":
+        raise HTTPException(status_code=400, detail="当前仅支持智能画布。")
+    return {"canvas": new_canvas(payload.title, payload.icon, payload.project, payload.board_x, payload.board_y)}
 
 @app.get("/api/canvases/{canvas_id}/meta")
 async def get_canvas_meta(canvas_id: str):
@@ -21385,7 +21422,7 @@ async def get_canvas_meta(canvas_id: str):
         "updated_at": canvas.get("updated_at", 0),
         "title": canvas.get("title", "未命名画布"),
         "icon": canvas.get("icon", "layers"),
-        "kind": normalize_canvas_kind(canvas.get("kind")),
+        "kind": "smart",
     }
 
 @app.post("/api/canvases/{canvas_id}/meta")
@@ -23958,8 +23995,6 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     def mutate_canvas():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
-            if normalize_canvas_kind(canvas.get("kind")) != "smart":
-                raise HTTPException(status_code=410, detail="普通画布已冻结，仅支持查看。")
             current_updated_at = int(canvas.get("updated_at") or 0)
             if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
                 raise HTTPException(status_code=409, detail={
@@ -23969,7 +24004,7 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
                 })
             canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
             canvas["icon"] = (payload.icon or canvas.get("icon") or "layers")[:32]
-            canvas["kind"] = normalize_canvas_kind(canvas.get("kind"))
+            canvas["kind"] = "smart"
             old_deleted = {str(item or "").strip() for item in (canvas.get("deleted_node_ids") or []) if str(item or "").strip()}
             new_deleted = {str(item or "").strip() for item in (payload.deleted_node_ids or []) if str(item or "").strip()}
             deleted_node_ids = list(old_deleted | new_deleted)[-2000:]
@@ -23984,10 +24019,7 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
                 if str((conn or {}).get("from") or "").strip() not in deleted_set
                 and str((conn or {}).get("to") or "").strip() not in deleted_set
             ]
-            if canvas["kind"] == "smart":
-                canvas["viewport"] = payload.viewport
-            else:
-                canvas["viewport"] = canvas.get("viewport") or {"x": 0, "y": 0, "scale": 1}
+            canvas["viewport"] = payload.viewport
             canvas["logs"] = payload.logs[-500:]
             canvas["settings"] = payload.settings or {}
             ensure_canvas_cover(canvas)

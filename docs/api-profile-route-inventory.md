@@ -209,7 +209,6 @@
 | 客户端 | 重点文件/页面 | 需要验证 | 状态 |
 | --- | --- | --- | --- |
 | API 设置页 | `static/api-settings.html`、`static/js/api-settings.js` | 管理员切换组、复制配置、保存不串组 | 待确认 |
-| 普通画布 | `static/canvas.html`、`static/js/canvas.js` | 平台列表只来自当前组；旧 localStorage兼容 | 待确认 |
 | 智能画布 | `static/smart-canvas.html`、`static/js/smart-canvas.js` | 节点设置、级联、循环、异步恢复 | 待确认 |
 | 在线生图 | `static/online.html` | 平台、模型和任务查询 | 待确认 |
 | GPT 对话 | `static/gpt-chat.html` | 聊天、流式、图片模式 | 待确认 |

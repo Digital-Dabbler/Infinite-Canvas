@@ -284,9 +284,9 @@ class PhotoshopBridgeTests(unittest.TestCase):
         self.assertGreater(node["x"], canvas["nodes"][0]["x"])
         self.assertEqual(len(canvas["nodes"]), 2)
 
-    def test_source_rejects_classic_canvas(self):
+    def test_source_rejects_non_smart_canvas(self):
         with self.assertRaises(main.HTTPException) as raised:
-            main.photoshop_bridge_source({"kind": "classic", "nodes": []}, "node-1", 0)
+            main.photoshop_bridge_source({"kind": "unsupported", "nodes": []}, "node-1", 0)
         self.assertEqual(raised.exception.status_code, 400)
 
     def test_return_item_reads_image_dimensions(self):
@@ -327,10 +327,10 @@ class PhotoshopBridgeTests(unittest.TestCase):
         self.assertGreater(second["x"], first["x"])
         self.assertEqual(len(canvas["nodes"]), 3)
 
-    def test_free_import_rejects_classic_canvas(self):
+    def test_free_import_rejects_non_smart_canvas(self):
         with self.assertRaises(main.HTTPException) as raised:
             main.create_photoshop_upload_node(
-                {"id": "classic", "kind": "classic", "nodes": []},
+                {"id": "unsupported", "kind": "unsupported", "nodes": []},
                 {"url": "/assets/input/edited.png", "name": "edited.png", "kind": "image"},
             )
         self.assertEqual(raised.exception.status_code, 400)

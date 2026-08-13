@@ -176,7 +176,6 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .ws-card-icon.icon-has-color { background:var(--accent); color:#fff; border-color:transparent; }
 .ws-card-kind { display:inline-flex; align-items:center; justify-content:center; flex:0 1 auto; min-width:0; max-width:calc(100% - 36px); height:22px; padding:0 8px; border-radius:6px; font-size:10px; font-weight:850; letter-spacing:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .ws-card-kind.smart { background:#f5f3ff; color:#6d28d9; border:1px solid #ddd6fe; }
-.ws-card-kind.classic { background:var(--soft-2); color:var(--muted); border:1px solid var(--line); }
 .ws-card-menu { margin-left:auto; width:28px; height:28px; flex:0 0 28px; border-radius:8px; display:flex; align-items:center; justify-content:center; color:var(--faint); background:transparent; border:1px solid transparent; cursor:pointer; opacity:.58; transition:all .14s var(--ease); }
 .ws-card:hover .ws-card-menu,.ws-card:focus-within .ws-card-menu { opacity:1; }
 .ws-card-menu:hover { color:var(--text); background:var(--soft); border-color:var(--line); }
@@ -491,20 +490,12 @@ html[data-studio-scale="off"].studio-scale-managed .workspace { height:100vh !im
 .ws-card-meta { margin:8px 0 0; padding:0; border:0; background:transparent; color:var(--ws-muted); }
 .ws-card-menu { position:absolute; right:10px; top:10px; opacity:.78; color:var(--ws-muted); }
 .ws-card-menu:hover { color:var(--ws-text); background:var(--ws-layer-2); }
-.ws-card-pin,.ws-readonly-badge {
+.ws-card-pin {
     position:absolute; top:10px; display:inline-flex; align-items:center; gap:5px; height:25px; padding:0 8px;
     border-radius:999px; background:var(--ws-pin-bg); backdrop-filter:blur(8px); color:#f4f7fb; font-size:10px;
 }
 .ws-card-pin { right:10px; padding:0; width:25px; justify-content:center; color:var(--ws-brand); }
-.ws-readonly-badge { left:10px; }
-.ws-readonly-badge svg,.ws-card-pin svg { width:12px; height:12px; }
-.ws-legacy-section { margin-top:34px; border-top:1px solid var(--ws-line); padding-top:18px; }
-.ws-legacy-section > summary { display:flex; align-items:center; gap:10px; color:var(--ws-muted); cursor:pointer; list-style:none; font-size:13px; font-weight:700; }
-.ws-legacy-section > summary span { display:flex; align-items:center; gap:8px; }
-.ws-legacy-section > summary b { min-width:21px; height:21px; border-radius:999px; display:grid; place-items:center; background:var(--ws-layer); font-size:10px; }
-.ws-legacy-section > summary > svg { width:15px; height:15px; transition:transform .15s; }
-.ws-legacy-section[open] > summary > svg { transform:rotate(180deg); }
-.ws-legacy-grid { margin-top:16px; opacity:.84; }
+.ws-card-pin svg { width:12px; height:12px; }
 .ws-search-wrap { width:38px; height:38px; position:relative; transition:width .18s; }
 .ws-search-wrap .ws-icon-btn { position:absolute; right:0; z-index:2; }
 .ws-search-wrap input {

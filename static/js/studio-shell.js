@@ -12,6 +12,7 @@
     const languageAction = document.getElementById('languageAction');
     const languageCurrentMode = document.getElementById('languageCurrentMode');
     const languageOtherMode = document.getElementById('languageOtherMode');
+    const panelVersion = '2026.08.12-settings-navigation';
     let currentUser = null;
 
     function initials(user){
@@ -44,18 +45,34 @@
     function openPanel(name, push=true){
         const paths = { assets:'/static/library.html', 'api-settings':'/static/api-settings.html', admin:'/static/admin.html' };
         if(!paths[name]) return;
+        const replacingPanel = panel.classList.contains('open') || Boolean(new URLSearchParams(location.search).get('panel'));
         closeFloating();
         panelTitle.textContent = name === 'admin' ? '管理台' : name === 'assets' ? '资产库' : 'API 设置';
-        if(!panelFrame.src.endsWith(paths[name])) panelFrame.src = paths[name];
+        const frameSrc = `${paths[name]}?v=${panelVersion}`;
+        if(panelFrame.getAttribute('src') !== frameSrc) panelFrame.src = frameSrc;
         panel.dataset.name = name;
         panel.setAttribute('aria-hidden','false');
         panel.classList.add('open');
-        if(push) history.pushState({ panel:name },'',`/?panel=${encodeURIComponent(name)}`);
+        if(push){
+            const url = `/?panel=${encodeURIComponent(name)}`;
+            // A settings-page switch is one panel session, not a new back-stack entry.
+            if(replacingPanel) {
+                history.replaceState({ panel:name },'',url);
+            } else {
+                history.pushState({ panel:name },'',url);
+            }
+        }
     }
     function closePanel(push=true){
         panel.classList.remove('open');
         panel.setAttribute('aria-hidden','true');
-        if(push) history.pushState({},'', '/');
+        delete panel.dataset.name;
+        // Return to the workbench entry created before this panel. Pushing a new
+        // entry here leaves stale panels in history and reopens the wrong page.
+        if(push){
+            if(history.state?.panel) history.back();
+            else history.replaceState({},'', '/');
+        }
     }
     function showAccount(){
         closeFloating();
@@ -179,7 +196,7 @@
     });
     backdrop.onclick = closeFloating;
     document.getElementById('accountClose').onclick = closeFloating;
-    document.getElementById('panelClose').onclick = () => history.back();
+    document.getElementById('panelClose').onclick = () => closePanel();
     window.addEventListener('message', event => {
         if(event.origin !== location.origin) return;
         if(event.data?.type==='studio:toggle-settings') toggleSettings();
@@ -188,14 +205,24 @@
         if(event.data?.type==='studio:open-announcement') window.openSiteAnnouncement?.();
     });
     workbench.addEventListener('load', () => syncFramePreferences(workbench));
-    panelFrame.addEventListener('load', () => syncFramePreferences(panelFrame));
+    panelFrame.addEventListener('load', () => {
+        syncFramePreferences(panelFrame);
+        // The shell owns the return navigation while a page is embedded here.
+        // Enforce this from the parent as well, including older cached library pages.
+        if(panel.dataset.name === 'assets') {
+            try {
+                const libraryBar = panelFrame.contentDocument?.querySelector('.library-standalone-bar');
+                if(libraryBar) { libraryBar.hidden = true; libraryBar.style.display = 'none'; }
+            } catch(e) {}
+        }
+    });
     window.addEventListener('popstate', () => {
         const name = new URLSearchParams(location.search).get('panel');
         if(name) openPanel(name,false); else closePanel(false);
     });
     document.addEventListener('keydown', event => {
         if(event.key!=='Escape') return;
-        if(panel.classList.contains('open')) history.back(); else closeFloating();
+        if(panel.classList.contains('open')) closePanel(); else closeFloating();
     });
     const initialPanel = new URLSearchParams(location.search).get('panel');
     if(initialPanel) openPanel(initialPanel,false);
