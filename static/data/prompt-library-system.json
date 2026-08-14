@@ -69,7 +69,7 @@
     "suffix": "crisp silhouette, vivid controlled palette, polished key visual",
     "positive": "Japanese anime illustration, clean expressive linework, cel shading",
     "negative": "crisp silhouette, vivid controlled palette, polished key visual",
-    "cover_url": "/static/images/prompt-library/style_anime_cel.webp"
+    "cover_url": "/static/images/prompt-library/style_anime_cel.webp?v=20260814-2d-illustration"
   },
   {
     "id": "style_guofeng_ink",
@@ -81,7 +81,7 @@
     "suffix": "ornamental detail, balanced negative space, refined brushwork",
     "positive": "Chinese gongbi illustration, delicate ink outlines, silk texture, elegant traditional palette",
     "negative": "ornamental detail, balanced negative space, refined brushwork",
-    "cover_url": "/static/images/prompt-library/style_guofeng_ink.webp"
+    "cover_url": "/static/images/prompt-library/style_guofeng_ink.webp?v=20260814-2d-illustration"
   },
   {
     "id": "style_watercolor",
@@ -93,7 +93,7 @@
     "suffix": "gentle edges, warm handmade feeling, lyrical composition",
     "positive": "watercolor storybook illustration, soft pigment blooms, textured paper",
     "negative": "gentle edges, warm handmade feeling, lyrical composition",
-    "cover_url": "/static/images/prompt-library/style_watercolor.webp"
+    "cover_url": "/static/images/prompt-library/style_watercolor.webp?v=20260814-2d-illustration"
   },
   {
     "id": "style_american_comic",
@@ -105,7 +105,7 @@
     "suffix": "dynamic foreshortening, punchy contrast, graphic panel energy",
     "positive": "American comic book illustration, bold ink contours, halftone shading",
     "negative": "dynamic foreshortening, punchy contrast, graphic panel energy",
-    "cover_url": "/static/images/prompt-library/style_american_comic.webp"
+    "cover_url": "/static/images/prompt-library/style_american_comic.webp?v=20260814-2d-illustration"
   },
   {
     "id": "style_childrens_book",
@@ -117,7 +117,7 @@
     "suffix": "soft storytelling light, friendly shapes, cozy color harmony",
     "positive": "whimsical children's book illustration, hand-painted charm, magical environment",
     "negative": "soft storytelling light, friendly shapes, cozy color harmony",
-    "cover_url": "/static/images/prompt-library/style_childrens_book.webp"
+    "cover_url": "/static/images/prompt-library/style_childrens_book.webp?v=20260814-2d-illustration"
   },
   {
     "id": "style_ue5",
@@ -129,7 +129,7 @@
     "suffix": "high fidelity environment detail, realistic reflections, dramatic depth",
     "positive": "Unreal Engine 5 render, physically based materials, cinematic volumetric lighting",
     "negative": "high fidelity environment detail, realistic reflections, dramatic depth",
-    "cover_url": "/static/images/prompt-library/style_ue5.webp"
+    "cover_url": "/static/images/prompt-library/style_ue5.webp?v=20260814-3d-showcase"
   },
   {
     "id": "style_3d_animation",
@@ -141,7 +141,7 @@
     "suffix": "soft global illumination, playful proportions, polished animated-film finish",
     "positive": "stylized 3D animation, hand-painted textures, expressive character design",
     "negative": "soft global illumination, playful proportions, polished animated-film finish",
-    "cover_url": "/static/images/prompt-library/style_3d_animation.webp"
+    "cover_url": "/static/images/prompt-library/style_3d_animation.webp?v=20260814-3d-showcase"
   },
   {
     "id": "style_collectible",
@@ -153,7 +153,7 @@
     "suffix": "clean turntable presentation, subtle rim light, high-end toy photography",
     "positive": "premium collectible figure render, sculpted resin detail, product studio lighting",
     "negative": "clean turntable presentation, subtle rim light, high-end toy photography",
-    "cover_url": "/static/images/prompt-library/style_collectible.webp"
+    "cover_url": "/static/images/prompt-library/style_collectible.webp?v=20260814-3d-showcase"
   },
   {
     "id": "style_cyber_mecha",
@@ -165,7 +165,7 @@
     "suffix": "dramatic neon rim lighting, cinematic scale, high detail render",
     "positive": "sci-fi mecha CG, hard-surface design, intricate mechanical panels",
     "negative": "dramatic neon rim lighting, cinematic scale, high detail render",
-    "cover_url": "/static/images/prompt-library/style_cyber_mecha.webp"
+    "cover_url": "/static/images/prompt-library/style_cyber_mecha.webp?v=20260814-3d-showcase"
   },
   {
     "id": "style_3d_guochao",
@@ -177,7 +177,7 @@
     "suffix": "luxury red and gold accents, cinematic soft light, premium render",
     "positive": "3D Chinese new-wave aesthetic, ornate modern oriental design, glossy sculptural forms",
     "negative": "luxury red and gold accents, cinematic soft light, premium render",
-    "cover_url": "/static/images/prompt-library/style_3d_guochao.webp"
+    "cover_url": "/static/images/prompt-library/style_3d_guochao.webp?v=20260814-3d-showcase"
   },
   {
     "id": "style_low_poly",
@@ -189,7 +189,7 @@
     "suffix": "readable shapes, tasteful color blocking, crisp ambient shadows",
     "positive": "low-poly 3D scene, clean geometric forms, stylized lighting",
     "negative": "readable shapes, tasteful color blocking, crisp ambient shadows",
-    "cover_url": "/static/images/prompt-library/style_low_poly.webp"
+    "cover_url": "/static/images/prompt-library/style_low_poly.webp?v=20260814-3d-showcase"
   },
   {
     "id": "filter_kodak",
@@ -201,7 +201,7 @@
     "suffix": "subtle analog grain, nostalgic exposure roll-off",
     "positive": "Kodak film color palette, warm golden highlights, gentle cyan shadows",
     "negative": "subtle analog grain, nostalgic exposure roll-off",
-    "cover_url": "/static/images/prompt-library/filter_kodak.webp"
+    "cover_url": "/static/images/prompt-library/filter_kodak.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_fuji",
@@ -213,7 +213,7 @@
     "suffix": "soft contrast, fine grain, natural highlight retention",
     "positive": "Fuji film color palette, clean greens, airy cool shadows",
     "negative": "soft contrast, fine grain, natural highlight retention",
-    "cover_url": "/static/images/prompt-library/filter_fuji.webp"
+    "cover_url": "/static/images/prompt-library/filter_fuji.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_ilford",
@@ -225,7 +225,7 @@
     "suffix": "fine silver grain, deep blacks, luminous midtones",
     "positive": "Ilford black and white film look, rich monochrome tonal range",
     "negative": "fine silver grain, deep blacks, luminous midtones",
-    "cover_url": "/static/images/prompt-library/filter_ilford.webp"
+    "cover_url": "/static/images/prompt-library/filter_ilford.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_polaroid",
@@ -237,7 +237,7 @@
     "suffix": "matte finish, gentle vignette, imperfect analog charm",
     "positive": "Polaroid instant film aesthetic, faded warm colors, soft flash",
     "negative": "matte finish, gentle vignette, imperfect analog charm",
-    "cover_url": "/static/images/prompt-library/filter_polaroid.webp"
+    "cover_url": "/static/images/prompt-library/filter_polaroid.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_cinematic",
@@ -249,7 +249,7 @@
     "suffix": "subtle grain, rich shadows, theatrical contrast",
     "positive": "cinematic film emulation, controlled highlights, atmospheric color separation",
     "negative": "subtle grain, rich shadows, theatrical contrast",
-    "cover_url": "/static/images/prompt-library/filter_cinematic.webp"
+    "cover_url": "/static/images/prompt-library/filter_cinematic.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_hdr",
@@ -261,7 +261,7 @@
     "suffix": "clean clarity, balanced highlights, refined local contrast",
     "positive": "high dynamic range treatment, enhanced micro-contrast, detailed tonal separation",
     "negative": "clean clarity, balanced highlights, refined local contrast",
-    "cover_url": "/static/images/prompt-library/filter_hdr.webp"
+    "cover_url": "/static/images/prompt-library/filter_hdr.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_soft_glow",
@@ -273,7 +273,7 @@
     "suffix": "gentle skin smoothing, luminous atmosphere, elegant softness",
     "positive": "soft glow diffusion, dreamy highlight bloom, delicate haze",
     "negative": "gentle skin smoothing, luminous atmosphere, elegant softness",
-    "cover_url": "/static/images/prompt-library/filter_soft_glow.webp"
+    "cover_url": "/static/images/prompt-library/filter_soft_glow.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_grain",
@@ -285,7 +285,7 @@
     "suffix": "restrained contrast, tactile photographic finish",
     "positive": "fine analog film grain, organic texture, subtle exposure variation",
     "negative": "restrained contrast, tactile photographic finish",
-    "cover_url": "/static/images/prompt-library/filter_grain.webp"
+    "cover_url": "/static/images/prompt-library/filter_grain.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_cyberpunk",
@@ -297,7 +297,7 @@
     "suffix": "wet reflective surfaces, deep night contrast, futuristic glow",
     "positive": "cyberpunk neon color grade, electric cyan and magenta lighting",
     "negative": "wet reflective surfaces, deep night contrast, futuristic glow",
-    "cover_url": "/static/images/prompt-library/filter_cyberpunk.webp"
+    "cover_url": "/static/images/prompt-library/filter_cyberpunk.webp?v=20260814-filter-photography"
   },
   {
     "id": "filter_vintage",
@@ -309,7 +309,7 @@
     "suffix": "soft vignette, muted contrast, nostalgic atmosphere",
     "positive": "vintage color grading, faded pigments, warm aged paper tone",
     "negative": "soft vignette, muted contrast, nostalgic atmosphere",
-    "cover_url": "/static/images/prompt-library/filter_vintage.webp"
+    "cover_url": "/static/images/prompt-library/filter_vintage.webp?v=20260814-filter-photography"
   },
   {
     "id": "function_multicam",
@@ -321,7 +321,7 @@
     "suffix": "varied camera angles, cohesive lighting, clean 3x3 layout",
     "positive": "nine-panel multi-camera storyboard, same subject and consistent identity across shots",
     "negative": "varied camera angles, cohesive lighting, clean 3x3 layout",
-    "cover_url": "/static/images/prompt-library/function_multicam.webp"
+    "cover_url": "/static/images/prompt-library/function_multicam.webp?v=20260814-concept-board"
   },
   {
     "id": "function_lighting_fix",
@@ -333,7 +333,7 @@
     "suffix": "natural skin tones, dimensional shadows, professional color balance",
     "positive": "cinematic relighting, physically plausible key light and fill light, controlled contrast",
     "negative": "natural skin tones, dimensional shadows, professional color balance",
-    "cover_url": "/static/images/prompt-library/function_lighting_fix.webp"
+    "cover_url": "/static/images/prompt-library/function_lighting_fix.webp?v=20260814-concept-board"
   },
   {
     "id": "function_three_view",
@@ -345,7 +345,7 @@
     "suffix": "neutral background, full body, clean design reference layout",
     "positive": "character turnaround sheet, front view, side view, back view, consistent costume",
     "negative": "neutral background, full body, clean design reference layout",
-    "cover_url": "/static/images/prompt-library/function_three_view.webp"
+    "cover_url": "/static/images/prompt-library/function_three_view.webp?v=20260814-concept-board"
   },
   {
     "id": "function_four_view",
@@ -357,7 +357,7 @@
     "suffix": "plain background, readable silhouette, production-ready design sheet",
     "positive": "four-view character reference, front, side, back, three-quarter view, consistent proportions",
     "negative": "plain background, readable silhouette, production-ready design sheet",
-    "cover_url": "/static/images/prompt-library/function_four_view.webp"
+    "cover_url": "/static/images/prompt-library/function_four_view.webp?v=20260814-concept-board"
   },
   {
     "id": "function_character_sheet",
@@ -369,7 +369,7 @@
     "suffix": "clean concept art layout, consistent identity, readable annotations-free presentation",
     "positive": "character design sheet, expression studies, costume callouts, color swatches",
     "negative": "clean concept art layout, consistent identity, readable annotations-free presentation",
-    "cover_url": "/static/images/prompt-library/function_character_sheet.webp"
+    "cover_url": "/static/images/prompt-library/function_character_sheet.webp?v=20260814-concept-board"
   },
   {
     "id": "function_scene_sheet",
@@ -381,7 +381,7 @@
     "suffix": "cohesive worldbuilding, readable composition, production concept art",
     "positive": "environment concept design sheet, wide establishing view, detail callouts, mood exploration",
     "negative": "cohesive worldbuilding, readable composition, production concept art",
-    "cover_url": "/static/images/prompt-library/function_scene_sheet.webp"
+    "cover_url": "/static/images/prompt-library/function_scene_sheet.webp?v=20260814-concept-board"
   },
   {
     "id": "function_prop_sheet",
@@ -393,7 +393,7 @@
     "suffix": "clean presentation, consistent scale, production-ready concept design",
     "positive": "prop design sheet, orthographic views, material details, functional silhouette",
     "negative": "clean presentation, consistent scale, production-ready concept design",
-    "cover_url": "/static/images/prompt-library/function_prop_sheet.webp"
+    "cover_url": "/static/images/prompt-library/function_prop_sheet.webp?v=20260814-concept-board"
   },
   {
     "id": "other_composition",

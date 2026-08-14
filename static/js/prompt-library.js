@@ -142,11 +142,32 @@ const PromptLibrary = {
 
     detailHtml(item) {
         if (!item) return '';
-        const example = [item.prefix || item.positive, '用户提示词', item.suffix || item.negative].filter(Boolean).join('\n\n');
+        const prefix = item.prefix || item.positive || '';
+        const suffix = item.suffix || item.negative || '';
         const selected = this.activeTarget() && Array.isArray(this.activeTarget().promptPresets) && this.activeTarget().promptPresets.some(preset => preset.id === item.id);
-        const applyLabel = selected ? '取消应用' : '应用提示词';
+        const previewLabel = t('smart.promptPreview', '提示词预览');
+        const recipeLabel = t('smart.promptRecipe', '提示词配方');
+        const prefixLabel = t('smart.promptPrefix', '前缀');
+        const userPromptLabel = t('smart.promptUserInput', '用户提示词');
+        const suffixLabel = t('smart.promptSuffix', '后缀');
+        const copyLabel = t('smart.copyPromptRecipe', '复制组合');
+        const applyLabel = selected ? t('smart.unapplyPrompt', '取消应用') : t('smart.applyPrompt', '应用提示词');
         const applyIcon = selected ? 'x' : 'plus';
-        return `<section class="prompt-detail"><header class="prompt-preview-header"><span>提示词预览</span><button type="button" class="prompt-preview-close" data-pl-preview-close aria-label="关闭预览"><i data-lucide="x"></i></button></header><div class="prompt-detail-grid"><div class="prompt-detail-cover">${item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}">` : '<i data-lucide="sparkles"></i>'}</div><div><span class="prompt-detail-kicker">${LibraryUtils.escapeHtml(item.subcategory || item.category)}</span><h2>${LibraryUtils.escapeHtml(item.name)}</h2><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-detail-field"><b>前缀</b><pre>${LibraryUtils.escapeHtml(item.prefix || item.positive || '')}</pre></div><div class="prompt-detail-field"><b>组合示例</b><pre>${LibraryUtils.escapeHtml(example)}</pre></div><div class="prompt-detail-field"><b>后缀</b><pre>${LibraryUtils.escapeHtml(item.suffix || item.negative || '')}</pre></div><div class="prompt-detail-actions"><button type="button" class="library-editor-btn" data-pl-copy="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="copy"></i>复制组合</button><button type="button" class="library-editor-btn prompt-preview-apply ${selected ? 'is-applied' : 'primary'}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button></div></div></div></section>`;
+        const closeLabel = t('library.close', '关闭预览');
+        return `<section class="prompt-detail" aria-labelledby="prompt-preview-title" aria-describedby="prompt-preview-description">
+            <header class="prompt-preview-header"><div><span class="prompt-preview-eyebrow">${LibraryUtils.escapeHtml(previewLabel)}</span><span class="prompt-preview-recipe-label">${LibraryUtils.escapeHtml(recipeLabel)}</span></div><button type="button" class="prompt-preview-close" data-pl-preview-close aria-label="${LibraryUtils.escapeHtml(closeLabel)}"><i data-lucide="x"></i></button></header>
+            <div class="prompt-detail-body"><div class="prompt-detail-grid">
+                <figure class="prompt-detail-cover">${item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}">` : '<i data-lucide="sparkles" aria-hidden="true"></i>'}</figure>
+                <div class="prompt-detail-copy"><span class="prompt-detail-kicker">${LibraryUtils.escapeHtml(item.subcategory || item.category)}</span><h2 id="prompt-preview-title">${LibraryUtils.escapeHtml(item.name)}</h2><p id="prompt-preview-description">${LibraryUtils.escapeHtml(item.description || '')}</p>
+                    <section class="prompt-detail-recipe" aria-label="${LibraryUtils.escapeHtml(recipeLabel)}">
+                        <div class="prompt-detail-field"><b>${LibraryUtils.escapeHtml(prefixLabel)}</b><pre>${LibraryUtils.escapeHtml(prefix)}</pre></div>
+                        <div class="prompt-detail-user-input"><span>${LibraryUtils.escapeHtml(userPromptLabel)}</span><i data-lucide="text-cursor-input" aria-hidden="true"></i></div>
+                        <div class="prompt-detail-field"><b>${LibraryUtils.escapeHtml(suffixLabel)}</b><pre>${LibraryUtils.escapeHtml(suffix)}</pre></div>
+                    </section>
+                </div>
+            </div></div>
+            <footer class="prompt-detail-actions"><button type="button" class="library-editor-btn" data-pl-copy="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="copy"></i>${LibraryUtils.escapeHtml(copyLabel)}</button><button type="button" class="library-editor-btn prompt-preview-apply ${selected ? 'is-applied' : 'primary'}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${LibraryUtils.escapeHtml(applyLabel)}</button></footer>
+        </section>`;
     },
 
     previewOverlay() {
@@ -155,7 +176,7 @@ const PromptLibrary = {
         overlay = document.createElement('div');
         overlay.id = 'prompt-library-preview-overlay';
         overlay.className = 'prompt-library-preview-overlay';
-        overlay.innerHTML = '<div class="prompt-library-preview-modal" role="dialog" aria-modal="true" aria-label="提示词预览"><div class="prompt-library-preview-content"></div></div>';
+        overlay.innerHTML = '<div class="prompt-library-preview-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-preview-title" aria-describedby="prompt-preview-description"><div class="prompt-library-preview-content"></div></div>';
         overlay.addEventListener('click', event => {
             if (event.target !== overlay) return;
             event.stopPropagation();
@@ -183,6 +204,25 @@ const PromptLibrary = {
         if (!item) { this.closePreview(); return; }
         overlay.querySelector('.prompt-library-preview-content').innerHTML = this.detailHtml(item);
         window.lucide?.createIcons();
+    },
+
+    showPreviewFeedback(message, isError=false) {
+        const modal = document.querySelector('#prompt-library-preview-overlay .prompt-library-preview-modal');
+        if (!modal) return;
+        let feedback = modal.querySelector('.prompt-preview-feedback');
+        if (!feedback) {
+            feedback = document.createElement('div');
+            feedback.className = 'prompt-preview-feedback';
+            feedback.setAttribute('role', 'status');
+            feedback.setAttribute('aria-live', 'polite');
+            modal.appendChild(feedback);
+        }
+        feedback.textContent = message;
+        feedback.classList.toggle('is-error', isError);
+        feedback.classList.remove('show');
+        requestAnimationFrame(() => feedback.classList.add('show'));
+        clearTimeout(this._previewFeedbackTimer);
+        this._previewFeedbackTimer = setTimeout(() => feedback.classList.remove('show'), 2200);
     },
 
     closePreview({restoreFocus=true} = {}) {
@@ -276,7 +316,7 @@ const PromptLibrary = {
         const del=event.target.closest('[data-pl-delete]'); if(del){event.stopPropagation();try{await this.deleteItem(del.dataset.plDelete)}catch(error){window.toast?.(error.message)}return;}
         const fav=event.target.closest('[data-pl-favorite]'); if(fav){event.stopPropagation();try{await this.toggleFavorite(fav.dataset.plFavorite)}catch(error){window.toast?.(error.message)}return;}
         const apply=event.target.closest('[data-pl-apply]'); if(apply){try{await this.apply(apply.dataset.plApply)}catch(error){window.toast?.(error.message)}return;}
-        const copy=event.target.closest('[data-pl-copy]'); if(copy){const item=this.find(copy.dataset.plCopy); const text=[item?.prefix||item?.positive,'用户提示词',item?.suffix||item?.negative].filter(Boolean).join('\n\n');try{await navigator.clipboard.writeText(text);window.toast?.('已复制组合提示词')}catch(_){window.toast?.('复制失败')}return;}
+        const copy=event.target.closest('[data-pl-copy]'); if(copy){const item=this.find(copy.dataset.plCopy); const text=[item?.prefix||item?.positive,'用户提示词',item?.suffix||item?.negative].filter(Boolean).join('\n\n'); const copied = typeof copyTextToClipboard === 'function' ? await copyTextToClipboard(text) : false; this.showPreviewFeedback(copied ? t('smart.promptRecipeCopied', '已复制组合提示词') : t('smart.promptRecipeCopyFailed', '复制失败，请检查浏览器剪贴板权限'), !copied); return;}
         const save=event.target.closest('[data-pl-save]'); if(save){try{await this.save(save.dataset.plSave,event.target.closest('.prompt-editor'))}catch(error){window.toast?.(error.message)}return;}
         const upload=event.target.closest('[data-pe-upload]'); if(upload) return;
     },
