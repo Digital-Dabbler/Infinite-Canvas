@@ -12,6 +12,12 @@
     const upstreamControlsNode = node => isRunnablePromptNode(node) && typeof promptInputNodesFor === 'function' && promptInputNodesFor(node).length > 0;
     const isEditableTarget = node => Boolean(node && (isPromptNode(node) || isLoopNode(node) || isRunnablePromptNode(node)) && !upstreamControlsNode(node));
 
+    function setLibraryTarget(nodeId = '') {
+        libraryTargetId = String(nodeId || '');
+        window.__promptLibraryTargetId = libraryTargetId;
+        return libraryTargetId;
+    }
+
     function normalizePreset(card) {
         return {
             id: value(card?.id),
@@ -277,6 +283,7 @@
             if (typeof createPromptNode !== 'function') return { ok: false, message: '请先打开画布' };
             const point = typeof viewportCenter === 'function' ? viewportCenter() : { x: 420, y: 280 };
             node = createPromptNode(Math.round(point.x - 158), Math.round(point.y - 100));
+            setLibraryTarget(node.id);
         }
         const preset = normalizePreset(card);
         if (isPromptNode(node)) {
@@ -309,12 +316,12 @@
     window.bindPromptPresetNodeControls = (el, node) => el.querySelectorAll('.prompt-preset-shell').forEach(root => bindControls(root, node.id));
     window.syncPromptPresetComposer = syncComposer;
     window.openPromptLibraryForTarget = nodeId => {
-        libraryTargetId = String(nodeId || '');
-        window.__promptLibraryTargetId = libraryTargetId;
+        setLibraryTarget(nodeId);
         window.openPromptLibrary?.({ targetId: libraryTargetId });
     };
     window.getPromptLibraryTargetId = () => libraryTargetId || String(window.__promptLibraryTargetId || '');
-    window.clearPromptLibraryTarget = () => { libraryTargetId = ''; window.__promptLibraryTargetId = ''; };
+    window.setPromptLibraryTarget = setLibraryTarget;
+    window.clearPromptLibraryTarget = () => setLibraryTarget('');
     window.applyPromptPresetCard = addCard;
     window.isPromptPresetTargetEditable = isEditableTarget;
     document.addEventListener('DOMContentLoaded', () => {

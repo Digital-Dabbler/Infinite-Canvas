@@ -13,7 +13,8 @@ const PromptLibrary = {
     library: null,
     favorites: new Set(),
     editorId: '',
-    detailId: '',
+    previewId: '',
+    previewTrigger: null,
     initialized: false,
     loading: false,
 
@@ -22,6 +23,12 @@ const PromptLibrary = {
         this.initialized = true;
         const overlay = document.getElementById('prompts-library-overlay');
         overlay.addEventListener('click', event => this.handleClick(event));
+        document.addEventListener('keydown', event => {
+            if (event.key !== 'Escape' || !this.previewId) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            this.closePreview();
+        }, true);
         LibrarySearch.setup('prompts-library-overlay', value => { this.search = String(value || '').trim().toLowerCase(); this.render(); });
     },
 
@@ -30,7 +37,8 @@ const PromptLibrary = {
         if (options.targetId) window.__promptLibraryTargetId = String(options.targetId);
         else window.clearPromptLibraryTarget?.();
         this.tab = options.tab || this.tab || 'inspiration';
-        this.category = 'all'; this.subcategory = 'real'; this.editorId = ''; this.detailId = '';
+        this.category = 'all'; this.subcategory = 'real'; this.editorId = '';
+        this.closePreview({restoreFocus:false});
         LibraryModalManager.open('prompts');
         await this.load();
     },
@@ -88,7 +96,7 @@ const PromptLibrary = {
     renderHeaderAction(overlay) {
         const headerActions = overlay.querySelector('.library-header-right');
         headerActions?.querySelector('.prompt-library-header-create')?.remove();
-        if (this.tab !== 'myPrompts' || this.editorId || this.detailId || !headerActions) return;
+        if (this.tab !== 'myPrompts' || this.editorId || !headerActions) return;
         const closeButton = headerActions.querySelector('.library-close-btn');
         const button = `<button type="button" class="library-editor-btn primary prompt-library-header-create" data-pl-new><i data-lucide="plus"></i>新建提示词</button>`;
         if (closeButton) closeButton.insertAdjacentHTML('beforebegin', button);
@@ -111,8 +119,10 @@ const PromptLibrary = {
         const favorite = this.favorites.has(item.id);
         const preview = [item.prefix || item.positive, item.suffix || item.negative].filter(Boolean).join(' · ');
         const cover = item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy">` : `<div class="prompt-card-placeholder"><i data-lucide="sparkles"></i></div>`;
-        return `<article class="prompt-card ${selected ? 'is-selected' : ''}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}">
-            <div class="prompt-card-cover">${cover}<div class="prompt-card-hover"><button type="button" data-pl-detail="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="expand"></i>预览</button></div>${selected ? '<span class="prompt-card-selected"><i data-lucide="check"></i>已应用</span>' : ''}</div>
+        const applyLabel = selected ? '取消' : '应用';
+        const applyIcon = selected ? 'x' : 'plus';
+        return `<article class="prompt-card ${selected ? 'is-selected' : ''}">
+            <div class="prompt-card-cover">${cover}<div class="prompt-card-hover" aria-label="${LibraryUtils.escapeHtml(item.name || '提示词')} 操作"><button type="button" class="prompt-card-action prompt-card-apply ${selected ? 'is-applied' : ''}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button><button type="button" class="prompt-card-action" data-pl-preview="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="expand"></i>预览</button></div></div>
             <div class="prompt-card-info"><h3>${LibraryUtils.escapeHtml(item.name || '未命名')}</h3><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-card-preview">${LibraryUtils.escapeHtml(LibraryUtils.truncate(preview, 96) || '（空提示词）')}</div></div>
             <div class="prompt-card-foot"><span>${LibraryUtils.escapeHtml(item.subcategory || item.category || '我的')}</span><button type="button" class="prompt-card-favorite ${favorite ? 'is-favorite' : ''}" data-pl-favorite="${LibraryUtils.escapeHtml(item.id)}" title="${favorite ? '取消收藏' : '收藏'}" aria-label="${favorite ? '取消收藏' : '收藏'}" aria-pressed="${favorite ? 'true' : 'false'}"><i data-lucide="heart"></i></button>${this.tab === 'myPrompts' ? `<button type="button" data-pl-edit="${LibraryUtils.escapeHtml(item.id)}" title="编辑"><i data-lucide="pencil"></i></button><button type="button" data-pl-delete="${LibraryUtils.escapeHtml(item.id)}" title="删除"><i data-lucide="trash-2"></i></button>` : ''}</div>
         </article>`;
@@ -120,9 +130,8 @@ const PromptLibrary = {
 
     renderContent() {
         const content = this.content(); if (!content) return;
-        content.classList.remove('is-prompt-editor-view', 'is-prompt-detail-view');
+        content.classList.remove('is-prompt-editor-view');
         if (this.editorId === '__new__' || this.editorId) { content.classList.add('is-prompt-editor-view'); content.innerHTML = this.editorHtml(this.editorId === '__new__' ? null : this.find(this.editorId)); window.lucide?.createIcons(); return; }
-        if (this.detailId) { content.classList.add('is-prompt-detail-view'); content.innerHTML = this.detailHtml(this.find(this.detailId)); window.lucide?.createIcons(); return; }
         const items = this.filteredItems();
         const grid = items.length ? `<div class="prompt-card-grid">${items.map(item => this.cardHtml(item)).join('')}</div>` : `<div class="library-empty"><div class="library-empty-icon"><i data-lucide="text-cursor-input"></i></div><div class="library-empty-title">暂无提示词</div><div class="library-empty-desc">${this.tab === 'myPrompts' ? '新建一个预设，快速复用你的前缀与后缀。' : '尝试调整分类或搜索关键词。'}</div>${this.tab === 'myPrompts' ? '<button type="button" class="library-editor-btn primary" data-pl-new><i data-lucide="plus"></i>新建提示词</button>' : ''}</div>`;
         content.innerHTML = this.tab === 'inspiration' && this.category === 'style'
@@ -132,9 +141,58 @@ const PromptLibrary = {
     },
 
     detailHtml(item) {
-        if (!item) { this.detailId = ''; return ''; }
+        if (!item) return '';
         const example = [item.prefix || item.positive, '用户提示词', item.suffix || item.negative].filter(Boolean).join('\n\n');
-        return `<section class="prompt-detail"><button type="button" class="prompt-detail-back" data-pl-back><i data-lucide="arrow-left"></i>返回卡片</button><div class="prompt-detail-grid"><div class="prompt-detail-cover">${item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="">` : '<i data-lucide="sparkles"></i>'}</div><div><span class="prompt-detail-kicker">${LibraryUtils.escapeHtml(item.subcategory || item.category)}</span><h2>${LibraryUtils.escapeHtml(item.name)}</h2><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-detail-field"><b>前缀</b><pre>${LibraryUtils.escapeHtml(item.prefix || item.positive || '')}</pre></div><div class="prompt-detail-field"><b>组合示例</b><pre>${LibraryUtils.escapeHtml(example)}</pre></div><div class="prompt-detail-field"><b>后缀</b><pre>${LibraryUtils.escapeHtml(item.suffix || item.negative || '')}</pre></div><div class="prompt-detail-actions"><button type="button" class="library-editor-btn" data-pl-copy="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="copy"></i>复制组合</button><button type="button" class="library-editor-btn primary" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="plus"></i>添加到节点</button></div></div></div></section>`;
+        const selected = this.activeTarget() && Array.isArray(this.activeTarget().promptPresets) && this.activeTarget().promptPresets.some(preset => preset.id === item.id);
+        const applyLabel = selected ? '取消应用' : '应用提示词';
+        const applyIcon = selected ? 'x' : 'plus';
+        return `<section class="prompt-detail"><header class="prompt-preview-header"><span>提示词预览</span><button type="button" class="prompt-preview-close" data-pl-preview-close aria-label="关闭预览"><i data-lucide="x"></i></button></header><div class="prompt-detail-grid"><div class="prompt-detail-cover">${item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}">` : '<i data-lucide="sparkles"></i>'}</div><div><span class="prompt-detail-kicker">${LibraryUtils.escapeHtml(item.subcategory || item.category)}</span><h2>${LibraryUtils.escapeHtml(item.name)}</h2><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-detail-field"><b>前缀</b><pre>${LibraryUtils.escapeHtml(item.prefix || item.positive || '')}</pre></div><div class="prompt-detail-field"><b>组合示例</b><pre>${LibraryUtils.escapeHtml(example)}</pre></div><div class="prompt-detail-field"><b>后缀</b><pre>${LibraryUtils.escapeHtml(item.suffix || item.negative || '')}</pre></div><div class="prompt-detail-actions"><button type="button" class="library-editor-btn" data-pl-copy="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="copy"></i>复制组合</button><button type="button" class="library-editor-btn prompt-preview-apply ${selected ? 'is-applied' : 'primary'}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button></div></div></div></section>`;
+    },
+
+    previewOverlay() {
+        let overlay = document.getElementById('prompt-library-preview-overlay');
+        if (overlay) return overlay;
+        overlay = document.createElement('div');
+        overlay.id = 'prompt-library-preview-overlay';
+        overlay.className = 'prompt-library-preview-overlay';
+        overlay.innerHTML = '<div class="prompt-library-preview-modal" role="dialog" aria-modal="true" aria-label="提示词预览"><div class="prompt-library-preview-content"></div></div>';
+        overlay.addEventListener('click', event => {
+            if (event.target !== overlay) return;
+            event.stopPropagation();
+            this.closePreview();
+        });
+        this.overlay()?.appendChild(overlay);
+        return overlay;
+    },
+
+    openPreview(id, trigger) {
+        if (!this.find(id)) return;
+        this.previewId = id;
+        this.previewTrigger = trigger || null;
+        const overlay = this.previewOverlay();
+        overlay.classList.add('open');
+        this.renderPreview();
+        LibraryModalManager.trapFocus(overlay);
+        requestAnimationFrame(() => overlay.querySelector('[data-pl-preview-close]')?.focus());
+    },
+
+    renderPreview() {
+        if (!this.previewId) return;
+        const overlay = this.previewOverlay();
+        const item = this.find(this.previewId);
+        if (!item) { this.closePreview(); return; }
+        overlay.querySelector('.prompt-library-preview-content').innerHTML = this.detailHtml(item);
+        window.lucide?.createIcons();
+    },
+
+    closePreview({restoreFocus=true} = {}) {
+        const overlay = document.getElementById('prompt-library-preview-overlay');
+        const trigger = this.previewTrigger;
+        this.previewId = '';
+        this.previewTrigger = null;
+        overlay?.classList.remove('open');
+        if (this.overlay()?.classList.contains('open')) LibraryModalManager.trapFocus(this.overlay());
+        if (restoreFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
     },
 
     editorHtml(item) {
@@ -203,15 +261,16 @@ const PromptLibrary = {
         if (!response.ok) throw new Error('收藏操作失败'); this.favorites = new Set((await response.json()).favorites || []); this.render();
     },
     async deleteItem(id) { if (!confirm('确认删除这条提示词？')) return; const response = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'DELETE'}); if (!response.ok) throw new Error('删除失败'); await this.load(); },
-    async apply(id) { const item=this.find(id); if(!item)return; const result=window.applyPromptPresetCard?.(item,this.targetId()); if(!result?.ok) throw new Error(result?.message || '应用失败'); this.render(); },
+    async apply(id) { const item=this.find(id); if(!item)return; const result=window.applyPromptPresetCard?.(item,this.targetId()); if(!result?.ok) throw new Error(result?.message || '应用失败'); if(result.targetId) window.setPromptLibraryTarget?.(result.targetId); this.render(); this.renderPreview(); },
 
     async handleClick(event) {
-        const close = event.target.closest('.library-close-btn'); if (close) { LibraryModalManager.closeAll(); window.clearPromptLibraryTarget?.(); return; }
-        const tab = event.target.closest('[data-pl-tab]'); if(tab){ this.tab=tab.dataset.plTab; this.category='all'; this.subcategory='real'; this.editorId=''; this.detailId=''; this.render(); return; }
+        const close = event.target.closest('.library-close-btn'); if (close) { this.closePreview({restoreFocus:false}); LibraryModalManager.closeAll(); window.clearPromptLibraryTarget?.(); return; }
+        const previewClose = event.target.closest('[data-pl-preview-close]'); if(previewClose){ this.closePreview(); return; }
+        const tab = event.target.closest('[data-pl-tab]'); if(tab){ this.tab=tab.dataset.plTab; this.category='all'; this.subcategory='real'; this.editorId=''; this.render(); return; }
         const category=event.target.closest('[data-pl-category]'); if(category){ this.category=category.dataset.plCategory; this.subcategory=this.category==='style'?'real':'all'; this.render(); return; }
         const sub=event.target.closest('[data-pl-subcategory]'); if(sub){this.subcategory=sub.dataset.plSubcategory;this.render();return;}
-        const detail=event.target.closest('[data-pl-detail]'); if(detail){event.stopPropagation();this.detailId=detail.dataset.plDetail;this.renderContent();return;}
-        const back=event.target.closest('[data-pl-back]'); if(back){this.editorId='';this.detailId='';this.render();return;}
+        const preview=event.target.closest('[data-pl-preview]'); if(preview){event.stopPropagation();this.openPreview(preview.dataset.plPreview,preview);return;}
+        const back=event.target.closest('[data-pl-back]'); if(back){this.editorId='';this.render();return;}
         const newButton=event.target.closest('[data-pl-new]'); if(newButton){this.editorId='__new__';this.render();return;}
         const edit=event.target.closest('[data-pl-edit]'); if(edit){event.stopPropagation();this.editorId=edit.dataset.plEdit;this.render();return;}
         const del=event.target.closest('[data-pl-delete]'); if(del){event.stopPropagation();try{await this.deleteItem(del.dataset.plDelete)}catch(error){window.toast?.(error.message)}return;}
