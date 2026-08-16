@@ -2566,6 +2566,7 @@ function applyViewport(){
     scheduleSmartImageResolutionSync(world, 120);
     requestAnimationFrame(() => {
         positionImageActionToolbar();
+        positionUploadResourcePicker();
         // 图片生成 composer 位于 world 内，会随视口变换自然移动；文本节点的
         // 生成面板在独立图层中，因此在每次平移/缩放后按当前节点屏幕位置同步。
         // 这里不触发自动平移，避免用户拖动画布时面板反向拉回视口。
@@ -9517,9 +9518,9 @@ function nodeBodyHtml(node, layout){
     if(imgs.length > 1){
         const visibleRows = Math.max(1, Math.min(MEDIA_GROUP_MAX_VISIBLE_ROWS, Number(layout.visibleRows || layout.rows || 1)));
         const maxHeight = visibleRows * Number(layout.thumb || 96) + Math.max(0, visibleRows - 1) * 8;
-        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}${imageToolbarOwnsDelete ? `<button class="resource-replace" type="button" data-replace-image="${i}" title="替换资源">替换</button>` : `<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`}</div>`).join('')}</div>`;
+        return `<div class="thumb-grid" data-thumb-scroll="1" style="--thumb-cols:${layout.cols}; --thumb-size:${layout.thumb}px; --thumb-max-height:${maxHeight}px">${imgs.map((img, i) => `<div class="thumb-item has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === i ? 'image-selected' : ''}" data-image-index="${i}" data-media-signature="${escapeAttr(`${mediaKindForItem(img)}:${img?.url || ''}`)}">${thumbMediaHtml(img)}${imageNameBadgeHtml(img, {outside:true})}${imageResolutionBadgeHtml(img)}${imageToolbarOwnsDelete ? '' : `<button class="mini-x image-delete" type="button" data-image-index="${i}" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`}</div>`).join('')}</div>`;
     }
-    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}${imageToolbarOwnsDelete ? '<button class="resource-replace" type="button" data-replace-image="0" title="替换资源">替换</button>' : `<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`}</div>`;
+    if(imgs[0]) return `<div class="image-wrap has-outside-image-name ${selectedImage.nodeId === node.id && selectedImage.index === 0 ? 'image-selected' : ''}" data-image-index="0" data-media-signature="${escapeAttr(`${mediaKindForItem(imgs[0])}:${imgs[0]?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${layout.height}px">${singleMediaHtml(imgs[0], layout.width, layout.height)}${imageNameBadgeHtml(imgs[0], {outside:true})}${imageResolutionBadgeHtml(imgs[0])}${imageToolbarOwnsDelete ? '' : `<button class="mini-x image-delete" type="button" data-image-index="0" title="${escapeHtml(tr('smart.deleteImage'))}"><i data-lucide="trash-2"></i></button>`}</div>`;
     if(isSmartGenerationNode(node)) return `<div class="generation-empty-state"><i data-lucide="${isSmartVideoGenerationNode(node) ? 'video' : 'image-plus'}"></i><span>${isSmartVideoGenerationNode(node) ? '连接素材后在下方输入描述并生成视频' : '连接图片后在下方输入描述并生成'}</span></div>`;
     return `<div class="node-drop" data-upload-action="files">
         <span class="upload-node-main"><i data-lucide="upload-cloud"></i></span>
@@ -10199,11 +10200,13 @@ function render(){
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
+        const uploadResourceHeader = uploadResourceHeaderHtml(node);
+        const renderedNodeHeight = layout.height + (uploadResourceHeader ? 38 : 0);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;height:${layout.height}px">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--upload-resource-base-height:${layout.height}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
-            <div class="node-head"><div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div></div>
+            <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
             ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartImageUploadNode(node) && imgs.some(img => mediaKindForItem(imageForDisplay(img)) === 'image')) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
@@ -10245,6 +10248,7 @@ function render(){
     });
     restoreMediaPlaybackStates(mediaStates);
     bindNodeEvents();
+    if(uploadResourcePickerState.open) requestAnimationFrame(positionUploadResourcePicker);
     bindConnectionEvents();
     updateComposer();
     renderTextNodePanel();
@@ -11189,6 +11193,213 @@ function handlePortDrop(drag, e){
     render();
     requestAnimationFrame(() => openPortConnectMenu(drag.fromId, drag.fromPort, e, {worldPoint:screenToWorld(e)}));
 }
+const uploadResourcePickerState = {open:false, nodeId:'', imageIndex:-1, tab:'all', query:'', view:'grid', sort:'recent', trigger:null};
+let uploadResourcePickerEl = null;
+function uploadResourceSourceLabel(source){
+    return source === 'generated' ? tr('smart.resourceGenerated') : tr('smart.resourceImported');
+}
+function currentCanvasUploadResourceItems(){
+    const seen = new Set();
+    const resources = [];
+    const add = (raw, source, node, imageIndex) => {
+        if(!raw?.url || mediaKindForItem(imageForDisplay(raw)) !== 'image') return;
+        const identity = mediaOutputIdentity(raw) || String(raw.url || '');
+        if(!identity || seen.has(identity)) return;
+        seen.add(identity);
+        resources.push({
+            ...raw,
+            source,
+            nodeId:node.id,
+            imageIndex,
+            identity,
+            name:imageNameLabel(raw, tr('smart.resourceImage'))
+        });
+    };
+    nodes.forEach(node => {
+        const source = isSmartImageUploadNode(node) ? 'imported' : (isSmartImageGenerationNode(node) ? 'generated' : '');
+        if(!source) return;
+        (node.images || []).forEach((image, imageIndex) => {
+            if(image?.loopInputPreview || isReturnedVideoLastFrame(image)) return;
+            add(image, source, node, imageIndex);
+        });
+    });
+    return resources;
+}
+function filteredCanvasUploadResourceItems(){
+    const state = uploadResourcePickerState;
+    const keyword = String(state.query || '').trim().toLocaleLowerCase();
+    const target = nodes.find(node => node.id === state.nodeId)?.images?.[state.imageIndex];
+    const targetIdentity = mediaOutputIdentity(target) || String(target?.url || '');
+    let items = currentCanvasUploadResourceItems()
+        .filter(item => state.tab === 'all' || item.source === state.tab)
+        .filter(item => !keyword || `${item.name} ${uploadResourceSourceLabel(item.source)}`.toLocaleLowerCase().includes(keyword));
+    if(state.sort === 'name-asc') items.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+    else if(state.sort === 'name-desc') items.sort((a, b) => b.name.localeCompare(a.name, 'zh-CN'));
+    else items = items.reverse();
+    return {items, targetIdentity};
+}
+function ensureUploadResourcePicker(){
+    if(uploadResourcePickerEl?.isConnected) return uploadResourcePickerEl;
+    uploadResourcePickerEl = document.createElement('section');
+    uploadResourcePickerEl.id = 'uploadResourcePicker';
+    uploadResourcePickerEl.className = 'upload-resource-picker';
+    uploadResourcePickerEl.setAttribute('role', 'dialog');
+    uploadResourcePickerEl.setAttribute('aria-label', tr('smart.resourcePickerLabel'));
+    uploadResourcePickerEl.addEventListener('pointerdown', event => event.stopPropagation());
+    uploadResourcePickerEl.addEventListener('mousedown', event => event.stopPropagation());
+    uploadResourcePickerEl.addEventListener('click', event => event.stopPropagation());
+    uploadResourcePickerEl.addEventListener('wheel', event => event.stopPropagation(), {passive:true});
+    shell.appendChild(uploadResourcePickerEl);
+    return uploadResourcePickerEl;
+}
+function uploadResourcePickerEmptyCopy(){
+    const state = uploadResourcePickerState;
+    if(state.query.trim()) return {title:tr('smart.resourceNoMatchTitle'), body:tr('smart.resourceNoMatchBody')};
+    if(state.tab === 'generated') return {title:tr('smart.resourceNoGeneratedTitle'), body:tr('smart.resourceNoGeneratedBody')};
+    if(state.tab === 'imported') return {title:tr('smart.resourceNoImportedTitle'), body:tr('smart.resourceNoImportedBody')};
+    return {title:tr('smart.resourceEmptyTitle'), body:tr('smart.resourceEmptyBody')};
+}
+function uploadResourceSortIcon(){
+    if(uploadResourcePickerState.sort === 'name-asc') return 'arrow-down-a-z';
+    if(uploadResourcePickerState.sort === 'name-desc') return 'arrow-up-a-z';
+    return 'arrow-down-up';
+}
+function uploadResourceSortLabel(){
+    if(uploadResourcePickerState.sort === 'name-asc') return tr('smart.resourceSortNameAsc');
+    if(uploadResourcePickerState.sort === 'name-desc') return tr('smart.resourceSortNameDesc');
+    return tr('smart.resourceSortRecent');
+}
+function renderUploadResourcePicker({focusSearch=false}={}){
+    const picker = ensureUploadResourcePicker();
+    const state = uploadResourcePickerState;
+    const {items, targetIdentity} = filteredCanvasUploadResourceItems();
+    const countBy = source => currentCanvasUploadResourceItems().filter(item => source === 'all' || item.source === source).length;
+    const tabs = [['all', tr('smart.resourceAll')], ['imported', tr('smart.resourceImported')], ['generated', tr('smart.resourceGenerated')]];
+    const empty = uploadResourcePickerEmptyCopy();
+    picker.innerHTML = `<div class="upload-resource-picker-head">
+        <div class="upload-resource-tabs" role="tablist" aria-label="${escapeAttr(tr('smart.resourcePickerRange'))}">
+            ${tabs.map(([key, label]) => `<button class="upload-resource-tab ${state.tab === key ? 'active' : ''}" type="button" role="tab" data-upload-resource-tab="${key}" aria-selected="${state.tab === key}">${escapeHtml(label)}<span class="sr-only">${escapeHtml(trf('smart.resourceTabCount', {n:countBy(key)}))}</span></button>`).join('')}
+        </div>
+        <button class="upload-resource-upload" type="button" data-upload-resource-upload title="${escapeAttr(tr('smart.resourceUploadReplace'))}"><i data-lucide="folder-up"></i><span>${escapeHtml(tr('smart.resourceUpload'))}</span></button>
+    </div>
+    <div class="upload-resource-toolbar">
+        <label class="upload-resource-search"><i data-lucide="search"></i><input data-upload-resource-search type="search" value="${escapeAttr(state.query)}" placeholder="${escapeAttr(tr('smart.resourceSearch'))}" aria-label="${escapeAttr(tr('smart.resourceSearch'))}"></label>
+        <button class="upload-resource-tool" type="button" data-upload-resource-sort title="${escapeAttr(uploadResourceSortLabel())}" aria-label="${escapeAttr(uploadResourceSortLabel())}"><i data-lucide="${uploadResourceSortIcon()}"></i></button>
+        <button class="upload-resource-tool ${state.view === 'grid' ? 'active' : ''}" type="button" data-upload-resource-view="grid" title="${escapeAttr(tr('smart.resourceGridView'))}" aria-label="${escapeAttr(tr('smart.resourceGridView'))}" aria-pressed="${state.view === 'grid'}"><i data-lucide="grid-2x2"></i></button>
+        <button class="upload-resource-tool ${state.view === 'list' ? 'active' : ''}" type="button" data-upload-resource-view="list" title="${escapeAttr(tr('smart.resourceListView'))}" aria-label="${escapeAttr(tr('smart.resourceListView'))}" aria-pressed="${state.view === 'list'}"><i data-lucide="list"></i></button>
+    </div>
+    <div class="upload-resource-count" aria-live="polite">${escapeHtml(trf('smart.resourceCanvasImageCount', {n:items.length}))}</div>
+    <div class="upload-resource-grid ${state.view === 'list' ? 'is-list' : ''}" role="listbox" aria-label="${escapeAttr(tr('smart.resourcePickerLabel'))}">
+        ${items.length ? items.map((item, index) => `<button class="upload-resource-item ${(item.identity === targetIdentity) ? 'selected' : ''}" type="button" role="option" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb">${smartPreviewImgHtml(imageForDisplay(item), 256, `loading="lazy" decoding="async" draggable="false" alt="${escapeAttr(item.name)}"`)}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${uploadResourceSourceLabel(item.source)}</span></button>`).join('') : `<div class="upload-resource-empty"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`}
+    </div>`;
+    picker.querySelectorAll('[data-upload-resource-tab]').forEach(button => {
+        button.addEventListener('click', () => {
+            state.tab = button.dataset.uploadResourceTab || 'all';
+            renderUploadResourcePicker();
+        });
+    });
+    picker.querySelector('[data-upload-resource-search]')?.addEventListener('input', event => {
+        state.query = event.target.value || '';
+        renderUploadResourcePicker({focusSearch:true});
+    });
+    picker.querySelector('[data-upload-resource-sort]')?.addEventListener('click', () => {
+        state.sort = state.sort === 'recent' ? 'name-asc' : (state.sort === 'name-asc' ? 'name-desc' : 'recent');
+        renderUploadResourcePicker();
+    });
+    picker.querySelectorAll('[data-upload-resource-view]').forEach(button => {
+        button.addEventListener('click', () => {
+            state.view = button.dataset.uploadResourceView === 'list' ? 'list' : 'grid';
+            renderUploadResourcePicker();
+        });
+    });
+    picker.querySelector('[data-upload-resource-upload]')?.addEventListener('click', () => {
+        const {nodeId, imageIndex} = state;
+        closeUploadResourcePicker({restoreFocus:false});
+        pickMediaForSmartNode(nodeId, {replaceIndex:imageIndex});
+    });
+    picker.querySelectorAll('[data-upload-resource-select]').forEach(button => {
+        button.addEventListener('click', () => {
+            const selected = items[Number(button.dataset.uploadResourceSelect)];
+            const target = nodes.find(node => node.id === state.nodeId);
+            if(!selected?.url || !target?.images?.[state.imageIndex]) return;
+            pushUndo();
+            closeUploadResourcePicker({restoreFocus:false});
+            appendImagesToSmartNode([{...selected, kind:'image'}], state.nodeId, {replaceIndex:state.imageIndex});
+            toast(tr('smart.resourceReplaced'));
+        });
+    });
+    picker.querySelector('.upload-resource-grid')?.addEventListener('keydown', event => {
+        if(!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        const buttons = [...picker.querySelectorAll('[data-upload-resource-select]')];
+        const current = buttons.indexOf(document.activeElement);
+        if(current < 0 || !buttons.length) return;
+        const columns = state.view === 'list' ? 1 : (shell.clientWidth <= 640 ? 3 : 4);
+        const offset = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : event.key === 'ArrowUp' ? -columns : columns;
+        const next = Math.max(0, Math.min(buttons.length - 1, current + offset));
+        if(next === current) return;
+        event.preventDefault();
+        buttons[next].focus();
+    });
+    bindSmartPreviewImageFallbacks(picker);
+    refreshIcons();
+    requestAnimationFrame(() => {
+        positionUploadResourcePicker();
+        if(focusSearch) picker.querySelector('[data-upload-resource-search]')?.focus();
+    });
+}
+function positionUploadResourcePicker(){
+    const state = uploadResourcePickerState;
+    const picker = uploadResourcePickerEl;
+    if(!state.open || !picker?.isConnected) return;
+    const trigger = world.querySelector(`[data-upload-resource-picker-trigger][data-node-id="${CSS.escape(state.nodeId)}"][data-image-index="${state.imageIndex}"]`);
+    if(!trigger){ closeUploadResourcePicker({restoreFocus:false}); return; }
+    state.trigger = trigger;
+    const shellRect = shell.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
+    const pickerWidth = picker.offsetWidth || Math.min(416, shellRect.width - 24);
+    const pickerHeight = picker.offsetHeight || 360;
+    const margin = 12;
+    const aboveTop = triggerRect.top - shellRect.top - pickerHeight - margin;
+    const belowTop = triggerRect.bottom - shellRect.top + margin;
+    const placeAbove = aboveTop >= margin || belowTop + pickerHeight > shellRect.height - margin;
+    const top = placeAbove ? Math.max(margin, aboveTop) : Math.min(Math.max(margin, belowTop), Math.max(margin, shellRect.height - pickerHeight - margin));
+    const preferredLeft = triggerRect.right - shellRect.left - pickerWidth;
+    picker.style.left = `${Math.max(margin, Math.min(preferredLeft, shellRect.width - pickerWidth - margin))}px`;
+    picker.style.top = `${top}px`;
+    picker.dataset.placement = placeAbove ? 'above' : 'below';
+}
+function openUploadResourcePicker(nodeId, imageIndex, trigger){
+    const node = nodes.find(item => item.id === nodeId);
+    if(!node?.images?.[imageIndex]) return;
+    const state = uploadResourcePickerState;
+    if(state.open && state.nodeId === nodeId && state.imageIndex === imageIndex){
+        closeUploadResourcePicker();
+        return;
+    }
+    closeUploadResourcePicker({restoreFocus:false});
+    state.open = true;
+    state.nodeId = nodeId;
+    state.imageIndex = imageIndex;
+    state.tab = 'all';
+    state.query = '';
+    state.sort = 'recent';
+    state.trigger = trigger || null;
+    const picker = ensureUploadResourcePicker();
+    picker.classList.add('open');
+    trigger?.setAttribute('aria-expanded', 'true');
+    renderUploadResourcePicker({focusSearch:true});
+}
+function closeUploadResourcePicker({restoreFocus=true}={}){
+    const state = uploadResourcePickerState;
+    const trigger = state.trigger;
+    state.open = false;
+    state.nodeId = '';
+    state.imageIndex = -1;
+    state.trigger = null;
+    uploadResourcePickerEl?.classList.remove('open');
+    trigger?.setAttribute?.('aria-expanded', 'false');
+    if(restoreFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
+}
 function pickMediaForSmartNode(nodeId='', options={}){
     const input = document.createElement('input');
     input.type = 'file';
@@ -11457,6 +11668,28 @@ function bindNodeEvents(){
             btn.addEventListener('click', e => {
                 e.preventDefault(); e.stopPropagation();
                 deleteImage(id, Number(btn.dataset.imageIndex));
+            });
+        });
+        el.querySelectorAll('[data-upload-resource-picker-trigger]').forEach(btn => {
+            btn.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                openUploadResourcePicker(btn.dataset.nodeId || id, Number(btn.dataset.imageIndex), btn);
+            });
+        });
+        el.querySelectorAll('[data-upload-resource-file]').forEach(btn => {
+            btn.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                pickMediaForSmartNode(btn.dataset.nodeId || id, {replaceIndex:Number(btn.dataset.imageIndex)});
             });
         });
         el.querySelectorAll('[data-replace-image]').forEach(btn => {
@@ -14471,6 +14704,29 @@ function updateOutpaintResolutionLabel(){
     label.textContent = `${Math.round(size.w)} x ${Math.round(size.h)}`;
     const target = document.getElementById('outpaintTargetSize');
     if(target) target.textContent = label.textContent;
+}
+function uploadResourceHeaderHtml(node){
+    // 控件节点始终保留在 DOM 中，但仅通过 .selected 显示。选中变化走
+    // syncSelectionUi() 的轻量级 class 更新，不会再次 render，因此不能在此处
+    // 以选中态决定是否创建 DOM，否则已有节点会在选中后缺少顶部栏。
+    if(!isSmartImageUploadNode(node)) return '';
+    const images = node.images || [];
+    const requestedIndex = selectedImage.nodeId === node.id
+        ? Number(selectedImage.index)
+        : Number(node.activeImageIndex);
+    const index = Number.isInteger(requestedIndex) && requestedIndex >= 0 && mediaKindForItem(imageForDisplay(images[requestedIndex])) === 'image'
+        ? requestedIndex
+        : images.findIndex(image => mediaKindForItem(imageForDisplay(image)) === 'image');
+    const image = images[index];
+    if(index < 0 || !image?.url) return '';
+    const name = imageNameLabel(image, tr('smart.resourceImage'));
+    return `<div class="upload-resource-control" data-upload-resource-control>
+        <span class="upload-resource-label">${escapeHtml(tr('smart.resourceImage'))}</span>
+        <button class="upload-resource-select" type="button" data-upload-resource-picker-trigger data-node-id="${escapeAttr(node.id)}" data-image-index="${index}" aria-haspopup="dialog" aria-expanded="false" title="${escapeAttr(tr('smart.resourceSelectCanvas'))}">
+            <span>${escapeHtml(name)}</span><i data-lucide="chevron-down"></i>
+        </button>
+        <button class="upload-resource-file" type="button" data-upload-resource-file data-node-id="${escapeAttr(node.id)}" data-image-index="${index}" title="${escapeAttr(tr('smart.resourceSelectLocal'))}" aria-label="${escapeAttr(tr('smart.resourceSelectLocal'))}"><i data-lucide="folder-search-2"></i></button>
+    </div>`;
 }
 function failedGenerationCellHtml(node, layout){
     const error = String(node?.lastRunError || tr('smart.errRunFailed')).replace(/\s+/g, ' ').trim();
@@ -20010,7 +20266,7 @@ function createNodeFromMenu(type){
 }
 // 画布平移：鼠标中键在画布任意位置（包括节点、工作流分组内部）都固定为移动画布，
 // 避免鼠标落在分组/节点上时误触发移动分组。左键空白处拖拽的既有行为保持不变。
-const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';
+const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.upload-resource-picker,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';
 function startCanvasPan(e){
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
@@ -20745,8 +21001,20 @@ window.addEventListener('paste', e => {
         pasteNodes();
     }
 });
+document.addEventListener('pointerdown', event => {
+    if(!uploadResourcePickerState.open) return;
+    const target = event.target;
+    if(uploadResourcePickerEl?.contains(target) || target?.closest?.('[data-upload-resource-picker-trigger]')) return;
+    closeUploadResourcePicker({restoreFocus:false});
+}, true);
 window.addEventListener('keydown', e => {
     const key = String(e.key || '').toLowerCase();
+    if(e.key === 'Escape' && uploadResourcePickerState.open){
+        e.preventDefault();
+        e.stopPropagation();
+        closeUploadResourcePicker();
+        return;
+    }
     if(key === 'r' && !isEditableTarget(e.target)) isRKeyDown = true;
     if(imageEditModal.classList.contains('open') && imageEditMode === 'preview' && !isEditableTarget(e.target)){
         if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
@@ -21544,6 +21812,7 @@ document.getElementById('imageEditStage').addEventListener('wheel', event => {
 window.addEventListener('resize', () => {
     if(cropState) syncImageEditOverflow();
     if(panoramaState.enabled) resizePanoramaViewer();
+    if(uploadResourcePickerState.open) requestAnimationFrame(positionUploadResourcePicker);
 });
 window.addEventListener('studio-theme-change', event => applyTheme(event.detail?.theme || 'light'));
 try {
