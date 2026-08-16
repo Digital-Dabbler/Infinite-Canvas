@@ -398,7 +398,7 @@ function renderBoard(){
     const create = document.createElement('button');
     create.className = 'ws-new-canvas-tile';
     create.type = 'button';
-    create.innerHTML = `<span class="ws-new-canvas-icon"><i data-lucide="plus"></i></span><strong>${L('新建画布','New canvas')}</strong><span>${L('从空白智能画布开始','Start from a blank smart canvas')}</span>`;
+    create.innerHTML = `<span class="ws-new-canvas-content"><span class="ws-new-canvas-icon"><i data-lucide="plus"></i></span><strong>${L('新建画布','New canvas')}</strong><span>${L('从空白智能画布开始','Start from a blank smart canvas')}</span></span>`;
     create.onclick = () => openCreateCard();
     grid.appendChild(create);
     smartItems.forEach(c => grid.appendChild(buildCard(c)));
