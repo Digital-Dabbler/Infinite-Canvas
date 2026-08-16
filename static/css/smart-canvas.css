@@ -64,6 +64,7 @@ body.smart-canvas-panning iframe { pointer-events:none !important; }
 .image-action-toolbar button:disabled { opacity:.34; cursor:not-allowed; }
 .image-action-toolbar button[hidden] { display:none !important; }
 .image-action-toolbar svg { width:15px; height:15px; }
+.image-toolbar-remove-background .background-removal-mark { width:15px; height:15px; box-sizing:border-box; border:1px solid currentColor; border-radius:4px; background:conic-gradient(from 90deg, color-mix(in srgb, currentColor 34%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 34%, transparent) 0 75%, transparent 0) 0 0 / 6px 6px; }
 .image-action-divider { flex:0 0 1px; width:1px; height:18px; margin:0 3px; background:var(--line); }
 .smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-outline-toggle { position:absolute; top:22px; z-index:56; width:96px; height:40px; padding:0 15px; border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; font-weight:750; white-space:nowrap; transition:transform .14s ease, border-color .14s ease; }
 .smart-log-toggle { right:130px; }
@@ -665,9 +666,9 @@ body.smart-node-resize .smart-node-floating-menu,
 .generation-result-tail-frame .media-thumb,.generation-result-tail-frame img { display:block; width:100%; height:100%; object-fit:cover; }
 .image-edit-mode { display:none !important; }
 @media (max-width: 760px){
-    .image-action-toolbar { max-width:calc(100vw - 28px); }
+    .image-action-toolbar { max-width:calc(100vw - 28px); height:52px; padding:4px; }
     .image-action-toolbar button span { display:none; }
-    .image-action-toolbar button { width:32px; justify-content:center; padding:0; }
+    .image-action-toolbar button { width:44px; min-height:44px; justify-content:center; padding:0; }
     .smart-node-floating-menu { top:-40px; overflow-x:auto; scrollbar-width:none; }
     .smart-node-floating-menu::-webkit-scrollbar { display:none; }
     .smart-node-floating-menu button span { display:none; }

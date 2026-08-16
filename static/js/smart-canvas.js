@@ -1399,6 +1399,9 @@ function isSmartAudioUploadNode(node){
 function isSmartImageGenerationNode(node){
     return Boolean(node && node.type === 'smart-image-generation');
 }
+function isSmartBackgroundRemovalNode(node){
+    return Boolean(isSmartImageGenerationNode(node) && node.backgroundRemoval);
+}
 function isSmartVideoGenerationNode(node){
     return Boolean(node && node.type === 'smart-video-generation');
 }
@@ -1425,8 +1428,8 @@ function isCanvasOrganizerNode(node){
     return isWorkflowOrganizerNode(node) || isSmartNoteNode(node);
 }
 function isSmartRunnableNode(node){
-    // 上传节点只是素材入口；只有图片/视频生成节点承接提示词和运行。
-    return Boolean(isSmartGenerationNode(node));
+    // 上传节点只是素材入口；去背景节点是已完成的媒体结果，不能再次作为普通生成节点运行。
+    return Boolean(isSmartGenerationNode(node) && !isSmartBackgroundRemovalNode(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -9613,7 +9616,8 @@ function imageTaskRecoverBodyHtml(node, task, layout){
 }
 function failedGenerationOverlayHtml(node){
     const error = String(node?.lastRunError || tr('smart.errRunFailed')).replace(/\s+/g, ' ').trim();
-    return `<div class="generation-failed-overlay" role="status"><i data-lucide="circle-alert"></i><span>生成失败</span><small title="${escapeAttr(error)}">${escapeHtml(error)}</small></div>`;
+    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : tr('smart.errRunFailed');
+    return `<div class="generation-failed-overlay" role="status"><i data-lucide="circle-alert"></i><span>${escapeHtml(title)}</span><small title="${escapeAttr(error)}">${escapeHtml(error)}</small></div>`;
 }
 function smartNodeToolbarImageIndex(node){
     const images = node?.images || [];
@@ -9651,12 +9655,16 @@ function positionImageActionToolbar(target=currentMediaToolbarTarget()){
 function updateImageActionToolbar(){
     if(!imageActionToolbar) return;
     const target = currentMediaToolbarTarget();
+    const canRemoveBackground = Boolean(target?.kind === 'image' && (isSmartImageGenerationNode(target.node) || isSmartImageUploadNode(target.node)));
     imageActionToolbar.classList.toggle('open', Boolean(target));
     imageActionToolbar.setAttribute('aria-hidden', target ? 'false' : 'true');
     imageActionToolbar.querySelectorAll('[data-image-toolbar-action]').forEach(button => {
         const action = button.dataset.imageToolbarAction || '';
         const requiredKind = button.dataset.toolbarKind || '';
-        button.hidden = Boolean(target && requiredKind && requiredKind !== target.kind);
+        button.hidden = Boolean(
+            (target && requiredKind && requiredKind !== target.kind)
+            || (action === 'remove-background' && !canRemoveBackground)
+        );
         button.disabled = !target || (action === 'upscale' && !jimengImageProviderId());
     });
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
@@ -9902,6 +9910,10 @@ function runImageToolbarAction(action){
         createImageEditGenerationNode(node);
         return;
     }
+    if(action === 'remove-background'){
+        runSmartBackgroundRemoval(node, index);
+        return;
+    }
     if(action === 'preview'){
         openImagePreview(node.id, index);
         return;
@@ -10033,6 +10045,105 @@ async function runJimengUpscale(node, index){
         }
         render();
         scheduleSave();
+    }
+}
+const SMART_BACKGROUND_REMOVAL_WORKFLOW = '抠图_api.json';
+const SMART_BACKGROUND_REMOVAL_VARIANTS = {
+    '4':'RMBG-2.0',
+    '8':'INSPYRENET'
+};
+const smartBackgroundRemovalRequests = new Set();
+function smartBackgroundRemovalRequestKey(node, index, item){
+    return `${node?.id || ''}:${Number(index) || 0}:${item?.url || ''}`;
+}
+function smartBackgroundRemovalOutputs(result){
+    const sourceItems = Array.isArray(result?.items) ? result.items : [];
+    return resultMediaUrls(result).map((output, index) => {
+        const url = typeof output === 'string' ? output : output?.url || '';
+        if(!url) return null;
+        const source = sourceItems.find(item => String(item?.url || '') === url) || {};
+        const variant = SMART_BACKGROUND_REMOVAL_VARIANTS[String(source.node_id || '')] || `Result ${index + 1}`;
+        return stripImageGenerationMeta(copyMediaSizeFields(source, {
+            url,
+            kind:'image',
+            name:`${variant}.png`,
+            generatedResult:true
+        }));
+    }).filter(item => item?.url);
+}
+async function runSmartBackgroundRemoval(sourceNode, imageIndex){
+    const source = liveSmartNode(sourceNode) || sourceNode;
+    const index = Number.isFinite(Number(imageIndex)) ? Number(imageIndex) : smartNodeToolbarImageIndex(source);
+    const item = imageForDisplay(source?.images?.[index]);
+    if(!source || !item?.url || mediaKindForItem(item) !== 'image'){
+        toast(tr('smart.removeBackgroundNeedImage'));
+        return;
+    }
+    const requestKey = smartBackgroundRemovalRequestKey(source, index, item);
+    if(smartBackgroundRemovalRequests.has(requestKey)) return;
+    smartBackgroundRemovalRequests.add(requestKey);
+    pushUndo();
+    const rect = nodeRect(source);
+    const created = createImageGenerationNode({x:rect.x + rect.width + 200, y:rect.y + 118}, {
+        skipUndo:true,
+        select:true,
+        deferRender:true,
+        deferSave:true
+    });
+    const sourceRef = {url:item.url, name:item.name || smartImageNameFromUrl(item.url), kind:'image', nodeId:source.id, imageIndex:index};
+    const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_BACKGROUND_REMOVAL_WORKFLOW, apiKind:'image'};
+    created.title = tr('smart.removeBackgroundRunning');
+    created.backgroundRemoval = {workflow:SMART_BACKGROUND_REMOVAL_WORKFLOW, sourceNodeId:source.id, sourceImageIndex:index, sourceUrl:item.url};
+    created.sourceNodeId = source.id;
+    created.runInputRefs = [{...sourceRef}];
+    created.runSettings = runSettings;
+    created.runStartedAt = nowMs();
+    created.running = true;
+    created.pending = 1;
+    connectInputNode(source.id, created.id);
+    selectedId = created.id;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    render();
+    updateComposer();
+    scheduleSave();
+    const run = {nodeId:created.id, nodeType:created.type, kind:'image', settings:runSettings, prompt:'', refs:[sourceRef]};
+    const startedAt = nowMs();
+    try {
+        const inputName = await comfyNameForRef(sourceRef);
+        const result = await runQueuedSmartComfyGenerate({
+            workflow_json:SMART_BACKGROUND_REMOVAL_WORKFLOW,
+            params:{'3':{image:inputName}},
+            type:'background-removal',
+            client_id:smartClientId
+        });
+        const outputs = smartBackgroundRemovalOutputs(result);
+        if(!outputs.length) throw new Error(tr('smart.errComfyEmpty'));
+        const live = liveSmartNode(created) || created;
+        live.images = outputs;
+        live.activeImageIndex = 0;
+        live.title = tr('smart.removeBackground');
+        live.outputKind = 'image';
+        live.runFinishedAt = nowMs();
+        markSmartNodeComplete(live);
+        addSmartGenerationLog({run, outputs, runMs:nowMs() - startedAt});
+        selectedId = live.id;
+        selectedImage = {nodeId:live.id, index:0};
+        render();
+        scheduleSave();
+        toast(tr('smart.removeBackgroundDone'));
+    } catch(error){
+        const live = liveSmartNode(created) || created;
+        const detail = String(error?.message || error || tr('smart.errRunFailed')).slice(0, 600);
+        live.title = tr('smart.removeBackgroundFailedTitle');
+        live.lastRunError = detail;
+        markSmartNodeFailedIfIdle(live, detail);
+        addSmartGenerationLog({run, runMs:nowMs() - startedAt, error:detail});
+        render();
+        scheduleSave();
+        toast(trf('smart.removeBackgroundFailed', {error:detail}).slice(0, 180));
+    } finally {
+        smartBackgroundRemovalRequests.delete(requestKey);
     }
 }
 // 智能分组顶部小菜单：整理排列 / 预览（整组左右切换）/ 宫格拼接 / 批量下载 / 解散分组。
@@ -10226,7 +10337,8 @@ function render(){
         .map(node => {
         if(isCanvasOrganizerNode(node)) return {node, html:canvasOrganizerHtml(node)};
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -10240,14 +10352,14 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const uploadResourceHeader = uploadResourceHeaderHtml(node);
         const renderedNodeHeight = layout.height + (uploadResourceHeader ? 38 : 0);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--upload-resource-base-height:${layout.height}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
@@ -12089,6 +12201,7 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
 }
 function smartConnectionNodeLabel(node){
     if(isSmartVideoGenerationNode(node)) return '视频生成';
+    if(isSmartBackgroundRemovalNode(node)) return tr('smart.removeBackground');
     if(isSmartImageGenerationNode(node)) return '图片生成';
     if(isSmartUploadNode(node)) return uploadNodeLabel(uploadMediaKindForNode(node));
     if(node?.type === 'smart-prompt') return tr('smart.textNode');
@@ -15808,7 +15921,7 @@ function updateComposer(){
         lastComposerNodeId = '';
         return;
     }
-    composer.classList.toggle('open', !!node);
+    composer.classList.toggle('open', isSmartRunnableNode(node));
     if(!isSmartRunnableNode(node)){
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         savePromptDraftForCurrent();
