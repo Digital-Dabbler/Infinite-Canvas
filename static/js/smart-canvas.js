@@ -1285,23 +1285,9 @@ function applyLibraryAssetToCanvas(item){
     if(!item?.url){ toast('素材地址无效'); return; }
     const point = viewportCenter();
     const image = imageForDisplay({...item, name:item.name || 'asset', url:item.url});
-    const node = {
-        id: uid('upload'),
-        type: 'smart-image-upload',
-        x: Math.round(point.x - 150),
-        y: Math.round(point.y - 100),
-        title: item.name || 'asset',
-        images: [image],
-        activeImageIndex: 0,
-        created_at: Date.now()
-    };
-    node.scale = mediaNodeDefaultScale(node);
     pushUndo();
-    nodes.push(node);
-    localUnsyncedNodeIds.add(node.id);
-    selectedId = node.id;
-    render();
-    scheduleSave();
+    const node = createMediaUploadNodeAt(point, [image], {skipUndo:true});
+    if(!node) return;
     toast('已添加到画布');
 }
 
@@ -1369,8 +1355,46 @@ function clearVolcengineSelectionOutsideVolcengine(target=settings){
     if(target.videoProvider === 'volcengine') target.videoProvider = '';
     return target;
 }
+const SMART_UPLOAD_MEDIA_KINDS = new Set(['image', 'video', 'audio']);
+function normalizedUploadMediaKind(kind='image'){
+    return SMART_UPLOAD_MEDIA_KINDS.has(String(kind || '').toLowerCase()) ? String(kind).toLowerCase() : 'image';
+}
+function uploadNodeTypeForMediaKind(kind='image'){
+    const mediaKind = normalizedUploadMediaKind(kind);
+    return mediaKind === 'video' ? 'smart-video-upload' : mediaKind === 'audio' ? 'smart-audio-upload' : 'smart-image-upload';
+}
+function uploadMediaKindForNode(node){
+    if(node?.pendingUpload && !(node?.images || []).some(item => item?.url)) return '';
+    if(node?.type === 'smart-video-upload') return 'video';
+    if(node?.type === 'smart-audio-upload') return 'audio';
+    const first = (node?.images || []).find(item => item?.url);
+    return normalizedUploadMediaKind(first ? mediaKindForItem(imageForDisplay(first)) : 'image');
+}
+function uploadNodeLabel(kind='image'){
+    if(!kind) return tr('smart.createImportNode');
+    const mediaKind = normalizedUploadMediaKind(kind);
+    return mediaKind === 'video' ? tr('smart.uploadNodeVideo') : mediaKind === 'audio' ? tr('smart.uploadNodeAudio') : tr('smart.uploadNodeImage');
+}
+function uploadResourceLabel(kind='image'){
+    const mediaKind = normalizedUploadMediaKind(kind);
+    return mediaKind === 'video' ? tr('smart.resourceVideo') : mediaKind === 'audio' ? tr('smart.resourceAudio') : tr('smart.resourceImage');
+}
+function uploadNodeIcon(kind='image'){
+    if(!kind) return 'upload-cloud';
+    const mediaKind = normalizedUploadMediaKind(kind);
+    return mediaKind === 'video' ? 'video' : mediaKind === 'audio' ? 'audio-lines' : 'image';
+}
+function isSmartUploadNode(node){
+    return Boolean(node && ['smart-image-upload', 'smart-video-upload', 'smart-audio-upload', 'smart-image'].includes(node.type || 'smart-image-upload'));
+}
 function isSmartImageUploadNode(node){
-    return Boolean(node && (node.type === 'smart-image-upload' || node.type === 'smart-image' || !node.type));
+    return Boolean(isSmartUploadNode(node) && uploadMediaKindForNode(node) === 'image');
+}
+function isSmartVideoUploadNode(node){
+    return Boolean(isSmartUploadNode(node) && uploadMediaKindForNode(node) === 'video');
+}
+function isSmartAudioUploadNode(node){
+    return Boolean(isSmartUploadNode(node) && uploadMediaKindForNode(node) === 'audio');
 }
 function isSmartImageGenerationNode(node){
     return Boolean(node && node.type === 'smart-image-generation');
@@ -1385,7 +1409,7 @@ function isSmartGenerationResultKind(node, kind='image'){
     return Boolean((isSmartImageGenerationNode(node) && kind === 'image') || (isSmartVideoGenerationNode(node) && kind === 'video'));
 }
 function isSmartImageNode(node){
-    return Boolean(isSmartImageUploadNode(node) || isSmartGenerationNode(node));
+    return Boolean(isSmartUploadNode(node) || isSmartGenerationNode(node));
 }
 // 智能分组已退出运行时；旧数据会在 normalizeLegacySmartNode() 中转换成生成节点。
 function isSmartGroupNode(){
@@ -1446,10 +1470,14 @@ function normalizeLegacySmartNode(node){
         const images = Array.isArray(node.images) && node.images.length
             ? node.images
             : (fallbackImage ? [fallbackImage] : []);
+        const generated = legacyNodeLooksGenerated(node);
+        const mediaKind = normalizedUploadMediaKind(mediaKindForItem(imageForDisplay(images[0])));
         const normalized = {
             ...node,
-            type:legacyNodeLooksGenerated(node) ? legacyGenerationNodeType(node) : 'smart-image-upload',
-            title:images.length > 1 ? 'Group' : (images.length ? 'Image' : tr('smart.createImportNode')),
+            type:generated ? legacyGenerationNodeType(node) : uploadNodeTypeForMediaKind(mediaKind),
+            title:generated
+                ? (images.length > 1 ? 'Group' : (images.length ? 'Image' : tr('smart.createImportNode')))
+                : uploadNodeLabel(mediaKind),
             images
         };
         delete normalized.imageMode;
@@ -1460,6 +1488,11 @@ function normalizeLegacySmartNode(node){
     }
     if(!node.type) node.type = legacyNodeLooksGenerated(node) ? legacyGenerationNodeType(node) : 'smart-image-upload';
     if(node.type === 'smart-image') node.type = legacyNodeLooksGenerated(node) ? legacyGenerationNodeType(node) : 'smart-image-upload';
+    if(isSmartUploadNode(node) && !node.pendingUpload){
+        const mediaKind = uploadMediaKindForNode(node);
+        node.type = uploadNodeTypeForMediaKind(mediaKind);
+        node.title = uploadNodeLabel(mediaKind);
+    }
     if(isSmartImageNode(node)){
         delete node.imageMode;
         // 旧画布曾会把同一个远程输出在轮询、恢复或同步时重复写入。生成节点
@@ -1503,14 +1536,17 @@ function migrateLegacySmartCanvasNodes(rawNodes=[], rawConnections=[]){
         if(!node) return;
         if(node.type !== originalType) changed = true;
         if(originalPromptState && originalPromptState !== JSON.stringify({text:String(node.text || ''), presets:node.promptPresets || [], version:node.promptPresetTextModelVersion || 0, legacy:node.textOutputSemanticsV1 === true})) changed = true;
-        const imagesAreAllRaster = (node.images || []).length > 1 && (node.images || []).every(image => mediaKindForItem(imageForDisplay(image)) === 'image');
-        if(isSmartImageUploadNode(node) && imagesAreAllRaster){
-            const count = node.images.length;
+        const uploadItems = isSmartUploadNode(node)
+            ? (node.images || []).filter(image => image?.url && SMART_UPLOAD_MEDIA_KINDS.has(mediaKindForItem(imageForDisplay(image))))
+            : [];
+        if(isSmartUploadNode(node) && uploadItems.length > 1){
+            const count = uploadItems.length;
             const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
-            const copies = node.images.map((image, index) => {
+            const copies = uploadItems.map((image, index) => {
                 const col = index % cols;
                 const row = Math.floor(index / cols);
-                const copy = {...node, id:index === 0 ? node.id : uid('upload'), type:'smart-image-upload', title:'上传', images:[image], activeImageIndex:0,
+                const mediaKind = normalizedUploadMediaKind(mediaKindForItem(imageForDisplay(image)));
+                const copy = {...node, id:index === 0 ? node.id : uid('upload'), type:uploadNodeTypeForMediaKind(mediaKind), title:uploadNodeLabel(mediaKind), images:[image], activeImageIndex:0,
                     x:(Number(node.x) || 0) + col * 228, y:(Number(node.y) || 0) + row * 228};
                 delete copy.w; delete copy.h;
                 copy.scale = MEDIA_NODE_DEFAULT_SCALE;
@@ -1755,9 +1791,15 @@ function mediaNodeDefaultScale(node){
     if((node?.images || []).length > 1 && !Number.isFinite(Number(node?.scale))) return MEDIA_GROUP_DEFAULT_SCALE;
     return Number.isFinite(Number(node?.scale)) && Number(node.scale) > 0 ? Number(node.scale) : MEDIA_NODE_DEFAULT_SCALE;
 }
+function createMediaUploadNodeAt(point, images=[], options={}){
+    const sourceItems = images || [];
+    const mediaKind = normalizedUploadMediaKind(options.mediaKind || mediaKindForItem(imageForDisplay(sourceItems.find(item => item?.url) || {})));
+    const type = uploadNodeTypeForMediaKind(mediaKind);
+    const layout = imageLayout(sourceItems, mediaNodeDefaultScale({type, images:sourceItems}), {type, images:sourceItems});
+    return createNode((point?.x || 0) - Math.round(layout.width / 2), (point?.y || 0) - Math.round(layout.height / 2), sourceItems, {...options, mediaKind});
+}
 function createImageNodeAt(point, images=[], options={}){
-    const layout = imageLayout(images || [], mediaNodeDefaultScale({type:'smart-image-upload', images:images || []}), {type:'smart-image-upload', images:images || []});
-    return createNode((point?.x || 0) - Math.round(layout.width / 2), (point?.y || 0) - Math.round(layout.height / 2), images, options);
+    return createMediaUploadNodeAt(point, images, {...options, mediaKind:'image'});
 }
 function smartGroupLayoutSize(node){
     const explicitW = Number(node?.w);
@@ -4928,13 +4970,14 @@ function renderedInputMediaRefs(){
         nodeId:el.dataset.nodeId || '',
         imageIndex:Number.isFinite(Number(el.dataset.imageIndex)) ? Number(el.dataset.imageIndex) : index,
         name:tr('smart.inputNum').replace('{n}', String(index + 1)),
+        kind:normalizedUploadMediaKind(el.dataset.kind || 'image'),
         role:`image_${index + 1}`
     })).filter(ref => ref.url);
 }
 function currentSmartMediaRefs(node){
     if(!node) return [];
     const request = buildPromptRequest(node, null, true, smartLoopContext);
-    return (request.refs || []).filter(ref => ref?.url && ['image','video'].includes(mediaKindForItem(ref)));
+    return (request.refs || []).filter(ref => ref?.url && SMART_UPLOAD_MEDIA_KINDS.has(mediaKindForItem(ref)));
 }
 function currentUploadMediaRefs(node){
     const rendered = renderedInputMediaRefs();
@@ -7786,8 +7829,9 @@ function inheritNodeMetaFromImage(node){
 function createNode(x, y, images=[], options={}){
     if(!options.skipUndo) pushUndo();
     const nodeImages = (images || []).map(img => ({...img}));
-    const imageOnly = nodeImages.length <= 1 || nodeImages.every(image => mediaKindForItem(imageForDisplay(image)) === 'image');
-    const node = {id:uid('upload'), type:imageOnly ? 'smart-image-upload' : 'smart-image', x, y, title:nodeImages.length ? '上传' : tr('smart.createImportNode'), images:imageOnly ? nodeImages.slice(0, 1) : nodeImages, activeImageIndex:0, created_at:Date.now()};
+    const mediaKind = normalizedUploadMediaKind(options.mediaKind || mediaKindForItem(imageForDisplay(nodeImages.find(item => item?.url) || {})));
+    const node = {id:uid('upload'), type:uploadNodeTypeForMediaKind(mediaKind), x, y, title:nodeImages.length ? uploadNodeLabel(mediaKind) : tr('smart.createImportNode'), images:nodeImages, activeImageIndex:0, created_at:Date.now()};
+    if(options.pendingUpload) node.pendingUpload = true;
     node.scale = mediaNodeDefaultScale(node);
     inheritNodeMetaFromImage(node);
     nodes.push(node);
@@ -8219,7 +8263,7 @@ function pasteNodes(){
     return true;
 }
 // 跨页"素材库 → 画布"剪贴板：素材库管理页把所选素材写进这个 localStorage key，
-// 画布里按 Ctrl+V 读取并批量生成图片节点（网格平铺），用完即清空（一次性）。
+// 画布里按 Ctrl+V 读取并按素材类型生成上传节点（网格平铺），用完即清空（一次性）。
 const SMART_CANVAS_ASSET_INBOX_KEY = 'smart_canvas_asset_inbox';
 function readAssetInbox(){
     try {
@@ -8244,7 +8288,7 @@ function pasteAssetsFromInbox(){
     items.forEach((it, i) => {
         const r = Math.floor(i / cols), c = i % cols;
         const p = {x: startX + c * cell, y: startY + r * cell};
-        const node = createImageNodeAt(p, [assetNodeImageFromItem(it)], {skipUndo:true, select:false});
+        const node = createMediaUploadNodeAt(p, [assetNodeImageFromItem(it)], {skipUndo:true, select:false});
         if(node) created.push(node.id);
     });
     selectedId = created.length === 1 ? created[0] : '';
@@ -10182,7 +10226,7 @@ function render(){
         .map(node => {
         if(isCanvasOrganizerNode(node)) return {node, html:canvasOrganizerHtml(node)};
         const imgs = node.images || [];
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -10196,7 +10240,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartImageUploadNode(node) ? 'upload-cloud' : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -10204,10 +10248,10 @@ function render(){
         const renderedNodeHeight = layout.height + (uploadResourceHeader ? 38 : 0);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--upload-resource-base-height:${layout.height}px;height:${renderedNodeHeight}px">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--upload-resource-base-height:${layout.height}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
-            ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartImageUploadNode(node) && imgs.some(img => mediaKindForItem(imageForDisplay(img)) === 'image')) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
+            ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartUploadNode(node) && imgs.length) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
             ${smartNodeToolbarHtml(node)}${smartGroupToolbarHtml(node)}
             ${runTimePillHtml(node)}
             <div class="node-body">${body}</div>
@@ -11195,15 +11239,59 @@ function handlePortDrop(drag, e){
 }
 const uploadResourcePickerState = {open:false, nodeId:'', imageIndex:-1, tab:'all', query:'', view:'grid', sort:'recent', trigger:null};
 let uploadResourcePickerEl = null;
+const uploadResourceFingerprintByUrl = new Map();
+let uploadResourceFingerprintRequestKey = '';
 function uploadResourceSourceLabel(source){
     return source === 'generated' ? tr('smart.resourceGenerated') : tr('smart.resourceImported');
+}
+function canvasUploadResourceIdentity(raw){
+    const url = String(raw?.url || '');
+    const fingerprint = uploadResourceFingerprintByUrl.get(url);
+    return fingerprint ? `sha256:${fingerprint}` : `url:${mediaOutputIdentity(raw) || url}`;
+}
+function isLocalCanvasMediaUrl(url){
+    return /^\/(?:assets|output|api\/storage-files)\//.test(String(url || ''));
+}
+async function refreshCanvasUploadResourceFingerprints(){
+    if(!canvasId) return;
+    const urls = [...new Set(currentCanvasUploadResourceItems()
+        .map(item => String(item.url || ''))
+        .filter(url => isLocalCanvasMediaUrl(url) && !uploadResourceFingerprintByUrl.has(url)))];
+    if(!urls.length) return;
+    const requestKey = `${canvasId}|${urls.join('|')}`;
+    if(uploadResourceFingerprintRequestKey === requestKey) return;
+    uploadResourceFingerprintRequestKey = requestKey;
+    try {
+        const response = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/media-fingerprints`, {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({urls})
+        });
+        if(!response.ok){
+            uploadResourceFingerprintRequestKey = '';
+            return;
+        }
+        const data = await response.json();
+        let changed = false;
+        Object.entries(data?.fingerprints || {}).forEach(([url, fingerprint]) => {
+            if(!url || !fingerprint || uploadResourceFingerprintByUrl.get(url) === fingerprint) return;
+            uploadResourceFingerprintByUrl.set(url, fingerprint);
+            changed = true;
+        });
+        if(changed && uploadResourcePickerState.open) renderUploadResourcePicker();
+    } catch(e) {
+        // 指纹不可用时继续按 URL 去重，不影响资源选择。
+        uploadResourceFingerprintRequestKey = '';
+    }
 }
 function currentCanvasUploadResourceItems(){
     const seen = new Set();
     const resources = [];
+    const target = nodes.find(node => node.id === uploadResourcePickerState.nodeId);
+    const targetKind = isSmartUploadNode(target) ? uploadMediaKindForNode(target) : 'image';
     const add = (raw, source, node, imageIndex) => {
-        if(!raw?.url || mediaKindForItem(imageForDisplay(raw)) !== 'image') return;
-        const identity = mediaOutputIdentity(raw) || String(raw.url || '');
+        if(!raw?.url || mediaKindForItem(imageForDisplay(raw)) !== targetKind) return;
+        const identity = canvasUploadResourceIdentity(raw);
         if(!identity || seen.has(identity)) return;
         seen.add(identity);
         resources.push({
@@ -11212,11 +11300,11 @@ function currentCanvasUploadResourceItems(){
             nodeId:node.id,
             imageIndex,
             identity,
-            name:imageNameLabel(raw, tr('smart.resourceImage'))
+            name:imageNameLabel(raw, uploadResourceLabel(targetKind))
         });
     };
     nodes.forEach(node => {
-        const source = isSmartImageUploadNode(node) ? 'imported' : (isSmartImageGenerationNode(node) ? 'generated' : '');
+        const source = isSmartUploadNode(node) ? 'imported' : (isSmartGenerationNode(node) ? 'generated' : '');
         if(!source) return;
         (node.images || []).forEach((image, imageIndex) => {
             if(image?.loopInputPreview || isReturnedVideoLastFrame(image)) return;
@@ -11229,7 +11317,7 @@ function filteredCanvasUploadResourceItems(){
     const state = uploadResourcePickerState;
     const keyword = String(state.query || '').trim().toLocaleLowerCase();
     const target = nodes.find(node => node.id === state.nodeId)?.images?.[state.imageIndex];
-    const targetIdentity = mediaOutputIdentity(target) || String(target?.url || '');
+    const targetIdentity = canvasUploadResourceIdentity(target);
     let items = currentCanvasUploadResourceItems()
         .filter(item => state.tab === 'all' || item.source === state.tab)
         .filter(item => !keyword || `${item.name} ${uploadResourceSourceLabel(item.source)}`.toLocaleLowerCase().includes(keyword));
@@ -11244,7 +11332,7 @@ function ensureUploadResourcePicker(){
     uploadResourcePickerEl.id = 'uploadResourcePicker';
     uploadResourcePickerEl.className = 'upload-resource-picker';
     uploadResourcePickerEl.setAttribute('role', 'dialog');
-    uploadResourcePickerEl.setAttribute('aria-label', tr('smart.resourcePickerLabel'));
+    uploadResourcePickerEl.setAttribute('aria-label', trf('smart.resourcePickerLabel', {kind:uploadResourceLabel('image')}));
     uploadResourcePickerEl.addEventListener('pointerdown', event => event.stopPropagation());
     uploadResourcePickerEl.addEventListener('mousedown', event => event.stopPropagation());
     uploadResourcePickerEl.addEventListener('click', event => event.stopPropagation());
@@ -11272,10 +11360,14 @@ function uploadResourceSortLabel(){
 function renderUploadResourcePicker({focusSearch=false}={}){
     const picker = ensureUploadResourcePicker();
     const state = uploadResourcePickerState;
+    const targetNode = nodes.find(node => node.id === state.nodeId);
+    const targetKind = isSmartUploadNode(targetNode) ? uploadMediaKindForNode(targetNode) : 'image';
+    const kindLabel = uploadResourceLabel(targetKind);
     const {items, targetIdentity} = filteredCanvasUploadResourceItems();
     const countBy = source => currentCanvasUploadResourceItems().filter(item => source === 'all' || item.source === source).length;
     const tabs = [['all', tr('smart.resourceAll')], ['imported', tr('smart.resourceImported')], ['generated', tr('smart.resourceGenerated')]];
     const empty = uploadResourcePickerEmptyCopy();
+    picker.setAttribute('aria-label', trf('smart.resourcePickerLabel', {kind:kindLabel}));
     picker.innerHTML = `<div class="upload-resource-picker-head">
         <div class="upload-resource-tabs" role="tablist" aria-label="${escapeAttr(tr('smart.resourcePickerRange'))}">
             ${tabs.map(([key, label]) => `<button class="upload-resource-tab ${state.tab === key ? 'active' : ''}" type="button" role="tab" data-upload-resource-tab="${key}" aria-selected="${state.tab === key}">${escapeHtml(label)}<span class="sr-only">${escapeHtml(trf('smart.resourceTabCount', {n:countBy(key)}))}</span></button>`).join('')}
@@ -11288,9 +11380,9 @@ function renderUploadResourcePicker({focusSearch=false}={}){
         <button class="upload-resource-tool ${state.view === 'grid' ? 'active' : ''}" type="button" data-upload-resource-view="grid" title="${escapeAttr(tr('smart.resourceGridView'))}" aria-label="${escapeAttr(tr('smart.resourceGridView'))}" aria-pressed="${state.view === 'grid'}"><i data-lucide="grid-2x2"></i></button>
         <button class="upload-resource-tool ${state.view === 'list' ? 'active' : ''}" type="button" data-upload-resource-view="list" title="${escapeAttr(tr('smart.resourceListView'))}" aria-label="${escapeAttr(tr('smart.resourceListView'))}" aria-pressed="${state.view === 'list'}"><i data-lucide="list"></i></button>
     </div>
-    <div class="upload-resource-count" aria-live="polite">${escapeHtml(trf('smart.resourceCanvasImageCount', {n:items.length}))}</div>
-    <div class="upload-resource-grid ${state.view === 'list' ? 'is-list' : ''}" role="listbox" aria-label="${escapeAttr(tr('smart.resourcePickerLabel'))}">
-        ${items.length ? items.map((item, index) => `<button class="upload-resource-item ${(item.identity === targetIdentity) ? 'selected' : ''}" type="button" role="option" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb">${smartPreviewImgHtml(imageForDisplay(item), 256, `loading="lazy" decoding="async" draggable="false" alt="${escapeAttr(item.name)}"`)}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${uploadResourceSourceLabel(item.source)}</span></button>`).join('') : `<div class="upload-resource-empty"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`}
+    <div class="upload-resource-count" aria-live="polite">${escapeHtml(trf('smart.resourceCanvasMediaCount', {n:items.length, kind:kindLabel}))}</div>
+    <div class="upload-resource-grid ${state.view === 'list' ? 'is-list' : ''}" role="listbox" aria-label="${escapeAttr(trf('smart.resourcePickerLabel', {kind:kindLabel}))}">
+        ${items.length ? items.map((item, index) => `<button class="upload-resource-item ${(item.identity === targetIdentity) ? 'selected' : ''}" type="button" role="option" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb">${thumbMediaHtml(imageForDisplay(item), {selectOnly:true})}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${uploadResourceSourceLabel(item.source)}</span></button>`).join('') : `<div class="upload-resource-empty"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`}
     </div>`;
     picker.querySelectorAll('[data-upload-resource-tab]').forEach(button => {
         button.addEventListener('click', () => {
@@ -11320,11 +11412,13 @@ function renderUploadResourcePicker({focusSearch=false}={}){
     picker.querySelectorAll('[data-upload-resource-select]').forEach(button => {
         button.addEventListener('click', () => {
             const selected = items[Number(button.dataset.uploadResourceSelect)];
-            const target = nodes.find(node => node.id === state.nodeId);
-            if(!selected?.url || !target?.images?.[state.imageIndex]) return;
+            const nodeId = state.nodeId;
+            const imageIndex = state.imageIndex;
+            const target = nodes.find(node => node.id === nodeId);
+            if(!selected?.url || !target?.images?.[imageIndex]) return;
             pushUndo();
             closeUploadResourcePicker({restoreFocus:false});
-            appendImagesToSmartNode([{...selected, kind:'image'}], state.nodeId, {replaceIndex:state.imageIndex});
+            appendImagesToSmartNode([{...selected, kind:targetKind}], nodeId, {replaceIndex:imageIndex});
             toast(tr('smart.resourceReplaced'));
         });
     });
@@ -11388,6 +11482,7 @@ function openUploadResourcePicker(nodeId, imageIndex, trigger){
     picker.classList.add('open');
     trigger?.setAttribute('aria-expanded', 'true');
     renderUploadResourcePicker({focusSearch:true});
+    void refreshCanvasUploadResourceFingerprints();
 }
 function closeUploadResourcePicker({restoreFocus=true}={}){
     const state = uploadResourcePickerState;
@@ -11403,8 +11498,10 @@ function closeUploadResourcePicker({restoreFocus=true}={}){
 function pickMediaForSmartNode(nodeId='', options={}){
     const input = document.createElement('input');
     input.type = 'file';
-    const replacing = Number.isInteger(Number(options.replaceIndex));
-    input.accept = replacing ? 'image/*' : 'image/*,video/*,audio/*';
+    const replacing = Number.isInteger(Number(options.replaceIndex)) && Number(options.replaceIndex) >= 0;
+    const target = nodes.find(node => node.id === nodeId);
+    const nodeKind = isSmartUploadNode(target) ? uploadMediaKindForNode(target) : '';
+    input.accept = nodeKind ? `${nodeKind}/*` : 'image/*,video/*,audio/*';
     input.multiple = !replacing;
     input.onchange = () => {
         if(input.files?.length) handleFiles(input.files, nodeId, options);
@@ -11993,7 +12090,7 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
 function smartConnectionNodeLabel(node){
     if(isSmartVideoGenerationNode(node)) return '视频生成';
     if(isSmartImageGenerationNode(node)) return '图片生成';
-    if(isSmartImageUploadNode(node)) return '上传';
+    if(isSmartUploadNode(node)) return uploadNodeLabel(uploadMediaKindForNode(node));
     if(node?.type === 'smart-prompt') return tr('smart.textNode');
     if(node?.type === 'smart-loop') return '循环';
     return node?.title || '节点';
@@ -12001,7 +12098,7 @@ function smartConnectionNodeLabel(node){
 function smartConnectionNodeIcon(node){
     if(isSmartVideoGenerationNode(node)) return 'video';
     if(isSmartImageGenerationNode(node)) return 'sparkles';
-    if(isSmartImageUploadNode(node)) return 'upload-cloud';
+    if(isSmartUploadNode(node)) return uploadNodeIcon(uploadMediaKindForNode(node));
     if(node?.type === 'smart-prompt') return 'text-cursor-input';
     if(node?.type === 'smart-loop') return 'repeat-2';
     return 'circle';
@@ -12044,7 +12141,7 @@ function portConnectionPoint(node, port, fallbackPoint){
     };
 }
 function createPortConnectionNode(type, point){
-    if(type === 'smart-image-upload') return createImageNodeAt(point, [], {skipUndo:true, select:true});
+    if(type === 'smart-image-upload') return createImageNodeAt(point, [], {skipUndo:true, select:true, pendingUpload:true});
     if(type === 'smart-image-generation') return createImageGenerationNode(point, {skipUndo:true, select:true});
     if(type === 'smart-video-generation') return createVideoGenerationNode(point, {skipUndo:true, select:true});
     if(type === 'smart-prompt') return createPromptNode(Math.round(point.x - 158), Math.round(point.y - 97), {skipUndo:true, select:true});
@@ -13390,13 +13487,14 @@ function reproducePreviewWorkflow(){
     const created = [];
     const inputNodes = refs.map((ref, index) => {
         const item = imageForDisplay({...ref, name:ref.name || smartImageNameFromUrl(ref.url)});
-        const node = {
-            id:uid('upload'), type:'smart-image-upload', x:Math.round(origin.x), y:Math.round(origin.y + index * 190),
-            title:ref.name || tr('smart.createImportNode'), images:[item], activeImageIndex:0, created_at:Date.now()
-        };
-        node.scale = mediaNodeDefaultScale(node);
-        nodes.push(node);
-        localUnsyncedNodeIds.add(node.id);
+        const node = createMediaUploadNodeAt({
+            x:Math.round(origin.x),
+            y:Math.round(origin.y + index * 190)
+        }, [item], {
+            skipUndo:true,
+            select:false,
+            mediaKind:normalizedUploadMediaKind(mediaKindForItem(item))
+        });
         created.push(node);
         return node;
     });
@@ -14709,23 +14807,25 @@ function uploadResourceHeaderHtml(node){
     // 控件节点始终保留在 DOM 中，但仅通过 .selected 显示。选中变化走
     // syncSelectionUi() 的轻量级 class 更新，不会再次 render，因此不能在此处
     // 以选中态决定是否创建 DOM，否则已有节点会在选中后缺少顶部栏。
-    if(!isSmartImageUploadNode(node)) return '';
+    if(!isSmartUploadNode(node)) return '';
+    const mediaKind = uploadMediaKindForNode(node);
+    const kindLabel = uploadResourceLabel(mediaKind);
     const images = node.images || [];
     const requestedIndex = selectedImage.nodeId === node.id
         ? Number(selectedImage.index)
         : Number(node.activeImageIndex);
-    const index = Number.isInteger(requestedIndex) && requestedIndex >= 0 && mediaKindForItem(imageForDisplay(images[requestedIndex])) === 'image'
+    const index = Number.isInteger(requestedIndex) && requestedIndex >= 0 && mediaKindForItem(imageForDisplay(images[requestedIndex])) === mediaKind
         ? requestedIndex
-        : images.findIndex(image => mediaKindForItem(imageForDisplay(image)) === 'image');
+        : images.findIndex(image => mediaKindForItem(imageForDisplay(image)) === mediaKind);
     const image = images[index];
     if(index < 0 || !image?.url) return '';
-    const name = imageNameLabel(image, tr('smart.resourceImage'));
+    const name = imageNameLabel(image, kindLabel);
     return `<div class="upload-resource-control" data-upload-resource-control>
-        <span class="upload-resource-label">${escapeHtml(tr('smart.resourceImage'))}</span>
-        <button class="upload-resource-select" type="button" data-upload-resource-picker-trigger data-node-id="${escapeAttr(node.id)}" data-image-index="${index}" aria-haspopup="dialog" aria-expanded="false" title="${escapeAttr(tr('smart.resourceSelectCanvas'))}">
+        <span class="upload-resource-label"><i data-lucide="${uploadNodeIcon(mediaKind)}"></i>${escapeHtml(kindLabel)}</span>
+        <button class="upload-resource-select" type="button" data-upload-resource-picker-trigger data-node-id="${escapeAttr(node.id)}" data-image-index="${index}" aria-haspopup="dialog" aria-expanded="false" title="${escapeAttr(trf('smart.resourceSelectCanvas', {kind:kindLabel}))}">
             <span>${escapeHtml(name)}</span><i data-lucide="chevron-down"></i>
         </button>
-        <button class="upload-resource-file" type="button" data-upload-resource-file data-node-id="${escapeAttr(node.id)}" data-image-index="${index}" title="${escapeAttr(tr('smart.resourceSelectLocal'))}" aria-label="${escapeAttr(tr('smart.resourceSelectLocal'))}"><i data-lucide="folder-search-2"></i></button>
+        <button class="upload-resource-file" type="button" data-upload-resource-file data-node-id="${escapeAttr(node.id)}" data-image-index="${index}" title="${escapeAttr(trf('smart.resourceSelectLocal', {kind:kindLabel}))}" aria-label="${escapeAttr(trf('smart.resourceSelectLocal', {kind:kindLabel}))}"><i data-lucide="folder-search-2"></i></button>
     </div>`;
 }
 function failedGenerationCellHtml(node, layout){
@@ -15776,7 +15876,7 @@ function renderInputThumbsRow(node){
     // 参考图多时会让输入框打字明显卡顿。
     const thumbsSignature = JSON.stringify({
         node: node?.id || '',
-        items: dedup.map(img => `${inputRefKey(img)}@${img.url || ''}`),
+        items: dedup.map(img => `${inputRefKey(img)}@${mediaKindForItem(img)}@${img.url || ''}`),
         manual: [...manualRefKeys],
         add: addActive,
         mode: node ? smartImageMode(node) : ''
@@ -15813,7 +15913,7 @@ function renderInputThumbsRow(node){
         const key = inputRefKey(img);
         const removable = manualRefKeys.has(key);
         const removeBtn = removable ? `<button class="input-thumb-remove" type="button" data-input-remove-reference="${escapeHtml(inputRefKey(img))}" title="删除参考图" aria-label="删除参考图">×</button>` : '';
-        return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
+        return `<div class="input-thumb ${isSelf ? 'input-self' : ''} ${removable ? 'input-manual-ref' : ''}" draggable="false" data-thumb-index="${i}" data-node-id="${escapeHtml(img.nodeId || '')}" data-image-index="${img.imageIndex ?? ''}" data-url="${escapeHtml(img.url || '')}" data-source-url="${escapeHtml(sourceUrl)}" data-kind="${escapeAttr(kind)}" title="${escapeHtml(`${img.name || tr('smart.inputNum').replace('{n}', String(i + 1))} · ${title}`)}">${inner}<span class="input-thumb-label">${escapeHtml(label)}</span>${removeBtn}</div>`;
     }).join('');
     inputThumbsRow.innerHTML = `<div class="input-thumb-list">${thumbsHtml}${dedup.length > 1 ? `<span class="input-thumb-count">${escapeHtml(tr('smart.inputCount').replace('{n}', String(dedup.length)))}</span>` : ''}</div><div class="input-thumb-actions">${utilityButtons}${addButton}</div>`;
     bindSmartPreviewImageFallbacks(inputThumbsRow);
@@ -16282,93 +16382,76 @@ async function uploadFiles(files){
     }));
 }
 function appendImagesToSmartNode(uploaded, targetId='', opts={}){
-    const images = [...(uploaded || [])].filter(file => file?.url);
-    if(!images.length) return null;
-    const imageFiles = images.filter(file => mediaKindForItem(file) === 'image');
-    const otherFiles = images.filter(file => mediaKindForItem(file) !== 'image');
+    const media = [...(uploaded || [])].filter(file => file?.url).map(file => ({...file, kind:normalizedUploadMediaKind(file.kind || mediaKindForItem(file))}));
+    if(!media.length) return null;
+    const mediaKind = media[0].kind;
+    if(media.some(file => file.kind !== mediaKind)){
+        toast(tr('smart.uploadMixedKinds'));
+        return null;
+    }
+    const target = nodes.find(node => node.id === targetId && isSmartUploadNode(node));
+    const targetKind = target ? uploadMediaKindForNode(target) : '';
+    if(target && targetKind && targetKind !== mediaKind){
+        toast(trf('smart.uploadNodeKindLocked', {kind:uploadNodeLabel(targetKind)}));
+        return null;
+    }
     const replaceIndex = Number(opts.replaceIndex);
-    const replaceTarget = nodes.find(node => node.id === targetId && isSmartImageUploadNode(node));
-    if(Number.isInteger(replaceIndex) && replaceIndex >= 0 && replaceTarget?.images?.[replaceIndex] && imageFiles[0]){
-        replaceTarget.images[replaceIndex] = {...imageFiles[0], kind:'image'};
-        replaceTarget.activeImageIndex = replaceIndex;
-        replaceTarget.title = '上传';
-        delete replaceTarget.w;
-        delete replaceTarget.h;
-        selectedId = replaceTarget.id;
+    if(Number.isInteger(replaceIndex) && replaceIndex >= 0 && target?.images?.[replaceIndex]){
+        target.images = [{...media[0], kind:mediaKind}];
+        target.type = uploadNodeTypeForMediaKind(mediaKind);
+        delete target.pendingUpload;
+        target.activeImageIndex = 0;
+        target.title = uploadNodeLabel(mediaKind);
+        delete target.w;
+        delete target.h;
+        selectedId = target.id;
         selectedIds = [];
-        selectedImage = {nodeId:replaceTarget.id, index:replaceIndex};
+        selectedImage = {nodeId:target.id, index:0};
         render();
         scheduleSave();
-        return replaceTarget;
+        return target;
     }
-    let firstCreated = null;
-    if(imageFiles.length){
-        const target = nodes.find(n => n.id === targetId);
-        const canFillTarget = isSmartImageUploadNode(target) && !(target.images || []).length && imageFiles.length === 1 && !opts.forceNew;
-        if(canFillTarget){
-            target.images = [{...imageFiles[0], kind:'image'}];
-            target.activeImageIndex = 0;
-            target.title = '上传';
-            delete target.w; delete target.h;
-            selectedId = target.id;
-            selectedIds = [];
-            render();
-            scheduleSave();
-            firstCreated = target;
-            if(!otherFiles.length) return target;
-        }
-        if(!canFillTarget){
-            const baseRect = target ? nodeRect(target) : null;
-            const center = opts.point || (baseRect ? {x:baseRect.x + baseRect.width + 148, y:baseRect.y + baseRect.height / 2} : viewportCenter());
-            const cols = Math.max(1, Math.ceil(Math.sqrt(imageFiles.length)));
-            const created = imageFiles.map((file, index) => {
-                const col = index % cols;
-                const row = Math.floor(index / cols);
-                return createImageNodeAt({x:center.x + col * 228, y:center.y + row * 228}, [{...file, kind:'image'}], {skipUndo:true, select:false});
-            }).filter(Boolean);
-            selectedId = created.length === 1 ? created[0].id : '';
-            selectedIds = created.length > 1 ? created.map(node => node.id) : [];
-            selectedImage = selectedId ? {nodeId:selectedId, index:0} : {nodeId:'', index:-1};
-            render();
-            scheduleSave();
-            firstCreated = created[0] || null;
-            if(!otherFiles.length) return firstCreated;
-        }
-        // 同一次选择中的视频、音频继续各自走多媒体上传逻辑，避免混入单图节点。
-        targetId = '';
+    if(target && !(target.images || []).length && media.length === 1 && !opts.forceNew){
+        target.images = [{...media[0], kind:mediaKind}];
+        target.type = uploadNodeTypeForMediaKind(mediaKind);
+        delete target.pendingUpload;
+        target.activeImageIndex = 0;
+        target.title = uploadNodeLabel(mediaKind);
+        delete target.w;
+        delete target.h;
+        selectedId = target.id;
+        selectedIds = [];
+        render();
+        scheduleSave();
+        return target;
     }
-    const targetGroup = nodes.find(n => n.id === targetId && isSmartGroupNode(n));
-    let node = targetGroup ? null : (nodes.find(n => n.id === targetId) || selectedNode());
-    if(node && !isSmartImageUploadNode(node)) node = null;
-    if(opts.forceNew) node = null;
-    if(!node){
-        const groupRect = targetGroup ? nodeRect(targetGroup) : null;
-        const center = opts.point || (groupRect ? {x:groupRect.x + groupRect.width / 2, y:groupRect.y + groupRect.height / 2} : viewportCenter());
-        undoSuppressed = true;
-        node = createImageNodeAt(center, []);
-        undoSuppressed = false;
-    }
-    const previousCount = (node.images || []).length;
-    node.images = [...(node.images || []), ...otherFiles.map(file => ({...file, kind:file.kind || mediaKindForItem(file)}))];
-    if(node.images.length > 1){
-        node.title = uploadTitleForItems(node.images, 'Group');
-        if(previousCount <= 1 && (!Number.isFinite(Number(node.scale)) || Number(node.scale) === MEDIA_NODE_DEFAULT_SCALE || Number(node.scale) === MEDIA_GROUP_PREVIOUS_DEFAULT_SCALE)){
-            node.scale = MEDIA_GROUP_DEFAULT_SCALE;
-        }
-        delete node.w;
-        delete node.h;
-    }
-    if(node.images.length === 1){ node.title = uploadTitleForItems(node.images, node.title || 'Image'); delete node.w; delete node.h; }
-    if(targetGroup) addNodeToSmartGroup(targetGroup, node);
-    selectedId = node.id;
+    const baseRect = target ? nodeRect(target) : null;
+    const center = opts.point || (baseRect ? {x:baseRect.x + baseRect.width + 148, y:baseRect.y + baseRect.height / 2} : viewportCenter());
+    const cols = Math.max(1, Math.ceil(Math.sqrt(media.length)));
+    const created = media.map((file, index) => {
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        return createMediaUploadNodeAt({x:center.x + col * 228, y:center.y + row * 228}, [file], {skipUndo:true, select:false, mediaKind});
+    }).filter(Boolean);
+    selectedId = created.length === 1 ? created[0].id : '';
+    selectedIds = created.length > 1 ? created.map(node => node.id) : [];
+    selectedImage = selectedId ? {nodeId:selectedId, index:0} : {nodeId:'', index:-1};
     render();
     scheduleSave();
-    return firstCreated || node;
+    return created[0] || null;
 }
 async function handleFiles(files, targetId='', opts={}){
     try {
         const fileList = [...(files || [])].filter(isSupportedUploadFile).slice(0, SMART_UPLOAD_MAX);
         if(!fileList.length) return;
+        const kinds = new Set(fileList.map(mediaKindForFile).map(normalizedUploadMediaKind));
+        if(kinds.size > 1){ toast(tr('smart.uploadMixedKinds')); return; }
+        const target = nodes.find(node => node.id === targetId && isSmartUploadNode(node));
+        const mediaKind = [...kinds][0] || 'image';
+        if(target && uploadMediaKindForNode(target) && uploadMediaKindForNode(target) !== mediaKind){
+            toast(trf('smart.uploadNodeKindLocked', {kind:uploadNodeLabel(uploadMediaKindForNode(target))}));
+            return;
+        }
         const uploaded = await uploadFiles(fileList);
         if(!uploaded.length) return;
         if(!opts.skipUndo) pushUndo();
@@ -17661,16 +17744,18 @@ function extractCurrentImagesToSource(node, meta=null){
     if(!imgs.length) return null;
     const r = nodeRect(node);
     const newX = (node.x || 0) - Math.max(280, r.width + 60);
+    const sourceMedia = stripImageGenerationMeta({...imgs[0]});
+    const sourceKind = normalizedUploadMediaKind(mediaKindForItem(sourceMedia));
     const source = {
         id: uid('smart'),
-        type: 'smart-image-upload',
+        type: uploadNodeTypeForMediaKind(sourceKind),
         x: newX,
         y: node.y || 0,
-        title: imgs.length > 1 ? 'Group' : 'Image',
+        title: uploadNodeLabel(sourceKind),
         // 抽出到上游源节点的图片只保留"原始素材"语义：清空 runPrompt / runSettings /
         // sourceNodeId / runAt / promptDraftHtml / promptDraftText 等"生成"相关字段，
         // 避免上游图片继承下游输出的提示词信息
-        images: imgs.slice(0, 1).map(img => stripImageGenerationMeta({...img})), activeImageIndex:0,
+        images: [sourceMedia], activeImageIndex:0,
         created_at: Date.now()
     };
     if(Number.isFinite(Number(node.w))) source.w = node.w;
@@ -20251,9 +20336,13 @@ function createNodeFromMenu(type){
     if(type === 'image-generation') return createImageGenerationNode(p);
     if(type === 'video-generation') return createVideoGenerationNode(p);
     if(type === 'image'){
-        // 上传入口不创建空壳节点：用户选择素材后才落到画布。
-        pickMediaForSmartNode('', {point:p});
-        return null;
+        // 先创建中性“待上传”节点；首次成功上传后再按资源类型定型，
+        // 避免取消文件选择时用户误以为无法新建上传节点。
+        const created = createImageNodeAt(p, [], {pendingUpload:true});
+        createMenuGroupId = groupId;
+        addCreatedNodeToMenuGroup(created);
+        createMenuGroupId = '';
+        return created;
     }
     let created = null;
     if(type === 'prompt') created = createPromptNode(p.x - 158, p.y - 97);
@@ -20681,7 +20770,7 @@ window.onmousemove = e => {
                     const point = screenToWorld(e);
                     selectedId = '';
                     selectedImage = {nodeId:'', index:-1};
-                    const newNode = createImageNodeAt(point, [img], {select:false, skipUndo:true});
+                    const newNode = createMediaUploadNodeAt(point, [img], {select:false, skipUndo:true});
                     undoSuppressed = false;
                     dragState = {id:newNode.id, startX:e.clientX, startY:e.clientY, ox:newNode.x, oy:newNode.y, thumbDetached:true};
                     thumbDragState.detached = true;
@@ -20967,7 +21056,7 @@ shell.ondrop = async e => {
             const asset = JSON.parse(assetRaw);
             if(asset?.url) {
                 pushUndo();
-                createImageNodeAt(p, [assetNodeImageFromItem(asset)], {skipUndo:true});
+                createMediaUploadNodeAt(p, [assetNodeImageFromItem(asset)], {skipUndo:true});
             }
             return;
         } catch {}

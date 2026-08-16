@@ -329,6 +329,9 @@ CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
 CANVAS_ASSET_INDEX_CACHE_PATH = os.path.join(DATA_DIR, "canvas_asset_index_cache.json")
 MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
+MEDIA_CONTENT_HASH_CACHE: Dict[Tuple[str, int, int], str] = {}
+MEDIA_CONTENT_HASH_CACHE_LOCK = RLock()
+MEDIA_CONTENT_HASH_CACHE_MAX = 512
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
@@ -5453,6 +5456,9 @@ class AssetUrlLibraryItemRequest(BaseModel):
 class CanvasAssetCheckRequest(BaseModel):
     urls: List[str] = []
 
+class CanvasMediaFingerprintRequest(BaseModel):
+    urls: List[str] = []
+
 class CanvasAssetDownloadRequest(BaseModel):
     urls: List[str] = []
     items: List[Dict[str, Any]] = []
@@ -9421,6 +9427,34 @@ def output_file_from_url(url):
         if os.path.commonpath([output_root, path]) == output_root and os.path.exists(path):
             return path
     return None
+
+def local_media_content_hash(path):
+    """Return a cached SHA-256 for a verified local media file."""
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return ""
+    cache_key = (os.path.realpath(path), int(stat.st_size), int(stat.st_mtime_ns))
+    with MEDIA_CONTENT_HASH_CACHE_LOCK:
+        cached = MEDIA_CONTENT_HASH_CACHE.get(cache_key)
+    if cached:
+        return cached
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return ""
+    value = digest.hexdigest()
+    with MEDIA_CONTENT_HASH_CACHE_LOCK:
+        if len(MEDIA_CONTENT_HASH_CACHE) >= MEDIA_CONTENT_HASH_CACHE_MAX:
+            for stale_key in list(MEDIA_CONTENT_HASH_CACHE)[: MEDIA_CONTENT_HASH_CACHE_MAX // 4]:
+                MEDIA_CONTENT_HASH_CACHE.pop(stale_key, None)
+        MEDIA_CONTENT_HASH_CACHE[cache_key] = value
+    return value
 
 def asset_library_item_media_available(item):
     """Return False only for a local asset URL that no longer resolves on disk."""
@@ -21546,6 +21580,35 @@ async def reset_canvas_cover(canvas_id: str):
 @app.get("/api/canvases/{canvas_id}")
 async def get_canvas(canvas_id: str):
     return {"canvas": load_canvas(canvas_id)}
+
+@app.post("/api/canvases/{canvas_id}/media-fingerprints")
+async def canvas_media_fingerprints(canvas_id: str, payload: CanvasMediaFingerprintRequest, request: Request):
+    """Return content hashes only for local media already referenced by this canvas."""
+    require_authenticated(request)
+    canvas = load_canvas(canvas_id)
+    urls = []
+    seen = set()
+    for raw_url in payload.urls or []:
+        url = str(raw_url or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        urls.append(url)
+        if len(urls) >= 200:
+            break
+
+    def build_fingerprints():
+        fingerprints = {}
+        for url in urls:
+            if not canvas_contains_media(canvas, url):
+                continue
+            path = output_file_from_url(url)
+            fingerprint = local_media_content_hash(path)
+            if fingerprint:
+                fingerprints[url] = fingerprint
+        return fingerprints
+
+    return {"fingerprints": await asyncio.to_thread(build_fingerprints)}
 
 @app.post("/api/canvases/{canvas_id}/touch")
 async def touch_canvas(canvas_id: str):

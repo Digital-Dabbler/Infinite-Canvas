@@ -110,6 +110,7 @@ body.smart-node-drag .image-wrap:hover .image-resolution-badge { opacity:0 !impo
 .node-role-label { position:absolute; left:0; top:-28px; z-index:10; height:22px; max-width:100%; display:inline-flex; align-items:center; gap:6px; padding:0 8px; border:1px solid var(--line); border-radius:8px; background:color-mix(in srgb, var(--panel) 92%, transparent); color:var(--muted); box-shadow:0 8px 20px rgba(15,23,42,.1); backdrop-filter:blur(12px); font-size:10.5px; font-weight:800; line-height:1; white-space:nowrap; opacity:0; transform:translateY(2px); pointer-events:none; transition:opacity .14s ease, transform .14s ease; }
 .node-role-label i,.node-role-label svg { width:13px; height:13px; flex:0 0 auto; }
 .image-node.selected > .node-role-label { opacity:1; transform:translateY(0); }
+.media-upload-node > .node-role-label { opacity:.88; transform:translateY(0); }
 .image-node.dragging > .node-role-label { opacity:0 !important; }
 .image-node.selected:not(.empty-node):not(.group-node):not(.prompt-smart-node):not(.loop-smart-node):not(.smart-group-node) { box-shadow:none; border-radius:12px; }
 .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > img, .image-node.selected:not(.empty-node):not(.group-node) .image-wrap > .node-img { border-color:var(--strong); box-shadow:0 0 0 1px var(--strong); }
@@ -603,7 +604,8 @@ body.smart-node-drag .text-node-panel-layer .text-node-generation-panel {
 .image-node.has-upload-resource-header .node-body { width:100%; }
 .image-node.has-upload-resource-header.selected .image-wrap { border-radius:0 0 14px 14px; }
 .upload-resource-control { width:100%; min-width:0; height:30px; display:flex; align-items:center; gap:4px; }
-.upload-resource-label { flex:0 0 auto; padding:0 4px; color:var(--muted); font-size:12px; font-weight:800; letter-spacing:.01em; }
+.upload-resource-label { flex:0 0 auto; display:inline-flex; align-items:center; gap:4px; padding:0 4px; color:var(--muted); font-size:12px; font-weight:800; letter-spacing:.01em; }
+.upload-resource-label i,.upload-resource-label svg { width:14px; height:14px; flex:0 0 auto; }
 .upload-resource-select { min-width:0; flex:1 1 auto; height:30px; display:flex; align-items:center; justify-content:space-between; gap:7px; padding:0 8px 0 10px; border:0; border-radius:8px; background:var(--soft); color:var(--text); cursor:pointer; font-size:12px; font-weight:800; text-align:left; }
 .upload-resource-select > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .upload-resource-select i,.upload-resource-select svg { width:15px; height:15px; flex:0 0 auto; color:var(--faint); transition:transform .16s ease; }
@@ -634,8 +636,8 @@ body.smart-node-drag .text-node-panel-layer .text-node-generation-panel {
 body.smart-node-drag .smart-node-floating-menu,
 body.smart-node-resize .smart-node-floating-menu,
 .image-node.dragging .smart-node-floating-menu { opacity:0 !important; pointer-events:none !important; }
-.image-upload-node .node-body { display:flex; }
-.image-upload-node .image-wrap { width:100%; }
+.media-upload-node .node-body { display:flex; }
+.media-upload-node .image-wrap { width:100%; }
 .image-generation-node .node-body { min-width:0; }
 .generation-empty-state { min-height:170px; padding:18px; border:1px dashed var(--line); border-radius:16px; background:linear-gradient(145deg, color-mix(in srgb, var(--soft) 88%, transparent), var(--panel)); color:var(--muted); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px; text-align:center; font-size:11px; font-weight:750; }
 .generation-empty-state svg { width:28px; height:28px; color:var(--faint); }
