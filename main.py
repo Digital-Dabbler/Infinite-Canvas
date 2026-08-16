@@ -335,6 +335,8 @@ MEDIA_CONTENT_HASH_CACHE_MAX = 512
 ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
+PROMPT_LIBRARY_DIR = os.path.join(ASSETS_DIR, "prompt_library")
+PROMPT_LIBRARY_PUBLIC_DIR = os.path.join(PROMPT_LIBRARY_DIR, "public")
 LIBRARY_FAVORITES_PATH = os.path.join(DATA_DIR, "library_favorites.json")
 LIBRARY_FAVORITES_LOCK = Lock()
 ASSET_TRASH_PATH = os.path.join(DATA_DIR, "asset_trash.json")
@@ -5629,6 +5631,14 @@ class PromptLibraryItemRequest(BaseModel):
     negative: str = ""
     scene: str = ""
     published: Optional[bool] = None
+
+class PromptLibraryPublishRequest(BaseModel):
+    published: bool = True
+    # Publication metadata belongs to the public snapshot only.  Keep these
+    # optional so older clients that only send {published: true} still work.
+    name: Optional[str] = None
+    category: Optional[str] = None
+    subcategory: Optional[str] = None
 
 class PromptLibraryBatchDeleteRequest(BaseModel):
     ids: List[str] = []
@@ -11006,7 +11016,9 @@ def normalize_prompt_library_item(item):
         "source_root_id": str(item.get("source_root_id") or ""),
         "source_direct_id": str(item.get("source_direct_id") or ""),
         "source_author_id": str(item.get("source_author_id") or ""),
-        "published": bool(item.get("owner_type") == "system"),
+        "source_prompt_id": str(item.get("source_prompt_id") or ""),
+        "published_at": int(item.get("published_at") or 0),
+        "published": bool(item.get("published") or item.get("owner_type") == "system"),
     }
     normalized.update(asset_owner_fields(item))
     return normalized
@@ -11024,6 +11036,7 @@ def default_prompt_libraries():
     return {
         "active_library_id": "system",
         "libraries": [seed_system_prompt_library()],
+        "published": [],
         "updated_at": now_ms(),
     }
 
@@ -11107,10 +11120,26 @@ def normalize_prompt_libraries(data):
         for item in items:
             if item.get("owner_type") == "system" and not is_system and libraries[-1].get("owner_id"):
                 item.update(asset_owner_fields({}, libraries[-1]["owner_id"]))
+    published = []
+    seen_published_ids = set()
+    for raw_item in data.get("published") if isinstance(data.get("published"), list) else []:
+        if not isinstance(raw_item, dict):
+            continue
+        item = normalize_prompt_library_item({**raw_item, "published": True})
+        item_id = item.get("id") or f"published_{uuid.uuid4().hex[:12]}"
+        if item_id in seen_published_ids or not item.get("source_prompt_id"):
+            continue
+        seen_published_ids.add(item_id)
+        published.append(item)
     active = str(data.get("active_library_id") or "system")
     if not any(lib["id"] == active for lib in libraries):
         active = "system" if any(lib["id"] == "system" for lib in libraries) else (libraries[0]["id"] if libraries else "system")
-    return {"active_library_id": active, "libraries": libraries, "updated_at": int(data.get("updated_at") or now_ms())}
+    return {
+        "active_library_id": active,
+        "libraries": libraries,
+        "published": published,
+        "updated_at": int(data.get("updated_at") or now_ms()),
+    }
 
 def load_prompt_libraries():
     if not os.path.exists(PROMPT_LIBRARY_PATH):
@@ -11135,11 +11164,39 @@ def save_prompt_libraries(data):
         _write_json_atomic(PROMPT_LIBRARY_PATH, data)
     return data
 
+def prompt_public_cover_copy(url, snapshot_id):
+    url = str(url or "")
+    if url.startswith("/static/images/prompt-library/"):
+        return url
+    source = output_file_from_url(url)
+    if not source or not os.path.isfile(source) or not content_type_for_path(source).startswith("image/"):
+        return ""
+    os.makedirs(PROMPT_LIBRARY_PUBLIC_DIR, exist_ok=True)
+    ext = os.path.splitext(source)[1].lower() or ".png"
+    target = os.path.join(PROMPT_LIBRARY_PUBLIC_DIR, f"{snapshot_id}_cover{ext}")
+    shutil.copy2(source, target)
+    return workflow_relative_url(target)
+
+def remove_prompt_public_cover(record):
+    path = output_file_from_url(str((record or {}).get("cover_url") or ""))
+    if not path:
+        return
+    try:
+        is_public_cover = os.path.commonpath([os.path.abspath(path), os.path.abspath(PROMPT_LIBRARY_PUBLIC_DIR)]) == os.path.abspath(PROMPT_LIBRARY_PUBLIC_DIR)
+    except ValueError:
+        is_public_cover = False
+    if is_public_cover and os.path.isfile(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
 def public_prompt_libraries(data=None):
     data = normalize_prompt_libraries(data or load_prompt_libraries())
     return {
         "active_library_id": data.get("active_library_id") or (data.get("libraries") or [{}])[0].get("id") or "system",
         "libraries": data.get("libraries") or [],
+        "published": data.get("published") or [],
         "updated_at": data.get("updated_at") or now_ms(),
     }
 
@@ -11241,7 +11298,10 @@ def public_prompt_libraries_for_user(data, user):
     user_id = str((user or {}).get("id") or "")
     admin = asset_is_admin(user)
     user_names = {str(row.get("id") or ""): str(row.get("name") or row.get("username") or "") for row in load_auth_users().get("users", [])}
+    visible_libraries = []
     for library in public.get("libraries", []):
+        if not (library.get("owner_type") == "system" or library.get("owner_id") == user_id or admin):
+            continue
         library["can_manage"] = admin or (
             library.get("owner_type") == "user" and library.get("owner_id") == user_id
         )
@@ -11255,6 +11315,18 @@ def public_prompt_libraries_for_user(data, user):
             item["owner_name"] = "系统" if item.get("owner_type") == "system" else user_names.get(item.get("owner_id"), "未知用户")
             if item.get("source_author_id"):
                 item["source_author_name"] = user_names.get(item.get("source_author_id"), "系统")
+        visible_libraries.append(library)
+    public["libraries"] = visible_libraries
+    all_published = public.get("published") or []
+    for item in all_published:
+        item["can_manage"] = admin or item.get("owner_id") == user_id
+        item["owner_name"] = user_names.get(item.get("owner_id"), "未知用户")
+        item["published"] = True
+    public["inspiration"] = [
+        *next((library.get("items") or [] for library in visible_libraries if library.get("id") == "system"), []),
+        *all_published,
+    ]
+    public["published"] = [item for item in all_published if item.get("owner_id") == user_id or admin]
     public["viewer"] = {"user_id": user_id, "is_admin": admin}
     personal_id = personal_prompt_library_id(user_id)
     if any(item.get("id") == personal_id for item in public.get("libraries", [])):
@@ -22357,8 +22429,103 @@ async def update_prompt_library_item(item_id: str, payload: PromptLibraryItemReq
                 })
                 library["items"][index] = next_item
                 data = save_prompt_libraries(data)
-                return {"library": public_prompt_libraries(data), "item": next_item}
+                return {"library": public_prompt_libraries_for_user(data, user), "item": next_item}
     raise HTTPException(status_code=404, detail="提示词不存在")
+
+@app.patch("/api/prompt-libraries/items/{item_id}/publish")
+async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublishRequest, request: Request):
+    user = require_authenticated(request)
+    data = load_prompt_libraries()
+    user_id = str(user.get("id") or "")
+    source = None
+    for library in data.get("libraries") or []:
+        for item in library.get("items") or []:
+            if item.get("id") == item_id:
+                require_asset_manage(item, user, "无权发布这条提示词")
+                source = item
+                break
+        if source:
+            break
+    if not source:
+        raise HTTPException(status_code=404, detail="提示词不存在")
+    if source.get("owner_type") != "user" or str(source.get("owner_id") or "") != user_id:
+        raise HTTPException(status_code=403, detail="只能发布自己的个人提示词")
+    existing = next((item for item in data.get("published") or []
+                     if item.get("source_prompt_id") == item_id and str(item.get("owner_id") or "") == user_id), None)
+    if not payload.published:
+        if existing:
+            data["published"] = [item for item in data.get("published") or [] if item is not existing]
+            remove_prompt_public_cover(existing)
+            data = save_prompt_libraries(data)
+        return {"library": public_prompt_libraries_for_user(data, user), "published": False}
+    if existing:
+        return {"library": public_prompt_libraries_for_user(data, user), "snapshot": existing, "published": True}
+    public_name = source.get("name") or "提示词"
+    if payload.name is not None:
+        requested_name = str(payload.name).strip()
+        if not requested_name:
+            raise HTTPException(status_code=400, detail="发布名称不能为空")
+        public_name = sanitize_asset_name(requested_name, "提示词")[:80]
+
+    source_category = normalize_prompt_category_id(source.get("category") or "custom")
+    public_category = source_category
+    public_subcategory = source.get("subcategory") or ""
+    if payload.category is not None:
+        requested_category = normalize_prompt_category_id(payload.category)
+        allowed_public_categories = {"style", "filter", "function", "other"}
+        if requested_category not in allowed_public_categories:
+            raise HTTPException(status_code=400, detail="发布类别无效")
+        public_category = requested_category
+        # Subcategories only describe their original parent category.  A
+        # publication that moves to another category must not retain one.
+        if public_category != source_category:
+            public_subcategory = ""
+    allowed_public_subcategories = {
+        "style": {"real", "2d", "3d"},
+        "filter": {"film", "color", "lighting"},
+        "function": {"character", "scene", "composition"},
+        "other": set(),
+    }
+    if payload.subcategory is not None:
+        requested_subcategory = normalize_prompt_category_id(payload.subcategory) if payload.subcategory else ""
+        valid_subcategories = allowed_public_subcategories.get(public_category, set())
+        if requested_subcategory and requested_subcategory not in valid_subcategories:
+            raise HTTPException(status_code=400, detail="发布子类别与发布类别不匹配")
+        public_subcategory = requested_subcategory if valid_subcategories else ""
+    elif public_subcategory not in allowed_public_subcategories.get(public_category, set()):
+        public_subcategory = ""
+    snapshot_id = f"published_{uuid.uuid4().hex[:14]}"
+    snapshot = normalize_prompt_library_item({
+        **source,
+        "id": snapshot_id,
+        "name": public_name,
+        "category": public_category,
+        "subcategory": public_subcategory,
+        "source_prompt_id": item_id,
+        "source_author_id": source.get("owner_id") or "",
+        "cover_url": prompt_public_cover_copy(source.get("cover_url"), snapshot_id),
+        "published": True,
+        "published_at": now_ms(),
+        "created_at": now_ms(),
+        "updated_at": now_ms(),
+    })
+    data.setdefault("published", []).append(snapshot)
+    data = save_prompt_libraries(data)
+    return {"library": public_prompt_libraries_for_user(data, user), "snapshot": snapshot, "published": True}
+
+@app.delete("/api/prompt-libraries/published/{snapshot_id}")
+async def withdraw_prompt_library_snapshot(snapshot_id: str, request: Request):
+    user = require_authenticated(request)
+    data = load_prompt_libraries()
+    user_id = str(user.get("id") or "")
+    snapshot = next((item for item in data.get("published") or []
+                     if item.get("id") == snapshot_id and (asset_is_admin(user) or str(item.get("owner_id") or "") == user_id)), None)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="已发布提示词不存在")
+    data["published"] = [item for item in data.get("published") or [] if item is not snapshot]
+    remove_prompt_public_cover(snapshot)
+    data = save_prompt_libraries(data)
+    return {"library": public_prompt_libraries_for_user(data, user), "withdrawn": True}
 
 @app.delete("/api/prompt-libraries/items/{item_id}")
 async def delete_prompt_library_item(item_id: str, request: Request):

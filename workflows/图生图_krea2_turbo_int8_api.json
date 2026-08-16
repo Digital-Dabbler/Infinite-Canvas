@@ -1,0 +1,156 @@
+{
+  "29": {
+    "inputs": {
+      "filename_prefix": "Krea2_turbo",
+      "images": [
+        "55",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "53": {
+    "inputs": {
+      "text": "3D动画风格（3D Animation Style），类似皮克斯或迪士尼角色设计。低角度仰拍（Low Angle Shot），中景镜头（Medium Shot）。画面主体为一名棕发年轻女性，佩戴白色头戴式耳机（Over-ear Headphones），身穿黑色系带比基尼（Black String Bikini），左手夹持蓝黄白相间排球（Volleyball），面带灿烂笑容，姿态自信活力。背景为阳光明媚的热带沙滩，可见排球网、棕榈树叶、蓝天白云及远处游客。右下角有一只拟人化卡通螃蟹手持小球。高饱和度配色（High Saturation），明亮的日光照明（Bright Daylight Lighting），强烈的光影对比，皮肤质感光滑细腻，整体氛围轻松愉悦，充满夏日度假气息。8k分辨率，C4D渲染质感，细节丰富。",
+      "clip": [
+        "57",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP文本编码"
+    }
+  },
+  "54": {
+    "inputs": {
+      "seed": 184616813795734,
+      "steps": 8,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 0.4,
+      "model": [
+        "56",
+        0
+      ],
+      "positive": [
+        "53",
+        0
+      ],
+      "negative": [
+        "59",
+        0
+      ],
+      "latent_image": [
+        "62",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "55": {
+    "inputs": {
+      "samples": [
+        "54",
+        0
+      ],
+      "vae": [
+        "58",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "56": {
+    "inputs": {
+      "unet_name": "Krea 2\\dark\\darkBeast30BF16INT8_darkBeast330.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "57": {
+    "inputs": {
+      "clip_name": "qwen3vl_4b_fp8_scaled.safetensors",
+      "type": "krea2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "58": {
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "59": {
+    "inputs": {
+      "conditioning": [
+        "53",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "条件零化"
+    }
+  },
+  "62": {
+    "inputs": {
+      "pixels": [
+        "65",
+        0
+      ],
+      "vae": [
+        "58",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "63": {
+    "inputs": {
+      "image": "canvas-output-1784826664830.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "65": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "megapixels": 2,
+      "resolution_steps": 1,
+      "image": [
+        "63",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToTotalPixels",
+    "_meta": {
+      "title": "缩放图像（像素）"
+    }
+  }
+}

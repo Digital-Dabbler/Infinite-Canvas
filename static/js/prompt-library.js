@@ -15,6 +15,8 @@ const PromptLibrary = {
     editorId: '',
     previewId: '',
     previewTrigger: null,
+    publishItemId: '',
+    publishTrigger: null,
     initialized: false,
     loading: false,
 
@@ -23,8 +25,18 @@ const PromptLibrary = {
         this.initialized = true;
         const overlay = document.getElementById('prompts-library-overlay');
         overlay.addEventListener('click', event => this.handleClick(event));
+        ['pointerdown', 'mousedown', 'dblclick', 'wheel'].forEach(type => {
+            overlay.addEventListener(type, event => event.stopPropagation());
+        });
         document.addEventListener('keydown', event => {
-            if (event.key !== 'Escape' || !this.previewId) return;
+            if (event.key !== 'Escape') return;
+            if (this.publishItemId) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                this.closePublishDialog();
+                return;
+            }
+            if (!this.previewId) return;
             event.preventDefault();
             event.stopImmediatePropagation();
             this.closePreview();
@@ -68,15 +80,33 @@ const PromptLibrary = {
     overlay() { return document.getElementById('prompts-library-overlay'); },
     content() { return this.overlay()?.querySelector('.library-content'); },
     mineLibrary() { const uid = String(this.library?.viewer?.user_id || ''); return (this.library?.libraries || []).find(lib => lib.personal && String(lib.owner_id || '') === uid) || null; },
-    allItems() { return (this.library?.libraries || []).flatMap(lib => (lib.items || []).map(item => ({ ...item, __libraryId: lib.id }))); },
-    systemItems() { return this.allItems().filter(item => item.owner_type === 'system' || item.__libraryId === 'system'); },
+    allItems() {
+        const items = [
+            ...(this.library?.libraries || []).flatMap(lib => (lib.items || []).map(item => ({ ...item, __libraryId: lib.id }))),
+            ...(this.library?.inspiration || []),
+            ...(this.library?.published || []),
+        ];
+        return [...new Map(items.filter(item => item?.id).map(item => [item.id, item])).values()];
+    },
+    inspirationItems() { return Array.isArray(this.library?.inspiration) ? this.library.inspiration : this.allItems().filter(item => item.owner_type === 'system' || item.__libraryId === 'system'); },
+    publishedItems() { return Array.isArray(this.library?.published) ? this.library.published : []; },
+    publishedForSource(id) { return this.publishedItems().find(item => item.source_prompt_id === id) || null; },
+    publishedMeta(item) {
+        const author = item?.owner_name || t('library.unknownAuthor', '未知作者');
+        const timestamp = Number(item?.published_at || 0);
+        if (!timestamp) return author;
+        return `${author} · ${new Date(timestamp).toLocaleDateString()}`;
+    },
     mineItems() { return this.mineLibrary()?.items || []; },
     find(id) { return this.allItems().find(item => item.id === id) || null; },
     targetId() { return window.getPromptLibraryTargetId?.() || String(window.__promptLibraryTargetId || ''); },
     activeTarget() { return typeof nodes !== 'undefined' ? nodes.find(node => node?.id === this.targetId()) : null; },
 
     filteredItems() {
-        let items = this.tab === 'myPrompts' ? this.mineItems() : this.tab === 'favorites' ? this.systemItems().filter(item => this.favorites.has(item.id)) : this.systemItems();
+        let items = this.tab === 'myPrompts' ? this.mineItems()
+            : this.tab === 'myPublished' ? this.publishedItems()
+            : this.tab === 'favorites' ? this.inspirationItems().filter(item => this.favorites.has(item.id))
+            : this.inspirationItems();
         if (this.tab === 'inspiration' && this.category !== 'all') items = items.filter(item => item.category === this.category);
         if (this.tab === 'inspiration' && this.category === 'style' && this.subcategory !== 'all') items = items.filter(item => item.subcategory === this.subcategory);
         if (this.search) items = items.filter(item => [item.name, item.description, item.category, item.subcategory, item.prefix, item.suffix].join(' ').toLowerCase().includes(this.search));
@@ -98,12 +128,12 @@ const PromptLibrary = {
         headerActions?.querySelector('.prompt-library-header-create')?.remove();
         if (this.tab !== 'myPrompts' || this.editorId || !headerActions) return;
         const closeButton = headerActions.querySelector('.library-close-btn');
-        const button = `<button type="button" class="library-editor-btn primary prompt-library-header-create" data-pl-new><i data-lucide="plus"></i>新建提示词</button>`;
+        const button = `<button type="button" class="library-editor-btn primary prompt-library-header-create" data-pl-new><i data-lucide="plus"></i>${LibraryUtils.escapeHtml(t('library.newPrompt', '新建提示词'))}</button>`;
         if (closeButton) closeButton.insertAdjacentHTML('beforebegin', button);
         else headerActions.insertAdjacentHTML('beforeend', button);
     },
     tabsHtml() { return [
-        ['inspiration','lightbulb','灵感库'], ['favorites','heart','我的收藏'], ['myPrompts','text-cursor-input','我的提示词']
+        ['inspiration','lightbulb',t('library.inspiration', '灵感库')], ['favorites','heart',t('library.myFavorites', '我的收藏')], ['myPrompts','text-cursor-input',t('library.myPrompts', '我的提示词')], ['myPublished','send',t('library.myPublished', '我的发布')]
     ].map(([id,icon,label]) => `<button type="button" class="library-tab ${this.tab === id ? 'active' : ''}" data-pl-tab="${id}"><i data-lucide="${icon}"></i><span>${label}</span></button>`).join(''); },
     categoriesHtml() {
         if (this.tab !== 'inspiration') return '';
@@ -117,14 +147,17 @@ const PromptLibrary = {
     cardHtml(item) {
         const selected = this.activeTarget() && Array.isArray(this.activeTarget().promptPresets) && this.activeTarget().promptPresets.some(preset => preset.id === item.id);
         const favorite = this.favorites.has(item.id);
+        const isMine = this.tab === 'myPrompts';
+        const isPublished = this.tab === 'myPublished';
+        const publication = isMine ? this.publishedForSource(item.id) : null;
         const preview = [item.prefix || item.positive, item.suffix || item.negative].filter(Boolean).join(' · ');
         const cover = item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy">` : `<div class="prompt-card-placeholder"><i data-lucide="sparkles"></i></div>`;
         const applyLabel = selected ? '取消' : '应用';
         const applyIcon = selected ? 'x' : 'plus';
         return `<article class="prompt-card ${selected ? 'is-selected' : ''}">
             <div class="prompt-card-cover">${cover}<div class="prompt-card-hover" aria-label="${LibraryUtils.escapeHtml(item.name || '提示词')} 操作"><button type="button" class="prompt-card-action prompt-card-apply ${selected ? 'is-applied' : ''}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button><button type="button" class="prompt-card-action" data-pl-preview="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="expand"></i>预览</button></div></div>
-            <div class="prompt-card-info"><h3>${LibraryUtils.escapeHtml(item.name || '未命名')}</h3><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-card-preview">${LibraryUtils.escapeHtml(LibraryUtils.truncate(preview, 96) || '（空提示词）')}</div></div>
-            <div class="prompt-card-foot"><span>${LibraryUtils.escapeHtml(item.subcategory || item.category || '我的')}</span><button type="button" class="prompt-card-favorite ${favorite ? 'is-favorite' : ''}" data-pl-favorite="${LibraryUtils.escapeHtml(item.id)}" title="${favorite ? '取消收藏' : '收藏'}" aria-label="${favorite ? '取消收藏' : '收藏'}" aria-pressed="${favorite ? 'true' : 'false'}"><i data-lucide="heart"></i></button>${this.tab === 'myPrompts' ? `<button type="button" data-pl-edit="${LibraryUtils.escapeHtml(item.id)}" title="编辑"><i data-lucide="pencil"></i></button><button type="button" data-pl-delete="${LibraryUtils.escapeHtml(item.id)}" title="删除"><i data-lucide="trash-2"></i></button>` : ''}</div>
+            <div class="prompt-card-info"><h3>${LibraryUtils.escapeHtml(item.name || t('library.untitled', '未命名'))}</h3><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-card-preview">${LibraryUtils.escapeHtml(LibraryUtils.truncate(preview, 96) || t('library.emptyPrompt', '（空提示词）'))}</div>${!isMine && !isPublished && item.owner_type !== 'system' ? `<span class="prompt-card-meta"><i data-lucide="user-round"></i>${LibraryUtils.escapeHtml(this.publishedMeta(item))}</span>` : ''}</div>
+            ${isMine ? `<div class="prompt-card-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.promptManageActions', '提示词管理操作'))}"><button type="button" data-pl-edit="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="pencil"></i><span>${LibraryUtils.escapeHtml(t('library.edit', '编辑'))}</span></button>${publication ? `<button type="button" class="is-published" data-pl-show-publication="${LibraryUtils.escapeHtml(publication.id)}"><i data-lucide="check-circle-2"></i><span>${LibraryUtils.escapeHtml(t('library.published', '已发布'))}</span></button>` : `<button type="button" data-pl-publish="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="send"></i><span>${LibraryUtils.escapeHtml(t('library.publish', '发布'))}</span></button>`}<button type="button" class="danger" data-pl-delete="${LibraryUtils.escapeHtml(item.id)}" aria-label="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}" title="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}"><i data-lucide="trash-2"></i></button></div>` : isPublished ? `<div class="prompt-card-manage prompt-card-published-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.publishedManageActions', '已发布提示词操作'))}"><button type="button" class="danger" data-pl-withdraw="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="rotate-ccw"></i><span>${LibraryUtils.escapeHtml(t('library.withdraw', '撤回'))}</span></button></div>` : `<div class="prompt-card-foot"><button type="button" class="prompt-card-favorite ${favorite ? 'is-favorite' : ''}" data-pl-favorite="${LibraryUtils.escapeHtml(item.id)}" title="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-label="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-pressed="${favorite ? 'true' : 'false'}"><i data-lucide="heart"></i></button></div>`}
         </article>`;
     },
 
@@ -133,11 +166,34 @@ const PromptLibrary = {
         content.classList.remove('is-prompt-editor-view');
         if (this.editorId === '__new__' || this.editorId) { content.classList.add('is-prompt-editor-view'); content.innerHTML = this.editorHtml(this.editorId === '__new__' ? null : this.find(this.editorId)); window.lucide?.createIcons(); return; }
         const items = this.filteredItems();
-        const grid = items.length ? `<div class="prompt-card-grid">${items.map(item => this.cardHtml(item)).join('')}</div>` : `<div class="library-empty"><div class="library-empty-icon"><i data-lucide="text-cursor-input"></i></div><div class="library-empty-title">暂无提示词</div><div class="library-empty-desc">${this.tab === 'myPrompts' ? '新建一个预设，快速复用你的前缀与后缀。' : '尝试调整分类或搜索关键词。'}</div>${this.tab === 'myPrompts' ? '<button type="button" class="library-editor-btn primary" data-pl-new><i data-lucide="plus"></i>新建提示词</button>' : ''}</div>`;
+        const emptyDesc = this.tab === 'myPrompts' ? t('library.promptEmptyMine', '新建一个预设，快速复用你的前缀与后缀。')
+            : this.tab === 'myPublished' ? t('library.promptEmptyPublished', '在“我的提示词”中发布模板后，会在这里管理公开版本。')
+            : t('library.promptEmptySearch', '尝试调整分类或搜索关键词。');
+        const grid = items.length ? `<div class="prompt-card-grid">${items.map(item => this.cardHtml(item)).join('')}</div>` : `<div class="library-empty"><div class="library-empty-icon"><i data-lucide="text-cursor-input"></i></div><div class="library-empty-title">${LibraryUtils.escapeHtml(t('library.empty', '暂无提示词'))}</div><div class="library-empty-desc">${LibraryUtils.escapeHtml(emptyDesc)}</div>${this.tab === 'myPrompts' ? `<button type="button" class="library-editor-btn primary" data-pl-new><i data-lucide="plus"></i>${LibraryUtils.escapeHtml(t('library.newPrompt', '新建提示词'))}</button>` : ''}</div>`;
         content.innerHTML = this.tab === 'inspiration' && this.category === 'style'
             ? `<div class="prompt-library-browser">${this.styleSidebarHtml()}<section class="prompt-library-results">${grid}</section></div>`
             : `<section class="prompt-library-results is-wide">${grid}</section>`;
         window.lucide?.createIcons();
+        this.bindCardActions(content);
+        if (this.returnFocusId) {
+            const focusId = this.returnFocusId;
+            this.returnFocusId = '';
+            requestAnimationFrame(() => content.querySelector(`[data-pl-edit="${CSS.escape(focusId)}"]`)?.focus());
+        }
+    },
+
+    openEditor(id) {
+        this.editorId = String(id || '');
+        this.returnFocusId = this.editorId;
+        this.render();
+    },
+
+    bindCardActions(content) {
+        content.querySelectorAll('[data-pl-edit]').forEach(button => button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.openEditor(button.dataset.plEdit);
+        }));
     },
 
     detailHtml(item) {
@@ -235,6 +291,141 @@ const PromptLibrary = {
         if (restoreFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
     },
 
+    publishDialog() {
+        let overlay = document.getElementById('prompt-library-publish-overlay');
+        if (overlay) return overlay;
+        overlay = document.createElement('div');
+        overlay.id = 'prompt-library-publish-overlay';
+        overlay.className = 'prompt-library-publish-overlay';
+        overlay.innerHTML = `<section class="prompt-library-publish-dialog" role="dialog" aria-modal="true" aria-labelledby="prompt-publish-title" aria-describedby="prompt-publish-hint">
+            <form data-pl-publish-form novalidate>
+                <header class="prompt-publish-header"><span class="prompt-publish-kicker"><i data-lucide="send" aria-hidden="true"></i><span data-pl-publish-kicker></span></span><h2 id="prompt-publish-title"></h2><p id="prompt-publish-hint"></p></header>
+                <div class="prompt-publish-fields"><label><span data-pl-publish-name-label></span><input type="text" data-pl-publish-name maxlength="80" autocomplete="off" required></label><label><span data-pl-publish-category-label></span><select data-pl-publish-category></select></label><label data-pl-publish-subcategory-wrap><span data-pl-publish-subcategory-label></span><select data-pl-publish-subcategory></select></label></div>
+                <p class="prompt-publish-error" data-pl-publish-error role="alert" aria-live="assertive"></p>
+                <footer class="prompt-publish-actions"><button type="button" class="library-editor-btn" data-pl-publish-cancel></button><button type="submit" class="library-editor-btn primary" data-pl-publish-confirm><i data-lucide="send" aria-hidden="true"></i><span></span></button></footer>
+            </form>
+        </section>`;
+        overlay.addEventListener('click', event => {
+            if (event.target !== overlay) return;
+            event.stopPropagation();
+            this.closePublishDialog();
+        });
+        overlay.querySelector('[data-pl-publish-category]')?.addEventListener('change', event => {
+            this.updatePublishSubcategory(event.target.value);
+        });
+        overlay.querySelector('[data-pl-publish-form]')?.addEventListener('submit', event => this.submitPublishDialog(event));
+        this.overlay()?.appendChild(overlay);
+        return overlay;
+    },
+
+    publicationCategoryOptions(category) {
+        const options = [
+            ['style', t('library.categoryStyle', '风格')],
+            ['filter', t('library.categoryFilter', '滤镜')],
+            ['function', t('library.categoryFunction', '功能')],
+            ['other', t('library.categoryOther', '其他')],
+        ];
+        return options.map(([id, label]) => `<option value="${id}" ${category === id ? 'selected' : ''}>${LibraryUtils.escapeHtml(label)}</option>`).join('');
+    },
+
+    publicationSubcategoryOptions(category, selected = '') {
+        const options = this.subcategoryOptions(category);
+        if (!options.length) return '';
+        const selectedId = options.some(([id]) => id === selected) ? selected : options[0][0];
+        return options.map(([id, label]) => `<option value="${id}" ${id === selectedId ? 'selected' : ''}>${LibraryUtils.escapeHtml(label)}</option>`).join('');
+    },
+
+    updatePublishSubcategory(category, selected = '') {
+        const overlay = document.getElementById('prompt-library-publish-overlay');
+        const wrap = overlay?.querySelector('[data-pl-publish-subcategory-wrap]');
+        const select = overlay?.querySelector('[data-pl-publish-subcategory]');
+        if (!wrap || !select) return;
+        const options = this.subcategoryOptions(category);
+        wrap.hidden = !options.length;
+        select.disabled = !options.length;
+        select.innerHTML = this.publicationSubcategoryOptions(category, selected);
+    },
+
+    openPublishDialog(id, trigger) {
+        const item = this.find(id);
+        if (!item) return;
+        const overlay = this.publishDialog();
+        const category = ['style', 'filter', 'function', 'other'].includes(item.category) ? item.category : 'other';
+        this.publishItemId = item.id;
+        this.publishTrigger = trigger || null;
+        overlay.querySelector('[data-pl-publish-kicker]').textContent = t('library.publishKicker', '公开版本');
+        overlay.querySelector('#prompt-publish-title').textContent = t('library.publishPrompt', '发布到灵感库');
+        overlay.querySelector('#prompt-publish-hint').textContent = t('library.publishHint', '设置其他人在灵感库中看到的名称和类别；不会改动你的原提示词。');
+        overlay.querySelector('[data-pl-publish-name-label]').textContent = t('library.publishName', '发布名称');
+        overlay.querySelector('[data-pl-publish-category-label]').textContent = t('library.publishCategory', '发布类别');
+        overlay.querySelector('[data-pl-publish-subcategory-label]').textContent = t('library.publishSubcategory', '发布子分类');
+        const nameInput = overlay.querySelector('[data-pl-publish-name]');
+        const categorySelect = overlay.querySelector('[data-pl-publish-category]');
+        nameInput.value = item.name || '';
+        nameInput.removeAttribute('aria-invalid');
+        categorySelect.innerHTML = this.publicationCategoryOptions(category);
+        this.updatePublishSubcategory(category, item.category === category ? item.subcategory : '');
+        overlay.querySelector('[data-pl-publish-cancel]').textContent = t('library.publishCancel', '取消');
+        overlay.querySelector('[data-pl-publish-confirm] span').textContent = t('library.publishConfirm', '确认发布');
+        this.setPublishError('');
+        overlay.classList.add('open');
+        window.lucide?.createIcons();
+        LibraryModalManager.trapFocus(overlay);
+        requestAnimationFrame(() => nameInput.focus());
+    },
+
+    closePublishDialog({restoreFocus=true} = {}) {
+        const overlay = document.getElementById('prompt-library-publish-overlay');
+        const trigger = this.publishTrigger;
+        this.publishItemId = '';
+        this.publishTrigger = null;
+        overlay?.classList.remove('open');
+        if (this.overlay()?.classList.contains('open')) LibraryModalManager.trapFocus(this.overlay());
+        if (restoreFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
+    },
+
+    setPublishError(message) {
+        const error = document.querySelector('#prompt-library-publish-overlay [data-pl-publish-error]');
+        if (error) error.textContent = message || '';
+    },
+
+    async submitPublishDialog(event) {
+        event.preventDefault();
+        const id = this.publishItemId;
+        const overlay = this.publishDialog();
+        const nameInput = overlay.querySelector('[data-pl-publish-name]');
+        const categorySelect = overlay.querySelector('[data-pl-publish-category]');
+        const subcategorySelect = overlay.querySelector('[data-pl-publish-subcategory]');
+        const name = nameInput.value.trim();
+        const category = categorySelect.value;
+        const subcategory = subcategorySelect?.disabled ? '' : String(subcategorySelect?.value || '');
+        if (!name) {
+            nameInput.setAttribute('aria-invalid', 'true');
+            this.setPublishError(t('library.publishNameRequired', '请填写发布名称'));
+            nameInput.focus();
+            return;
+        }
+        if (!['style', 'filter', 'function', 'other'].includes(category)) {
+            this.setPublishError(t('library.publishCategoryInvalid', '请选择有效的发布类别'));
+            categorySelect.focus();
+            return;
+        }
+        if (this.subcategoryOptions(category).length && !this.subcategoryOptions(category).some(([id]) => id === subcategory)) {
+            this.setPublishError(t('library.publishSubcategoryInvalid', '请选择与发布类别匹配的子分类'));
+            subcategorySelect?.focus();
+            return;
+        }
+        nameInput.removeAttribute('aria-invalid');
+        this.setPublishError('');
+        const submit = overlay.querySelector('[data-pl-publish-confirm]');
+        try {
+            await this.withBusy(submit, () => this.publishItem(id, {name, category, subcategory}));
+            this.closePublishDialog({restoreFocus:false});
+        } catch (error) {
+            this.setPublishError(error.message || t('library.publishFailed', '发布失败'));
+        }
+    },
+
     editorHtml(item) {
         const isNew = !item; item = item || { name:'', category:'other', subcategory:'', description:'', cover_url:'', prefix:'', suffix:'' };
         const assetOptions = this.assetCoverOptions(item.cover_url);
@@ -300,7 +491,33 @@ const PromptLibrary = {
         const response = active ? await fetch(`/api/library/favorites/prompt/${encodeURIComponent(id)}`, {method:'DELETE'}) : await fetch('/api/library/favorites', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'prompt',item_id:id})});
         if (!response.ok) throw new Error('收藏操作失败'); this.favorites = new Set((await response.json()).favorites || []); this.render();
     },
-    async deleteItem(id) { if (!confirm('确认删除这条提示词？')) return; const response = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'DELETE'}); if (!response.ok) throw new Error('删除失败'); await this.load(); },
+    async withBusy(button, work) {
+        if (button?.disabled) return;
+        const previous = button?.innerHTML;
+        if (button) { button.disabled = true; button.setAttribute('aria-busy', 'true'); button.innerHTML = '<i data-lucide="loader-circle" class="is-spinning"></i>'; window.lucide?.createIcons(); }
+        try { return await work(); }
+        finally { if (button?.isConnected) { button.disabled = false; button.removeAttribute('aria-busy'); button.innerHTML = previous; window.lucide?.createIcons(); } }
+    },
+    async deleteItem(id) {
+        if (!confirm(t('library.deletePromptConfirm', '确认删除这条提示词？删除后可在回收站恢复。'))) return;
+        const response = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(id)}`, {method:'DELETE'});
+        if (!response.ok) throw new Error((await response.text()) || t('library.deleteFailed', '删除失败'));
+        await this.load();
+        window.toast?.(t('library.promptMovedToTrash', '已移至回收站，可在回收站恢复'));
+    },
+    async publishItem(id, metadata = {}) {
+        const response = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(id)}/publish`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({published:true, ...metadata})});
+        if (!response.ok) throw new Error((await response.text()) || t('library.publishFailed', '发布失败'));
+        await this.load();
+        window.toast?.(t('library.publishedToast', '已发布到灵感库'));
+    },
+    async withdrawItem(id) {
+        if (!confirm(t('library.withdrawPromptConfirm', '确认撤回这条已发布提示词？其他用户将不能再从灵感库使用它。'))) return;
+        const response = await fetch(`/api/prompt-libraries/published/${encodeURIComponent(id)}`, {method:'DELETE'});
+        if (!response.ok) throw new Error((await response.text()) || t('library.withdrawFailed', '撤回失败'));
+        await this.load();
+        window.toast?.(t('library.promptWithdrawnToast', '已从灵感库撤回'));
+    },
     async apply(id) { const item=this.find(id); if(!item)return; const result=window.applyPromptPresetCard?.(item,this.targetId()); if(!result?.ok) throw new Error(result?.message || '应用失败'); if(result.targetId) window.setPromptLibraryTarget?.(result.targetId); this.render(); this.renderPreview(); },
 
     async handleClick(event) {
@@ -312,12 +529,16 @@ const PromptLibrary = {
         const preview=event.target.closest('[data-pl-preview]'); if(preview){event.stopPropagation();this.openPreview(preview.dataset.plPreview,preview);return;}
         const back=event.target.closest('[data-pl-back]'); if(back){this.editorId='';this.render();return;}
         const newButton=event.target.closest('[data-pl-new]'); if(newButton){this.editorId='__new__';this.render();return;}
-        const edit=event.target.closest('[data-pl-edit]'); if(edit){event.stopPropagation();this.editorId=edit.dataset.plEdit;this.render();return;}
+        const edit=event.target.closest('[data-pl-edit]'); if(edit){event.stopPropagation();this.openEditor(edit.dataset.plEdit);return;}
         const del=event.target.closest('[data-pl-delete]'); if(del){event.stopPropagation();try{await this.deleteItem(del.dataset.plDelete)}catch(error){window.toast?.(error.message)}return;}
+        const publishCancel=event.target.closest('[data-pl-publish-cancel]'); if(publishCancel){event.stopPropagation();this.closePublishDialog();return;}
+        const publish=event.target.closest('[data-pl-publish]'); if(publish){event.stopPropagation();this.openPublishDialog(publish.dataset.plPublish, publish);return;}
+        const withdraw=event.target.closest('[data-pl-withdraw]'); if(withdraw){event.stopPropagation();try{await this.withBusy(withdraw,()=>this.withdrawItem(withdraw.dataset.plWithdraw))}catch(error){window.toast?.(error.message)}return;}
+        const showPublication=event.target.closest('[data-pl-show-publication]'); if(showPublication){event.stopPropagation();this.tab='myPublished';this.render();requestAnimationFrame(()=>this.content()?.querySelector(`[data-pl-withdraw="${CSS.escape(showPublication.dataset.plShowPublication)}"]`)?.focus());return;}
         const fav=event.target.closest('[data-pl-favorite]'); if(fav){event.stopPropagation();try{await this.toggleFavorite(fav.dataset.plFavorite)}catch(error){window.toast?.(error.message)}return;}
         const apply=event.target.closest('[data-pl-apply]'); if(apply){try{await this.apply(apply.dataset.plApply)}catch(error){window.toast?.(error.message)}return;}
         const copy=event.target.closest('[data-pl-copy]'); if(copy){const item=this.find(copy.dataset.plCopy); const text=[item?.prefix||item?.positive,'用户提示词',item?.suffix||item?.negative].filter(Boolean).join('\n\n'); const copied = typeof copyTextToClipboard === 'function' ? await copyTextToClipboard(text) : false; this.showPreviewFeedback(copied ? t('smart.promptRecipeCopied', '已复制组合提示词') : t('smart.promptRecipeCopyFailed', '复制失败，请检查浏览器剪贴板权限'), !copied); return;}
-        const save=event.target.closest('[data-pl-save]'); if(save){try{await this.save(save.dataset.plSave,event.target.closest('.prompt-editor'))}catch(error){window.toast?.(error.message)}return;}
+        const save=event.target.closest('[data-pl-save]'); if(save){try{await this.withBusy(save,()=>this.save(save.dataset.plSave,event.target.closest('.prompt-editor')))}catch(error){window.toast?.(error.message)}return;}
         const upload=event.target.closest('[data-pe-upload]'); if(upload) return;
     },
     bindEditorInputs() {},

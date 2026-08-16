@@ -1985,6 +1985,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .crop-canvas.outpaint-mode img { cursor:grab; border-radius:0; box-shadow:0 0 0 1px rgba(255,255,255,.28); }
 .crop-canvas.outpaint-mode.dragging-image img { cursor:grabbing; }
 .outpaint-color-control { position:absolute; left:50%; top:7px; z-index:2; transform:translateX(-50%); display:flex; align-items:center; gap:6px; min-height:34px; padding:4px 7px; border:1px solid var(--line); border-radius:999px; background:var(--card); box-shadow:0 8px 22px rgba(15,23,42,.12); }
+.outpaint-color-control[hidden], .outpaint-run-controls[hidden] { display:none !important; }
 .outpaint-color-control > span { margin-right:2px; color:var(--muted); font-size:10px; font-weight:850; white-space:nowrap; }
 .outpaint-color-control button { width:20px; height:20px; padding:0; border:2px solid transparent; border-radius:999px; background:var(--outpaint-color); box-shadow:inset 0 0 0 1px rgba(15,23,42,.16); cursor:pointer; transition:transform .14s ease, border-color .14s ease, box-shadow .14s ease; }
 .outpaint-color-control button[data-outpaint-color="#ffffff"] { --outpaint-color:#ffffff; }

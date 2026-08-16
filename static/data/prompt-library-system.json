@@ -9,7 +9,7 @@
     "suffix": "85mm lens look, refined color grading, high-end commercial photography",
     "positive": "editorial fashion portrait, realistic skin texture, cinematic studio lighting",
     "negative": "85mm lens look, refined color grading, high-end commercial photography",
-    "cover_url": "/static/images/prompt-library/style_editorial_portrait.webp"
+    "cover_url": "/static/images/prompt-library/style_editorial_portrait.webp?v=20260815-real-style-covers"
   },
   {
     "id": "style_documentary",
@@ -21,7 +21,7 @@
     "suffix": "subtle film grain, honest composition, realistic details",
     "positive": "documentary photography, candid natural light, authentic atmosphere",
     "negative": "subtle film grain, honest composition, realistic details",
-    "cover_url": "/static/images/prompt-library/style_documentary.webp"
+    "cover_url": "/static/images/prompt-library/style_documentary.webp?v=20260815-real-style-covers"
   },
   {
     "id": "style_luxury_beauty",
@@ -33,7 +33,7 @@
     "suffix": "premium retouching, elegant color palette, polished advertising finish",
     "positive": "luxury beauty campaign, flawless makeup detail, soft directional key light",
     "negative": "premium retouching, elegant color palette, polished advertising finish",
-    "cover_url": "/static/images/prompt-library/style_luxury_beauty.webp"
+    "cover_url": "/static/images/prompt-library/style_luxury_beauty.webp?v=20260815-real-style-covers"
   },
   {
     "id": "style_street_fashion",
@@ -45,7 +45,7 @@
     "suffix": "high contrast editorial grade, natural motion, sharp fabric detail",
     "positive": "urban street fashion photography, confident pose, dynamic city backdrop",
     "negative": "high contrast editorial grade, natural motion, sharp fabric detail",
-    "cover_url": "/static/images/prompt-library/style_street_fashion.webp"
+    "cover_url": "/static/images/prompt-library/style_street_fashion.webp?v=20260815-real-style-covers"
   },
   {
     "id": "style_cinematic_real",
@@ -57,7 +57,7 @@
     "suffix": "film still color science, atmospheric depth, detailed textures",
     "positive": "cinematic live-action still, realistic production design, dramatic practical lighting",
     "negative": "film still color science, atmospheric depth, detailed textures",
-    "cover_url": "/static/images/prompt-library/style_cinematic_real.webp"
+    "cover_url": "/static/images/prompt-library/style_cinematic_real.webp?v=20260815-real-style-covers"
   },
   {
     "id": "style_anime_cel",
