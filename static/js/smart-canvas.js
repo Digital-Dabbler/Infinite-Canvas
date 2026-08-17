@@ -11862,15 +11862,6 @@ function bindNodeEvents(){
                 el.addEventListener('dragleave', event => {
                     if(!el.contains(event.relatedTarget)) setReplacementDropTarget(false);
                 });
-                el.addEventListener('drop', async event => {
-                    if(!hasSmartImageDropData(event.dataTransfer)) return;
-                    event.preventDefault();
-                    event._smartMediaReplacementDrop = true;
-                    event.stopPropagation();
-                    setReplacementDropTarget(false);
-                    const payload = await resolveSmartImageDropPayload(event.dataTransfer);
-                    await replaceExistingSmartMediaNode(id, payload);
-                });
             }
         }
         if(isCanvasOrganizerNode(nodeForControls)){
@@ -12296,9 +12287,16 @@ function bindNodeEvents(){
         el.ondragover = e => setSmartDropCopyEffect(e);
         el.ondrop = async e => {
             e.preventDefault();
+            e._smartMediaReplacementDrop = true;
             e.stopPropagation();
             const payload = await resolveSmartImageDropPayload(e.dataTransfer);
             if(payload.type === 'none') return;
+            const replacementTarget = existingSmartMediaReplacementNode(id);
+            if(replacementTarget){
+                el.classList.remove('media-replacement-drop-target');
+                await replaceExistingSmartMediaNode(replacementTarget.id, payload);
+                return;
+            }
             await handleSmartImageDropPayload(payload, id);
         };
     });
