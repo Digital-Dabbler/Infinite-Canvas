@@ -1387,6 +1387,75 @@ function uploadNodeIcon(kind='image'){
 function isSmartUploadNode(node){
     return Boolean(node && ['smart-image-upload', 'smart-video-upload', 'smart-audio-upload', 'smart-image'].includes(node.type || 'smart-image-upload'));
 }
+const smartMediaReplacementInFlightIds = new Set();
+const smartMediaReplacementSuccessIds = new Set();
+function existingSmartMediaReplacementNode(nodeId){
+    const node = nodes.find(item => item.id === nodeId && isSmartUploadNode(item));
+    return node && (node.images || []).length === 1 && node.images[0]?.url ? node : null;
+}
+function isSmartMediaReplacementInFlight(nodeId){
+    return smartMediaReplacementInFlightIds.has(String(nodeId || ''));
+}
+function smartMediaReplacementPayloadDetails(payload){
+    if(payload?.type === 'files'){
+        const files = [...(payload.files || [])].filter(isSupportedUploadFile);
+        return {count:files.length, kind:files.length === 1 ? normalizedUploadMediaKind(mediaKindForFile(files[0])) : ''};
+    }
+    if(payload?.type === 'localPaths'){
+        const paths = [...(payload.localPaths || [])].filter(Boolean);
+        return {count:paths.length, kind:paths.length === 1 ? normalizedUploadMediaKind(mediaKindForFile({name:paths[0]})) : ''};
+    }
+    if(payload?.type === 'url') return {count:payload.url ? 1 : 0, kind:normalizedUploadMediaKind(smartManualUrlKind(payload.url, 'image'))};
+    return {count:0, kind:''};
+}
+function validateSmartMediaReplacementPayload(node, payload){
+    const details = smartMediaReplacementPayloadDetails(payload);
+    const targetKind = uploadMediaKindForNode(node);
+    if(details.count !== 1){
+        toast(trf('smart.mediaReplaceSingleOnly', {kind:uploadResourceLabel(targetKind)}));
+        return false;
+    }
+    if(!details.kind || details.kind !== targetKind){
+        toast(trf('smart.mediaReplaceKindMismatch', {kind:uploadResourceLabel(targetKind)}));
+        return false;
+    }
+    return true;
+}
+function markSmartMediaReplacementSuccess(nodeId){
+    const id = String(nodeId || '');
+    if(!id) return;
+    smartMediaReplacementSuccessIds.add(id);
+    requestAnimationFrame(() => {
+        window.setTimeout(() => {
+            smartMediaReplacementSuccessIds.delete(id);
+            world.querySelector(`.image-node[data-id="${CSS.escape(id)}"]`)?.classList.remove('media-replacement-success');
+        }, 220);
+    });
+}
+async function replaceExistingSmartMediaNode(nodeId, payload){
+    const target = existingSmartMediaReplacementNode(nodeId);
+    if(!target) return false;
+    const targetKind = uploadMediaKindForNode(target);
+    if(isSmartMediaReplacementInFlight(target.id)){
+        toast(trf('smart.mediaReplaceInProgress', {kind:uploadResourceLabel(targetKind)}));
+        return false;
+    }
+    if(!validateSmartMediaReplacementPayload(target, payload)) return false;
+    smartMediaReplacementInFlightIds.add(target.id);
+    render();
+    let replaced = null;
+    try {
+        replaced = await handleSmartImageDropPayload(payload, target.id, {replaceIndex:0, replacement:true});
+        return Boolean(replaced);
+    } finally {
+        smartMediaReplacementInFlightIds.delete(target.id);
+        if(replaced){
+            markSmartMediaReplacementSuccess(target.id);
+            toast(trf('smart.mediaReplaceSuccess', {kind:uploadResourceLabel(targetKind)}));
+        }
+        render();
+    }
+}
 function isSmartImageUploadNode(node){
     return Boolean(isSmartUploadNode(node) && uploadMediaKindForNode(node) === 'image');
 }
@@ -1677,6 +1746,10 @@ function applyTheme(theme){
 }
 function toast(text){
     const el = document.getElementById('toast');
+    if(!el) return;
+    el.setAttribute('role', 'status');
+    el.setAttribute('aria-live', 'polite');
+    el.setAttribute('aria-atomic', 'true');
     el.textContent = text;
     el.classList.add('show');
     clearTimeout(toast._timer);
@@ -11754,6 +11827,51 @@ function bindNodeEvents(){
     world.querySelectorAll('.image-node').forEach(el => {
         const id = el.dataset.id;
         const nodeForControls = nodes.find(n => n.id === id);
+        const replacementNode = existingSmartMediaReplacementNode(id);
+        if(replacementNode){
+            const replacementKind = uploadMediaKindForNode(replacementNode);
+            const replacementInFlight = isSmartMediaReplacementInFlight(id);
+            el.classList.add('media-replacement-target');
+            el.classList.toggle('media-replacement-inflight', replacementInFlight);
+            el.classList.toggle('media-replacement-success', smartMediaReplacementSuccessIds.has(id));
+            el.setAttribute('aria-busy', replacementInFlight ? 'true' : 'false');
+            let overlay = el.querySelector('.media-replacement-overlay');
+            if(!overlay){
+                overlay = document.createElement('div');
+                overlay.className = 'media-replacement-overlay';
+                overlay.setAttribute('aria-hidden', 'true');
+                el.appendChild(overlay);
+            }
+            overlay.innerHTML = `<i data-lucide="${replacementInFlight ? 'loader-circle' : 'replace'}"></i><span>${escapeHtml(replacementInFlight ? trf('smart.mediaReplaceUploading', {kind:uploadResourceLabel(replacementKind)}) : trf('smart.mediaReplaceDropHint', {kind:uploadResourceLabel(replacementKind)}))}</span>`;
+            if(!el.dataset.mediaReplacementBound){
+                el.dataset.mediaReplacementBound = 'true';
+                const setReplacementDropTarget = active => el.classList.toggle('media-replacement-drop-target', Boolean(active) && !isSmartMediaReplacementInFlight(id));
+                el.addEventListener('dragenter', event => {
+                    if(!hasSmartImageDropData(event.dataTransfer)) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setReplacementDropTarget(true);
+                });
+                el.addEventListener('dragover', event => {
+                    if(!hasSmartImageDropData(event.dataTransfer)) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.dataTransfer.dropEffect = 'copy';
+                    setReplacementDropTarget(true);
+                });
+                el.addEventListener('dragleave', event => {
+                    if(!el.contains(event.relatedTarget)) setReplacementDropTarget(false);
+                });
+                el.addEventListener('drop', async event => {
+                    if(!hasSmartImageDropData(event.dataTransfer)) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setReplacementDropTarget(false);
+                    const payload = await resolveSmartImageDropPayload(event.dataTransfer);
+                    await replaceExistingSmartMediaNode(id, payload);
+                });
+            }
+        }
         if(isCanvasOrganizerNode(nodeForControls)){
             el.querySelectorAll('input,textarea,button').forEach(control => {
                 control.addEventListener('mousedown', e => e.stopPropagation());
@@ -16347,7 +16465,7 @@ function uploadTitleForItems(items, fallback='Upload'){
     if(kinds.has('audio')) return 'Audio';
     return list.length > 1 ? 'Group' : 'Image';
 }
-const SMART_IMAGE_DROP_EXT_RE = /\.(png|jpe?g|webp|gif)$/i;
+const SMART_IMAGE_DROP_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|tiff|avif|mp4|webm|mov|m4v|avi|mkv|mp3|wav|m4a|aac|ogg|flac)$/i;
 const SMART_IMAGE_DROP_TEXT_TYPES = [
     'text/uri-list',
     'text/plain',
@@ -16361,7 +16479,7 @@ const SMART_IMAGE_DROP_TEXT_TYPES = [
     'FileName',
     'FileNameW'
 ];
-const SMART_IMAGE_DROP_TYPE_HINT_RE = /^(?:files?|image\/.+|text\/(?:uri-list|html|plain|x-moz-url|x-file-url)|downloadurl|public\.(?:file-url|url)|uniformresourcelocator|filenamew?)$|application\/x-qt-(?:windows-mime|image)|application\/x-moz-file|com\.eagle/i;
+const SMART_IMAGE_DROP_TYPE_HINT_RE = /^(?:files?|(?:image|video|audio)\/.+|text\/(?:uri-list|html|plain|x-moz-url|x-file-url)|downloadurl|public\.(?:file-url|url)|uniformresourcelocator|filenamew?)$|application\/x-qt-(?:windows-mime|image)|application\/x-moz-file|com\.eagle/i;
 function smartImageFilesFromDataTransfer(dataTransfer){
     return [...(dataTransfer?.files || [])].filter(isSupportedUploadFile);
 }
@@ -16401,7 +16519,7 @@ function smartDropTextFragments(value){
         const item = line.trim();
         if(item) fragments.push(item);
     });
-    const downloadUrl = text.match(/^image\/[^\s:]+:(.+)$/i);
+    const downloadUrl = text.match(/^(?:image|video|audio)\/[^\s:]+:(.+)$/i);
     if(downloadUrl) fragments.push(downloadUrl[1]);
     return fragments;
 }
@@ -16423,7 +16541,7 @@ function smartDropTextCandidates(dataTransfer){
 }
 function isRemoteSmartImageDropValue(value){
     const text = String(value || '').trim();
-    return /^https?:\/\/.+/i.test(text) || /^data:image\//i.test(text) || /^blob:/i.test(text);
+    return /^https?:\/\/.+/i.test(text) || /^data:(?:image|video|audio)\//i.test(text) || /^blob:/i.test(text);
 }
 function isLocalSmartImageDropValue(value){
     const text = String(value || '').trim();
@@ -16581,8 +16699,8 @@ async function handleFiles(files, targetId='', opts={}){
         const uploaded = await uploadFiles(fileList);
         if(!uploaded.length) return;
         if(!opts.skipUndo) pushUndo();
-        appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:file.kind || mediaKindForFile(fileList[index])})), targetId, opts);
-    } catch(e) { toast(e.message || tr('smart.toastUploadFail')); }
+        return appendImagesToSmartNode(uploaded.map((file, index) => ({...file, kind:file.kind || mediaKindForFile(fileList[index])})), targetId, opts);
+    } catch(e) { toast(e.message || tr('smart.toastUploadFail')); return null; }
 }
 async function importSmartLocalImages(paths){
     if(!paths?.length) return [];
@@ -16597,16 +16715,19 @@ async function importSmartLocalImages(paths){
 }
 async function handleSmartImageDropPayload(payload, targetId='', opts={}){
     try {
-        if(payload.type === 'files') await handleFiles(payload.files, targetId, opts);
+        if(payload.type === 'files') return handleFiles(payload.files, targetId, opts);
         else if(payload.type === 'localPaths') {
+            const imported = await importSmartLocalImages(payload.localPaths);
+            if(!imported.length) return null;
             if(!opts.skipUndo) pushUndo();
-            appendImagesToSmartNode(await importSmartLocalImages(payload.localPaths), targetId, opts);
+            return appendImagesToSmartNode(imported, targetId, opts);
         } else if(payload.type === 'url') {
             if(!opts.skipUndo) pushUndo();
-            appendImagesToSmartNode([{url:payload.url, name:smartImageNameFromUrl(payload.url), kind:'image'}], targetId, opts);
+            return appendImagesToSmartNode([{url:payload.url, name:smartImageNameFromUrl(payload.url), kind:normalizedUploadMediaKind(smartManualUrlKind(payload.url, 'image'))}], targetId, opts);
         }
     } catch(e) {
         toast(e.message || tr('smart.toastUploadFail'));
+        return null;
     }
 }
 function sizeForRun(sourceSettings=settings){
@@ -21184,7 +21305,13 @@ window.addEventListener('paste', e => {
     const files = [...(e.clipboardData?.files || [])].filter(isSupportedUploadFile);
     if(files.length){
         lastImagePasteAt = Date.now();
-        handleFiles(files, selectedId);
+        const replacementTarget = existingSmartMediaReplacementNode(selectedId);
+        if(replacementTarget){
+            e.preventDefault();
+            replaceExistingSmartMediaNode(replacementTarget.id, {type:'files', files});
+        } else {
+            handleFiles(files, selectedId);
+        }
         return;
     }
     const nodeClipboardText = e.clipboardData?.getData('text/plain') || '';
