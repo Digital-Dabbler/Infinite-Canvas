@@ -309,6 +309,8 @@ let previewComparePos = 50;
 let imageEditPanDrag = null;
 let previewNavState = {nodeId:'', index:0, count:0};
 let videoTrimState = {start:0, end:0, mute:false, previewing:false, speed:1};
+let smartClipState = {open:false, candidateKey:'', start:0, end:0, duration:0, mute:false, previewing:false, exporting:false, thumbToken:0, returnFocus:null};
+let smartClipRangeDrag = null;
 const PANORAMA_RATIO_PRESETS = {
     square:{w:1, h:1},
     portrait:{w:2, h:3},
@@ -14189,6 +14191,278 @@ async function exportVideoTrim(){
         toast((error.message || '视频片段导出失败').slice(0, 180));
     } finally {
         if(button) button.disabled = false;
+    }
+}
+function smartClipModal(){ return document.getElementById('smartClipModal'); }
+function smartClipVideo(){ return document.getElementById('smartClipVideo'); }
+function smartClipCandidateKey(nodeId, index){ return `${nodeId}:${index}`; }
+function smartClipCandidates(){
+    const candidates = [];
+    nodes.forEach(node => {
+        (node?.images || []).forEach((raw, index) => {
+            const item = imageForDisplay(raw);
+            if(!item?.url || mediaKindForItem(item) !== 'video') return;
+            candidates.push({key:smartClipCandidateKey(node.id, index), node, index, raw, item, label:item.name || node.title || tr('smart.clipUntitledVideo')});
+        });
+    });
+    return candidates;
+}
+function smartClipCurrentCandidate(){ return smartClipCandidates().find(item => item.key === smartClipState.candidateKey) || null; }
+function smartClipPreferredCandidate(candidates=smartClipCandidates()){
+    const current = currentMediaToolbarTarget();
+    if(current?.kind === 'video'){
+        const key = smartClipCandidateKey(current.node.id, current.index);
+        const preferred = candidates.find(item => item.key === key);
+        if(preferred) return preferred;
+    }
+    const selected = candidates.find(item => item.node.id === selectedImage?.nodeId && item.index === Number(selectedImage?.index));
+    return selected || candidates[0] || null;
+}
+function smartClipTimecode(seconds){ return videoTimeLabel(seconds); }
+function setSmartClipCurrentTime(seconds){
+    const target = document.getElementById('smartClipCurrentTime');
+    if(target) target.textContent = smartClipTimecode(seconds);
+}
+function syncSmartClipControls(){
+    const modal = smartClipModal();
+    if(!modal) return;
+    const candidates = smartClipCandidates();
+    const candidate = candidates.find(item => item.key === smartClipState.candidateKey) || null;
+    if(!candidate && smartClipState.candidateKey) smartClipState.candidateKey = '';
+    const ready = Boolean(candidate && smartClipState.duration > 0);
+    const select = document.getElementById('smartClipSourceSelect');
+    if(select){
+        const emptyLabel = candidates.length ? tr('smart.clipChooseSource') : tr('smart.clipNoVideo');
+        select.innerHTML = `<option value="">${escapeHtml(emptyLabel)}</option>${candidates.map(item => `<option value="${escapeAttr(item.key)}" ${item.key === smartClipState.candidateKey ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}`;
+        select.disabled = !candidates.length;
+    }
+    const empty = document.getElementById('smartClipEmpty');
+    const video = smartClipVideo();
+    if(empty) empty.hidden = Boolean(candidate);
+    if(video) video.style.display = candidate ? '' : 'none';
+    const total = document.getElementById('smartClipTotalTime');
+    if(total) total.textContent = smartClipTimecode(smartClipState.duration);
+    const sourceName = document.getElementById('smartClipSourceName');
+    if(sourceName) sourceName.textContent = candidate?.label || '';
+    ['smartClipStartRange','smartClipEndRange','smartClipStartInput','smartClipEndInput'].forEach(id => {
+        const input = document.getElementById(id);
+        if(!input) return;
+        input.min = '0'; input.max = String(smartClipState.duration || 0); input.disabled = !ready;
+        input.value = id.includes('Start') ? String(smartClipState.start || 0) : String(smartClipState.end || 0);
+    });
+    const startLabel = document.getElementById('smartClipStartLabel');
+    const endLabel = document.getElementById('smartClipEndLabel');
+    const duration = document.getElementById('smartClipDuration');
+    if(startLabel) startLabel.textContent = smartClipTimecode(smartClipState.start);
+    if(endLabel) endLabel.textContent = smartClipTimecode(smartClipState.end);
+    if(duration) duration.textContent = smartClipTimecode(Math.max(0, smartClipState.end - smartClipState.start));
+    const fill = document.getElementById('smartClipRangeFill');
+    if(fill){
+        const totalDuration = Math.max(0.001, Number(smartClipState.duration || 0));
+        const startPct = Math.max(0, Math.min(100, Number(smartClipState.start || 0) / totalDuration * 100));
+        const endPct = Math.max(startPct, Math.min(100, Number(smartClipState.end || 0) / totalDuration * 100));
+        fill.style.left = `${startPct}%`; fill.style.width = `${endPct - startPct}%`;
+    }
+    const play = document.getElementById('smartClipPlayBtn');
+    if(play){
+        play.disabled = !ready;
+        play.setAttribute('aria-label', tr(smartClipState.previewing ? 'smart.videoStopTrimPreview' : 'smart.videoPreviewTrim'));
+        play.title = play.getAttribute('aria-label');
+        play.querySelector('i')?.setAttribute('data-lucide', smartClipState.previewing ? 'square' : 'play');
+    }
+    const audio = document.getElementById('smartClipAudioBtn');
+    if(audio){
+        audio.disabled = !ready;
+        audio.classList.toggle('is-muted', Boolean(smartClipState.mute));
+        audio.querySelector('i')?.setAttribute('data-lucide', smartClipState.mute ? 'volume-x' : 'volume-2');
+        const label = audio.querySelector('span');
+        if(label) label.textContent = tr(smartClipState.mute ? 'smart.videoMuteExport' : 'smart.videoKeepAudio');
+    }
+    const reset = document.getElementById('smartClipResetBtn');
+    if(reset) reset.disabled = !ready || smartClipState.exporting;
+    const exportButton = document.getElementById('smartClipExportBtn');
+    if(exportButton) exportButton.disabled = !ready || smartClipState.exporting || smartClipState.end - smartClipState.start < 0.1;
+    refreshIcons();
+}
+function setSmartClipCandidate(candidate){
+    const video = smartClipVideo();
+    smartClipState.candidateKey = candidate?.key || '';
+    smartClipState.duration = 0; smartClipState.start = 0; smartClipState.end = 0; smartClipState.previewing = false; smartClipState.mute = false;
+    smartClipState.thumbToken += 1;
+    if(video){
+        video.pause?.(); video.onloadedmetadata = null; video.ontimeupdate = null; video.onpause = null;
+        video.removeAttribute('src'); video.load?.();
+    }
+    document.getElementById('smartClipThumbs')?.replaceChildren();
+    setSmartClipCurrentTime(0);
+    if(!candidate){ syncSmartClipControls(); return; }
+    if(!video){ syncSmartClipControls(); return; }
+    const candidateKey = candidate.key;
+    video.onloadedmetadata = () => {
+        if(!smartClipState.open || smartClipState.candidateKey !== candidateKey) return;
+        const duration = Number(video.duration || 0);
+        smartClipState.duration = Number.isFinite(duration) && duration > 0 ? duration : 0;
+        smartClipState.start = 0; smartClipState.end = smartClipState.duration;
+        video.muted = false;
+        syncSmartClipControls();
+        renderSmartClipThumbnails(candidateKey);
+    };
+    video.ontimeupdate = () => {
+        if(!smartClipState.open || smartClipState.candidateKey !== candidateKey) return;
+        setSmartClipCurrentTime(video.currentTime || 0);
+        if(smartClipState.previewing && Number(video.currentTime || 0) + 0.025 >= Number(smartClipState.end || 0)){
+            video.pause?.(); smartClipState.previewing = false; syncSmartClipControls();
+        }
+    };
+    video.onpause = () => {
+        if(smartClipState.previewing){ smartClipState.previewing = false; syncSmartClipControls(); }
+    };
+    video.removeAttribute('crossorigin');
+    video.src = displayMediaUrl(candidate.item);
+    video.load?.();
+    syncSmartClipControls();
+}
+function selectSmartClipSource(key){
+    const candidate = smartClipCandidates().find(item => item.key === String(key || '')) || null;
+    setSmartClipCandidate(candidate);
+}
+function openSmartClipModal(){
+    const modal = smartClipModal();
+    if(!modal) return;
+    closeImageEditor();
+    smartClipState.open = true;
+    smartClipState.returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    modal.classList.add('open'); modal.setAttribute('aria-hidden', 'false');
+    const candidates = smartClipCandidates();
+    setSmartClipCandidate(smartClipPreferredCandidate(candidates));
+    requestAnimationFrame(() => document.getElementById('smartClipSourceSelect')?.focus());
+    window.syncSmartCanvasRailStates?.();
+}
+function closeSmartClipModal(){
+    const modal = smartClipModal();
+    const video = smartClipVideo();
+    if(video){ video.pause?.(); video.onloadedmetadata = null; video.ontimeupdate = null; video.onpause = null; video.removeAttribute('src'); video.load?.(); }
+    smartClipState.thumbToken += 1; smartClipState.open = false; smartClipState.previewing = false; smartClipState.exporting = false;
+    smartClipState.duration = 0; smartClipState.start = 0; smartClipState.end = 0; smartClipState.candidateKey = '';
+    modal?.classList.remove('open'); modal?.setAttribute('aria-hidden', 'true');
+    window.syncSmartCanvasRailStates?.();
+    const returnFocus = smartClipState.returnFocus;
+    smartClipState.returnFocus = null;
+    if(returnFocus?.isConnected) requestAnimationFrame(() => returnFocus.focus());
+}
+function updateSmartClipRange(which, value){
+    if(!smartClipState.duration) return;
+    const next = Math.max(0, Math.min(Number(smartClipState.duration || 0), Number(value || 0)));
+    if(which === 'start') smartClipState.start = Math.min(next, Math.max(0, smartClipState.end - 0.1));
+    else smartClipState.end = Math.max(next, Math.min(smartClipState.duration, smartClipState.start + 0.1));
+    const video = smartClipVideo();
+    if(video && Number.isFinite(video.duration) && which === 'start') video.currentTime = smartClipState.start;
+    syncSmartClipControls();
+}
+function smartClipRangeValueAt(control, clientX){
+    const rect = control?.getBoundingClientRect();
+    if(!rect?.width) return 0;
+    const ratio = Math.max(0, Math.min(1, (Number(clientX || 0) - rect.left) / rect.width));
+    return ratio * Number(smartClipState.duration || 0);
+}
+function beginSmartClipRangeDrag(event){
+    if(!smartClipState.duration || (event.button != null && event.button !== 0)) return;
+    const control = event.currentTarget;
+    if(!control) return;
+    event.preventDefault(); event.stopPropagation();
+    const value = smartClipRangeValueAt(control, event.clientX);
+    const which = Math.abs(value - smartClipState.start) <= Math.abs(value - smartClipState.end) ? 'start' : 'end';
+    smartClipRangeDrag = {control, pointerId:event.pointerId, which};
+    control.setPointerCapture?.(event.pointerId);
+    updateSmartClipRange(which, value);
+    const move = moveEvent => {
+        if(!smartClipRangeDrag || moveEvent.pointerId !== smartClipRangeDrag.pointerId) return;
+        moveEvent.preventDefault();
+        updateSmartClipRange(smartClipRangeDrag.which, smartClipRangeValueAt(control, moveEvent.clientX));
+    };
+    const finish = finishEvent => {
+        if(!smartClipRangeDrag || finishEvent.pointerId !== smartClipRangeDrag.pointerId) return;
+        control.releasePointerCapture?.(finishEvent.pointerId);
+        control.removeEventListener('pointermove', move);
+        control.removeEventListener('pointerup', finish);
+        control.removeEventListener('pointercancel', finish);
+        smartClipRangeDrag = null;
+    };
+    control.addEventListener('pointermove', move);
+    control.addEventListener('pointerup', finish);
+    control.addEventListener('pointercancel', finish);
+}
+async function toggleSmartClipPlayback(){
+    const video = smartClipVideo();
+    if(!video || !smartClipState.duration) return;
+    if(smartClipState.previewing){ video.pause?.(); return; }
+    if(Number(video.currentTime || 0) < smartClipState.start || Number(video.currentTime || 0) >= smartClipState.end) await seekVideoForFrame(video, smartClipState.start);
+    video.muted = Boolean(smartClipState.mute); smartClipState.previewing = true; syncSmartClipControls();
+    video.play?.().catch(() => { smartClipState.previewing = false; syncSmartClipControls(); });
+}
+function toggleSmartClipMute(){
+    smartClipState.mute = !smartClipState.mute;
+    const video = smartClipVideo();
+    if(video) video.muted = Boolean(smartClipState.mute);
+    syncSmartClipControls();
+}
+function resetSmartClip(){
+    const video = smartClipVideo();
+    if(video) video.pause?.();
+    smartClipState.start = 0; smartClipState.end = Number(smartClipState.duration || 0); smartClipState.mute = false; smartClipState.previewing = false;
+    if(video) video.currentTime = 0;
+    setSmartClipCurrentTime(0); syncSmartClipControls();
+}
+async function renderSmartClipThumbnails(candidateKey){
+    const strip = document.getElementById('smartClipThumbs');
+    const video = smartClipVideo();
+    if(!strip || !video || !smartClipState.duration) return;
+    const token = ++smartClipState.thumbToken;
+    strip.replaceChildren();
+    const count = Math.max(7, Math.min(12, Math.round((strip.clientWidth || 720) / 92)));
+    const previousTime = Number(video.currentTime || 0);
+    try {
+        for(let index = 0; index < count; index += 1){
+            if(token !== smartClipState.thumbToken || !smartClipState.open || smartClipState.candidateKey !== candidateKey) return;
+            const time = Math.min(Math.max(0, smartClipState.duration - 0.03), smartClipState.duration * index / Math.max(1, count - 1));
+            await seekVideoForFrame(video, time);
+            const canvas = document.createElement('canvas');
+            const ratio = video.videoWidth && video.videoHeight ? video.videoWidth / video.videoHeight : 16 / 9;
+            canvas.width = 144; canvas.height = Math.max(56, Math.round(canvas.width / ratio));
+            const context = canvas.getContext('2d');
+            context?.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.title = smartClipTimecode(time);
+            strip.appendChild(canvas);
+        }
+    } catch(error){
+        if(token === smartClipState.thumbToken) strip.textContent = tr('smart.clipThumbsUnavailable');
+    } finally {
+        if(token === smartClipState.thumbToken && smartClipState.open){
+            try { await seekVideoForFrame(video, Math.min(previousTime, Math.max(0, smartClipState.duration - 0.03))); } catch(error) {}
+            setSmartClipCurrentTime(video.currentTime || 0);
+        }
+    }
+}
+async function exportSmartClip(){
+    const candidate = smartClipCurrentCandidate();
+    if(!candidate || smartClipState.end - smartClipState.start < 0.1){ toast(tr('smart.clipNeedRange')); return; }
+    smartClipState.exporting = true; syncSmartClipControls();
+    try {
+        const response = await fetch('/api/video-tools/trim', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:candidate.raw?.url || candidate.item.url, start:smartClipState.start, end:smartClipState.end, mute:Boolean(smartClipState.mute)})});
+        const result = await response.json().catch(() => ({}));
+        if(!response.ok) throw new Error(result.detail || tr('smart.clipExportFailed'));
+        pushUndo();
+        const rect = nodeRect(candidate.node);
+        const created = createVideoGenerationNode({x:rect.x + rect.width + 240, y:rect.y + rect.height / 2}, {skipUndo:true, select:true});
+        created.title = tr('smart.clipResultTitle');
+        created.images = [{...result, kind:'video'}]; created.activeImageIndex = 0; created.outputKind = 'video'; created.runPrompt = candidate.node?.runPrompt || '';
+        selectedIds = []; selectedImage = {nodeId:created.id, index:0};
+        render(); scheduleSave(); closeSmartClipModal(); toast(tr('smart.clipExported'));
+    } catch(error){
+        toast((error.message || tr('smart.clipExportFailed')).slice(0, 180));
+    } finally {
+        smartClipState.exporting = false;
+        if(smartClipState.open) syncSmartClipControls();
     }
 }
 function videoFrameStep(){

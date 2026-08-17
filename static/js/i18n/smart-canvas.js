@@ -583,6 +583,26 @@
         ,"smart.railHistory": { zh: "生成历史", en: "History" }
         ,"smart.railOutline": { zh: "画布目录", en: "Outline" }
         ,"smart.railEdit": { zh: "编辑", en: "Edit" }
+        ,"smart.railClip": { zh: "剪辑", en: "Clip" }
+        ,"smart.clipTitle": { zh: "剪辑", en: "Clip" }
+        ,"smart.clipSubtitle": { zh: "从当前画布的视频中截取片段，并作为新节点返回画布", en: "Trim a canvas video and return the result as a new node" }
+        ,"smart.clipSource": { zh: "源视频", en: "Source video" }
+        ,"smart.clipChooseSource": { zh: "选择画布中的视频", en: "Choose a canvas video" }
+        ,"smart.clipNoVideo": { zh: "画布中暂无视频", en: "No videos on this canvas" }
+        ,"smart.clipUntitledVideo": { zh: "未命名视频", en: "Untitled video" }
+        ,"smart.clipEmptyTitle": { zh: "选择一个画布视频开始剪辑", en: "Choose a canvas video to start clipping" }
+        ,"smart.clipEmptyHint": { zh: "可先选中视频节点，或在上方列表中选择", en: "Select a video node first or choose one above" }
+        ,"smart.clipSettings": { zh: "片段设置", en: "Clip settings" }
+        ,"smart.clipStart": { zh: "开始时间", en: "Start time" }
+        ,"smart.clipEnd": { zh: "结束时间", en: "End time" }
+        ,"smart.clipDuration": { zh: "片段时长", en: "Clip duration" }
+        ,"smart.clipExport": { zh: "导出到画布", en: "Export to canvas" }
+        ,"smart.clipReset": { zh: "重置", en: "Reset" }
+        ,"smart.clipNeedRange": { zh: "请先设置有效的截取范围", en: "Set a valid clip range first" }
+        ,"smart.clipExportFailed": { zh: "视频片段导出失败", en: "Could not export the video clip" }
+        ,"smart.clipExported": { zh: "视频片段已导出到画布", en: "Video clip exported to canvas" }
+        ,"smart.clipResultTitle": { zh: "视频片段", en: "Video clip" }
+        ,"smart.clipThumbsUnavailable": { zh: "预览帧暂不可用", en: "Preview frames unavailable" }
         ,"smart.railMinimap": { zh: "小地图", en: "Minimap" }
         ,"smart.railAgent": { zh: "AI 对话", en: "AI chat" }
         ,"smart.railEditNeedImage": { zh: "请先选择一张图片", en: "Select an image first" }

@@ -212,6 +212,13 @@
             open(){ minimap?.classList.add('rh-open'); renderMinimap(); },
             close(){ minimap?.classList.remove('rh-open'); },
         },
+        clip: {
+            labelKey:'smart.railClip', labelFallback:'剪辑',
+            el: () => document.getElementById('smartClipModal'),
+            isOpen(){ return isOpenEl(this.el()); },
+            open(){ window.openSmartClipModal?.(); },
+            close(){ window.closeSmartClipModal?.(); },
+        },
         agent: {
             labelKey:'smart.railAgent', labelFallback:'AI 对话',
             el: () => agentPanel,
@@ -281,7 +288,7 @@
     // Esc 也应能关闭这些侧栏/浮层，smart-canvas.js 只处理了一部分，这里补齐剩余面板。
     document.addEventListener('keydown', event => {
         if(event.key !== 'Escape') return;
-        ['agent','workflow','outline','minimap'].forEach(name => {
+        ['agent','workflow','outline','minimap','clip'].forEach(name => {
             if(surfaces[name].isOpen()) surfaces[name].close();
         });
         syncSurfaceStates();

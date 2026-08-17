@@ -88,7 +88,7 @@
             <button type="button" data-rh-action="workflow" aria-expanded="false"><i data-lucide="workflow"></i><em data-i18n="smart.railWorkflow">工作流</em></button>
             <button type="button" data-rh-action="history" aria-expanded="false"><i data-lucide="history"></i><em data-i18n="smart.railHistory">生成历史</em></button>
             <button type="button" data-rh-action="outline" aria-expanded="false"><i data-lucide="list-tree"></i><em data-i18n="smart.railOutline">画布目录</em></button>
-            <button type="button" data-rh-action="edit" aria-expanded="false"><i data-lucide="scissors"></i><em data-i18n="smart.railEdit">编辑</em></button>
+            <button type="button" data-rh-action="clip" aria-expanded="false"><i data-lucide="scissors"></i><em data-i18n="smart.railClip">剪辑</em></button>
         </nav>
         <div class="rh-view-controls">
             <button id="rhMinimapToggle" type="button" title="小地图" aria-label="小地图"><i data-lucide="map"></i></button>
@@ -505,6 +505,38 @@
             </div>
         </div>
         <div id="toast" class="toast"></div>
+        <div id="smartClipModal" class="smart-clip-modal" aria-hidden="true" onclick="if(event.target === this) closeSmartClipModal()">
+            <section class="smart-clip-panel" role="dialog" aria-modal="true" aria-labelledby="smartClipTitle">
+                <header class="smart-clip-head">
+                    <div><div id="smartClipTitle" class="smart-clip-title"><i data-lucide="scissors"></i><span data-i18n="smart.clipTitle">剪辑</span></div><p class="smart-clip-subtitle" data-i18n="smart.clipSubtitle">从当前画布的视频中截取片段，并作为新节点返回画布</p></div>
+                    <button class="smart-clip-icon-btn" type="button" onclick="closeSmartClipModal()" data-i18n-title="common.close" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+                </header>
+                <div class="smart-clip-layout">
+                    <div class="smart-clip-main">
+                        <div class="smart-clip-preview-wrap">
+                            <div id="smartClipEmpty" class="smart-clip-empty"><i data-lucide="clapperboard"></i><strong data-i18n="smart.clipEmptyTitle">选择一个画布视频开始剪辑</strong><span data-i18n="smart.clipEmptyHint">可先选中视频节点，或在上方列表中选择</span></div>
+                            <video id="smartClipVideo" class="smart-clip-video" preload="metadata" playsinline disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" style="display:none"></video>
+                            <button id="smartClipPlayBtn" class="smart-clip-play-btn" type="button" onclick="toggleSmartClipPlayback()" data-i18n-title="smart.videoPreviewTrim" title="预览片段" aria-label="预览片段" disabled><i data-lucide="play"></i></button>
+                        </div>
+                        <div class="smart-clip-timebar" aria-live="polite"><strong id="smartClipCurrentTime">00:00.0</strong><span>/</span><span id="smartClipTotalTime">00:00.0</span><span id="smartClipSourceName" class="smart-clip-source-name"></span></div>
+                        <div id="smartClipTimeline" class="smart-clip-timeline" aria-label="视频片段范围">
+                            <div id="smartClipThumbs" class="smart-clip-thumbs" aria-hidden="true"></div>
+                            <div class="smart-clip-range-control" onpointerdown="beginSmartClipRangeDrag(event)"><div id="smartClipRangeFill" class="smart-clip-range-fill"></div><input id="smartClipStartRange" class="smart-clip-range smart-clip-range-start" type="range" min="0" max="0" step="0.01" value="0" oninput="updateSmartClipRange('start', this.value)" aria-label="片段起点" disabled><input id="smartClipEndRange" class="smart-clip-range smart-clip-range-end" type="range" min="0" max="0" step="0.01" value="0" oninput="updateSmartClipRange('end', this.value)" aria-label="片段终点" disabled></div>
+                            <div class="smart-clip-range-labels"><span id="smartClipStartLabel">00:00.0</span><span id="smartClipEndLabel">00:00.0</span></div>
+                        </div>
+                    </div>
+                    <aside class="smart-clip-sidebar">
+                        <div class="smart-clip-sidebar-title" data-i18n="smart.clipSettings">片段设置</div>
+                        <label class="smart-clip-source-field"><span data-i18n="smart.clipSource">源视频</span><select id="smartClipSourceSelect" onchange="selectSmartClipSource(this.value)" aria-label="源视频"></select></label>
+                        <label class="smart-clip-field"><span data-i18n="smart.clipStart">开始时间</span><input id="smartClipStartInput" type="number" min="0" step="0.01" value="0" oninput="updateSmartClipRange('start', this.value)" disabled></label>
+                        <label class="smart-clip-field"><span data-i18n="smart.clipEnd">结束时间</span><input id="smartClipEndInput" type="number" min="0" step="0.01" value="0" oninput="updateSmartClipRange('end', this.value)" disabled></label>
+                        <div class="smart-clip-duration"><span data-i18n="smart.clipDuration">片段时长</span><strong id="smartClipDuration">00:00.0</strong></div>
+                        <button id="smartClipAudioBtn" class="smart-clip-toggle" type="button" onclick="toggleSmartClipMute()" disabled><i data-lucide="volume-2"></i><span data-i18n="smart.videoKeepAudio">保留声音</span><b aria-hidden="true"></b></button>
+                        <div class="smart-clip-sidebar-actions"><button id="smartClipResetBtn" class="smart-clip-secondary-btn" type="button" onclick="resetSmartClip()" disabled><i data-lucide="rotate-ccw"></i><span data-i18n="smart.clipReset">重置</span></button><button id="smartClipExportBtn" class="smart-clip-export-btn" type="button" onclick="exportSmartClip()" disabled><i data-lucide="scissors"></i><span data-i18n="smart.clipExport">导出到画布</span></button></div>
+                    </aside>
+                </div>
+            </section>
+        </div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
     <script src="/static/js/smart-canvas.js?v=2026.07.29.1786676486"></script>
