@@ -62,6 +62,13 @@ body.smart-canvas-panning iframe { pointer-events:none !important; }
 .image-action-toolbar .image-toolbar-delete:hover:not(:disabled) { color:#dc2626; background:rgba(220,38,38,.12); }
 .image-action-toolbar button:focus-visible { outline:2px solid var(--strong); outline-offset:1px; }
 .image-action-toolbar button:disabled { opacity:.34; cursor:not-allowed; }
+#workflowGroupToolbar { position:absolute; left:0; top:0; z-index:56; display:none; max-width:min(calc(100vw - 28px), 720px); transform:translateX(-50%); }
+#workflowGroupToolbar.open { display:flex; }
+.workflow-group-toolbar-floating .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.workflow-group-toolbar-floating .workflow-group-layout-menu { top:calc(100% + 6px); left:50%; z-index:1; display:none; transform:translateX(-50%); }
+.workflow-group-toolbar-floating .workflow-group-layout-menu.open { display:grid; }
+.workflow-group-toolbar-floating[data-placement="inside"] { box-shadow:0 14px 34px rgba(0,0,0,.34); }
+.workflow-group-toolbar-floating button:focus-visible { outline:2px solid var(--strong); outline-offset:1px; }
 .image-action-toolbar button[hidden] { display:none !important; }
 .image-action-toolbar svg { width:15px; height:15px; }
 .image-toolbar-remove-background .background-removal-mark { width:15px; height:15px; box-sizing:border-box; border:1px solid currentColor; border-radius:4px; background:conic-gradient(from 90deg, color-mix(in srgb, currentColor 34%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 34%, transparent) 0 75%, transparent 0) 0 0 / 6px 6px; }
@@ -2074,8 +2081,8 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 /* 纯管理分组与便签：不参与生成节点的视觉和端口体系。 */
 .workflow-organizer-node { z-index:-1000; box-sizing:border-box; border:2px solid color-mix(in srgb, var(--organizer-color) 72%, transparent); border-radius:18px; background:color-mix(in srgb, var(--organizer-color) 7%, transparent); box-shadow:none; overflow:visible; }
 .workflow-organizer-node.selected { border-color:var(--organizer-color); box-shadow:0 0 0 3px color-mix(in srgb, var(--organizer-color) 18%, transparent); }
-.workflow-organizer-head { position:absolute; left:0; right:0; bottom:calc(100% + 4px); min-height:34px; display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; color:var(--text); }
-.organizer-title-control { min-width:120px; max-width:100%; display:flex; align-items:center; gap:5px; flex:1 1 220px; }
+.workflow-organizer-head { position:absolute; left:12px; right:auto; bottom:calc(100% + 6px); min-height:30px; max-width:calc(100% - 24px); display:flex; flex-wrap:nowrap; align-items:center; gap:6px; color:var(--text); }
+.organizer-title-control { min-width:120px; max-width:min(420px, calc(100vw - 68px)); display:flex; align-items:center; gap:5px; flex:0 1 auto; }
 .workflow-organizer-title { width:clamp(120px, calc(var(--organizer-title-ch, 8) * 1em + 28px), 100%); max-width:100%; min-width:90px; min-height:30px; border:0; border-radius:8px; background:color-mix(in srgb, var(--organizer-color) 16%, var(--panel)); color:var(--text); padding:6px 9px; font-family:inherit; font-size:calc(12px * var(--canvas-ui-inverse-scale, 1)); font-weight:750; line-height:1.2; outline:none; }
 .organizer-color-row { display:flex; gap:4px; margin-left:4px; }
 .organizer-font-controls { display:flex; align-items:center; gap:3px; flex:0 0 auto; }
@@ -2092,7 +2099,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .workflow-group-toolbar .workflow-group-run { color:#4ce79a; }
 .workflow-group-toolbar .workflow-group-create { border-left:1px solid rgba(255,255,255,.12); border-radius:0; }
 .workflow-group-layout { position:relative; }
-.workflow-group-layout-menu { position:absolute; z-index:25; top:34px; left:0; display:grid; min-width:142px; padding:5px; border:1px solid rgba(255,255,255,.12); border-radius:11px; background:rgba(30,32,36,.98); box-shadow:0 14px 32px rgba(0,0,0,.38); }
+.workflow-group-layout-menu { position:absolute; z-index:25; min-width:142px; padding:5px; border:1px solid rgba(255,255,255,.12); border-radius:11px; background:rgba(30,32,36,.98); box-shadow:0 14px 32px rgba(0,0,0,.38); }
 .workflow-group-layout-menu button { justify-content:flex-start; height:31px; }
 .workflow-group-layout-menu button i { width:15px; height:15px; }
 .workflow-create-modal { position:fixed; inset:0; z-index:360; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,.64); backdrop-filter:blur(7px); }

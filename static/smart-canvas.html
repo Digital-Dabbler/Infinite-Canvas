@@ -130,6 +130,21 @@
             <button type="button" data-image-toolbar-action="download" title="下载"><i data-lucide="download"></i><span>下载</span></button>
             <button type="button" class="image-toolbar-delete" data-image-toolbar-action="delete" title="删除当前结果"><i data-lucide="trash-2"></i><span>删除</span></button>
         </div>
+        <div id="workflowGroupToolbar" class="workflow-group-toolbar workflow-group-toolbar-floating" role="toolbar" aria-labelledby="workflowGroupToolbarLabel" aria-hidden="true">
+            <span id="workflowGroupToolbarLabel" class="sr-only" data-i18n="smart.workflowGroupActions">工作流分组操作</span>
+            <div class="workflow-group-layout">
+                <button id="workflowGroupLayoutToggle" type="button" data-workflow-toolbar-action="layout-toggle" aria-expanded="false" aria-controls="workflowGroupLayoutMenu" data-i18n-title="smart.workflowGroupLayout">
+                    <i data-lucide="layout-grid"></i><span data-i18n="smart.workflowGroupLayout">布局</span><i data-lucide="chevron-down"></i>
+                </button>
+                <div id="workflowGroupLayoutMenu" class="workflow-group-layout-menu" role="menu" aria-hidden="true">
+                    <button type="button" role="menuitem" data-workflow-toolbar-action="layout-grid"><i data-lucide="grid-2x2"></i><span data-i18n="smart.workflowGroupGrid">宫格布局</span></button>
+                    <button type="button" role="menuitem" data-workflow-toolbar-action="layout-horizontal"><i data-lucide="panel-top"></i><span data-i18n="smart.workflowGroupHorizontal">水平布局</span></button>
+                    <button type="button" role="menuitem" data-workflow-toolbar-action="layout-vertical"><i data-lucide="panel-left"></i><span data-i18n="smart.workflowGroupVertical">垂直布局</span></button>
+                </div>
+            </div>
+            <button class="workflow-group-run" type="button" data-workflow-toolbar-action="run" data-i18n-title="smart.workflowGroupRun"><i data-lucide="play"></i><span data-i18n="smart.workflowGroupRun">整组执行</span></button>
+            <button class="workflow-group-create" type="button" data-workflow-toolbar-action="create" data-i18n-title="smart.workflowGroupCreate"><i data-lucide="save"></i><span data-i18n="smart.workflowGroupCreate">创建工作流</span></button>
+        </div>
         <div id="photoshopContextMenu" class="photoshop-context-menu" role="menu" aria-hidden="true"></div>
         <div id="photoshopInstallModal" class="photoshop-install-modal" aria-hidden="true">
             <div class="photoshop-install-card" role="dialog" aria-modal="true" aria-labelledby="photoshopInstallTitle">

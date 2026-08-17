@@ -27,6 +27,7 @@ const imageEditModal = document.getElementById('imageEditModal');
 let outpaintRunSettings = null;
 let outpaintFillColor = '#ffffff';
 const imageActionToolbar = document.getElementById('imageActionToolbar');
+const workflowGroupToolbar = document.getElementById('workflowGroupToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const photoshopInstallModal = document.getElementById('photoshopInstallModal');
 const photoshopInstallClose = document.getElementById('photoshopInstallClose');
@@ -1823,6 +1824,7 @@ function syncSelectionUi(){
     syncSmartSelectedImageResolution(world);
     syncRunButtonState();
     updateImageActionToolbar();
+    updateWorkflowGroupToolbar();
     scheduleConnectionLayerRefresh();
 }
 function isNodeSelected(id){
@@ -2684,6 +2686,7 @@ function applyViewport(){
     scheduleSmartImageResolutionSync(world, 120);
     requestAnimationFrame(() => {
         positionImageActionToolbar();
+        positionWorkflowGroupToolbar();
         positionUploadResourcePicker();
         // 图片生成 composer 位于 world 内，会随视口变换自然移动；文本节点的
         // 生成面板在独立图层中，因此在每次平移/缩放后按当前节点屏幕位置同步。
@@ -9742,6 +9745,94 @@ function updateImageActionToolbar(){
     });
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
 }
+function currentWorkflowGroupToolbarTarget(){
+    const ids = selectedNodeIds();
+    if(ids.length !== 1) return null;
+    const node = nodes.find(item => item.id === ids[0]);
+    return isWorkflowOrganizerNode(node) ? node : null;
+}
+function positionWorkflowGroupToolbar(target=currentWorkflowGroupToolbarTarget()){
+    if(!workflowGroupToolbar || !target) return;
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(target.id)}"]`);
+    if(!nodeEl) return;
+    const shellRect = shell.getBoundingClientRect();
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const headerRect = shell.querySelector('.rh-canvas-header')?.getBoundingClientRect();
+    const width = workflowGroupToolbar.offsetWidth || 1;
+    const height = workflowGroupToolbar.offsetHeight || 42;
+    const edge = 14;
+    const safeTop = Math.max(edge, (headerRect?.bottom || shellRect.top) - shellRect.top + edge);
+    const centerX = Math.max(width / 2 + edge, Math.min(shellRect.width - width / 2 - edge, nodeRect.left - shellRect.left + nodeRect.width / 2));
+    const above = nodeRect.top - shellRect.top - height - 12;
+    const placeInside = above < safeTop;
+    const insideTop = nodeRect.top - shellRect.top + 12;
+    const top = placeInside
+        ? Math.max(safeTop, Math.min(shellRect.height - height - edge, insideTop))
+        : above;
+    workflowGroupToolbar.dataset.placement = placeInside ? 'inside' : 'above';
+    workflowGroupToolbar.style.left = `${Math.round(centerX)}px`;
+    workflowGroupToolbar.style.top = `${Math.round(top)}px`;
+}
+function updateWorkflowGroupToolbar(){
+    if(!workflowGroupToolbar) return;
+    const target = currentWorkflowGroupToolbarTarget();
+    const layoutMenu = workflowGroupToolbar.querySelector('.workflow-group-layout-menu');
+    const layoutToggle = workflowGroupToolbar.querySelector('[data-workflow-toolbar-action="layout-toggle"]');
+    if(!target){
+        workflowGroupLayoutOpenId = '';
+        workflowGroupToolbar.classList.remove('open');
+        workflowGroupToolbar.removeAttribute('data-group-id');
+        workflowGroupToolbar.setAttribute('aria-hidden', 'true');
+        layoutMenu?.classList.remove('open');
+        layoutMenu?.setAttribute('aria-hidden', 'true');
+        layoutToggle?.setAttribute('aria-expanded', 'false');
+        return;
+    }
+    if(workflowGroupLayoutOpenId && workflowGroupLayoutOpenId !== target.id) workflowGroupLayoutOpenId = '';
+    const menuOpen = workflowGroupLayoutOpenId === target.id;
+    workflowGroupToolbar.dataset.groupId = target.id;
+    workflowGroupToolbar.classList.add('open');
+    workflowGroupToolbar.setAttribute('aria-hidden', 'false');
+    layoutMenu?.classList.toggle('open', menuOpen);
+    layoutMenu?.setAttribute('aria-hidden', menuOpen ? 'false' : 'true');
+    layoutToggle?.setAttribute('aria-expanded', menuOpen ? 'true' : 'false');
+    requestAnimationFrame(() => positionWorkflowGroupToolbar(target));
+}
+function closeWorkflowGroupLayoutMenu(restoreFocus=false){
+    if(!workflowGroupLayoutOpenId) return;
+    workflowGroupLayoutOpenId = '';
+    updateWorkflowGroupToolbar();
+    if(restoreFocus) workflowGroupToolbar?.querySelector('[data-workflow-toolbar-action="layout-toggle"]')?.focus();
+}
+function runWorkflowGroupToolbarAction(action){
+    const target = currentWorkflowGroupToolbarTarget();
+    if(!target) return;
+    if(action === 'layout-toggle'){
+        toggleWorkflowGroupLayoutMenu(target.id);
+        return;
+    }
+    if(action === 'layout-grid' || action === 'layout-horizontal' || action === 'layout-vertical'){
+        layoutWorkflowGroup(target.id, action.replace('layout-', ''));
+        return;
+    }
+    if(action === 'run'){
+        runWorkflowGroup(target.id);
+        return;
+    }
+    if(action === 'create') openWorkflowCreateDialog(target.id);
+}
+workflowGroupToolbar?.addEventListener('mousedown', event => event.stopPropagation());
+workflowGroupToolbar?.addEventListener('click', event => {
+    const button = event.target.closest?.('[data-workflow-toolbar-action]');
+    if(!button || button.disabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    runWorkflowGroupToolbarAction(button.dataset.workflowToolbarAction || '');
+});
+document.addEventListener('mousedown', event => {
+    if(workflowGroupLayoutOpenId && !workflowGroupToolbar?.contains(event.target)) closeWorkflowGroupLayoutMenu();
+}, true);
+
 function closePhotoshopContextMenu(){
     if(!photoshopContextMenu) return;
     photoshopContextMenu.classList.remove('open');
@@ -10353,7 +10444,7 @@ function workflowGroupOrderedMembers(group){
     while(queue.length){ const node=queue.shift(); out.push(node); edges.filter(c=>c.from===node.id).forEach(c=>{indegree.set(c.to,indegree.get(c.to)-1);if(!indegree.get(c.to))queue.push(members.find(n=>n.id===c.to));});queue.sort(sort); }
     members.filter(n=>!out.includes(n)).sort(sort).forEach(n=>out.push(n)); return out;
 }
-function toggleWorkflowGroupLayoutMenu(id){workflowGroupLayoutOpenId=workflowGroupLayoutOpenId===id?'':id;render();}
+function toggleWorkflowGroupLayoutMenu(id){workflowGroupLayoutOpenId=workflowGroupLayoutOpenId===id?'':id;updateWorkflowGroupToolbar();}
 function layoutWorkflowGroup(id,mode){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group)return;const members=workflowGroupOrderedMembers(group);if(!members.length)return;pushUndo();const x0=group.x+34,y0=group.y+52,gap=54;if(mode==='grid'){const cols=Math.max(1,Math.ceil(Math.sqrt(members.length)));let x=x0,y=y0,rowH=0;members.forEach((n,i)=>{const r=nodeRect(n);if(i&&i%cols===0){x=x0;y+=rowH+gap;rowH=0;}n.x=Math.round(x);n.y=Math.round(y);x+=Math.max(180,r.width)+gap;rowH=Math.max(rowH,Math.max(110,r.height));});}else if(mode==='vertical'){let y=y0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x0);n.y=Math.round(y);y+=Math.max(110,r.height)+gap;});}else{let x=x0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x);n.y=Math.round(y0);x+=Math.max(180,r.width)+gap;});}fitWorkflowOrganizerBounds(group);workflowGroupLayoutOpenId='';render();scheduleSave();toast('已整理工作流分组');}
 function removeNodeFromWorkflowGroup(id){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId)return;pushUndo();const groupId=node.workflowGroupId;delete node.workflowGroupId;node.workflowGroupReentryGate=groupId;fitWorkflowOrganizerBounds(nodes.find(n=>n.id===groupId));render();scheduleSave();toast('已移出工作流分组');}
 function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
@@ -10369,8 +10460,7 @@ function canvasOrganizerHtml(node){
     if(isSmartNoteNode(node)) return `<div class="image-node smart-note-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||240}px;height:${node.h||180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px"><div class="smart-note-toolbar">${organizerColorButtons(node)}${smartTextCopyButtonHtml('.smart-note-text')}<button class="organizer-edit node-delete" type="button"><i data-lucide="trash-2"></i></button></div><textarea class="smart-note-text">${escapeHtml(node.text||'')}</textarea><div class="node-resize-handle" data-resize="1"></div></div>`;
     delete node.titleFontSize;
     const title=String(node.title||'未命名工作流'), chars=Math.max(8,Math.min(64,Array.from(title).length));
-    const toolbar=isNodeSelected(node.id)?`<div class="workflow-group-toolbar"><div class="workflow-group-layout"><button type="button" onclick="toggleWorkflowGroupLayoutMenu('${escapeAttr(node.id)}')"><i data-lucide="layout-grid"></i>布局<i data-lucide="chevron-down"></i></button>${workflowGroupLayoutOpenId===node.id?`<div class="workflow-group-layout-menu"><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','grid')"><i data-lucide="grid-2x2"></i>宫格布局</button><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','horizontal')"><i data-lucide="panel-top"></i>水平布局</button><button type="button" onclick="layoutWorkflowGroup('${escapeAttr(node.id)}','vertical')"><i data-lucide="panel-left"></i>垂直布局</button></div>`:''}</div><button class="workflow-group-run" type="button" onclick="runWorkflowGroup('${escapeAttr(node.id)}')"><i data-lucide="play"></i>整组执行</button><button class="workflow-group-create" type="button" onclick="openWorkflowCreateDialog('${escapeAttr(node.id)}')"><i data-lucide="save"></i>创建工作流</button></div>`:'';
-    return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||520}px;height:${node.h||320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}"><div class="workflow-organizer-head">${toolbar}<div class="organizer-title-control" style="--organizer-title-ch:${chars}"><input class="workflow-organizer-title" value="${escapeAttr(title)}">${smartTextCopyButtonHtml('.workflow-organizer-title')}</div><div class="organizer-color-row">${organizerColorButtons(node)}</div></div><div class="node-resize-handle" data-resize="1"></div></div>`;
+    return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||520}px;height:${node.h||320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}"><div class="workflow-organizer-head"><div class="organizer-title-control" style="--organizer-title-ch:${chars}"><input class="workflow-organizer-title" value="${escapeAttr(title)}">${smartTextCopyButtonHtml('.workflow-organizer-title')}</div><div class="organizer-color-row">${organizerColorButtons(node)}</div></div><div class="node-resize-handle" data-resize="1"></div></div>`;
 }
 function renderSmartOutline(){
     if(!smartOutlineList) return;
@@ -10487,6 +10577,7 @@ function render(){
     scheduleSmartPostRenderMediaWork();
     refreshRunTimerPills();
     updateImageActionToolbar();
+    updateWorkflowGroupToolbar();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -20769,6 +20860,7 @@ shell.onclick = e => {
 };
 window.addEventListener('keydown', e => {
     if(e.key === 'Escape'){
+        closeWorkflowGroupLayoutMenu(true);
         closePortConnectMenu();
         closePhotoshopContextMenu();
     }
