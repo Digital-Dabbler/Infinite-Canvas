@@ -253,7 +253,7 @@ body.smart-prompt-split-resize .prompt-node-llm select { pointer-events:none !im
 }
 .prompt-smart-node .prompt-node-text[readonly] {
     color:var(--text);
-    cursor:grab;
+    cursor:inherit;
     caret-color:transparent;
     user-select:none;
     -webkit-user-select:none;

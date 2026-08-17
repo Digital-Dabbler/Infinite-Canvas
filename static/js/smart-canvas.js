@@ -11212,8 +11212,12 @@ function bindLoopNodeControls(el, node){
 function bindScrollableText(el){
     if(!el || el.dataset.scrollBound === '1') return;
     el.dataset.scrollBound = '1';
-    const stop = e => e.stopPropagation();
     const isReadonlyPromptSurface = () => el.matches?.('.prompt-node-text[readonly]');
+    // Read-only text is part of the node surface: let its click reach the shared
+    // node-selection handler, including modifier-click multi-select.
+    const stop = e => {
+        if(!isReadonlyPromptSurface()) e.stopPropagation();
+    };
     const beginSelection = e => {
         if(isReadonlyPromptSurface()) return;
         e.stopPropagation();
@@ -11801,8 +11805,17 @@ function bindNodeEvents(){
             const node = nodes.find(n => n.id === id);
             if(node?.type === 'smart-prompt') promptPanelClosedIds.delete(node.id);
             const timerHidden = hideRunTimerForNode(node);
-            selectedId = id;
-            selectedIds = [];
+            if(e.shiftKey || e.ctrlKey || e.metaKey){
+                const currentIds = selectedNodeIds();
+                const nextIds = currentIds.includes(id)
+                    ? currentIds.filter(selectedNodeId => selectedNodeId !== id)
+                    : [...currentIds, id];
+                selectedId = nextIds.length === 1 ? nextIds[0] : '';
+                selectedIds = nextIds.length > 1 ? nextIds : [];
+            } else {
+                selectedId = id;
+                selectedIds = [];
+            }
             selectedImage = {nodeId:'', index:-1};
             if(smartCascadeAnyRunning()) smartCascadeSilentSelection = false;
             syncSelectionUi();
@@ -21113,19 +21126,6 @@ window.onmouseup = e => {
         if(stateChanged) commitPendingUndo();
         else discardPendingUndo();
         if(stateChanged || dragState.thumbDetached) suppressNodeClickUntil = Date.now() + 180;
-        if(!stateChanged && dragState.fromReadonlyText){
-            const promptClickId = dragState.id;
-            setTimeout(() => {
-                if(promptTextEditingIds.has(promptClickId)) return;
-                const promptNode = nodes.find(n => n.id === promptClickId && n.type === 'smart-prompt');
-                if(!promptNode) return;
-                selectedId = promptClickId;
-                selectedIds = [];
-                selectedImage = {nodeId:'', index:-1};
-                promptPanelClosedIds.delete(promptClickId);
-                render();
-            }, 180);
-        }
         clearDropHighlight();
         loopInsertPreview = null;
         dragState = null;

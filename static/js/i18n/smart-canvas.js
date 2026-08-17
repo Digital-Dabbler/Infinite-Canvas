@@ -535,7 +535,7 @@
         "smart.mediaDrawerAdd": { zh: "放入画布", en: "Add to canvas" },
         "smart.mediaDrawerSave": { zh: "存资产", en: "Save asset" },
         "smart.shortcuts": { zh: "快捷键", en: "Shortcuts" },
-        "smart.shortcutBoxSelect": { zh: "按住并拖拽框选节点", en: "Hold and drag to box-select nodes" },
+        "smart.shortcutBoxSelect": { zh: "Ctrl 拖拽框选；Shift/Ctrl/Cmd + 点击多选节点", en: "Ctrl/Cmd + drag to box-select; Shift/Ctrl/Cmd + click to multi-select nodes" },
         "smart.shortcutGroup": { zh: "创建工作流分组", en: "Create a workflow group" },
         "smart.shortcutUngroup": { zh: "解除选中工作流成员关系", en: "Remove selected workflow members" },
         "smart.shortcutUndo": { zh: "撤销上一步操作", en: "Undo the last action" },
