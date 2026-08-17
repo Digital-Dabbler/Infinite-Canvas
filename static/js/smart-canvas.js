@@ -11865,6 +11865,7 @@ function bindNodeEvents(){
                 el.addEventListener('drop', async event => {
                     if(!hasSmartImageDropData(event.dataTransfer)) return;
                     event.preventDefault();
+                    event._smartMediaReplacementDrop = true;
                     event.stopPropagation();
                     setReplacementDropTarget(false);
                     const payload = await resolveSmartImageDropPayload(event.dataTransfer);
@@ -21281,6 +21282,8 @@ shell.addEventListener('wheel', e => {
 }, {passive:false});
 shell.ondragover = e => setSmartDropCopyEffect(e, true);
 shell.ondrop = async e => {
+    // 节点级媒体替换先处理；不能把同一次投放再次按画布空白处导入。
+    if(e._smartMediaReplacementDrop || e.defaultPrevented) return;
     e.preventDefault();
     if(e.target.closest('.image-node')) return;
     const p = screenToWorld(e);
