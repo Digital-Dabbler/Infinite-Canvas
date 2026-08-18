@@ -22834,7 +22834,7 @@ window.addEventListener('studio-lang-change', () => {
     render();
 });
 window.onload = async () => {
-    applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'light');
+    applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark');
     loadPromptPresets();
     loadPromptTemplateGroups();
     loadPromptTemplateOverrides();

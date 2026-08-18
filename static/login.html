@@ -3,9 +3,19 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Infinite Canvas · 登录</title>
+  <script>
+    (function(){
+      try {
+        var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark';
+        if(theme === 'dark') document.documentElement.classList.add('theme-dark','studio-theme-dark');
+      } catch(e) {}
+    })();
+  </script>
+  <script src="/static/js/theme.js?v=2026.07.29.1783969806"></script>
   <style>
-    :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0d1117;color:#e6edf3;font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}.card{width:min(420px,calc(100vw - 32px));padding:30px;border:1px solid #30363d;border-radius:18px;background:#161b22;box-shadow:0 24px 70px #0008}h1{margin:0 0 6px;font-size:25px}p{color:#8b949e;margin:0 0 22px}label{display:block;margin:12px 0 5px}input,select{width:100%;padding:11px 12px;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:inherit;font:inherit}input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}select:disabled{color:#8b949e}button{margin-top:18px;width:100%;padding:11px;border:0;border-radius:8px;background:#58a6ff;color:#07111f;font-weight:700;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}.link{background:transparent;color:#8b949e;margin-top:8px}.form[hidden]{display:none}.form-actions{display:flex;justify-content:space-between;gap:8px;margin-top:8px}.form-actions .link{width:auto;margin:0;padding:6px 0;text-align:left;font-size:13px;font-weight:600}.form-actions .link:last-child{text-align:right}#message{min-height:22px;margin-top:14px;color:#ff9b9b}.hint{font-size:12px;color:#8b949e}.reset-note{margin:4px 0 14px;font-size:12px;color:#8b949e}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--ui-bg-canvas);color:var(--ui-text);font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}.card{width:min(420px,calc(100vw - 32px));padding:30px;border:1px solid var(--ui-border);border-radius:18px;background:var(--ui-surface-raised);box-shadow:0 24px 70px var(--ui-shadow)}h1{margin:0 0 6px;font-size:25px}p{color:var(--ui-text-muted);margin:0 0 22px}label{display:block;margin:12px 0 5px}input,select{width:100%;padding:11px 12px;border-radius:8px;border:1px solid var(--ui-border);background:var(--ui-surface-sunken);color:inherit;font:inherit}input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--ui-focus-ring);outline-offset:2px}select:disabled{color:var(--ui-text-disabled)}button{margin-top:18px;width:100%;padding:11px;border:0;border-radius:8px;background:var(--ui-brand);color:var(--ui-on-brand);font-weight:700;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}.link{background:transparent;color:var(--ui-text-muted);margin-top:8px}.form[hidden]{display:none}.form-actions{display:flex;justify-content:space-between;gap:8px;margin-top:8px}.form-actions .link{width:auto;margin:0;padding:6px 0;text-align:left;font-size:13px;font-weight:600}.form-actions .link:last-child{text-align:right}#message{min-height:22px;margin-top:14px;color:var(--ui-danger)}.hint{font-size:12px;color:var(--ui-text-muted)}.reset-note{margin:4px 0 14px;font-size:12px;color:var(--ui-text-muted)}
   </style>
+  <link rel="stylesheet" href="/static/css/studio-theme-tokens.css">
 </head>
 <body><main class="card">
   <h1>Infinite Canvas</h1><p id="subtitle">请登录后使用公司局域网创作服务</p>

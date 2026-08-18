@@ -1,95 +1,3 @@
-:root { --bg:#f7f8fa; --panel:#fff; --soft:#f1f4f8; --line:#e8ecf2; --line-strong:#dbe1ea; --text:#0f172a; --muted:#64748b; --faint:#94a3b8; --accent:#0f172a; }
-body.studio-theme-dark, html.studio-theme-dark body { --bg:#0e1014; --panel:#1c1e26; --soft:#272a33; --line:#323540; --line-strong:#3f424d; --text:#e8e8ea; --muted:#a4adbf; --faint:#7a8497; --accent:#f5f6f8; }
-* { box-sizing:border-box; }
-html { min-height:100%; overflow-y:auto; overscroll-behavior:auto; }
-body { margin:0; min-height:100vh; overflow-y:auto; background:var(--bg); color:var(--text); font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; -webkit-overflow-scrolling:touch; overscroll-behavior:auto; }
-* { scrollbar-width:thin !important; scrollbar-color:rgba(148,163,184,.72) transparent !important; }
-*::-webkit-scrollbar { width:10px !important; height:10px !important; background:transparent !important; }
-*::-webkit-scrollbar-track { background:transparent !important; }
-*::-webkit-scrollbar-thumb { min-height:36px; background-color:rgba(148,163,184,.72) !important; border:3px solid transparent !important; border-right-width:3px !important; background-clip:padding-box !important; border-radius:999px !important; }
-*::-webkit-scrollbar-thumb:hover { background-color:rgba(100,116,139,.86) !important; }
-*::-webkit-scrollbar-corner { background:transparent !important; }
-button { font-family:inherit; cursor:pointer; border:0; background:transparent; color:inherit; }
-.page { min-height:100vh; padding:40px 32px 80px; }
-.wrap { max-width:1100px; margin:0 auto; }
-.page-head { padding:0 4px 28px; display:flex; justify-content:space-between; align-items:end; gap:24px; flex-wrap:wrap; }
-.page-head .title { font-size:26px; line-height:1.05; font-weight:900; letter-spacing:-.015em; }
-.page-head .sub { margin-top:8px; color:var(--muted); font-size:12.5px; line-height:1.55; font-weight:600; max-width:520px; }
-.page-head .status { color:var(--muted); font-size:11.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; min-height:16px; }
-.api-profile-bar { margin:-10px 4px 24px; padding:14px 16px; display:flex; align-items:center; justify-content:space-between; gap:18px; border:1px solid var(--line-strong); border-radius:14px; background:var(--panel); }
-.api-profile-bar[hidden] { display:none; }
-.api-profile-label { font-size:12px; font-weight:900; color:var(--text); }
-.api-profile-hint { margin-top:3px; font-size:10.5px; line-height:1.45; color:var(--muted); }
-.api-profile-bar select { min-width:240px; height:38px; padding:0 34px 0 12px; border:1px solid var(--line-strong); border-radius:10px; background:var(--soft); color:var(--text); font:800 12px/1 inherit; }
-.layout { display:grid; grid-template-columns:260px minmax(0,1fr); gap:36px; align-items:start; }
-/* Sidebar */
-.sidebar { display:flex; flex-direction:column; gap:12px; position:sticky; top:32px; max-height:calc(100vh - 64px); overflow-y:auto; -webkit-overflow-scrolling:touch; padding:16px; background:var(--panel); border:1px solid var(--line); border-radius:16px; }
-.side-section-title { color:var(--faint); font-size:10px; font-weight:900; letter-spacing:.1em; text-transform:uppercase; padding:2px 4px; }
-.provider-groups { display:flex; flex-direction:column; gap:0; }
-.settings-category { display:flex; flex-direction:column; gap:9px; min-width:0; padding:14px 0; border-top:1px solid var(--line); }
-.settings-category:first-child { padding-top:0; border-top:0; }
-.settings-category-local { padding-bottom:0; }
-.settings-category-head { display:flex; align-items:center; gap:9px; min-width:0; padding:0 3px; }
-.settings-category-head > span:last-child { display:flex; flex-direction:column; min-width:0; gap:2px; }
-.settings-category-head strong { color:var(--text); font-size:11.5px; line-height:1.2; font-weight:900; letter-spacing:.02em; }
-.settings-category-head small { color:var(--faint); font-size:9.5px; line-height:1.35; font-weight:650; }
-.settings-category-icon { width:26px; height:26px; flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--line); border-radius:8px; background:var(--soft); color:var(--muted); }
-.settings-category-icon svg { width:13px; height:13px; }
-.settings-category .provider-list { padding-bottom:0; margin-bottom:0; border-bottom:0; }
-.settings-category-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
-.settings-category-actions .add-btn,.settings-category-actions .api-link-btn { height:36px; min-width:0; font-size:11px; }
-.settings-category-actions .api-link-btn { background:var(--panel); }
-.provider-list { display:flex; flex-direction:column; gap:4px; padding-bottom:8px; border-bottom:1px solid var(--line); margin-bottom:4px; }
-.provider-card { width:100%; text-align:left; border:1px solid transparent; background:transparent; border-radius:12px; padding:8px 10px; display:flex; align-items:center; gap:10px; color:var(--muted); transition:all .15s ease; min-height:48px; }
-.provider-card:hover { border-color:var(--text); color:var(--text); }
-.provider-card.active { background:var(--soft); color:var(--text); border-color:transparent; }
-.provider-card.active:hover { border-color:var(--text); }
-.provider-card.active .provider-name { color:var(--text); }
-.provider-card.active .provider-meta { color:var(--muted); }
-.provider-mark { width:28px; height:28px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex:0 0 auto; background:var(--soft); color:var(--muted); }
-.provider-card.active .provider-mark { background:var(--panel); color:var(--text); }
-.provider-card.provider-card-banner { padding:8px 10px; justify-content:center; min-height:44px; border-color:var(--line); }
-.provider-card.provider-card-banner:hover { border-color:var(--line-strong); }
-.provider-card.provider-card-banner.active { border-color:var(--line-strong); box-shadow:inset 0 0 0 1px rgba(15,23,42,.025); }
-body.studio-theme-dark .provider-card.provider-card-banner,
-html.studio-theme-dark body .provider-card.provider-card-banner { border-color:var(--line-strong); }
-body.studio-theme-dark .provider-card.provider-card-banner.active,
-html.studio-theme-dark body .provider-card.provider-card-banner.active { box-shadow:inset 0 0 0 1px rgba(255,255,255,.035); }
-.provider-card-banner img { height:22px; width:auto; max-width:100%; object-fit:contain; display:block; }
-.provider-card-banner .runninghub-icon { height:18px; max-width:132px; }
-.provider-card-banner .volcengine-icon { height:22px; max-width:132px; }
-.provider-card-banner .ms-icon-dark { display:none; }
-body.studio-theme-dark .provider-card-banner .ms-icon-light,
-html.studio-theme-dark body .provider-card-banner .ms-icon-light { display:none; }
-body.studio-theme-dark .provider-card-banner .ms-icon-dark,
-html.studio-theme-dark body .provider-card-banner .ms-icon-dark { display:block; }
-.provider-name { min-width:0; font-size:12.5px; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.provider-meta { margin-top:1px; color:var(--faint); font-size:10px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.add-btn { width:100%; height:40px; border:1px dashed var(--line-strong); border-radius:12px; color:var(--muted); display:inline-flex; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:800; transition:all .15s ease; }
-.add-btn:hover { color:var(--text); border-color:var(--faint); background:var(--soft); }
-.api-link-btn { width:100%; height:40px; border:1px solid var(--line); border-radius:12px; background:var(--soft); color:var(--text); display:inline-flex; align-items:center; justify-content:center; gap:6px; font-size:12px; font-weight:850; text-decoration:none; transition:all .15s ease; }
-.api-link-btn:hover { border-color:var(--text); background:var(--text); color:var(--bg); transform:translateY(-1px); box-shadow:0 8px 18px rgba(15,23,42,.12); }
-body.studio-theme-dark .api-link-btn,
-html.studio-theme-dark body .api-link-btn { background:#f5f6f8; border-color:#f5f6f8; color:#0e1014; box-shadow:0 8px 18px rgba(0,0,0,.24); }
-body.studio-theme-dark .api-link-btn:hover,
-html.studio-theme-dark body .api-link-btn:hover { background:#ffffff; border-color:#ffffff; color:#05070b; }
-.cli-quick-group { display:flex; flex-direction:column; gap:8px; padding-top:4px; }
-.cli-quick-list { display:grid; grid-template-columns:1fr; gap:6px; }
-.cli-quick-btn { width:100%; min-height:34px; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--muted); display:inline-flex; align-items:center; justify-content:flex-start; gap:8px; padding:0 10px; font-size:11.5px; font-weight:850; transition:all .15s ease; }
-.cli-quick-btn:hover { border-color:var(--line-strong); background:var(--soft); color:var(--text); }
-.cli-quick-btn i,
-.cli-quick-btn svg { flex:0 0 auto; color:currentColor; }
-.cli-quick-note {
-    margin:-2px 2px 4px 2px;
-    padding:5px 7px;
-    border:1px solid var(--line);
-    border-radius:8px;
-    background:var(--soft);
-    color:var(--muted);
-    font-size:9.5px;
-    line-height:1.45;
-    font-weight:650;
-}
 .local-service-btn { width:100%; min-height:54px; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; padding:8px 9px; border:1px solid var(--line); border-radius:12px; background:var(--soft); color:var(--text); text-align:left; transition:border-color .15s ease, background .15s ease, transform .15s ease; }
 .local-service-btn:hover { border-color:var(--text); background:var(--panel); transform:translateY(-1px); }
 .local-service-mark { width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; border-radius:9px; border:1px solid var(--line); background:var(--panel); color:var(--muted); }
@@ -683,30 +591,7 @@ html.studio-theme-dark body .image-edit-route-wrap select:hover { background:var
 .empty { padding:18px; border:1px dashed var(--line); border-radius:11px; color:var(--faint); text-align:center; font-size:11.5px; font-weight:700; }
 
 /* API 设置页视觉精修：保留原有功能结构，降低工业感并增强层次 */
-:root {
-    --api-page-bg:#f6f8fb;
-    --api-panel-bg:rgba(255,255,255,.86);
-    --api-surface-bg:#ffffff;
-    --api-soft-bg:#f4f7fb;
-    --api-line:#e4eaf2;
-    --api-line-strong:#d6deea;
-    --api-shadow:0 18px 48px rgba(31,41,55,.08);
-    --api-shadow-sm:0 8px 22px rgba(31,41,55,.06);
-    --api-blue:#2563eb;
-    --api-green:#0f9f6e;
-}
 
-body.studio-theme-dark,
-html.studio-theme-dark body {
-    --api-page-bg:#11151b;
-    --api-panel-bg:rgba(24,29,38,.86);
-    --api-surface-bg:#1c222c;
-    --api-soft-bg:#151b24;
-    --api-line:#2b3442;
-    --api-line-strong:#3a4657;
-    --api-shadow:0 22px 60px rgba(0,0,0,.36);
-    --api-shadow-sm:0 10px 26px rgba(0,0,0,.26);
-}
 
 body {
     background:
@@ -1191,18 +1076,6 @@ html.studio-theme-dark body .rh-config-card {
 }
 
 /* 简约版：宽度对齐工作流设置，靠层级色区分内容，减少边框/颜色/阴影 */
-:root {
-    --api-page-bg:var(--bg);
-    --api-panel-bg:var(--panel);
-    --api-surface-bg:var(--panel);
-    --api-soft-bg:var(--soft);
-    --api-line:transparent;
-    --api-line-strong:var(--line);
-    --api-shadow:none;
-    --api-shadow-sm:none;
-    --api-blue:var(--text);
-    --api-green:#16a34a;
-}
 
 body {
     background:var(--api-page-bg);
@@ -2522,26 +2395,7 @@ html.studio-theme-dark body .recommend-note {
     min-width:38px;
 }
 
-:root {
-    --api-readable-bg:#f5f7fa;
-    --api-readable-panel:#ffffff;
-    --api-readable-soft:#eef2f6;
-    --api-readable-field:#f6f8fb;
-    --api-readable-line:#e1e7ef;
-    --api-readable-button:#334155;
-    --api-readable-button-hover:#475569;
-}
 
-body.studio-theme-dark,
-html.studio-theme-dark body {
-    --api-readable-bg:#11151b;
-    --api-readable-panel:#1c222c;
-    --api-readable-soft:#171b23;
-    --api-readable-field:#202632;
-    --api-readable-line:rgba(255,255,255,.075);
-    --api-readable-button:#cbd5e1;
-    --api-readable-button-hover:#e2e8f0;
-}
 
 body {
     background:var(--api-readable-bg);
@@ -2655,20 +2509,8 @@ html.studio-theme-dark body .provider-card.active {
 /* 黑夜模式统一收口：按钮、平台列表和右侧面板共用同一套深灰层级 */
 body.studio-theme-dark,
 html.studio-theme-dark body {
-    --api-dark-page:#11151b;
-    --api-dark-panel:#1c222c;
-    --api-dark-soft:#171b23;
-    --api-dark-raised:#202632;
-    --api-dark-hover:#2a3342;
-    --api-dark-line:rgba(255,255,255,.075);
-    --api-dark-line-strong:rgba(255,255,255,.14);
-    --api-dark-text:#e8edf5;
-    --api-dark-muted:#a7b0c0;
-    --api-dark-faint:#7f8a9b;
-    --api-dark-primary:#cbd5e1;
-    --api-dark-primary-hover:#e2e8f0;
-    background:var(--api-dark-page);
-    color:var(--api-dark-text);
+    background:var(--ui-bg-canvas);
+    color:var(--ui-text);
 }
 
 body.studio-theme-dark .sidebar,
@@ -2880,20 +2722,6 @@ html.studio-theme-dark body .key-btn.key-clear:hover {
 }
 
 /* 白天模式统一收口：去掉混杂浅蓝，统一为中性灰阶 */
-:root {
-    --api-light-page:#f5f6f8;
-    --api-light-panel:#ffffff;
-    --api-light-soft:#eef1f5;
-    --api-light-raised:#f7f8fa;
-    --api-light-hover:#e6ebf1;
-    --api-light-line:#e2e7ee;
-    --api-light-line-strong:#d2dae5;
-    --api-light-text:#111827;
-    --api-light-muted:#64748b;
-    --api-light-faint:#94a3b8;
-    --api-light-primary:#334155;
-    --api-light-primary-hover:#475569;
-}
 
 body:not(.studio-theme-dark),
 html:not(.studio-theme-dark) body:not(.theme-dark) {
@@ -4453,16 +4281,6 @@ body.show-recommend-mode .provider-card.active {
 }
 
 /* API 设置最终统一色板与推荐平台紧凑布局 */
-:root {
-    --bg:#f6f7f9;
-    --panel:#ffffff;
-    --soft:#f3f5f8;
-    --line:#e3e8ef;
-    --line-strong:#d5dde8;
-    --text:#111827;
-    --muted:#667085;
-    --faint:#98a2b3;
-}
 
 body.studio-theme-dark,
 html.studio-theme-dark body {
@@ -6057,18 +5875,6 @@ html.studio-theme-dark body .recommend-tag.recommend-free-tag svg {
 }
 
 /* ===== Infinite Canvas UI system: responsive safety and consistent interaction ===== */
-:root {
-    --studio-brand:#168a55;
-    --studio-focus:#168a55;
-    --studio-radius-sm:8px;
-    --studio-radius-md:12px;
-    --studio-radius-lg:16px;
-}
-body.studio-theme-dark,
-html.studio-theme-dark body {
-    --studio-brand:#65f3a4;
-    --studio-focus:#65f3a4;
-}
 
 body { overflow-x:hidden; }
 button:focus-visible,
