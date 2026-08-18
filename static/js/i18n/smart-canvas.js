@@ -168,6 +168,7 @@
         "smart.workflowGroupVertical": { zh: "垂直布局", en: "Vertical layout" },
         "smart.workflowGroupRun": { zh: "整组执行", en: "Run group" },
         "smart.workflowGroupCreate": { zh: "创建工作流", en: "Create workflow" },
+        "smart.workflowGroupMore": { zh: "更多", en: "More" },
         "smart.modePreview": { zh: "预览", en: "Preview" },
         "smart.previewImage": { zh: "预览图片", en: "Preview" },
         "smart.promptPreview": { zh: "提示词预览", en: "Prompt preview" },

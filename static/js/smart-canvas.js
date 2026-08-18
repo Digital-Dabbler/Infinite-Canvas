@@ -9975,7 +9975,8 @@ workflowGroupToolbar?.addEventListener('keydown', event => {
 
 function closePhotoshopContextMenu(){
     if(!photoshopContextMenu) return;
-    photoshopContextMenu.classList.remove('open');
+    photoshopContextMenu.classList.remove('open', 'workflow-group-context-open');
+    delete photoshopContextMenu.dataset.workflowGroupContextPanel;
     photoshopContextMenu.setAttribute('aria-hidden', 'true');
     photoshopContextMenu.innerHTML = '';
 }
@@ -10589,6 +10590,82 @@ function workflowGroupOrderedMembers(group){
 function toggleWorkflowGroupLayoutMenu(id){workflowGroupLayoutOpenId=workflowGroupLayoutOpenId===id?'':id;if(workflowGroupLayoutOpenId)workflowGroupColorOpenId='';updateWorkflowGroupToolbar();}
 function layoutWorkflowGroup(id,mode){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group)return;const members=workflowGroupOrderedMembers(group);if(!members.length)return;pushUndo();const x0=group.x+WORKFLOW_GROUP_CONTENT_PAD_X,y0=group.y+WORKFLOW_GROUP_CONTENT_TOP,gap=54;if(mode==='grid'){const cols=Math.max(1,Math.ceil(Math.sqrt(members.length)));let x=x0,y=y0,rowH=0;members.forEach((n,i)=>{const r=nodeRect(n);if(i&&i%cols===0){x=x0;y+=rowH+gap;rowH=0;}n.x=Math.round(x);n.y=Math.round(y);x+=Math.max(180,r.width)+gap;rowH=Math.max(rowH,Math.max(110,r.height));});}else if(mode==='vertical'){let y=y0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x0);n.y=Math.round(y);y+=Math.max(110,r.height)+gap;});}else{let x=x0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x);n.y=Math.round(y0);x+=Math.max(180,r.width)+gap;});}fitWorkflowOrganizerBounds(group);workflowGroupLayoutOpenId='';render();scheduleSave();toast('已整理工作流分组');}
 function removeNodeFromWorkflowGroup(id){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId)return;pushUndo();const groupId=node.workflowGroupId;delete node.workflowGroupId;node.workflowGroupReentryGate=groupId;fitWorkflowOrganizerBounds(nodes.find(n=>n.id===groupId));render();scheduleSave();toast('已移出工作流分组');}
+function workflowGroupContextMenuHtml(group){
+    const submenu = (target, icon, label) => `<button class="workflow-group-context-submenu" type="button" role="menuitem" data-workflow-context-panel="${target}" aria-haspopup="menu" aria-expanded="false"><i data-lucide="${icon}"></i><span>${escapeHtml(label)}</span><i class="workflow-group-context-chevron" data-lucide="chevron-right" aria-hidden="true"></i></button>`;
+    const panel = (target, label, content) => `<div class="workflow-group-context-cascade" data-workflow-context-submenu="${target}" role="menu" aria-label="${escapeAttr(label)}" hidden>${content}</div>`;
+    const title = `<div class="workflow-group-context-title">${escapeHtml(tr('smart.workflowGroup'))}</div>`;
+    return `${title}${submenu('color', 'palette', tr('canvas.color'))}${submenu('layout', 'layout-template', tr('smart.workflowGroupLayout'))}<div class="workflow-group-context-separator"></div><button type="button" role="menuitem" data-workflow-context-action="run"><i data-lucide="play"></i><span>${escapeHtml(tr('smart.workflowGroupRun'))}</span></button>${submenu('more', 'ellipsis', tr('smart.workflowGroupMore'))}${panel('color', tr('canvas.color'), `<div class="workflow-group-context-color-grid">${workflowGroupColorMenuHtml(group)}</div>`)}${panel('layout', tr('smart.workflowGroupLayout'), `<button type="button" role="menuitem" data-workflow-context-action="layout-grid"><i data-lucide="grid-2x2"></i><span>${escapeHtml(tr('smart.workflowGroupGrid'))}</span></button><button type="button" role="menuitem" data-workflow-context-action="layout-horizontal"><i data-lucide="panel-top"></i><span>${escapeHtml(tr('smart.workflowGroupHorizontal'))}</span></button><button type="button" role="menuitem" data-workflow-context-action="layout-vertical"><i data-lucide="panel-left"></i><span>${escapeHtml(tr('smart.workflowGroupVertical'))}</span></button>`)}${panel('more', tr('smart.workflowGroupMore'), `<button type="button" role="menuitem" data-workflow-context-action="create"><i data-lucide="save"></i><span>${escapeHtml(tr('smart.workflowGroupCreate'))}</span></button>`)}`;
+}
+function positionWorkflowGroupContextSubmenu(trigger, submenu){
+    if(!photoshopContextMenu || !trigger || !submenu) return;
+    const margin = 10;
+    const gap = 6;
+    const rootRect = photoshopContextMenu.getBoundingClientRect();
+    const submenuWidth = submenu.offsetWidth || 180;
+    const submenuHeight = submenu.offsetHeight || 44;
+    const right = rootRect.right + gap;
+    const left = rootRect.left - gap - submenuWidth;
+    const viewportRight = window.innerWidth - margin;
+    const viewportLeft = margin;
+    const viewportTop = margin;
+    const viewportBottom = window.innerHeight - margin;
+    const desiredLeft = right + submenuWidth <= viewportRight ? right : (left >= viewportLeft ? left : Math.max(viewportLeft, Math.min(viewportRight - submenuWidth, right)));
+    const triggerTop = rootRect.top + trigger.offsetTop;
+    const desiredTop = Math.max(viewportTop, Math.min(viewportBottom - submenuHeight, triggerTop));
+    submenu.style.left = `${Math.round(desiredLeft - rootRect.left)}px`;
+    submenu.style.top = `${Math.round(desiredTop - rootRect.top)}px`;
+}
+function toggleWorkflowGroupContextSubmenu(panelName, trigger){
+    if(!photoshopContextMenu) return;
+    const submenu = photoshopContextMenu.querySelector(`[data-workflow-context-submenu="${panelName}"]`);
+    const isOpen = photoshopContextMenu.dataset.workflowGroupContextPanel === panelName && submenu && !submenu.hidden;
+    photoshopContextMenu.querySelectorAll('[data-workflow-context-submenu]').forEach(item => { item.hidden = true; });
+    photoshopContextMenu.querySelectorAll('[data-workflow-context-panel]').forEach(item => { item.setAttribute('aria-expanded', 'false'); });
+    delete photoshopContextMenu.dataset.workflowGroupContextPanel;
+    if(!submenu || isOpen) return;
+    submenu.hidden = false;
+    trigger?.setAttribute('aria-expanded', 'true');
+    photoshopContextMenu.dataset.workflowGroupContextPanel = panelName;
+    positionWorkflowGroupContextSubmenu(trigger, submenu);
+}
+function renderWorkflowGroupContextMenu(group){
+    if(!photoshopContextMenu || !group) return;
+    photoshopContextMenu.innerHTML = workflowGroupContextMenuHtml(group);
+    photoshopContextMenu.querySelectorAll('[data-workflow-context-panel]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleWorkflowGroupContextSubmenu(button.dataset.workflowContextPanel || '', button);
+        });
+    });
+    photoshopContextMenu.querySelectorAll('[data-workflow-context-action], [data-workflow-toolbar-action="color-select"]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const action = button.dataset.workflowContextAction || button.dataset.workflowToolbarAction || '';
+            const color = button.dataset.organizerColor || '';
+            closePhotoshopContextMenu();
+            if(action === 'color-select'){
+                if(ORGANIZER_COLORS.includes(color)){
+                    group.color = color;
+                    render();
+                    scheduleSave();
+                }
+                return;
+            }
+            if(action === 'layout-grid' || action === 'layout-horizontal' || action === 'layout-vertical'){
+                layoutWorkflowGroup(group.id, action.replace('layout-', ''));
+                return;
+            }
+            if(action === 'run'){
+                runWorkflowGroup(group.id);
+                return;
+            }
+            if(action === 'create') openWorkflowCreateDialog(group.id);
+        });
+    });
+    refreshIcons();
+}
 function openWorkflowGroupContextMenu(id, clientX, clientY){
     if(!photoshopContextMenu) return;
     const group = nodes.find(node => node.id === id && isWorkflowOrganizerNode(node));
@@ -10600,22 +10677,12 @@ function openWorkflowGroupContextMenu(id, clientX, clientY){
     selectedId = group.id;
     selectedIds = [];
     selectedImage = {nodeId:'', index:-1};
-    photoshopContextMenu.innerHTML = `<div class="workflow-group-context-title">${escapeHtml(tr('smart.workflowGroup'))}</div><div class="workflow-group-context-color-label">${escapeHtml(tr('canvas.color'))}</div><div class="workflow-group-context-color-grid">${workflowGroupColorMenuHtml(group)}</div><div class="workflow-group-context-separator"></div><button type="button" role="menuitem" data-workflow-toolbar-action="layout-grid"><i data-lucide="grid-2x2"></i><span>${escapeHtml(tr('smart.workflowGroupGrid'))}</span></button><button type="button" role="menuitem" data-workflow-toolbar-action="layout-horizontal"><i data-lucide="panel-top"></i><span>${escapeHtml(tr('smart.workflowGroupHorizontal'))}</span></button><button type="button" role="menuitem" data-workflow-toolbar-action="layout-vertical"><i data-lucide="panel-left"></i><span>${escapeHtml(tr('smart.workflowGroupVertical'))}</span></button><div class="workflow-group-context-separator"></div><button type="button" role="menuitem" data-workflow-toolbar-action="run"><i data-lucide="play"></i><span>${escapeHtml(tr('smart.workflowGroupRun'))}</span></button><button type="button" role="menuitem" data-workflow-toolbar-action="create"><i data-lucide="save"></i><span>${escapeHtml(tr('smart.workflowGroupCreate'))}</span></button>`;
-    photoshopContextMenu.classList.add('open');
+    renderWorkflowGroupContextMenu(group);
+    photoshopContextMenu.classList.add('open', 'workflow-group-context-open');
     photoshopContextMenu.setAttribute('aria-hidden', 'false');
     positionPhotoshopContextMenu(clientX, clientY);
-    photoshopContextMenu.querySelectorAll('[data-workflow-toolbar-action]').forEach(button => {
-        button.addEventListener('click', event => {
-            event.preventDefault();
-            event.stopPropagation();
-            const action = button.dataset.workflowToolbarAction || '';
-            const color = button.dataset.organizerColor || '';
-            closePhotoshopContextMenu();
-            runWorkflowGroupToolbarAction(action, color);
-        });
-    });
-    refreshIcons();
-}function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
+}
+function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
 function workflowGroupPayload(group){const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));return {nodes:members.map(n=>{const c=serializableSmartNode(n);delete c.workflowGroupId;if(Array.isArray(c.inputNodeIds))c.inputNodeIds=c.inputNodeIds.filter(id=>ids.has(id));return c;}),connections:(canvas?.connections||[]).filter(c=>ids.has(c.from)&&ids.has(c.to)),include_resources:true,filename:`${group.title||'workflow'}.zip`};}
 function workflowGroupCoverUrl(group){return workflowGroupOrderedMembers(group).flatMap(n=>n.images||[]).map(imageForDisplay).find(i=>i?.url&&mediaKindForItem(i)==='image')?.url||'';}
 function openWorkflowCreateDialog(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n)),modal=document.getElementById('workflowCreateModal');if(!group||!modal)return;pendingWorkflowCreateGroupId=id;const name=document.getElementById('workflowCreateName'),cover=document.getElementById('workflowCreateCover');if(name)name.value=String(group.title||'').slice(0,20);if(cover)cover.innerHTML=workflowGroupCoverUrl(group)?`<img src="${escapeAttr(workflowGroupCoverUrl(group))}" alt="">`:'<i data-lucide="workflow"></i>';document.getElementById('workflowCreateCount').textContent=`${Array.from(name?.value||'').length}/20`;modal.classList.add('open');refreshIcons();name?.focus();}
