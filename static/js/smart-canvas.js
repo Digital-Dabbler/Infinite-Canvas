@@ -8033,6 +8033,18 @@ function createSmartGroupNode(x, y, options={}){
     return node;
 }
 const ORGANIZER_COLORS = ['#64748b','#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981'];
+const WORKFLOW_GROUP_CONTENT_PAD_X = 34;
+const WORKFLOW_GROUP_CONTENT_TOP = 58;
+const WORKFLOW_GROUP_CONTENT_PAD_BOTTOM = 30;
+const ORGANIZER_COLOR_LABEL_KEYS = {
+    '#64748b':'smart.workflowGroupColorSlate',
+    '#3b82f6':'smart.workflowGroupColorBlue',
+    '#8b5cf6':'smart.workflowGroupColorPurple',
+    '#ec4899':'smart.workflowGroupColorPink',
+    '#f59e0b':'smart.workflowGroupColorAmber',
+    '#10b981':'smart.workflowGroupColorGreen'
+};
+function organizerColorLabel(color){ return tr(ORGANIZER_COLOR_LABEL_KEYS[color] || 'smart.workflowGroupColor'); }
 function organizerColor(node){
     return ORGANIZER_COLORS.includes(node?.color) ? node.color : ORGANIZER_COLORS[1];
 }
@@ -8099,7 +8111,7 @@ function createWorkflowOrganizerGroup(point=viewportCenter(), selected=selectedN
     const maxX = rects.length ? Math.max(...rects.map(r => r.x + r.width)) : point.x + 260;
     const maxY = rects.length ? Math.max(...rects.map(r => r.y + r.height)) : point.y + 160;
     pushUndo();
-    const group = {id:uid('workflow-group'), type:'smart-workflow-group', x:Math.round(minX - 34), y:Math.round(minY - 42), w:Math.max(360, Math.round(maxX - minX + 68)), h:Math.max(220, Math.round(maxY - minY + 76)), title:'未命名工作流', description:'', color:ORGANIZER_COLORS[1], created_at:Date.now()};
+    const group = {id:uid('workflow-group'), type:'smart-workflow-group', x:Math.round(minX - WORKFLOW_GROUP_CONTENT_PAD_X), y:Math.round(minY - WORKFLOW_GROUP_CONTENT_TOP), w:Math.max(360, Math.round(maxX - minX + WORKFLOW_GROUP_CONTENT_PAD_X * 2)), h:Math.max(220, Math.round(maxY - minY + WORKFLOW_GROUP_CONTENT_TOP + WORKFLOW_GROUP_CONTENT_PAD_BOTTOM)), title:'未命名工作流', description:'', color:ORGANIZER_COLORS[1], created_at:Date.now()};
     nodes.push(group);
     members.forEach(node => { node.workflowGroupId = group.id; });
     selectedId = group.id;
@@ -9765,40 +9777,107 @@ function positionWorkflowGroupToolbar(target=currentWorkflowGroupToolbarTarget()
     const edge = 14;
     const safeTop = Math.max(edge, (headerRect?.bottom || shellRect.top) - shellRect.top + edge);
     const centerX = Math.max(width / 2 + edge, Math.min(shellRect.width - width / 2 - edge, nodeRect.left - shellRect.left + nodeRect.width / 2));
-    const above = nodeRect.top - shellRect.top - height - 12;
-    const placeInside = above < safeTop;
-    const insideTop = nodeRect.top - shellRect.top + 12;
-    const top = placeInside
-        ? Math.max(safeTop, Math.min(shellRect.height - height - edge, insideTop))
-        : above;
-    workflowGroupToolbar.dataset.placement = placeInside ? 'inside' : 'above';
+    const nodeTop = nodeRect.top - shellRect.top;
+    const above = nodeTop - height - 12;
+    // 顶部空间放不下完整工具栏时，先贴在固定栏下沿；仅当分组已触及安全线才收进分组内部。
+    const placement = above >= safeTop ? 'above' : (nodeTop > safeTop ? 'edge' : 'inside');
+    const insideTop = nodeTop + 12;
+    const top = placement === 'above'
+        ? above
+        : placement === 'edge'
+            ? safeTop
+            : Math.max(safeTop, Math.min(shellRect.height - height - edge, insideTop));
+    workflowGroupToolbar.dataset.placement = placement;
     workflowGroupToolbar.style.left = `${Math.round(centerX)}px`;
     workflowGroupToolbar.style.top = `${Math.round(top)}px`;
 }
+function workflowGroupColorMenuHtml(group){
+    const active = organizerColor(group);
+    const colorTitle = tr('smart.workflowGroupColor');
+    return ORGANIZER_COLORS.map(color => {
+        const name = organizerColorLabel(color);
+        const selected = color === active;
+        const label = `${colorTitle}: ${name}`;
+        return `<button class="workflow-group-color-choice" type="button" role="menuitemradio" data-workflow-toolbar-action="color-select" data-organizer-color="${color}" aria-checked="${selected ? 'true' : 'false'}" aria-label="${escapeAttr(label)}" title="${escapeAttr(label)}" style="--swatch:${color}"><span class="workflow-group-color-choice-swatch" aria-hidden="true"></span></button>`;
+    }).join('');
+}
+function refreshWorkflowGroupColorControl(target){
+    const colorToggle = workflowGroupToolbar?.querySelector('[data-workflow-toolbar-action="color-toggle"]');
+    const colorMenu = workflowGroupToolbar?.querySelector('.workflow-group-color-menu');
+    if(!colorToggle || !colorMenu || !target) return;
+    const color = organizerColor(target);
+    const label = `${tr('smart.workflowGroupColor')}: ${organizerColorLabel(color)}`;
+    colorToggle.style.setProperty('--workflow-group-current-color', color);
+    colorToggle.setAttribute('aria-label', label);
+    colorToggle.title = label;
+    colorMenu.innerHTML = workflowGroupColorMenuHtml(target);
+}
 function updateWorkflowGroupToolbar(){
     if(!workflowGroupToolbar) return;
+    if(workflowGroupToolbarHiddenDuringDrag){
+        workflowGroupToolbar.classList.remove('open');
+        workflowGroupToolbar.setAttribute('aria-hidden', 'true');
+        return;
+    }
     const target = currentWorkflowGroupToolbarTarget();
     const layoutMenu = workflowGroupToolbar.querySelector('.workflow-group-layout-menu');
     const layoutToggle = workflowGroupToolbar.querySelector('[data-workflow-toolbar-action="layout-toggle"]');
+    const colorMenu = workflowGroupToolbar.querySelector('.workflow-group-color-menu');
+    const colorToggle = workflowGroupToolbar.querySelector('[data-workflow-toolbar-action="color-toggle"]');
     if(!target){
         workflowGroupLayoutOpenId = '';
+        workflowGroupColorOpenId = '';
         workflowGroupToolbar.classList.remove('open');
         workflowGroupToolbar.removeAttribute('data-group-id');
         workflowGroupToolbar.setAttribute('aria-hidden', 'true');
         layoutMenu?.classList.remove('open');
         layoutMenu?.setAttribute('aria-hidden', 'true');
         layoutToggle?.setAttribute('aria-expanded', 'false');
+        colorMenu?.classList.remove('open');
+        colorMenu?.setAttribute('aria-hidden', 'true');
+        colorToggle?.setAttribute('aria-expanded', 'false');
         return;
     }
     if(workflowGroupLayoutOpenId && workflowGroupLayoutOpenId !== target.id) workflowGroupLayoutOpenId = '';
-    const menuOpen = workflowGroupLayoutOpenId === target.id;
+    if(workflowGroupColorOpenId && workflowGroupColorOpenId !== target.id) workflowGroupColorOpenId = '';
+    const layoutOpen = workflowGroupLayoutOpenId === target.id;
+    const colorOpen = workflowGroupColorOpenId === target.id;
     workflowGroupToolbar.dataset.groupId = target.id;
     workflowGroupToolbar.classList.add('open');
     workflowGroupToolbar.setAttribute('aria-hidden', 'false');
-    layoutMenu?.classList.toggle('open', menuOpen);
-    layoutMenu?.setAttribute('aria-hidden', menuOpen ? 'false' : 'true');
-    layoutToggle?.setAttribute('aria-expanded', menuOpen ? 'true' : 'false');
+    refreshWorkflowGroupColorControl(target);
+    layoutMenu?.classList.toggle('open', layoutOpen);
+    layoutMenu?.setAttribute('aria-hidden', layoutOpen ? 'false' : 'true');
+    layoutToggle?.setAttribute('aria-expanded', layoutOpen ? 'true' : 'false');
+    colorMenu?.classList.toggle('open', colorOpen);
+    colorMenu?.setAttribute('aria-hidden', colorOpen ? 'false' : 'true');
+    colorToggle?.setAttribute('aria-expanded', colorOpen ? 'true' : 'false');
     requestAnimationFrame(() => positionWorkflowGroupToolbar(target));
+}
+function hideWorkflowGroupToolbarDuringDrag(event){
+    if(!workflowGroupToolbar || workflowGroupToolbarHiddenDuringDrag || !dragState) return;
+    if(Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) < 4) return;
+    const target = currentWorkflowGroupToolbarTarget();
+    const dragItems = dragState.group || [{id:dragState.id}];
+    if(!target || !dragItems.some(item => item.id === target.id)) return;
+    workflowGroupToolbarHiddenDuringDrag = true;
+    workflowGroupLayoutOpenId = '';
+    workflowGroupColorOpenId = '';
+    workflowGroupToolbar.classList.remove('open');
+    workflowGroupToolbar.setAttribute('aria-hidden', 'true');
+    workflowGroupToolbar.querySelector('.workflow-group-layout-menu')?.classList.remove('open');
+    workflowGroupToolbar.querySelector('.workflow-group-layout-menu')?.setAttribute('aria-hidden', 'true');
+    workflowGroupToolbar.querySelector('[data-workflow-toolbar-action="layout-toggle"]')?.setAttribute('aria-expanded', 'false');
+    workflowGroupToolbar.querySelector('.workflow-group-color-menu')?.classList.remove('open');
+    workflowGroupToolbar.querySelector('.workflow-group-color-menu')?.setAttribute('aria-hidden', 'true');
+    workflowGroupToolbar.querySelector('[data-workflow-toolbar-action="color-toggle"]')?.setAttribute('aria-expanded', 'false');
+}
+function restoreWorkflowGroupToolbarAfterDrag(){
+    if(!workflowGroupToolbarHiddenDuringDrag) return;
+    workflowGroupToolbarHiddenDuringDrag = false;
+    updateWorkflowGroupToolbar();
+    const target = currentWorkflowGroupToolbarTarget();
+    if(target) positionWorkflowGroupToolbar(target);
 }
 function closeWorkflowGroupLayoutMenu(restoreFocus=false){
     if(!workflowGroupLayoutOpenId) return;
@@ -9806,9 +9885,46 @@ function closeWorkflowGroupLayoutMenu(restoreFocus=false){
     updateWorkflowGroupToolbar();
     if(restoreFocus) workflowGroupToolbar?.querySelector('[data-workflow-toolbar-action="layout-toggle"]')?.focus();
 }
-function runWorkflowGroupToolbarAction(action){
+function closeWorkflowGroupColorMenu(restoreFocus=false){
+    if(!workflowGroupColorOpenId) return;
+    workflowGroupColorOpenId = '';
+    updateWorkflowGroupToolbar();
+    if(restoreFocus) workflowGroupToolbar?.querySelector('[data-workflow-toolbar-action="color-toggle"]')?.focus();
+}
+function focusWorkflowGroupColorChoice(current, direction){
+    const choices = Array.from(workflowGroupToolbar?.querySelectorAll('.workflow-group-color-choice') || []);
+    if(!choices.length) return;
+    const index = Math.max(0, choices.indexOf(current));
+    choices[(index + direction + choices.length) % choices.length]?.focus();
+}
+function toggleWorkflowGroupColorMenu(id){
+    workflowGroupColorOpenId = workflowGroupColorOpenId === id ? '' : id;
+    if(workflowGroupColorOpenId) workflowGroupLayoutOpenId = '';
+    updateWorkflowGroupToolbar();
+    if(workflowGroupColorOpenId){
+        requestAnimationFrame(() => workflowGroupToolbar?.querySelector('.workflow-group-color-choice[aria-checked="true"]')?.focus());
+    }
+}
+function setWorkflowGroupColor(color){
+    const target = currentWorkflowGroupToolbarTarget();
+    if(!target || !ORGANIZER_COLORS.includes(color)) return;
+    target.color = color;
+    workflowGroupColorOpenId = '';
+    render();
+    scheduleSave();
+    requestAnimationFrame(() => workflowGroupToolbar?.querySelector('[data-workflow-toolbar-action="color-toggle"]')?.focus());
+}
+function runWorkflowGroupToolbarAction(action, color=''){
     const target = currentWorkflowGroupToolbarTarget();
     if(!target) return;
+    if(action === 'color-toggle'){
+        toggleWorkflowGroupColorMenu(target.id);
+        return;
+    }
+    if(action === 'color-select'){
+        setWorkflowGroupColor(color);
+        return;
+    }
     if(action === 'layout-toggle'){
         toggleWorkflowGroupLayoutMenu(target.id);
         return;
@@ -9822,18 +9938,40 @@ function runWorkflowGroupToolbarAction(action){
         return;
     }
     if(action === 'create') openWorkflowCreateDialog(target.id);
-}
-workflowGroupToolbar?.addEventListener('mousedown', event => event.stopPropagation());
+}workflowGroupToolbar?.addEventListener('mousedown', event => event.stopPropagation());
 workflowGroupToolbar?.addEventListener('click', event => {
     const button = event.target.closest?.('[data-workflow-toolbar-action]');
     if(!button || button.disabled) return;
     event.preventDefault();
     event.stopPropagation();
-    runWorkflowGroupToolbarAction(button.dataset.workflowToolbarAction || '');
+    runWorkflowGroupToolbarAction(button.dataset.workflowToolbarAction || '', button.dataset.organizerColor || '');
 });
 document.addEventListener('mousedown', event => {
-    if(workflowGroupLayoutOpenId && !workflowGroupToolbar?.contains(event.target)) closeWorkflowGroupLayoutMenu();
+    if(!workflowGroupToolbar?.contains(event.target)){
+        closeWorkflowGroupLayoutMenu();
+        closeWorkflowGroupColorMenu();
+    }
 }, true);
+workflowGroupToolbar?.addEventListener('keydown', event => {
+    const colorChoice = event.target.closest?.('.workflow-group-color-choice');
+    const colorToggle = event.target.closest?.('[data-workflow-toolbar-action="color-toggle"]');
+    if(event.key === 'Escape'){
+        event.preventDefault();
+        closeWorkflowGroupColorMenu(true);
+        closeWorkflowGroupLayoutMenu(true);
+        return;
+    }
+    if(colorChoice && ['ArrowRight','ArrowDown','ArrowLeft','ArrowUp'].includes(event.key)){
+        event.preventDefault();
+        focusWorkflowGroupColorChoice(colorChoice, event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowDown' ? 3 : -3);
+        return;
+    }
+    if(colorToggle && event.key === 'ArrowDown' && workflowGroupColorOpenId === ''){
+        event.preventDefault();
+        const target = currentWorkflowGroupToolbarTarget();
+        if(target) toggleWorkflowGroupColorMenu(target.id);
+    }
+});
 
 function closePhotoshopContextMenu(){
     if(!photoshopContextMenu) return;
@@ -10416,6 +10554,8 @@ function organizerColorButtons(node){
     return ORGANIZER_COLORS.map(color => `<button class="organizer-color" type="button" data-organizer-color="${color}" title="${color}" style="--swatch:${color}"></button>`).join('');
 }
 let workflowGroupLayoutOpenId = '';
+let workflowGroupColorOpenId = '';
+let workflowGroupToolbarHiddenDuringDrag = false;
 let workflowGroupRunState = null;
 let pendingWorkflowCreateGroupId = '';
 function fitWorkflowOrganizerBounds(group){
@@ -10423,7 +10563,7 @@ function fitWorkflowOrganizerBounds(group){
     const members = workflowOrganizerMembers(group);
     if(!members.length) return false;
     const rects = members.map(nodeRect);
-    const padX = 34, padTop = 46, padBottom = 30;
+    const padX = WORKFLOW_GROUP_CONTENT_PAD_X, padTop = WORKFLOW_GROUP_CONTENT_TOP, padBottom = WORKFLOW_GROUP_CONTENT_PAD_BOTTOM;
     const minX = Math.min(...rects.map(rect => rect.x));
     const minY = Math.min(...rects.map(rect => rect.y));
     const maxX = Math.max(...rects.map(rect => rect.x + rect.width));
@@ -10446,10 +10586,36 @@ function workflowGroupOrderedMembers(group){
     while(queue.length){ const node=queue.shift(); out.push(node); edges.filter(c=>c.from===node.id).forEach(c=>{indegree.set(c.to,indegree.get(c.to)-1);if(!indegree.get(c.to))queue.push(members.find(n=>n.id===c.to));});queue.sort(sort); }
     members.filter(n=>!out.includes(n)).sort(sort).forEach(n=>out.push(n)); return out;
 }
-function toggleWorkflowGroupLayoutMenu(id){workflowGroupLayoutOpenId=workflowGroupLayoutOpenId===id?'':id;updateWorkflowGroupToolbar();}
-function layoutWorkflowGroup(id,mode){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group)return;const members=workflowGroupOrderedMembers(group);if(!members.length)return;pushUndo();const x0=group.x+34,y0=group.y+52,gap=54;if(mode==='grid'){const cols=Math.max(1,Math.ceil(Math.sqrt(members.length)));let x=x0,y=y0,rowH=0;members.forEach((n,i)=>{const r=nodeRect(n);if(i&&i%cols===0){x=x0;y+=rowH+gap;rowH=0;}n.x=Math.round(x);n.y=Math.round(y);x+=Math.max(180,r.width)+gap;rowH=Math.max(rowH,Math.max(110,r.height));});}else if(mode==='vertical'){let y=y0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x0);n.y=Math.round(y);y+=Math.max(110,r.height)+gap;});}else{let x=x0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x);n.y=Math.round(y0);x+=Math.max(180,r.width)+gap;});}fitWorkflowOrganizerBounds(group);workflowGroupLayoutOpenId='';render();scheduleSave();toast('已整理工作流分组');}
+function toggleWorkflowGroupLayoutMenu(id){workflowGroupLayoutOpenId=workflowGroupLayoutOpenId===id?'':id;if(workflowGroupLayoutOpenId)workflowGroupColorOpenId='';updateWorkflowGroupToolbar();}
+function layoutWorkflowGroup(id,mode){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group)return;const members=workflowGroupOrderedMembers(group);if(!members.length)return;pushUndo();const x0=group.x+WORKFLOW_GROUP_CONTENT_PAD_X,y0=group.y+WORKFLOW_GROUP_CONTENT_TOP,gap=54;if(mode==='grid'){const cols=Math.max(1,Math.ceil(Math.sqrt(members.length)));let x=x0,y=y0,rowH=0;members.forEach((n,i)=>{const r=nodeRect(n);if(i&&i%cols===0){x=x0;y+=rowH+gap;rowH=0;}n.x=Math.round(x);n.y=Math.round(y);x+=Math.max(180,r.width)+gap;rowH=Math.max(rowH,Math.max(110,r.height));});}else if(mode==='vertical'){let y=y0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x0);n.y=Math.round(y);y+=Math.max(110,r.height)+gap;});}else{let x=x0;members.forEach(n=>{const r=nodeRect(n);n.x=Math.round(x);n.y=Math.round(y0);x+=Math.max(180,r.width)+gap;});}fitWorkflowOrganizerBounds(group);workflowGroupLayoutOpenId='';render();scheduleSave();toast('已整理工作流分组');}
 function removeNodeFromWorkflowGroup(id){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId)return;pushUndo();const groupId=node.workflowGroupId;delete node.workflowGroupId;node.workflowGroupReentryGate=groupId;fitWorkflowOrganizerBounds(nodes.find(n=>n.id===groupId));render();scheduleSave();toast('已移出工作流分组');}
-function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
+function openWorkflowGroupContextMenu(id, clientX, clientY){
+    if(!photoshopContextMenu) return;
+    const group = nodes.find(node => node.id === id && isWorkflowOrganizerNode(node));
+    if(!group) return;
+    closeCreateMenu();
+    closePortConnectMenu();
+    closeWorkflowGroupLayoutMenu();
+    closeWorkflowGroupColorMenu();
+    selectedId = group.id;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    photoshopContextMenu.innerHTML = `<div class="workflow-group-context-title">${escapeHtml(tr('smart.workflowGroup'))}</div><div class="workflow-group-context-color-label">${escapeHtml(tr('canvas.color'))}</div><div class="workflow-group-context-color-grid">${workflowGroupColorMenuHtml(group)}</div><div class="workflow-group-context-separator"></div><button type="button" role="menuitem" data-workflow-toolbar-action="layout-grid"><i data-lucide="grid-2x2"></i><span>${escapeHtml(tr('smart.workflowGroupGrid'))}</span></button><button type="button" role="menuitem" data-workflow-toolbar-action="layout-horizontal"><i data-lucide="panel-top"></i><span>${escapeHtml(tr('smart.workflowGroupHorizontal'))}</span></button><button type="button" role="menuitem" data-workflow-toolbar-action="layout-vertical"><i data-lucide="panel-left"></i><span>${escapeHtml(tr('smart.workflowGroupVertical'))}</span></button><div class="workflow-group-context-separator"></div><button type="button" role="menuitem" data-workflow-toolbar-action="run"><i data-lucide="play"></i><span>${escapeHtml(tr('smart.workflowGroupRun'))}</span></button><button type="button" role="menuitem" data-workflow-toolbar-action="create"><i data-lucide="save"></i><span>${escapeHtml(tr('smart.workflowGroupCreate'))}</span></button>`;
+    photoshopContextMenu.classList.add('open');
+    photoshopContextMenu.setAttribute('aria-hidden', 'false');
+    positionPhotoshopContextMenu(clientX, clientY);
+    photoshopContextMenu.querySelectorAll('[data-workflow-toolbar-action]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const action = button.dataset.workflowToolbarAction || '';
+            const color = button.dataset.organizerColor || '';
+            closePhotoshopContextMenu();
+            runWorkflowGroupToolbarAction(action, color);
+        });
+    });
+    refreshIcons();
+}function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
 function workflowGroupPayload(group){const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));return {nodes:members.map(n=>{const c=serializableSmartNode(n);delete c.workflowGroupId;if(Array.isArray(c.inputNodeIds))c.inputNodeIds=c.inputNodeIds.filter(id=>ids.has(id));return c;}),connections:(canvas?.connections||[]).filter(c=>ids.has(c.from)&&ids.has(c.to)),include_resources:true,filename:`${group.title||'workflow'}.zip`};}
 function workflowGroupCoverUrl(group){return workflowGroupOrderedMembers(group).flatMap(n=>n.images||[]).map(imageForDisplay).find(i=>i?.url&&mediaKindForItem(i)==='image')?.url||'';}
 function openWorkflowCreateDialog(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n)),modal=document.getElementById('workflowCreateModal');if(!group||!modal)return;pendingWorkflowCreateGroupId=id;const name=document.getElementById('workflowCreateName'),cover=document.getElementById('workflowCreateCover');if(name)name.value=String(group.title||'').slice(0,20);if(cover)cover.innerHTML=workflowGroupCoverUrl(group)?`<img src="${escapeAttr(workflowGroupCoverUrl(group))}" alt="">`:'<i data-lucide="workflow"></i>';document.getElementById('workflowCreateCount').textContent=`${Array.from(name?.value||'').length}/20`;modal.classList.add('open');refreshIcons();name?.focus();}
@@ -10461,8 +10627,8 @@ function canvasOrganizerHtml(node){
     const color=organizerColor(node);
     if(isSmartNoteNode(node)) return `<div class="image-node smart-note-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||240}px;height:${node.h||180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px"><div class="smart-note-toolbar">${organizerColorButtons(node)}${smartTextCopyButtonHtml('.smart-note-text')}<button class="organizer-edit node-delete" type="button"><i data-lucide="trash-2"></i></button></div><textarea class="smart-note-text">${escapeHtml(node.text||'')}</textarea><div class="node-resize-handle" data-resize="1"></div></div>`;
     delete node.titleFontSize;
-    const title=String(node.title||'未命名工作流'), chars=Math.max(8,Math.min(64,Array.from(title).length));
-    return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||520}px;height:${node.h||320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}"><div class="workflow-organizer-head"><div class="organizer-title-control" style="--organizer-title-ch:${chars}"><input class="workflow-organizer-title" value="${escapeAttr(title)}">${smartTextCopyButtonHtml('.workflow-organizer-title')}</div><div class="organizer-color-row">${organizerColorButtons(node)}</div></div><div class="node-resize-handle" data-resize="1"></div></div>`;
+    const title=String(node.title||'未命名工作流');
+    return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||520}px;height:${node.h||320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}"><div class="workflow-organizer-head"><div class="organizer-title-control"><span class="workflow-organizer-title-label" role="button" tabindex="0" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${escapeHtml(title)}</span><input class="workflow-organizer-title-input" type="text" value="${escapeAttr(title)}" aria-label="${escapeAttr(tr('smart.workflowGroup'))}" hidden></div></div><div class="node-resize-handle" data-resize="1"></div></div>`;
 }
 function renderSmartOutline(){
     if(!smartOutlineList) return;
@@ -11962,18 +12128,59 @@ function bindNodeEvents(){
                 control.addEventListener('mousedown', e => e.stopPropagation());
                 control.addEventListener('click', e => e.stopPropagation());
             });
-            const titleInput = el.querySelector('.workflow-organizer-title');
-            if(titleInput){
-                titleInput.oninput = e => {
-                    nodeForControls.title = e.target.value;
-                    e.target.title = e.target.value;
-                    e.target.parentElement?.style.setProperty('--organizer-title-ch', String(Math.max(8, Math.min(64, Array.from(e.target.value || '').length))));
+            const titleLabel = el.querySelector('.workflow-organizer-title-label');
+            const titleInput = el.querySelector('.workflow-organizer-title-input');
+            if(titleLabel && titleInput){
+                const setTitleLabel = value => {
+                    const title = String(value || '');
+                    titleLabel.textContent = title || '未命名工作流';
+                    titleLabel.title = title || '未命名工作流';
+                    titleLabel.setAttribute('aria-label', title || '未命名工作流');
+                };
+                const finishTitleEdit = (save=true) => {
+                    const nextTitle = save ? String(titleInput.value || '').trim() : String(titleInput.dataset.originalValue || '');
+                    nodeForControls.title = nextTitle || '未命名工作流';
+                    setTitleLabel(nodeForControls.title);
+                    titleInput.hidden = true;
+                    titleLabel.hidden = false;
+                    titleInput.dataset.originalValue = '';
                     renderSmartOutline();
                     scheduleSave();
                 };
-                titleInput.onchange = () => scheduleSave();
-            }
-            const noteInput = el.querySelector('.smart-note-text');
+                const beginTitleEdit = event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    titleInput.dataset.originalValue = String(nodeForControls.title || '');
+                    titleInput.value = titleInput.dataset.originalValue;
+                    titleLabel.hidden = true;
+                    titleInput.hidden = false;
+                    titleInput.focus();
+                    titleInput.select();
+                };
+                titleLabel.ondblclick = beginTitleEdit;
+                titleLabel.onkeydown = event => {
+                    if(event.key === 'Enter' || event.key === 'F2') beginTitleEdit(event);
+                };
+                titleInput.oninput = event => {
+                    nodeForControls.title = event.target.value;
+                    setTitleLabel(event.target.value);
+                    renderSmartOutline();
+                    scheduleSave();
+                };
+                titleInput.onchange = () => finishTitleEdit(true);
+                titleInput.onblur = () => {
+                    if(!titleInput.hidden) finishTitleEdit(true);
+                };
+                titleInput.onkeydown = event => {
+                    if(event.key === 'Enter'){
+                        event.preventDefault();
+                        finishTitleEdit(true);
+                    } else if(event.key === 'Escape'){
+                        event.preventDefault();
+                        finishTitleEdit(false);
+                    }
+                };
+            }            const noteInput = el.querySelector('.smart-note-text');
             if(noteInput) noteInput.oninput = e => {
                 nodeForControls.text = e.target.value;
                 fitSmartNoteToText(nodeForControls, el);
@@ -12328,6 +12535,7 @@ function bindNodeEvents(){
             if(document.activeElement?.blur) document.activeElement.blur();
             let node = nodes.find(n => n.id === id);
             if(!node) return;
+            if(isWorkflowOrganizerNode(node) && e.target.closest?.('.workflow-organizer-title-label') && e.detail >= 2) return;
             if(e.altKey) node = duplicateForAltDrag(node, e.shiftKey);
             let dragIds = selectedIds.includes(node.id) ? selectedIds.slice() : [node.id];
             if(isSmartGroupNode(node)){
@@ -21114,7 +21322,20 @@ shell.oncontextmenu = e => {
         return;
     }
     const memberEl=e.target.closest('.image-node');
-    if(memberEl?.dataset?.id){const member=nodes.find(n=>n.id===memberEl.dataset.id);if(member?.workflowGroupId){openWorkflowMemberContextMenu(member.id,e.clientX,e.clientY);return;}return;}
+    if(memberEl?.dataset?.id){
+        const member=nodes.find(n=>n.id===memberEl.dataset.id);
+        if(isWorkflowOrganizerNode(member)){
+            openWorkflowGroupContextMenu(member.id,e.clientX,e.clientY);
+            return;
+        }
+        if(member?.workflowGroupId){openWorkflowMemberContextMenu(member.id,e.clientX,e.clientY);return;}
+        return;
+    }
+    const blankWorkflowGroup = organizerAtPoint(screenToWorld(e));
+    if(blankWorkflowGroup){
+        openWorkflowGroupContextMenu(blankWorkflowGroup.id,e.clientX,e.clientY);
+        return;
+    }
     openCreateMenu(e);
 };
 shell.ondblclick = e => {
@@ -21135,6 +21356,7 @@ shell.onclick = e => {
 window.addEventListener('keydown', e => {
     if(e.key === 'Escape'){
         closeWorkflowGroupLayoutMenu(true);
+        closeWorkflowGroupColorMenu(true);
         closePortConnectMenu();
         closePhotoshopContextMenu();
     }
@@ -21411,6 +21633,7 @@ window.onmousemove = e => {
         n.x = snap ? Math.round(nextX / 20) * 20 : nextX;
         n.y = snap ? Math.round(nextY / 20) * 20 : nextY;
     });
+    hideWorkflowGroupToolbarDuringDrag(e);
     if(assetLibraryOpen){
         const hit = document.elementFromPoint(e.clientX, e.clientY);
         if(hit && assetPanel?.contains(hit)){
@@ -21615,6 +21838,7 @@ window.onmouseup = e => {
         clearDropHighlight();
         loopInsertPreview = null;
         dragState = null;
+        restoreWorkflowGroupToolbarAfterDrag();
         const active = selectedNode();
         if(active) positionComposerForNode(active);
         scheduleSave();

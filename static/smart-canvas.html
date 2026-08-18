@@ -20,10 +20,10 @@
     <script src="/static/js/theme.js?v=2026.07.29.1785819149"></script>
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1785819149"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1786605608"></script>
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1786676486">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1787027446">
     <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1786080775">
     <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.1786416506">
-    <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.1786682448">
+    <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.1786931690">
     <link rel="stylesheet" href="/static/css/prompt-presets.css?v=2026.07.29.1786447564">
     <link rel="stylesheet" href="/static/css/workflow-library.css?v=2026.07.29.1786416506">
 </head>
@@ -132,6 +132,12 @@
         </div>
         <div id="workflowGroupToolbar" class="workflow-group-toolbar workflow-group-toolbar-floating" role="toolbar" aria-labelledby="workflowGroupToolbarLabel" aria-hidden="true">
             <span id="workflowGroupToolbarLabel" class="sr-only" data-i18n="smart.workflowGroupActions">工作流分组操作</span>
+            <div class="workflow-group-color">
+                <button id="workflowGroupColorToggle" class="workflow-group-color-toggle" type="button" data-workflow-toolbar-action="color-toggle" aria-haspopup="menu" aria-expanded="false" aria-controls="workflowGroupColorMenu" data-i18n-title="smart.workflowGroupColor" data-i18n-label="smart.workflowGroupColor" aria-label="工作流分组颜色">
+                    <span class="workflow-group-current-color" aria-hidden="true"></span>
+                </button>
+                <div id="workflowGroupColorMenu" class="workflow-group-color-menu" role="menu" aria-hidden="true"></div>
+            </div>
             <div class="workflow-group-layout">
                 <button id="workflowGroupLayoutToggle" type="button" data-workflow-toolbar-action="layout-toggle" aria-expanded="false" aria-controls="workflowGroupLayoutMenu" data-i18n-title="smart.workflowGroupLayout">
                     <i data-lucide="layout-grid"></i><span data-i18n="smart.workflowGroupLayout">布局</span><i data-lucide="chevron-down"></i>
@@ -539,11 +545,11 @@
         </div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1786676486"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1787039751"></script>
     <script src="/static/js/prompt-presets.js?v=2026.07.29.1786676486"></script>
     <script src="/static/js/library-shared.js?v=2026.07.29.1786416506"></script>
     <script src="/static/js/asset-library.js?v=2026.07.29.1786416506"></script>
-    <script src="/static/js/prompt-library.js?v=2026.07.29.1786682447"></script>
+    <script src="/static/js/prompt-library.js?v=2026.07.29.1786931690"></script>
     <script src="/static/js/workflow-library.js?v=2026.07.29.1786416506"></script>
 
     <!-- 资产库弹窗 -->
@@ -715,6 +721,6 @@
             </div>
         </div>
     </div>
-    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1786416506"></script>
+    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.1787027446"></script>
 </body>
 </html>
