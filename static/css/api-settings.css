@@ -5351,17 +5351,25 @@ html.studio-theme-dark body .recommend-account-invite {
 }
 
 /* 平台列表拖拽与 RunningHub 白天层级增强 */
+/* 只保留一个左栏滚动区域，避免多个 provider-list 的高度相加后裁剪底部本地服务入口。 */
 .sidebar {
     overflow:hidden !important;
 }
 
+.provider-groups {
+    flex:1 1 auto;
+    min-height:0;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    padding-right:2px;
+}
+
 .provider-list {
-    flex:1 1 auto !important;
-    min-height:120px !important;
-    max-height:calc(100vh - 250px) !important;
-    overflow-y:auto !important;
-    overscroll-behavior:contain !important;
-    padding-right:2px !important;
+    flex:0 0 auto !important;
+    min-height:0 !important;
+    max-height:none !important;
+    overflow:visible !important;
+    padding-right:0 !important;
 }
 
 .provider-card-sortable {
@@ -5455,19 +5463,17 @@ html:not(.studio-theme-dark) body:not(.theme-dark) .rh-card-title-field input {
     border-color:#cfd9e6 !important;
 }
 
-@media (max-height:760px) {
-    .provider-list {
-        max-height:calc(100vh - 220px) !important;
-    }
-}
-
 @media (max-width:860px) {
     .sidebar {
         overflow:visible !important;
     }
 
-    .provider-list {
-        max-height:360px !important;
+    .provider-groups {
+        flex:0 0 auto;
+        min-height:0;
+        max-height:none;
+        overflow:visible;
+        padding-right:0;
     }
 }
 
