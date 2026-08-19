@@ -305,6 +305,10 @@
     document.getElementById('rhZoomOut').onclick = () => setScale(viewport.scale / 1.15);
     document.getElementById('rhZoomIn').onclick = () => setScale(viewport.scale * 1.15);
     zoomLabel.onclick = () => setScale(1);
+    document.getElementById('rhThemeToggle').onclick = () => {
+        const nextTheme = document.documentElement.classList.contains('theme-dark') ? 'light' : 'dark';
+        window.StudioTheme?.set(nextTheme);
+    };
     document.getElementById('rhAgentClose').onclick = () => toggleSurface('agent', false);
     document.getElementById('rhAnnouncementBtn').onclick = () => parent.postMessage({type:'studio:open-announcement'},location.origin);
     document.getElementById('rhAccountBtn').onclick = event => { event.stopPropagation(); balancePopover.classList.remove('open'); accountPopover.classList.toggle('open'); };
