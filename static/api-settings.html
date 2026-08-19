@@ -18,10 +18,10 @@
     </script>
     <script src="/static/vendor/js/tailwindcss-cdn.js?v=2026.07.29.1785819149"></script>
     <script src="/static/vendor/js/lucide.js?v=2026.07.29.1785819149"></script>
-    <script src="/static/js/theme.js?v=2026.07.29.1785819149"></script>
+    <script src="/static/js/theme.js?v=2026.07.29.1787103540"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1786605608"></script>
-    <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1785819149">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.29.1786080775">
+    <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.1787103540">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.29.1787137850">
 </head>
 <body>
     <div class="page">
@@ -41,11 +41,11 @@
                 <select id="apiProfileSelect" aria-label="API 配置组"></select>
             </section>
 
-            <div class="layout">
-                <aside class="sidebar">
-                    <div id="providerList" class="provider-groups"></div>
-                    <section class="settings-category settings-category-local">
-                        <div class="settings-category-head">
+            <div class="api-settings-layout">
+                <aside class="api-settings-sidebar">
+                    <div id="providerList" class="api-settings-nav-root"></div>
+                    <section class="api-nav-group api-nav-group-local">
+                        <div class="api-nav-group-head">
                             <span class="settings-category-icon"><i data-lucide="hard-drive"></i></span>
                             <span>
                                 <strong data-i18n="api.localServices">本地服务</strong>
@@ -63,7 +63,7 @@
                     </section>
                 </aside>
 
-                <main id="settingsContent" class="content">
+                <div class="api-settings-detail"><main id="settingsContent" class="api-settings-detail-view">
                     <div class="content-head">
                         <div>
                             <div id="editorTitle" class="editor-title" data-i18n="api.provider">平台</div>
@@ -396,7 +396,7 @@
                         </section>
                 </div>
             </main>
-                <main id="recommendContent" class="content recommend-content" hidden>
+                <main id="recommendContent" class="api-settings-recommend-view" hidden>
                     <div class="content-head">
                         <div>
                             <div class="editor-title" data-i18n="api.recommendPanelTitle">推荐平台</div>
@@ -405,9 +405,9 @@
                     </div>
                     <section id="recommendPanel" class="provider-onboarding-card recommend-inline-card"></section>
                 </main>
+                </div>
+            </div>
         </div>
-        </div>
-    </div>
 
     <!-- 模型选择浮层 -->
     <div id="recommendApiOverlay" class="picker-overlay">
@@ -578,6 +578,6 @@
         </div>
     </div>
 
-    <script src="/static/js/api-settings.js?v=2026.07.29.1786501385"></script>
+    <script src="/static/js/api-settings.js?v=2026.07.29.1787137630"></script>
 </body>
 </html>

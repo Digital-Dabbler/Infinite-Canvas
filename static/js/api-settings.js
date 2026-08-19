@@ -2385,67 +2385,39 @@ function providerDragAttrs(item){
     const id = escapeAttr(item.id);
     return ` draggable="true" data-provider-id="${id}" ondragstart="handleProviderDragStart(event,'${id}')" ondragover="handleProviderDragOver(event,'${id}')" ondrop="handleProviderDrop(event,'${id}')" ondragend="handleProviderDragEnd()"`;
 }
+function providerNavIcon(item){
+    const knownIcons = {
+        modelscope:'boxes',
+        runninghub:'workflow',
+        volcengine:'flame',
+        apimart:'plug-zap'
+    };
+    const protocol = String(item.protocol || 'openai').toLowerCase();
+    if(knownIcons[item.id]) return knownIcons[item.id];
+    if(CLI_PROTOCOLS.has(protocol)) return 'terminal-square';
+    return item.has_key || item.has_wallet_key ? 'key-round' : 'key';
+}
 function providerCardHtml(item){
-        const active = item.id === selectedId ? 'active' : '';
-        const itemProtocol = String(item.protocol || 'openai').toLowerCase();
-        const stateClass = item.enabled === false ? 'is-disabled' : (item.has_key || item.has_wallet_key || CLI_PROTOCOLS.has(itemProtocol) ? 'has-key' : 'missing-key');
-        const protocolLabel = item.id === 'runninghub' ? 'RH' : String(item.protocol || 'openai').toUpperCase();
-        if(item.id === 'modelscope'){
-            return `
-                <button class="provider-card provider-card-banner ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
-                    <span class="provider-banner-inner">
-                        <span class="provider-logo-wrap">
-                            <img src="/static/images/modelscope.gif" alt="ModelScope" class="ms-icon-light">
-                            <img src="/static/images/modelscope-1.gif" alt="ModelScope" class="ms-icon-dark">
-                            <span class="provider-logo-fallback">ModelScope</span>
-                        </span>
-                        <span class="provider-protocol-pill">OpenAI</span>
-                    </span>
-                </button>
-            `;
-        }
-        if(item.id === 'runninghub'){
-            return `
-                <button class="provider-card provider-card-banner ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
-                    <span class="provider-banner-inner">
-                        <span class="provider-logo-wrap">
-                            <img src="/static/images/RunningHub-B.png" alt="RunningHub" class="runninghub-icon ms-icon-light">
-                            <img src="/static/images/RunningHub-W.png" alt="RunningHub" class="runninghub-icon ms-icon-dark">
-                            <span class="provider-logo-fallback">RunningHub</span>
-                        </span>
-                        <span class="provider-protocol-pill">RH</span>
-                    </span>
-                </button>
-            `;
-        }
-        if(item.id === 'volcengine'){
-            return `
-                <button class="provider-card provider-card-banner ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')">
-                    <span class="provider-banner-inner">
-                        <span class="provider-logo-wrap">
-                            <img src="/static/images/volcengine-theme-light.svg" alt="火山引擎" class="volcengine-icon ms-icon-light">
-                            <img src="/static/images/volcengine-theme-dark.svg" alt="火山引擎" class="volcengine-icon ms-icon-dark">
-                            <span class="provider-logo-fallback">火山引擎</span>
-                        </span>
-                        <span class="provider-protocol-pill">Ark</span>
-                    </span>
-                </button>
-            `;
-        }
-        return `
-            <button class="provider-card provider-card-sortable ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')"${providerDragAttrs(item)}>
-                <span class="provider-drag-handle" aria-hidden="true"><i data-lucide="grip-vertical" class="w-3.5 h-3.5"></i></span>
-                <span class="provider-mark"><i data-lucide="${item.has_key ? 'key-round' : 'key'}" class="w-4 h-4"></i></span>
-                <span class="provider-info">
-                    <div class="provider-name">${escapeHtml(item.name || item.id)}</div>
-                    <div class="provider-meta">${escapeHtml(item.base_url || '未配置地址')}</div>
-                </span>
-                <span class="provider-side-meta">
-                    <span class="provider-status-dot"></span>
-                    <span class="provider-protocol-pill">${escapeHtml(protocolLabel)}</span>
-                </span>
-            </button>
-        `;
+    const active = item.id === selectedId ? 'active' : '';
+    const itemProtocol = String(item.protocol || 'openai').toLowerCase();
+    const stateClass = item.enabled === false ? 'is-disabled' : (item.has_key || item.has_wallet_key || CLI_PROTOCOLS.has(itemProtocol) ? 'has-key' : 'missing-key');
+    const protocolLabel = item.id === 'runninghub' ? 'RH' : String(item.protocol || 'openai').toUpperCase();
+    const draggable = !isFixedProvider(item);
+    const dragHandle = draggable ? '<span class="api-nav-drag-handle" aria-hidden="true"><i data-lucide="grip-vertical" class="w-3.5 h-3.5"></i></span>' : '<span class="api-nav-drag-spacer" aria-hidden="true"></span>';
+    return `
+        <button class="api-nav-item ${draggable ? 'api-nav-item-sortable' : 'api-nav-item-fixed'} ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')"${providerDragAttrs(item)}>
+            ${dragHandle}
+            <span class="api-nav-icon"><i data-lucide="${providerNavIcon(item)}" class="w-4 h-4"></i></span>
+            <span class="api-nav-copy">
+                <span class="api-nav-title">${escapeHtml(item.name || item.id)}</span>
+                <span class="api-nav-subtitle">${escapeHtml(item.base_url || protocolLabel)}</span>
+            </span>
+            <span class="api-nav-status">
+                <span class="api-nav-status-dot" aria-hidden="true"></span>
+                <span class="api-nav-protocol">${escapeHtml(protocolLabel)}</span>
+            </span>
+        </button>
+    `;
 }
 function renderProviderList(){
     const items = sortedProviders();
@@ -2453,33 +2425,33 @@ function renderProviderList(){
     const cliProviders = items.filter(item => CLI_PROTOCOLS.has(String(item.protocol || '').toLowerCase()));
     const providerCards = list => list.map(providerCardHtml).join('');
     providerList.innerHTML = `
-        <section class="settings-category settings-category-api">
-            <div class="settings-category-head">
+        <section class="api-nav-group api-nav-group-online">
+            <div class="api-nav-group-head">
                 <span class="settings-category-icon"><i data-lucide="cloud"></i></span>
                 <span>
                     <strong>${escapeHtml(tr('api.onlineApis'))}</strong>
                     <small>${escapeHtml(tr('api.onlineApisHint'))}</small>
                 </span>
             </div>
-            <div class="provider-list">${providerCards(onlineProviders)}</div>
-            <div class="settings-category-actions">
-                <button class="add-btn" type="button" onclick="addProvider()"><i data-lucide="plus" class="w-4 h-4"></i><span>${escapeHtml(tr('api.addProvider'))}</span></button>
-                <button class="api-link-btn" type="button" onclick="openRecommendApi()"><i data-lucide="sparkles" class="w-4 h-4"></i><span>${escapeHtml(tr('api.recommendApi'))}</span></button>
+            <div class="api-nav-items">${providerCards(onlineProviders)}</div>
+            <div class="api-nav-actions">
+                <button class="api-nav-action api-nav-action-add" type="button" onclick="addProvider()"><i data-lucide="plus" class="w-4 h-4"></i><span>${escapeHtml(tr('api.addProvider'))}</span></button>
+                <button class="api-nav-action api-nav-action-recommend" type="button" onclick="openRecommendApi()"><i data-lucide="sparkles" class="w-4 h-4"></i><span>${escapeHtml(tr('api.recommendApi'))}</span></button>
             </div>
         </section>
-        <section class="settings-category settings-category-cli">
-            <div class="settings-category-head">
+        <section class="api-nav-group api-nav-group-cli">
+            <div class="api-nav-group-head">
                 <span class="settings-category-icon"><i data-lucide="terminal-square"></i></span>
                 <span>
                     <strong>${escapeHtml(tr('api.cliSettings'))}</strong>
                     <small>${escapeHtml(tr('api.cliSettingsHint'))}</small>
                 </span>
             </div>
-            ${cliProviders.length ? `<div class="provider-list provider-list-cli">${providerCards(cliProviders)}</div>` : ''}
-            <div class="cli-quick-list">
-                <button class="cli-quick-btn" type="button" onclick="addCliProvider('jimeng')"><i data-lucide="image" class="w-3.5 h-3.5"></i><span>即梦 CLI</span></button>
-                <button class="cli-quick-btn" type="button" onclick="addCliProvider('codex')"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span>GPT CLI</span></button>
-                <button class="cli-quick-btn" type="button" onclick="addCliProvider('gemini-cli')"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i><span>Antigravity CLI</span></button>
+            ${cliProviders.length ? `<div class="api-nav-items api-nav-items-cli">${providerCards(cliProviders)}</div>` : ''}
+            <div class="api-cli-quick-list">
+                <button class="api-cli-quick-btn" type="button" onclick="addCliProvider('jimeng')"><i data-lucide="image" class="w-3.5 h-3.5"></i><span>即梦 CLI</span></button>
+                <button class="api-cli-quick-btn" type="button" onclick="addCliProvider('codex')"><i data-lucide="terminal" class="w-3.5 h-3.5"></i><span>GPT CLI</span></button>
+                <button class="api-cli-quick-btn" type="button" onclick="addCliProvider('gemini-cli')"><i data-lucide="sparkles" class="w-3.5 h-3.5"></i><span>Antigravity CLI</span></button>
                 <div class="cli-quick-note">${escapeHtml(tr('api.cliInstallHint'))}</div>
             </div>
         </section>
@@ -2503,7 +2475,7 @@ function handleProviderDragStart(event, id){
         return;
     }
     providerDragId = id;
-    event.currentTarget.classList.add('is-dragging');
+    event.currentTarget.classList.add('api-nav-dragging');
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', id);
 }
@@ -2511,12 +2483,12 @@ function handleProviderDragOver(event, id){
     if(!providerDragId || providerDragId === id || isFixedProvider(id)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
-    providerList?.querySelectorAll('.provider-card-drop-target').forEach(el => el.classList.remove('provider-card-drop-target'));
-    event.currentTarget.classList.add('provider-card-drop-target');
+    providerList?.querySelectorAll('.api-nav-drop-target').forEach(el => el.classList.remove('api-nav-drop-target'));
+    event.currentTarget.classList.add('api-nav-drop-target');
 }
 function handleProviderDrop(event, targetId){
     event.preventDefault();
-    providerList?.querySelectorAll('.provider-card-drop-target').forEach(el => el.classList.remove('provider-card-drop-target'));
+    providerList?.querySelectorAll('.api-nav-drop-target').forEach(el => el.classList.remove('api-nav-drop-target'));
     const sourceId = providerDragId || event.dataTransfer.getData('text/plain');
     providerDragId = '';
     if(!sourceId || sourceId === targetId || isFixedProvider(sourceId) || isFixedProvider(targetId)) return;
@@ -2531,8 +2503,8 @@ function handleProviderDrop(event, targetId){
 }
 function handleProviderDragEnd(){
     providerDragId = '';
-    providerList?.querySelectorAll('.is-dragging,.provider-card-drop-target').forEach(el => {
-        el.classList.remove('is-dragging', 'provider-card-drop-target');
+    providerList?.querySelectorAll('.api-nav-dragging,.api-nav-drop-target').forEach(el => {
+        el.classList.remove('api-nav-dragging', 'api-nav-drop-target');
     });
 }
 function renderEditor(){
