@@ -28,17 +28,20 @@
         <div class="wrap">
             <header class="page-head">
                 <div>
-                    <div class="title" data-i18n="api.title">API 设置</div>
+                    <h1 class="title" data-i18n="api.title">API 设置</h1>
                     <div class="sub" data-i18n="api.subtitle">统一管理在线 API、CLI 与本地服务。Key 写入后端 env，页面不会回显完整内容。</div>
                 </div>
-                <div id="status" class="status"></div>
+                <div id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
             </header>
             <section id="apiProfileBar" class="api-profile-bar" hidden>
                 <div>
                     <div class="api-profile-label" data-i18n="api.profileLabel">当前 API 配置组</div>
                     <div class="api-profile-hint" data-i18n="api.profileHint">平台、模型和凭据只保存到当前配置组。</div>
                 </div>
-                <select id="apiProfileSelect" aria-label="API 配置组"></select>
+                <div class="api-profile-select-wrap">
+                    <span class="api-profile-select-label" data-i18n="api.activeProfile">正在编辑</span>
+                    <select id="apiProfileSelect" aria-label="API 配置组"></select>
+                </div>
             </section>
 
             <div class="api-settings-layout">
@@ -71,7 +74,7 @@
                         </div>
                         <div class="content-actions">
                             <button id="deleteBtn" class="action-btn danger-btn api-page-delete-btn" type="button" onclick="deleteProvider()"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i><span data-i18n="api.delete">删除</span></button>
-                            <button class="action-btn save-btn api-page-save-btn" type="button" onclick="saveProviders()"><i data-lucide="save" class="w-3.5 h-3.5"></i><span data-i18n="api.save">保存</span></button>
+                            <button id="saveProvidersBtn" class="action-btn save-btn api-page-save-btn" type="button" onclick="saveProviders()"><i data-lucide="save" class="w-3.5 h-3.5"></i><span id="saveProvidersLabel" data-i18n="api.saveChanges">保存更改</span></button>
                         </div>
                     </div>
 
@@ -110,7 +113,7 @@
                                 </div>
                             </label>
                             <label class="field full api-key-field">
-                                <span class="label api-key-label">API Key</span>
+                                <span class="label api-key-label"><span>API Key</span><span id="keyState" class="credential-state" aria-live="polite"></span></span>
                                 <div class="key-panel api-standard-key-row">
                                     <div class="key-input-line">
                                         <div class="field-frame"><input id="keyInput" type="password"></div>
@@ -125,7 +128,7 @@
                                     <div class="rh-key-item">
                                         <div class="rh-key-head">
                                             <div>
-                                                <div class="rh-key-title" data-i18n="api.rhCoinApiKeyRequired">RH币 API Key · 必填</div>
+                                                <div class="rh-key-title"><span data-i18n="api.rhCoinApiKeyRequired">RH币 API Key · 必填</span><span id="rhFreeKeyState" class="credential-state" aria-live="polite"></span></div>
                                                 <div class="rh-key-desc" data-i18n="api.rhCoinKeyDesc">使用 RH币 接口时填写</div>
                                             </div>
                                             <div class="rh-key-links">
@@ -146,7 +149,7 @@
                                     <div class="rh-key-item">
                                         <div class="rh-key-head">
                                             <div>
-                                                <div class="rh-key-title" data-i18n="api.rhWalletApiKeyOptional">账户余额 API Key · 可选</div>
+                                                <div class="rh-key-title"><span data-i18n="api.rhWalletApiKeyOptional">账户余额 API Key · 可选</span><span id="rhWalletKeyState" class="credential-state" aria-live="polite"></span></div>
                                                 <div class="rh-key-desc" data-i18n="api.rhWalletKeyDesc">使用账户余额接口时填写</div>
                                             </div>
                                             <div class="rh-key-links">
@@ -169,7 +172,7 @@
                                     <div class="rh-key-item">
                                         <div class="rh-key-head">
                                             <div>
-                                                <div class="rh-key-title" data-i18n="api.volcengineArkKey">方舟 API Key · 生成视频</div>
+                                                <div class="rh-key-title"><span data-i18n="api.volcengineArkKey">方舟 API Key · 生成视频</span><span id="volcArkKeyState" class="credential-state" aria-live="polite"></span></div>
                                                 <div class="rh-key-desc" data-i18n="api.volcengineArkKeyDesc">用于 Seedance 2.0 生成接口，Authorization: Bearer。</div>
                                             </div>
                                         </div>
@@ -178,7 +181,7 @@
                                     <div class="rh-key-item">
                                         <div class="rh-key-head">
                                             <div>
-                                                <div class="rh-key-title" data-i18n="api.volcengineAssetKeys">素材库 AK/SK · 上传素材</div>
+                                                <div class="rh-key-title"><span data-i18n="api.volcengineAssetKeys">素材库 AK/SK · 上传素材</span><span id="volcAssetKeyState" class="credential-state" aria-live="polite"></span></div>
                                                 <div class="rh-key-desc" data-i18n="api.volcengineAssetKeysDesc">用于 CreateAssetGroup / CreateAsset / GetAsset 的 Access Key 鉴权。</div>
                                             </div>
                                         </div>
@@ -188,8 +191,8 @@
                                         <div class="key-input-line">
                                             <div class="field-frame"><input id="volcSkInput" type="password" placeholder="Secret Access Key"></div>
                                             <div class="key-actions">
-                                                <button class="key-btn" type="button" onclick="saveVolcengineAssetKeys()" title="保存火山素材库 AK/SK"><i data-lucide="check" class="w-4 h-4"></i></button>
-                                                <button class="key-btn key-clear" type="button" onclick="clearVolcengineAssetKeys()" title="清除火山素材库 AK/SK"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                                                <button class="key-btn" type="button" onclick="saveVolcengineAssetKeys()" title="保存火山素材库 AK/SK" data-i18n-title="api.saveVolcengineAssetKeysTitle"><i data-lucide="check" class="w-4 h-4"></i></button>
+                                                <button class="key-btn key-clear" type="button" onclick="clearVolcengineAssetKeys()" title="清除火山素材库 AK/SK" data-i18n-title="api.clearVolcengineAssetKeysTitle"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
                                             </div>
                                         </div>
                                         <span id="volcAssetKeyHint" class="hint"></span>
@@ -567,10 +570,10 @@
                     <div id="rhWorkflowEditorGraphWrap" class="rh-editor-graph-wrap">
                         <svg id="rhWorkflowEditorGraphSvg" class="rh-editor-graph-svg"></svg>
                         <div class="rh-editor-graph-controls">
-                            <button type="button" onclick="rhEditorGraphZoom(-1)" title="缩小"><i data-lucide="zoom-out" class="w-4 h-4"></i></button>
+                            <button type="button" onclick="rhEditorGraphZoom(-1)" title="缩小" data-i18n-title="api.rhEditorZoomOutTitle"><i data-lucide="zoom-out" class="w-4 h-4"></i></button>
                             <span id="rhWorkflowEditorZoom">100%</span>
-                            <button type="button" onclick="rhEditorGraphZoom(1)" title="放大"><i data-lucide="zoom-in" class="w-4 h-4"></i></button>
-                            <button type="button" onclick="rhEditorGraphFit()" title="适应窗口"><i data-lucide="maximize" class="w-4 h-4"></i></button>
+                            <button type="button" onclick="rhEditorGraphZoom(1)" title="放大" data-i18n-title="api.rhEditorZoomInTitle"><i data-lucide="zoom-in" class="w-4 h-4"></i></button>
+                            <button type="button" onclick="rhEditorGraphFit()" title="适应窗口" data-i18n-title="api.rhEditorFitTitle"><i data-lucide="maximize" class="w-4 h-4"></i></button>
                         </div>
                     </div>
                 </section>

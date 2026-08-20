@@ -12,6 +12,13 @@ const apiProfileBar = document.getElementById('apiProfileBar');
 const apiProfileSelect = document.getElementById('apiProfileSelect');
 const editorTitle = document.getElementById('editorTitle');
 const statusEl = document.getElementById('status');
+const saveProvidersBtn = document.getElementById('saveProvidersBtn');
+const saveProvidersLabel = document.getElementById('saveProvidersLabel');
+const keyState = document.getElementById('keyState');
+const rhFreeKeyState = document.getElementById('rhFreeKeyState');
+const rhWalletKeyState = document.getElementById('rhWalletKeyState');
+const volcArkKeyState = document.getElementById('volcArkKeyState');
+const volcAssetKeyState = document.getElementById('volcAssetKeyState');
 const nameInput = document.getElementById('nameInput');
 const idInput = document.getElementById('idInput');
 const baseInput = document.getElementById('baseInput');
@@ -324,7 +331,37 @@ function trf(key, vars={}){
     });
     return text;
 }
-function setStatus(text){ statusEl.textContent = text || ''; }
+let providersDirty = false;
+let providerSaveBusy = false;
+function setSaveControlState(state='idle'){
+    if(!saveProvidersBtn || !saveProvidersLabel) return;
+    const labelKey = state === 'saving'
+        ? 'api.saving'
+        : state === 'saved'
+        ? 'api.savedShort'
+        : 'api.saveChanges';
+    saveProvidersLabel.textContent = tr(labelKey);
+    saveProvidersBtn.disabled = state === 'saving';
+    saveProvidersBtn.classList.toggle('is-saving', state === 'saving');
+    saveProvidersBtn.classList.toggle('is-saved', state === 'saved');
+    saveProvidersBtn.classList.toggle('has-unsaved-changes', state === 'dirty');
+}
+function setStatus(text, state='info'){
+    if(!statusEl) return;
+    statusEl.textContent = text || '';
+    statusEl.dataset.state = text ? state : '';
+    statusEl.hidden = !text;
+}
+function markProvidersDirty(){
+    if(providerSaveBusy) return;
+    providersDirty = true;
+    setSaveControlState('dirty');
+    setStatus(tr('api.unsavedChanges'), 'dirty');
+}
+function resetProvidersDirty({saved=false}={}){
+    providersDirty = false;
+    setSaveControlState(saved ? 'saved' : 'idle');
+}
 let studioApiBroadcastChannel = null;
 let studioApiBroadcastTimer = 0;
 let studioApiBroadcastTypes = new Set();
@@ -2397,25 +2434,47 @@ function providerNavIcon(item){
     if(CLI_PROTOCOLS.has(protocol)) return 'terminal-square';
     return item.has_key || item.has_wallet_key ? 'key-round' : 'key';
 }
+function providerCredentialStatus(item){
+    const protocol = String(item?.protocol || 'openai').toLowerCase();
+    if(item?.enabled === false) return tr('api.providerDisabled');
+    if(CLI_PROTOCOLS.has(protocol)) return tr('api.providerLocalSession');
+    if(item?.has_key || item?.has_wallet_key) return tr('api.providerConfigured');
+    return tr('api.providerNotConfigured');
+}
+function credentialStateKey(configured, partial=false){
+    if(partial) return 'api.providerPartiallyConfigured';
+    return configured ? 'api.providerConfigured' : 'api.providerNotConfigured';
+}
+function setCredentialState(element, configured, {partial=false, hidden=false}={}){
+    if(!element) return;
+    const key = credentialStateKey(configured, partial);
+    element.textContent = hidden ? '' : tr(key);
+    element.hidden = hidden;
+    element.dataset.state = hidden ? '' : (partial ? 'partial' : configured ? 'configured' : 'missing');
+}
 function providerCardHtml(item){
     const active = item.id === selectedId ? 'active' : '';
     const itemProtocol = String(item.protocol || 'openai').toLowerCase();
     const stateClass = item.enabled === false ? 'is-disabled' : (item.has_key || item.has_wallet_key || CLI_PROTOCOLS.has(itemProtocol) ? 'has-key' : 'missing-key');
     const protocolLabel = item.id === 'runninghub' ? 'RH' : String(item.protocol || 'openai').toUpperCase();
+    const credentialStatus = providerCredentialStatus(item);
+    const providerName = item.name || item.id;
+    const accessibleLabel = `${providerName} · ${credentialStatus} · ${protocolLabel}`;
     const draggable = !isFixedProvider(item);
     const dragHandle = draggable ? '<span class="api-nav-drag-handle" aria-hidden="true"><i data-lucide="grip-vertical" class="w-3.5 h-3.5"></i></span>' : '<span class="api-nav-drag-spacer" aria-hidden="true"></span>';
     return `
-        <button class="api-nav-item ${draggable ? 'api-nav-item-sortable' : 'api-nav-item-fixed'} ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')"${providerDragAttrs(item)}>
+        <button class="api-nav-item ${draggable ? 'api-nav-item-sortable' : 'api-nav-item-fixed'} ${active} ${stateClass}" type="button" onclick="selectProvider('${escapeHtml(item.id)}')" aria-label="${escapeAttr(accessibleLabel)}" title="${escapeAttr(credentialStatus)}"${active ? ' aria-current="page"' : ''}${providerDragAttrs(item)}>
             ${dragHandle}
             <span class="api-nav-icon"><i data-lucide="${providerNavIcon(item)}" class="w-4 h-4"></i></span>
             <span class="api-nav-copy">
-                <span class="api-nav-title">${escapeHtml(item.name || item.id)}</span>
+                <span class="api-nav-title">${escapeHtml(providerName)}</span>
                 <span class="api-nav-subtitle">${escapeHtml(item.base_url || protocolLabel)}</span>
+                <span class="api-nav-state" data-state="${escapeAttr(stateClass)}" title="${escapeAttr(credentialStatus)}">
+                    <span class="api-nav-status-dot" aria-hidden="true"></span>
+                    <span>${escapeHtml(credentialStatus)}</span>
+                </span>
             </span>
-            <span class="api-nav-status">
-                <span class="api-nav-status-dot" aria-hidden="true"></span>
-                <span class="api-nav-protocol">${escapeHtml(protocolLabel)}</span>
-            </span>
+            <span class="api-nav-protocol">${escapeHtml(protocolLabel)}</span>
         </button>
     `;
 }
@@ -2536,6 +2595,7 @@ function renderEditor(){
     keyInput.value = '';
     keyInput.placeholder = item.has_key ? `${tr('api.keepCurrentKey')} ${item.key_preview || ''}` : tr('api.enterKey');
     keyHint.textContent = item.has_key ? `${tr('api.keySaved')}${item.key_env || 'API/.env'}` : tr('api.noKey');
+    setCredentialState(keyState, Boolean(item.has_key));
     const isModelScope = item.id === 'modelscope';
     const isRunningHub = item.id === 'runninghub';
     const isVolcengine = item.id === 'volcengine' || String(protocolInput?.value || item.protocol || '').toLowerCase() === 'volcengine';
@@ -2555,7 +2615,12 @@ function renderEditor(){
         }
         if(rhFreeKeyHint) rhFreeKeyHint.textContent = rhFreeKeyHintText(item);
         if(rhWalletKeyHint) rhWalletKeyHint.textContent = rhWalletKeyHintText(item);
+        setCredentialState(rhFreeKeyState, Boolean(item.has_key));
+        setCredentialState(rhWalletKeyState, Boolean(item.has_wallet_key));
         renderRunningHubCards();
+    } else {
+        setCredentialState(rhFreeKeyState, false, {hidden:true});
+        setCredentialState(rhWalletKeyState, false, {hidden:true});
     }
     if(isVolcengine){
         item.base_url = item.base_url || VOLCENGINE_DEFAULT_BASE_URL;
@@ -2574,8 +2639,16 @@ function renderEditor(){
             volcSkInput.placeholder = item.has_volcengine_secret_key ? `保持当前 SK ${item.volcengine_secret_key_preview || ''}` : 'Secret Access Key';
         }
         if(volcAssetKeyHint) volcAssetKeyHint.textContent = volcengineAssetKeyHintText(item);
+        setCredentialState(volcArkKeyState, Boolean(item.has_key));
+        const hasVolcAssetAccess = Boolean(item.has_volcengine_access_key);
+        const hasVolcAssetSecret = Boolean(item.has_volcengine_secret_key);
+        setCredentialState(volcAssetKeyState, hasVolcAssetAccess && hasVolcAssetSecret, {partial:hasVolcAssetAccess !== hasVolcAssetSecret});
         if(volcProjectInput) volcProjectInput.value = item.volcengine_project_name || VOLCENGINE_DEFAULT_PROJECT_NAME;
         if(volcRegionInput) volcRegionInput.value = item.volcengine_region || VOLCENGINE_DEFAULT_REGION;
+    }
+    if(!isVolcengine){
+        setCredentialState(volcArkKeyState, false, {hidden:true});
+        setCredentialState(volcAssetKeyState, false, {hidden:true});
     }
     if(isJimeng){
         item.base_url = '';
@@ -3802,6 +3875,9 @@ async function loadProviders(){
     }
 }
 async function saveProviders(){
+    if(providerSaveBusy) return false;
+    providerSaveBusy = true;
+    setSaveControlState('saving');
     syncEditor();
     providers.forEach(item => {
         item.id = normalizeId(item.id);
@@ -3857,9 +3933,11 @@ async function saveProviders(){
     });
     if(new Set(providers.map(item => item.id)).size !== providers.length){
         alert(tr('api.duplicateId'));
+        providerSaveBusy = false;
+        setSaveControlState(providersDirty ? 'dirty' : 'idle');
         return false;
     }
-    setStatus(tr('api.saving'));
+    setStatus(tr('api.saving'), 'saving');
     try {
         const query = currentApiProfileId ? `?api_profile_id=${encodeURIComponent(currentApiProfileId)}` : '';
         const res = await fetch(`/api/providers${query}`, {
@@ -3916,12 +3994,16 @@ async function saveProviders(){
         });
         selectedId = provider()?.id || providers[0]?.id || '';
         renderEditor();
-        setStatus(tr('api.saved'));
+        providerSaveBusy = false;
+        resetProvidersDirty({saved:true});
+        setStatus(tr('api.saved'), 'success');
         // 广播变更，画布等其他 iframe 立即重新拉取最新平台/模型列表
         broadcastStudioApiChange('providers-changed');
         return true;
     } catch(err) {
-        setStatus(err.message || tr('api.saveFailed'));
+        providerSaveBusy = false;
+        setSaveControlState(providersDirty ? 'dirty' : 'idle');
+        setStatus(err.message || tr('api.saveFailed'), 'error');
         return false;
     }
 }
@@ -3936,6 +4018,12 @@ function escapeHtml(str){
     return String(str || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
 }
 function escapeAttr(str){ return escapeHtml(str).replace(/`/g, '&#96;'); }
+function syncIconButtonLabels(scope=document){
+    scope.querySelectorAll('button[title]').forEach(button => {
+        const label = String(button.getAttribute('title') || '').trim();
+        if(label) button.setAttribute('aria-label', label);
+    });
+}
 window.addEventListener('message', event => {
     if(event.data?.type === 'studio-theme' && window.StudioTheme) window.StudioTheme.set(event.data.theme);
     if(event.data?.type === 'studio-lang' && window.StudioI18n) {
@@ -3965,13 +4053,25 @@ window.addEventListener('studio-lang-change', () => {
     syncRecommendView();
     if(recommendInlineOpen) renderRecommendApi();
     else renderEditor();
+    syncIconButtonLabels();
 });
 window.onload = () => {
     if(window.StudioTheme) window.StudioTheme.apply();
     if(window.StudioI18n) window.StudioI18n.apply();
+    syncIconButtonLabels();
     syncRecommendView();
     loadProviders();
     // 平台名输入时实时预览生成的 ID
+    // 事件委托覆盖动态渲染的模型、LoRA、RunningHub 工作流字段，
+    // 同时不会把 renderEditor() 的直接 value 赋值误判为用户改动。
+    if(settingsContent){
+        settingsContent.addEventListener('input', event => {
+            if(event.target?.matches('input, textarea, select')) markProvidersDirty();
+        });
+        settingsContent.addEventListener('change', event => {
+            if(event.target?.matches('input, textarea, select')) markProvidersDirty();
+        });
+    }
     if(nameInput) nameInput.addEventListener('input', updateIdPreview);
     if(protocolInput) protocolInput.addEventListener('change', updateProtocolFromInput);
     if(baseInput) baseInput.addEventListener('input', () => updateApimartDomesticHint());
