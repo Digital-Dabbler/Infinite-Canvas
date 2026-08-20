@@ -6878,6 +6878,68 @@ html:not(.studio-theme-dark):not(.theme-dark) body:not(.studio-theme-dark):not(.
     min-width:0;
 }
 
+
+/* Dark mode needs a dedicated contrast surface for the active profile picker.
+ * The global select rules make the control readable in forms, but this picker
+ * sits directly on the raised profile bar and otherwise visually disappears. */
+body.studio-theme-dark .api-profile-select-wrap,
+html.studio-theme-dark body .api-profile-select-wrap,
+body.theme-dark .api-profile-select-wrap,
+html.theme-dark body .api-profile-select-wrap {
+    padding:4px 6px;
+    border:1px solid var(--ui-border);
+    border-radius:12px;
+    background:var(--ui-surface);
+}
+
+body.studio-theme-dark .api-profile-select-label,
+html.studio-theme-dark body .api-profile-select-label,
+body.theme-dark .api-profile-select-label,
+html.theme-dark body .api-profile-select-label {
+    color:var(--ui-text-muted);
+}
+
+body.studio-theme-dark .api-profile-bar select,
+html.studio-theme-dark body .api-profile-bar select,
+body.theme-dark .api-profile-bar select,
+html.theme-dark body .api-profile-bar select {
+    min-width:240px;
+    min-height:40px;
+    padding:0 34px 0 12px;
+    border:1px solid var(--ui-border-strong);
+    border-radius:9px;
+    background:var(--ui-surface-sunken);
+    color:var(--ui-text);
+    font-size:13px;
+    font-weight:750;
+    line-height:1.2;
+}
+
+body.studio-theme-dark .api-profile-bar select:hover,
+html.studio-theme-dark body .api-profile-bar select:hover,
+body.theme-dark .api-profile-bar select:hover,
+html.theme-dark body .api-profile-bar select:hover {
+    border-color:var(--ui-brand);
+    background:var(--ui-surface-raised);
+}
+
+body.studio-theme-dark .api-profile-bar select:focus-visible,
+html.studio-theme-dark body .api-profile-bar select:focus-visible,
+body.theme-dark .api-profile-bar select:focus-visible,
+html.theme-dark body .api-profile-bar select:focus-visible {
+    outline:2px solid var(--ui-focus-ring);
+    outline-offset:2px;
+    box-shadow:0 0 0 4px var(--ui-focus-ring-shadow);
+}
+
+body.studio-theme-dark .api-profile-bar select option,
+html.studio-theme-dark body .api-profile-bar select option,
+body.theme-dark .api-profile-bar select option,
+html.theme-dark body .api-profile-bar select option {
+    background:var(--ui-surface-raised);
+    color:var(--ui-text);
+}
+
 .api-profile-select-label {
     color:var(--api-refresh-muted, var(--ui-text-muted));
     font-size:10px;
