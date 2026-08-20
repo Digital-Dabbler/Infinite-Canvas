@@ -8,6 +8,8 @@
     <script>
         (function(){
             try {
+                var presentation = new URLSearchParams(location.search).get('presentation');
+                document.documentElement.dataset.libraryPresentation = presentation || (window.self === window.top ? 'standalone' : 'modal');
                 var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark';
                 if(theme === 'dark') {
                     document.documentElement.classList.add('studio-theme-dark');
@@ -60,13 +62,12 @@
         }
         .library-standalone .library-modal {
             width: calc(100vw - 128px);
-            height: calc(100vh - 120px);
+            height: calc(100vh - 128px);
         }
         .library-standalone-bar { display: none; }
         .library-standalone-bar[hidden] { display: none !important; }
-        .library-standalone .library-modal { height: calc(100vh - 128px); }
-        html.library-direct .library-standalone-bar { display: flex; }
-        html.library-direct .library-standalone .library-modal { height: calc(100vh - 120px); }
+        html[data-library-presentation="standalone"] .library-standalone-bar { display: flex; }
+        html[data-library-presentation="standalone"] .library-standalone .library-modal { height: calc(100vh - 120px); }
     </style>
 </head>
 <body class="library-standalone">
@@ -116,16 +117,18 @@
     <script src="/static/js/library-shared.js?v=2026.07.29.1786416506"></script>
     <script src="/static/js/asset-library.js?v=2026.07.29.1786416506"></script>
     <script>
-        if(window.self === window.top) {
-            document.documentElement.classList.add('library-direct');
+        const libraryPresentation = document.documentElement.dataset.libraryPresentation || 'modal';
+        if(libraryPresentation === 'standalone') {
             document.getElementById('libraryStandaloneBar').removeAttribute('hidden');
         }
         document.getElementById('libraryBackBtn').addEventListener('click', () => {
-            try {
+            if(libraryPresentation === 'panel') {
                 parent.postMessage({type:'studio:close-panel'}, location.origin);
-            } catch(e) {}
-            if(window.self !== window.top) return;
-            setTimeout(() => { if(window.history.length > 1) history.back(); else location.href = '/'; }, 80);
+                return;
+            }
+            if(libraryPresentation === 'standalone') {
+                setTimeout(() => { if(window.history.length > 1) history.back(); else location.href = '/'; }, 80);
+            }
         });
     </script>
 </body>

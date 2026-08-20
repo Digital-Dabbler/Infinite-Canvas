@@ -3,7 +3,7 @@
     const popover = document.getElementById('settingsPopover');
     const backdrop = document.getElementById('settingsBackdrop');
     const panel = document.getElementById('panelOverlay');
-    const panelFrame = document.getElementById('panelFrame');
+    const panelFrameHost = document.getElementById('panelFrameHost');
     const panelTitle = document.getElementById('panelTitle');
     const accountCard = document.getElementById('accountCard');
     const themeAction = document.getElementById('themeAction');
@@ -12,7 +12,15 @@
     const languageAction = document.getElementById('languageAction');
     const languageCurrentMode = document.getElementById('languageCurrentMode');
     const languageOtherMode = document.getElementById('languageOtherMode');
-    const panelVersion = '2026.08.12-settings-navigation';
+    const panelVersion = '2026.08.19-panel-cache';
+    const panelRoutes = Object.freeze({
+        assets: { path:'/static/library.html', title:'资产库', presentation:'panel' },
+        'api-settings': { path:'/static/api-settings.html', title:'API 设置' },
+        admin: { path:'/static/admin.html', title:'管理台' }
+    });
+    const panelFrames = new Map();
+    let activePanelFrame = null;
+    let activePanelName = '';
     let currentUser = null;
 
     function initials(user){
@@ -29,8 +37,8 @@
         closeFloating(); setOpen(popover, open); setOpen(backdrop, open);
     }
     function notifyFrames(type, payload={}){
-        [workbench, panelFrame].forEach(frame => {
-            try { frame.contentWindow?.postMessage({ type, ...payload }, location.origin); } catch(e){}
+        [workbench, ...panelFrames.values()].forEach(frame => {
+            try { frame?.contentWindow?.postMessage({ type, ...payload }, location.origin); } catch(e){}
         });
     }
     function syncFramePreferences(frame){
@@ -42,33 +50,65 @@
             frame.contentWindow.postMessage({type:'studio-lang',lang},location.origin);
         } catch(e){}
     }
+    function configurePanelFrame(name, frame){
+        frame.className = 'studio-panel-frame';
+        frame.title = panelRoutes[name].title;
+        frame.dataset.panelName = name;
+        frame.addEventListener('load', () => {
+            frame.removeAttribute('data-loading');
+            if(activePanelName !== name || activePanelFrame !== frame || !panel.classList.contains('open')) return;
+            syncFramePreferences(frame);
+            if(name === 'assets') {
+                try {
+                    const libraryBar = frame.contentDocument?.querySelector('.library-standalone-bar');
+                    if(libraryBar) { libraryBar.hidden = true; libraryBar.style.display = 'none'; }
+                } catch(e) {}
+            }
+        });
+        panelFrameHost.appendChild(frame);
+    }
+    function panelFrameFor(name){
+        let frame = panelFrames.get(name);
+        if(frame) return frame;
+        const route = panelRoutes[name];
+        frame = document.createElement('iframe');
+        frame.src = `${route.path}?${new URLSearchParams({v:panelVersion,...(route.presentation ? {presentation:route.presentation} : {})}).toString()}`;
+        frame.setAttribute('data-loading','true');
+        configurePanelFrame(name, frame);
+        panelFrames.set(name, frame);
+        return frame;
+    }
+    function showPanelFrame(name){
+        const frame = panelFrameFor(name);
+        panelFrames.forEach((item, key) => item.classList.toggle('active', key === name));
+        activePanelName = name;
+        activePanelFrame = frame;
+        syncFramePreferences(frame);
+        return frame;
+    }
     function openPanel(name, push=true){
-        const paths = { assets:'/static/library.html', 'api-settings':'/static/api-settings.html', admin:'/static/admin.html' };
-        if(!paths[name]) return;
+        const route = panelRoutes[name];
+        if(!route) return;
         const replacingPanel = panel.classList.contains('open') || Boolean(new URLSearchParams(location.search).get('panel'));
         closeFloating();
-        panelTitle.textContent = name === 'admin' ? '管理台' : name === 'assets' ? '资产库' : 'API 设置';
-        const frameSrc = `${paths[name]}?v=${panelVersion}`;
-        if(panelFrame.getAttribute('src') !== frameSrc) panelFrame.src = frameSrc;
+        panelTitle.textContent = route.title;
         panel.dataset.name = name;
         panel.setAttribute('aria-hidden','false');
         panel.classList.add('open');
+        const frame = showPanelFrame(name);
         if(push){
             const url = `/?panel=${encodeURIComponent(name)}`;
-            // A settings-page switch is one panel session, not a new back-stack entry.
-            if(replacingPanel) {
-                history.replaceState({ panel:name },'',url);
-            } else {
-                history.pushState({ panel:name },'',url);
-            }
+            if(replacingPanel) history.replaceState({ panel:name },'',url);
+            else history.pushState({ panel:name },'',url);
         }
     }
     function closePanel(push=true){
         panel.classList.remove('open');
         panel.setAttribute('aria-hidden','true');
         delete panel.dataset.name;
-        // Return to the workbench entry created before this panel. Pushing a new
-        // entry here leaves stale panels in history and reopens the wrong page.
+        activePanelName = '';
+        activePanelFrame = null;
+        panelFrames.forEach(frame => frame.classList.remove('active'));
         if(push){
             if(history.state?.panel) history.back();
             else history.replaceState({},'', '/');
@@ -199,23 +239,14 @@
     document.getElementById('panelClose').onclick = () => closePanel();
     window.addEventListener('message', event => {
         if(event.origin !== location.origin) return;
-        if(event.data?.type==='studio:toggle-settings') toggleSettings();
-        if(event.data?.type==='studio:open-panel') openPanel(event.data.panel);
-        if(event.data?.type==='studio:close-panel') closePanel();
-        if(event.data?.type==='studio:open-announcement') window.openSiteAnnouncement?.();
+        const message = event.data || {};
+        const fromWorkbench = event.source === workbench?.contentWindow;
+        const fromActivePanel = event.source === activePanelFrame?.contentWindow && panel.classList.contains('open');
+        if(message.type==='studio:toggle-settings' && fromWorkbench) toggleSettings();
+        if(message.type==='studio:close-panel' && fromActivePanel) closePanel();
+        if(message.type==='studio:open-announcement' && fromWorkbench) window.openSiteAnnouncement?.();
     });
     workbench.addEventListener('load', () => syncFramePreferences(workbench));
-    panelFrame.addEventListener('load', () => {
-        syncFramePreferences(panelFrame);
-        // The shell owns the return navigation while a page is embedded here.
-        // Enforce this from the parent as well, including older cached library pages.
-        if(panel.dataset.name === 'assets') {
-            try {
-                const libraryBar = panelFrame.contentDocument?.querySelector('.library-standalone-bar');
-                if(libraryBar) { libraryBar.hidden = true; libraryBar.style.display = 'none'; }
-            } catch(e) {}
-        }
-    });
     window.addEventListener('popstate', () => {
         const name = new URLSearchParams(location.search).get('panel');
         if(name) openPanel(name,false); else closePanel(false);

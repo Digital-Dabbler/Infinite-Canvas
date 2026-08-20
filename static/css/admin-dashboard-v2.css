@@ -1,7 +1,7 @@
 .admin-workspaces{
   position:sticky;top:10px;z-index:20;display:flex;align-items:center;gap:4px;
   margin:-22px 0 24px;padding:6px;border:1px solid var(--line);
-  background:rgba(13,13,19,.9);backdrop-filter:blur(18px);box-shadow:0 12px 34px var(--ui-shadow);
+  background:var(--ui-surface-raised);backdrop-filter:blur(18px);box-shadow:0 12px 34px var(--ui-shadow);
 }
 .admin-workspaces button{
   flex:1;min-height:42px;border-color:transparent;background:transparent;

@@ -38,16 +38,26 @@ const LibraryModalManager = {
     _trapHandler: null,
     _trapRoot: null,
     
+    presentationMode() {
+        const explicitMode = document.documentElement.dataset.libraryPresentation;
+        if(explicitMode === 'panel' || explicitMode === 'standalone' || explicitMode === 'modal') return explicitMode;
+        return window.self === window.top && document.body?.classList.contains('library-standalone') ? 'standalone' : 'modal';
+    },
+
+    isDismissibleModal() {
+        return this.presentationMode() === 'modal';
+    },
+
     init() {
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
+            if (e.key === 'Escape' && this.isDismissibleModal()) {
                 this.closeAll();
             }
         });
         
         document.querySelectorAll('.library-modal-overlay').forEach(overlay => {
             overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) {
+                if (e.target === overlay && this.isDismissibleModal()) {
                     this.closeAll();
                 }
             });
@@ -65,6 +75,9 @@ const LibraryModalManager = {
     },
     
     closeAll() {
+        // Standalone and workbench-panel library pages share modal markup, but their library
+        // content is the page itself. Only a true embedded modal may remove its open state.
+        if (!this.isDismissibleModal()) return;
         document.querySelectorAll('.library-modal-overlay').forEach(o => o.classList.remove('open'));
         this.releaseFocusTrap();
         this.currentOpen = null;
