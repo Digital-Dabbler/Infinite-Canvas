@@ -93,6 +93,8 @@ let nodes = [];
 let selectedId = '';
 let selectedIds = [];
 let selectedImage = {nodeId:'', index:-1};
+// Single source of truth for the node currently rendered in the Composer.
+const composerContext = {nodeId:'', revision:0};
 const localUnsyncedNodeIds = new Set();
 const localDeletedNodeIds = new Set();
 let dragState = null;
@@ -260,8 +262,7 @@ function performUndo(){
     selectedId = snap.selectedId;
     selectedIds = snap.selectedIds;
     selectedImage = snap.selectedImage;
-    activeComposerSubject = null;
-    lastComposerNodeId = '';
+    clearComposerSubject();
     render();
     scheduleSave();
     undoSuppressed = false;
@@ -1162,7 +1163,7 @@ function insertSmartWorkflowIntoCanvas(imported, targetPoint = null){
     selectedIds = newNodes.length > 1 ? newNodes.map(node => node.id) : [];
     selectedId = newNodes.length === 1 ? newNodes[0].id : '';
     selectedImage = {nodeId:'', index:-1};
-    activeComposerSubject = null;
+    clearComposerSubject();
     render();
     scheduleSave();
     toast(`已导入 ${newNodes.length} 个节点`);
@@ -1685,14 +1686,10 @@ function smartSettingsForNode(node){
     return base;
 }
 function activeSettingsSubject(){
-    const active = activeComposerSubject?.id
-        ? (nodes.find(n => n.id === activeComposerSubject.id) || activeComposerSubject)
-        : selectedNode();
-    return isSmartRunnableNode(active) ? active : null;
+    return activeComposerNode();
 }
 function activeComposerNode(){
-    if(!lastComposerNodeId) return null;
-    const id = String(lastComposerNodeId).split(':')[0] || '';
+    const id = String(composerContext?.nodeId || lastComposerNodeId || '').split(':')[0] || '';
     const node = nodes.find(n => n.id === id);
     return isSmartRunnableNode(node) ? node : null;
 }
@@ -6255,7 +6252,7 @@ function applyPromptTemplateToNode(mode='positive'){
         setPromptText(text);
         delete promptInput.dataset.preserveDraftOnce;
         savePromptDraftForCurrent();
-        renderInputThumbsRow(selectedNode());
+        renderInputThumbsRow(composerActionNode());
         closePromptTemplatePanel();
         scheduleSave();
         return;
@@ -6834,7 +6831,7 @@ function completeSmartNodeWithImages(node, images){
     if(smartNodeHasDisplayResult(copy)) markSmartNodeComplete(copy);
     return copy;
 }
-function syncRunButtonState(node=selectedNode()){
+function syncRunButtonState(node=composerActionNode()){
     if(!runBtn) return;
     // API 图片任务提交后由服务端队列独立运行，同一节点可继续追加任务。
     // 视频、ComfyUI 和其他同步型运行仍保持单次执行，避免共享节点状态互相覆盖。
@@ -9192,8 +9189,8 @@ function smartRunRequestMeta(run){
     if(run?.kind === 'video') return {provider_id:s.videoProvider || '', model:s.videoModel || '', duration:s.videoDuration || '', aspect_ratio:s.videoAspect || '', resolution:s.videoResolution || ''};
     return {provider_id:s.provider_id || '', model:s.model || '', size:run?.size || '', quality:s.quality || '', n:s.count || 1};
 }
-function smartRunSnapshot(node, prompt, refs=[], kind='image'){
-    const settingsSnapshot = cloneSmartSettings(settings);
+function smartRunSnapshot(node, prompt, refs=[], kind='image', runSettings=settings){
+    const settingsSnapshot = cloneSmartSettings(runSettings);
     return {
         nodeId:node?.id || '',
         nodeType:node?.type || 'smart-image',
@@ -10751,7 +10748,7 @@ function workflowGroupCoverUrl(group){return workflowGroupOrderedMembers(group).
 function openWorkflowCreateDialog(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n)),modal=document.getElementById('workflowCreateModal');if(!group||!modal)return;pendingWorkflowCreateGroupId=id;const name=document.getElementById('workflowCreateName'),cover=document.getElementById('workflowCreateCover');if(name)name.value=String(group.title||'').slice(0,20);if(cover)cover.innerHTML=workflowGroupCoverUrl(group)?`<img src="${escapeAttr(workflowGroupCoverUrl(group))}" alt="">`:'<i data-lucide="workflow"></i>';document.getElementById('workflowCreateCount').textContent=`${Array.from(name?.value||'').length}/20`;modal.classList.add('open');refreshIcons();name?.focus();}
 function closeWorkflowCreateDialog(){document.getElementById('workflowCreateModal')?.classList.remove('open');pendingWorkflowCreateGroupId='';}
 async function confirmWorkflowCreate(){const group=nodes.find(n=>n.id===pendingWorkflowCreateGroupId&&isWorkflowOrganizerNode(n)),name=String(document.getElementById('workflowCreateName')?.value||'').trim();if(!group||!name){toast('请输入工作流名称');return;}const res=await fetch('/api/workflow-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...workflowGroupPayload(group),name,cover_url:workflowGroupCoverUrl(group)})});if(!res.ok)throw new Error(await responseErrorMessage(res,'创建工作流失败'));closeWorkflowCreateDialog();toast('工作流已创建');}
-async function runWorkflowGroup(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group||workflowGroupRunState)return;const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));const cross=(canvas?.connections||[]).some(c=>{const a=nodes.find(n=>n.id===c.from),b=nodes.find(n=>n.id===c.to);return(a?.type==='smart-loop'||b?.type==='smart-loop')&&(ids.has(c.from)!==ids.has(c.to));});if(cross){toast('循环链路不能跨出工作流分组');return;}workflowGroupRunState={id};const original=selectedId;try{for(const node of members){if(!isSmartRunnableNode(node))continue;selectedId=node.id;selectedIds=[];await runGeneration();if(node.error)throw new Error(node.error);}toast('整组执行完成');}catch(e){toast(e.message||'整组执行已停止');}finally{workflowGroupRunState=null;selectedId=original;render();scheduleSave();}}
+async function runWorkflowGroup(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group||workflowGroupRunState)return;const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));const cross=(canvas?.connections||[]).some(c=>{const a=nodes.find(n=>n.id===c.from),b=nodes.find(n=>n.id===c.to);return(a?.type==='smart-loop'||b?.type==='smart-loop')&&(ids.has(c.from)!==ids.has(c.to));});if(cross){toast('循环链路不能跨出工作流分组');return;}workflowGroupRunState={id};const original=selectedId;try{for(const node of members){if(!isSmartRunnableNode(node))continue;selectedId=node.id;selectedIds=[];await runGeneration(node);if(node.error)throw new Error(node.error);}toast('整组执行完成');}catch(e){toast(e.message||'整组执行已停止');}finally{workflowGroupRunState=null;selectedId=original;render();scheduleSave();}}
 window.toggleWorkflowGroupLayoutMenu=toggleWorkflowGroupLayoutMenu;window.layoutWorkflowGroup=layoutWorkflowGroup;window.runWorkflowGroup=runWorkflowGroup;window.openWorkflowCreateDialog=openWorkflowCreateDialog;
 function canvasOrganizerHtml(node){
     const color=organizerColor(node);
@@ -16673,8 +16670,35 @@ function applyImageEdit(){
 }
 let lastComposerNodeId = '';
 let activeComposerSubject = null;
+// Composer 的可见表单、参数和运行目标必须共享同一个节点上下文。selectedId 只描述
+// 画布选择，缩略图的单击/双击判定会延后更新 Composer，不能作为 Composer 操作的真相源。
+function setComposerSubject(node){
+    const nextId = isSmartRunnableNode(node) ? node.id : '';
+    if(composerContext.nodeId !== nextId) composerContext.revision++;
+    composerContext.nodeId = nextId;
+    activeComposerSubject = nextId ? node : null;
+    lastComposerNodeId = nextId ? `${nextId}:node` : '';
+    return activeComposerSubject;
+}
+function clearComposerSubject(){
+    if(composerContext.nodeId) composerContext.revision++;
+    composerContext.nodeId = '';
+    activeComposerSubject = null;
+    lastComposerNodeId = '';
+}
 function currentComposerSubject(){
-    return selectedNode();
+    return activeComposerNode();
+}
+function composerOwnsNode(node){
+    return Boolean(node?.id && composer?.classList?.contains('open') && activeComposerNode()?.id === node.id);
+}
+function composerActionNode(fallback=null){
+    return activeComposerNode() || fallback || selectedNode();
+}
+function clearPromptInputForNode(node, options={}){
+    if(!composerOwnsNode(node)) return false;
+    clearPromptInput(options);
+    return true;
 }
 function savePromptDraftForCurrent(){
     if(promptInput?.dataset?.promptLocked === '1') return;
@@ -16746,12 +16770,10 @@ function updateComposer(){
     // The text-node generation form is an independent floating layer. Keep it in
     // lockstep with selection changes, including selecting a non-text node.
     renderTextNodePanel();
-    syncRunButtonState(node);
-    if(smartCascadeSilentSelection && !activeComposerSubject){
+    if(smartCascadeSilentSelection && !activeComposerNode()){
         composer.classList.remove('open');
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
-        activeComposerSubject = null;
-        lastComposerNodeId = '';
+        clearComposerSubject();
         return;
     }
     composer.classList.toggle('open', isSmartRunnableNode(node));
@@ -16760,8 +16782,7 @@ function updateComposer(){
         savePromptDraftForCurrent();
         composer.classList.remove('open');
         composer.querySelector('.composer-card')?.classList.remove('has-upstream-prompt');
-        activeComposerSubject = null;
-        lastComposerNodeId = '';
+        clearComposerSubject();
         setPromptInputLocked(false);
         if(!node) setPromptText('');
         window.syncPromptPresetComposer?.();
@@ -16772,8 +16793,8 @@ function updateComposer(){
     const composerKey = `${node.id}:node`;
     const switchedNode = lastComposerNodeId !== composerKey;
     if(switchedNode) savePromptDraftForCurrent();
-    lastComposerNodeId = composerKey;
-    activeComposerSubject = subject;
+    setComposerSubject(subject);
+    syncRunButtonState(subject);
     const hasPromptInput = promptInputNodesFor(node).length > 0;
     if(switchedNode){
         settings = smartSettingsForNode(subject);
@@ -17576,16 +17597,16 @@ function promptHtmlWithMentionTokens(text, refs=[]){
     }
     return html;
 }
-function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[]){
+function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[], snapshot={}){
     return {
         prompt,
-        displayPrompt:displayPrompt || promptPlainText() || prompt,
-        promptHtml: promptInput ? promptInput.innerHTML : '',
-        promptText: promptPlainText(),
+        displayPrompt:displayPrompt || snapshot.promptText || prompt,
+        promptHtml: snapshot.promptHtml ?? '',
+        promptText: snapshot.promptText || displayPrompt || prompt,
         promptRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? ''})).filter(ref => ref.url),
         inputRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || ''})).filter(ref => ref.url),
         sourceNodeId:sourceId,
-        settings:JSON.parse(JSON.stringify(settings)),
+        settings:cloneSmartSettings(snapshot.settings || settings),
         createdAt:Date.now()
     };
 }
@@ -18114,7 +18135,7 @@ function closeMentionPicker(){
     mentionPicker.innerHTML = '';
     mentionAnchorEl = null;
     mentionInsertMode = 'token';
-    if(selectedNode()) renderInputThumbsRow(selectedNode());
+    if(composerActionNode()) renderInputThumbsRow(composerActionNode());
 }
 function saveMentionRange(){
     const sel = window.getSelection();
@@ -18131,7 +18152,7 @@ function textBeforeCaret(){
     return range.toString();
 }
 function renderMentionPicker(source){
-    const node = selectedNode();
+    const node = composerActionNode();
     const inputItems = inputMentionCandidateImages(node);
     const assetLibs = assetLibraries();
     if(!activeAssetLibraryId || !assetLibs.some(lib => lib.id === activeAssetLibraryId)) activeAssetLibraryId = assetLibrary.active_library_id || assetLibs[0]?.id || '';
@@ -18191,7 +18212,7 @@ function renderMentionPicker(source){
     bindSmartPreviewImageFallbacks(mentionPicker);
     if(mentionInsertMode === 'manual-ref'){
         placeMentionPickerInComposerCard();
-        renderInputThumbsRow(selectedNode());
+        renderInputThumbsRow(composerActionNode());
         mentionAnchorEl = inputThumbsRow?.querySelector('[data-input-add-reference]') || inputThumbsRow;
     } else {
         placeMentionPickerInPromptRow();
@@ -18233,7 +18254,7 @@ function renderMentionPicker(source){
     refreshIcons();
 }
 function showMentionPicker(){
-    const node = selectedNode();
+    const node = composerActionNode();
     const hasInput = inputMentionCandidateImages(node).length > 0;
     mentionInsertMode = 'token';
     mentionAnchorEl = null;
@@ -18253,13 +18274,13 @@ function setPromptCaretToEnd(){
     mentionRange = range.cloneRange();
 }
 function toggleAssetMentionPickerFromThumbs(){
-    if(!selectedNode()) return;
+    if(!composerActionNode()) return;
     if(mentionInsertMode === 'manual-ref'){
         closeMentionPicker();
         return;
     }
     mentionInsertMode = 'manual-ref';
-    renderInputThumbsRow(selectedNode());
+    renderInputThumbsRow(composerActionNode());
     mentionAnchorEl = inputThumbsRow?.querySelector('[data-input-add-reference]') || inputThumbsRow;
     renderMentionPicker('asset');
 }
@@ -18295,10 +18316,10 @@ function addManualReferenceToNode(node, img, options={}){
     if(options.save !== false) scheduleSave();
 }
 function addManualReferenceToSelectedNode(img){
-    addManualReferenceToNode(selectedNode(), img);
+    addManualReferenceToNode(composerActionNode(), img);
 }
 function removeManualReferenceFromSelectedNode(key){
-    const node = selectedNode();
+    const node = composerActionNode();
     if(!node || !key || !Array.isArray(node.manualInputRefs)) return;
     const refs = node.manualInputRefs.slice();
     const index = refs.findIndex(ref => inputRefKey(ref) === key);
@@ -18412,7 +18433,7 @@ function insertMentionToken(img){
     sel.addRange(range);
     closeMentionPicker();
     promptInput.focus();
-    renderInputThumbsRow(selectedNode());
+    renderInputThumbsRow(composerActionNode());
 }
 function collectPromptParts(){
     const parts = [];
@@ -19266,7 +19287,7 @@ function appendLoopOutputsToNode(node, additions, kind='image', ctx=smartLoopCon
     }
     return appendOutputsToNode(node, additions, kind, {skipShift:true});
 }
-function syncCascadeRunButton(node=selectedNode()){
+function syncCascadeRunButton(node=composerActionNode()){
     if(!cascadeRunBtn) return;
     const visible = canRunSmartCascade(node);
     cascadeRunBtn.style.display = visible ? 'inline-flex' : 'none';
@@ -19341,11 +19362,11 @@ function comfyParamsFromWorkflowValues(config, values={}){
     });
     return params;
 }
-function buildPromptRequestForNode(node, defaultImages, ctx=smartLoopContext){
+function buildPromptRequestForNode(node, defaultImages, ctx=smartLoopContext, consumeDefault=false){
     const oldHtml = promptInput.innerHTML;
     loadNodePromptDraftToInput(node);
     try {
-        return buildPromptRequest(node, defaultImages, false, ctx);
+        return buildPromptRequest(node, defaultImages, consumeDefault, ctx);
     } finally {
         promptInput.innerHTML = oldHtml;
     }
@@ -19730,7 +19751,7 @@ async function runSmartCascadeRoundsWithLimit(roundIndexes, limit, runner, runSt
     await Promise.all(workers);
 }
 async function runSmartCascade(targetNode=null){
-    const tail = targetNode || selectedNode();
+    const tail = targetNode || activeComposerNode();
     if(!canRunSmartCascade(tail)){ toast('请选择链路结尾图片节点'); return; }
     savePromptDraftForCurrent();
     const graph = smartCascadeGraphForTail(tail);
@@ -19914,8 +19935,7 @@ async function runSmartCascade(targetNode=null){
         selectedId = '';
         selectedIds = [];
         selectedImage = {nodeId:'', index:-1};
-        activeComposerSubject = null;
-        lastComposerNodeId = '';
+        clearComposerSubject();
         composer.classList.remove('open');
         settings = originalSettings;
         promptInput.innerHTML = originalPromptHtml;
@@ -19950,42 +19970,43 @@ function runSmartCascadeFromLoop(loopId){
     selectedImage = {nodeId:'', index:-1};
     runSmartCascade(tail);
 }
-async function runGeneration(){
-    const node = selectedNode();
+function buildRunRequestForNode(node, overrideDefaultImages=null, consumeDefault=true, ctx=smartLoopContext){
+    if(composerOwnsNode(node)) savePromptDraftForCurrent();
+    return buildPromptRequestForNode(node, overrideDefaultImages, ctx, consumeDefault);
+}
+async function runGeneration(targetNode=null){
+    // Toolbar clicks use the Composer context; workflow/automation callers pass an explicit node.
+    // This prevents a delayed canvas selection from redirecting a visible Composer run to another node.
+    const node = targetNode || activeComposerNode();
     if(!isSmartRunnableNode(node)){
         toast('请先创建或选中图片生成节点或视频生成节点');
         return;
     }
-    const request = buildPromptRequest(node, null, true, smartLoopContext);
+    const runSettings = cloneSmartSettings(smartSettingsForNode(node));
+    if(isSmartImageGenerationNode(node)) runSettings.apiKind = 'image';
+    if(isSmartVideoGenerationNode(node)) runSettings.apiKind = 'video';
+    const request = buildRunRequestForNode(node, null, true, smartLoopContext);
     const prompt = request.prompt.trim();
-    if(!node) return;
     const refs = request.refs;
-    const previousSettings = cloneSmartSettings(settings);
-    const runSettings = smartSettingsForNode(node);
-    settings = {...settings, ...cloneSmartSettings(runSettings || {})};
-    if(isSmartImageGenerationNode(node)) settings.apiKind = 'image';
-    if(isSmartVideoGenerationNode(node)) settings.apiKind = 'video';
     const appendingToPendingNode = smartNodeInFlight(node);
     if(appendingToPendingNode && !smartNodeAllowsConcurrentSubmit(node)){
-        settings = previousSettings;
         return;
     }
-    if(!prompt && smartRunNeedsPrompt(settings)){
-        settings = previousSettings;
+    if(!prompt && smartRunNeedsPrompt(runSettings)){
         toast(tr('smart.toastNeedPrompt'));
         return;
     }
-    const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs);
-    const logKind = isApiLikeEngine(settings.engine) && settings.apiKind === 'video' ? 'video' : 'image';
-    const runLog = smartRunSnapshot(node, prompt, refs, logKind);
-    rememberRecentSmartSettings(settings, node);
+    const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs, {promptHtml:node.promptDraftHtml || '', promptText:node.promptDraftText || request.displayPrompt || prompt, settings:runSettings});
+    const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
+    const runLog = smartRunSnapshot(node, prompt, refs, logKind, runSettings);
+    rememberRecentSmartSettings(runSettings, node);
     const runLogStart = nowMs();
-    const expectedCount = settings.engine === 'runninghub'
+    const expectedCount = runSettings.engine === 'runninghub'
         ? 1
-        : settings.engine === 'comfy'
-        ? (settings.comfyMode === 'text' || settings.comfyMode === 'enhance' || settings.comfyMode === 'edit' || settings.comfyMode === 'custom' ? 1 : 1)
-        : Math.max(1, Math.min(8, Number(settings.count || 1)));
-    const apiConcurrentRun = isApiLikeEngine(settings.engine) || settings.engine === 'runninghub' || settings.engine === 'modelscope' || settings.engine === 'comfy';
+        : runSettings.engine === 'comfy'
+        ? (runSettings.comfyMode === 'text' || runSettings.comfyMode === 'enhance' || runSettings.comfyMode === 'edit' || runSettings.comfyMode === 'custom' ? 1 : 1)
+        : Math.max(1, Math.min(8, Number(runSettings.count || 1)));
+    const apiConcurrentRun = isApiLikeEngine(runSettings.engine) || runSettings.engine === 'runninghub' || runSettings.engine === 'modelscope' || runSettings.engine === 'comfy';
     const nodeHasImages = isSmartGroupNode(node) ? imagesForNode(node).some(img => img?.url) : (node.images || []).some(img => img?.url);
     const workflowModeRun = smartImageUsesWorkflowInput(node, smartLoopContext);
     const sourceVisualState = isSmartImageUploadNode(node) && nodeHasImages && !workflowModeRun ? {
@@ -20032,33 +20053,31 @@ async function runGeneration(){
     render();
     let serverTasksSubmitted = false;
     try {
-        if(settings.engine === 'comfy'){
-            await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta);
+        if(runSettings.engine === 'comfy'){
+            await runComfyGeneration(pendingNode, prompt, refs, pendingNode, pendingMeta, runSettings);
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
-            settings = previousSettings;
-            return;
+                return;
         }
-        if(isApiLikeEngine(settings.engine) && settings.apiKind === 'video'){
-            const outVideos = await runApiVideoGeneration(prompt, refs, settings, pendingNode);
+        if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video'){
+            const outVideos = await runApiVideoGeneration(prompt, refs, runSettings, pendingNode);
             if(!outVideos.length) throw new Error(tr('smart.errNoOutVideos'));
             finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             addSmartGenerationLog({run:runLog, outputs:outVideos, runMs:nowMs() - runLogStart});
-            clearPromptInput({preserveDraft:true});
-            settings = previousSettings;
-            scheduleSave();
+            clearPromptInputForNode(node, {preserveDraft:true});
+                scheduleSave();
             return;
         }
-        const rhModelMode = settings.engine === 'runninghub' && Boolean(runningHubSelectedModel(settings));
+        const rhModelMode = runSettings.engine === 'runninghub' && Boolean(runningHubSelectedModel(runSettings));
         const outImages = rhModelMode
-            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(settings))
-            : settings.engine === 'runninghub'
-                ? await runRunningHubGeneration(prompt, refs)
-                : settings.engine === 'modelscope'
-                ? await runModelscopeGeneration(prompt, refs)
-                : await runApiGeneration(prompt, refs);
-        if(isApiLikeEngine(settings.engine) || rhModelMode){
+            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(runSettings))
+            : runSettings.engine === 'runninghub'
+                ? await runRunningHubGeneration(prompt, refs, runSettings)
+                : runSettings.engine === 'modelscope'
+                ? await runModelscopeGeneration(prompt, refs, runSettings)
+                : await runApiGeneration(prompt, refs, runSettings);
+        if(isApiLikeEngine(runSettings.engine) || rhModelMode){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
             const submittedTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
@@ -20074,9 +20093,8 @@ async function runGeneration(){
             await saveCanvas();
             serverTasksSubmitted = true;
             // 服务端已接管任务后立即释放 composer，用户可继续填写并提交下一项。
-            clearPromptInput({preserveDraft:true});
-            settings = previousSettings;
-            await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
+            clearPromptInputForNode(node, {preserveDraft:true});
+                await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
             if(pendingNode.jimengPending || smartRecoverableImageTask(pendingNode)){
                 if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
                 scheduleSave();
@@ -20092,16 +20110,14 @@ async function runGeneration(){
         finalizePendingNode(pendingNode, outImages, pendingMeta);
         if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
         addSmartGenerationLog({run:runLog, outputs:outImages, runMs:nowMs() - runLogStart});
-        clearPromptInput({preserveDraft:true});
-        settings = previousSettings;
+        clearPromptInputForNode(node, {preserveDraft:true});
         scheduleSave();
     } catch(e) {
-        if(!serverTasksSubmitted) settings = previousSettings;
         pendingNode.lastRunError = e?.message || String(e || tr('smart.errRunFailed'));
         if(handleJimengPendingSignal(pendingNode, e)){
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             delete pendingNode._runMetaTargetId;
-            clearPromptInput({preserveDraft:true});
+            clearPromptInputForNode(node, {preserveDraft:true});
             return;
         }
         const remainingPendingTasks = smartPendingTasks(pendingNode);
@@ -20524,14 +20540,14 @@ async function runSmartComfyUpscale(imageUrl, resolution){
         client_id:smartClientId
     });
 }
-async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
+async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSettings=settings){
     const allRefs = refs || [];
     refs = imageRefsOnly(allRefs);
-    const mode = settings.comfyMode || 'text';
-    if(mode === 'text') return runComfyText(node, prompt, pendingNode, meta);
-    if(mode === 'enhance') return runComfyEnhance(node, refs, pendingNode, meta);
-    if(mode === 'edit') return runComfyEdit(node, prompt, refs, pendingNode, meta);
-    const workflowName = settings.comfyWorkflow || comfyWorkflows[0]?.name || '';
+    const mode = runSettings.comfyMode || 'text';
+    if(mode === 'text') return runComfyText(node, prompt, pendingNode, meta, runSettings);
+    if(mode === 'enhance') return runComfyEnhance(node, refs, pendingNode, meta, runSettings);
+    if(mode === 'edit') return runComfyEdit(node, prompt, refs, pendingNode, meta, runSettings);
+    const workflowName = runSettings.comfyWorkflow || comfyWorkflows[0]?.name || '';
     if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
     const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
         if(!r.ok) throw new Error(await r.text());
@@ -20554,7 +20570,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
         if(comfyRandomEnabledField(field) && smartComfyRandomActive(field.id)){
             values[field.id] = smartComfyRandomValue(field);
         } else {
-            values[field.id] = settings.comfyParams?.[field.id] ?? field.default;
+            values[field.id] = runSettings.comfyParams?.[field.id] ?? field.default;
         }
     });
     const result = await runQueuedSmartComfyGenerate({prompt, workflow_json:workflowName, params:comfyParamsFromWorkflowValues(wf.config || {fields:[]}, values), type:'workflow-custom', client_id:smartClientId});
@@ -20570,11 +20586,11 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta){
     } else {
         createGenerationOutputNode(node, out, meta);
     }
-    clearPromptInput({preserveDraft:true});
+    clearPromptInputForNode(node, {preserveDraft:true});
     scheduleSave();
 }
-async function runComfyText(node, prompt, pendingNode, meta){
-    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(settings.width || 1024), height:Number(settings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId});
+async function runComfyText(node, prompt, pendingNode, meta, runSettings=settings){
+    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(runSettings.width || 1024), height:Number(runSettings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId});
     const out = data.outputs || data.images || [];
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
@@ -20582,17 +20598,17 @@ async function runComfyText(node, prompt, pendingNode, meta){
     } else {
         createGenerationOutputNode(node, out.map((url, i) => ({url, name:`comfy-${i + 1}.png`})), meta);
     }
-    clearPromptInput({preserveDraft:true});
+    clearPromptInputForNode(node, {preserveDraft:true});
     scheduleSave();
 }
-async function runComfyEnhance(node, refs, pendingNode, meta){
+async function runComfyEnhance(node, refs, pendingNode, meta, runSettings=settings){
     if(!refs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
     const inputName = await comfyNameForRef(refs[0]);
-    const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(settings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(runSettings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
     //修复超分勾选
     let out = data.outputs || data.images || [];
-    if(settings.enhanceUpscale && out[0]){
-        const upscale = await runSmartComfyUpscale(out[0], settings.enhanceUpscaleRes || 2048);
+    if(runSettings.enhanceUpscale && out[0]){
+        const upscale = await runSmartComfyUpscale(out[0], runSettings.enhanceUpscaleRes || 2048);
         out = upscale.outputs || upscale.images || [];
     }
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
@@ -20603,15 +20619,15 @@ async function runComfyEnhance(node, refs, pendingNode, meta){
     }
     scheduleSave();
 }
-async function runComfyEdit(node, prompt, refs, pendingNode, meta){
+async function runComfyEdit(node, prompt, refs, pendingNode, meta, runSettings=settings){
     if(!refs.length) throw new Error(tr('smart.errEditNeedRefs'));
     const names = [];
     for(const ref of refs.slice(0, 3)) names.push(await comfyNameForRef(ref));
     const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
     //修复超分勾选
     let out = data.outputs || data.images || [];
-    if(settings.editUpscale && out[0]){
-        const upscale = await runSmartComfyUpscale(out[0], settings.editUpscaleRes || 2048);
+    if(runSettings.editUpscale && out[0]){
+        const upscale = await runSmartComfyUpscale(out[0], runSettings.editUpscaleRes || 2048);
         out = upscale.outputs || upscale.images || [];
     }
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
@@ -20620,7 +20636,7 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta){
     } else {
         createGenerationOutputNode(node, out.map((url, i) => ({url, name:`edit-${i + 1}.png`})), meta);
     }
-    clearPromptInput({preserveDraft:true});
+    clearPromptInputForNode(node, {preserveDraft:true});
     scheduleSave();
 }
 async function comfyNameForRef(ref){
@@ -22146,7 +22162,7 @@ engineSelect.onchange = () => {
 function syncApiKindToggleVisibility(){
     if(!apiKindToggle) return;
     // 图片、视频节点各自固定一种输出类型，不再在同一个节点里切换。
-    apiKindToggle.style.display = isApiLikeEngine(settings.engine) && !isSmartGenerationNode(selectedNode()) ? 'inline-flex' : 'none';
+    apiKindToggle.style.display = isApiLikeEngine(settings.engine) && !isSmartGenerationNode(composerActionNode()) ? 'inline-flex' : 'none';
     apiKindToggle.querySelectorAll('[data-kind]').forEach(btn => btn.classList.toggle('active', btn.dataset.kind === (settings.apiKind || 'image')));
 }
 if(apiKindToggle){
@@ -22179,7 +22195,7 @@ if(promptResize){
 }
 runBtn.onclick = runGeneration;
 if(cascadeRunBtn) cascadeRunBtn.onclick = () => {
-    const node = selectedNode();
+    const node = composerActionNode();
     const loopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';
     if(loopId && smartCascadeIsLoopRunning(loopId)) {
         requestSmartCascadeStop(loopId);
@@ -22513,7 +22529,7 @@ document.querySelector('.composer-prompt-library')?.addEventListener('click', ev
 promptInput.addEventListener('input', () => {
     delete promptInput.dataset.preserveDraftOnce;
     savePromptDraftForCurrent();
-    renderInputThumbsRow(selectedNode());
+    renderInputThumbsRow(composerActionNode());
     scheduleSave();
 });
 promptInput.addEventListener('keyup', maybeOpenMentionPicker);
@@ -22883,7 +22899,7 @@ window.addEventListener('message', event => {
 });
 window.addEventListener('studio-lang-change', () => {
     renderDynamicParams();
-    renderInputThumbsRow(selectedNode());
+    renderInputThumbsRow(composerActionNode());
     renderAssetLibrary();
     if(document.getElementById('imageEditModal')?.classList.contains('open')){
         setImageEditMode(imageEditMode);
