@@ -476,6 +476,7 @@
         "smart.generated": { zh: "已生成", en: "Generated" },
         "smart.openApiSettings": { zh: "前往 API 设置", en: "Open API Settings" },
         "smart.textGenerationDone": { zh: "文本已生成", en: "Text generated" },
+        "smart.textGenerationTimeout": { zh: "文本生成超时，请检查平台状态后重试", en: "Text generation timed out. Check the provider status and try again." },
         "smart.textGenerationEmpty": { zh: "模型没有返回文本，请调整生成要求后重试", en: "The model returned no text. Adjust the request and try again." },
         "smart.textVisionUnsupported": { zh: "当前模型不支持图片输入，请选择视觉语言模型", en: "This model does not support image input. Choose a vision-language model." },
         "smart.loopPromptHintFound": { zh: "识别到 {n} 条提示词，按计数轮流输出", en: "Found {n} prompt(s); outputs rotate by count" },

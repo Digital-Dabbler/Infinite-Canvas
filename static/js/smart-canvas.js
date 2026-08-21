@@ -192,6 +192,7 @@ let runBtnCooldownToken = 0;
 let smartRunStateToken = 0;
 const activeSmartTaskPolls = new Map();
 const smartNodeRunTokens = new Map();
+const smartNodeExecutions = new Map();
 let smartRhRandomValues = {};
 let lastImagePasteAt = 0;
 let lastNodePasteAt = 0;
@@ -6643,12 +6644,74 @@ function smartNodeHasCompletedResult(node){
     if(node?.runFinishedAt) return true;
     return !node?.jimengPending && !smartPendingTasks(node).length && !Number(node?.pending || 0) && !node?.queued;
 }
+function invalidateSmartNodeExecution(node){
+    const nodeId = typeof node === 'string' ? node : node?.id;
+    if(!nodeId) return;
+    const execution = smartNodeExecutions.get(nodeId);
+    if(!execution) return;
+    if(execution.timeoutId) clearTimeout(execution.timeoutId);
+    if(execution.releaseId) clearTimeout(execution.releaseId);
+    if(execution.controller && !execution.controller.signal.aborted){
+        execution.controller.abort();
+    }
+    smartNodeExecutions.delete(nodeId);
+}
+function beginSmartNodeExecution(node, options={}){
+    if(!node?.id) return null;
+    invalidateSmartNodeExecution(node);
+    const execution = {
+        nodeId:node.id,
+        token:++smartRunStateToken,
+        controller:options.timeoutMs ? new AbortController() : null,
+        timedOut:false,
+        startedAt:nowMs(),
+        timeoutId:0,
+        releaseId:0
+    };
+    smartNodeExecutions.set(node.id, execution);
+    smartNodeRunTokens.set(node.id, execution.token);
+    node.running = true;
+    node.runStartedAt = execution.startedAt;
+    delete node.runFinishedAt;
+    delete node.runElapsedMs;
+    if(options.timeoutMs && execution.controller){
+        execution.timeoutId = setTimeout(() => {
+            if(!isCurrentSmartNodeExecution(node, execution)) return;
+            execution.timedOut = true;
+            execution.controller.abort();
+        }, Math.max(1, Number(options.timeoutMs) || 1));
+    }
+    if(options.releaseAfterMs){
+        execution.releaseId = setTimeout(() => {
+            const current = liveSmartNode(node);
+            if(!isCurrentSmartNodeExecution(current, execution)) return;
+            finishSmartNodeExecution(current, execution);
+            render();
+        }, Math.max(1, Number(options.releaseAfterMs) || 1));
+    }
+    return execution;
+}
+function isCurrentSmartNodeExecution(node, execution){
+    return Boolean(node?.id && execution && smartNodeExecutions.get(node.id)?.token === execution.token);
+}
+function finishSmartNodeExecution(node, execution){
+    if(!node || !execution || !isCurrentSmartNodeExecution(node, execution)) return false;
+    if(execution.timeoutId) clearTimeout(execution.timeoutId);
+    if(execution.releaseId) clearTimeout(execution.releaseId);
+    smartNodeExecutions.delete(node.id);
+    smartNodeRunTokens.delete(node.id);
+    node.running = false;
+    node.runFinishedAt = nowMs();
+    node.runElapsedMs = Math.max(0, node.runFinishedAt - Number(execution.startedAt || node.runFinishedAt));
+    return true;
+}
 function liveSmartNode(node){
     if(!node?.id) return node;
     return nodes.find(n => n.id === node.id) || node;
 }
 function clearSmartNodeBusyState(node){
     if(!node) return node;
+    invalidateSmartNodeExecution(node);
     smartNodeRunTokens.delete(node.id);
     node.running = false;
     node.pending = 0;
@@ -19002,23 +19065,12 @@ function coolRunButton(ms=2000){
     return token;
 }
 function coolNodeRunningState(node, ms=2000){
-    if(!node) return 0;
-    const token = ++smartRunStateToken;
-    smartNodeRunTokens.set(node.id, token);
-    node.running = true;
-    setTimeout(() => {
-        if(smartNodeRunTokens.get(node.id) !== token) return;
-        smartNodeRunTokens.delete(node.id);
-        const current = nodes.find(n => n.id === node.id);
-        if(current){
-            current.running = false;
-            render();
-        }
-    }, ms);
-    return token;
+    const execution = beginSmartNodeExecution(node, {releaseAfterMs:ms});
+    return execution?.token || 0;
 }
 function clearNodeRunningState(node){
     if(!node) return;
+    invalidateSmartNodeExecution(node);
     smartNodeRunTokens.delete(node.id);
     node.running = false;
 }
@@ -20077,9 +20129,11 @@ async function runGeneration(){
         render();
     }
 }
+const SMART_TEXT_GENERATION_TIMEOUT_MS = 180000;
 async function runPromptLLMNode(nodeId){
     const node = nodes.find(n => n.id === nodeId);
     if(!node || node.type !== 'smart-prompt') return;
+    if(node.running) return;
     const message = promptNodeLLMInputText(node).trim();
     if(!message){
         promptRunFeedback.set(node.id, {type:'error', message:tr('smart.promptLlmNeedText')});
@@ -20104,7 +20158,7 @@ async function runPromptLLMNode(nodeId){
         refs:mediaRefs.map(ref => ({url:ref.url || '', name:ref.name || '', kind:ref.kind || mediaKindForItem(ref)})).filter(ref => ref.url)
     };
     node.llmEnabled = true;
-    node.running = true;
+    const execution = beginSmartNodeExecution(node, {timeoutMs:SMART_TEXT_GENERATION_TIMEOUT_MS});
     promptRunFeedback.delete(node.id);
     render();
     try {
@@ -20122,7 +20176,8 @@ async function runPromptLLMNode(nodeId){
                 provider,
                 ms_model: provider === 'modelscope' ? model : '',
                 system_prompt:''
-            })
+            }),
+            signal:execution.controller.signal
         }).then(async r => {
             const body = await r.text();
             let data = null;
@@ -20138,31 +20193,34 @@ async function runPromptLLMNode(nodeId){
             if(data && typeof data === 'object') return data;
             throw new Error(body || tr('smart.textGenerationEmpty'));
         });
+        const currentNode = liveSmartNode(node);
+        if(!isCurrentSmartNodeExecution(currentNode, execution)) return;
         const generated = (result.text || '').trim();
         if(!generated) throw new Error(tr('smart.textGenerationEmpty'));
-        node.text = generated;
-        node.llmProvider = provider;
-        node.llmModel = model;
+        currentNode.text = generated;
+        currentNode.llmProvider = provider;
+        currentNode.llmModel = model;
         rememberPromptLlmSelection(provider, model);
-        promptRunFeedback.set(node.id, {type:'success', message:tr('smart.textGenerationDone')});
+        promptRunFeedback.set(currentNode.id, {type:'success', message:tr('smart.textGenerationDone')});
         addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStartedAt});
         toast(tr('smart.textGenerationDone'));
         scheduleSave();
         setTimeout(() => {
-            if(promptRunFeedback.get(node.id)?.type !== 'success') return;
-            promptRunFeedback.delete(node.id);
+            if(promptRunFeedback.get(currentNode.id)?.type !== 'success') return;
+            promptRunFeedback.delete(currentNode.id);
             render();
         }, 1600);
     } catch(e) {
+        if(!isCurrentSmartNodeExecution(liveSmartNode(node), execution)) return;
         let message = String(e.message || tr('smart.promptLlmFailed')).slice(0, 220);
+        if(execution.timedOut || e?.name === 'AbortError') message = tr('smart.textGenerationTimeout');
         if(promptNodeInputImages(node).length && /image|vision|multimodal|图片|视觉/i.test(message) && /support|unsupported|not allowed|不支持|无法/i.test(message)){
             message = tr('smart.textVisionUnsupported');
         }
         promptRunFeedback.set(node.id, {type:'error', message});
         addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStartedAt, error:message});
     } finally {
-        node.running = false;
-        render();
+        if(finishSmartNodeExecution(liveSmartNode(node), execution)) render();
     }
 }
 function comfyFieldKind(field){
