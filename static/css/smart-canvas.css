@@ -636,7 +636,12 @@ body.smart-node-resize .smart-node-floating-menu,
 .image-node.dragging .smart-node-floating-menu { opacity:0 !important; pointer-events:none !important; }
 .media-upload-node .node-body { display:flex; }
 .media-upload-node .image-wrap { width:100%; }
-.image-generation-node .node-body { min-width:0; }
+.image-generation-node .node-body { min-width:0; overflow:hidden; align-items:flex-start; }
+.image-generation-node .generation-result-card { box-sizing:border-box; width:100%; min-height:0; }
+.image-generation-node .generation-result-stack { width:100%; min-height:0; box-sizing:border-box; }
+.image-generation-node .generation-result-main { width:100%; min-height:0; overflow:hidden; box-sizing:border-box; }
+.image-generation-node .generation-result-main .node-img { object-fit:contain; }
+.video-generation-node .generation-result-main .node-img { object-fit:contain; }
 .generation-empty-state { min-height:170px; padding:18px; border:1px dashed var(--line); border-radius:16px; background:linear-gradient(145deg, color-mix(in srgb, var(--soft) 88%, transparent), var(--panel)); color:var(--muted); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:9px; text-align:center; font-size:11px; font-weight:750; }
 .generation-empty-state svg { width:28px; height:28px; color:var(--faint); }
 .generation-result-card { width:100%; min-width:0; display:flex; flex-direction:column; gap:8px; }
@@ -853,7 +858,7 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .theme-dark .node-resize-handle:hover { color:#f8fafc; border-color:rgba(203,213,225,.5); background:rgba(30,41,59,.96); }
 .image-node.selected .node-resize-handle, .image-node:hover .node-resize-handle { opacity:1; }
 .image-node.dragging .node-resize-handle { opacity:0 !important; pointer-events:none !important; }
-.node-port { position:absolute; top:50%; width:14px; height:14px; border-radius:50%; background:var(--card); border:1.8px solid var(--strong); transform:translateY(-50%); z-index:6; cursor:crosshair; opacity:0; pointer-events:none; transition:opacity .15s ease, background .15s ease, transform .15s ease, box-shadow .15s ease; box-shadow:0 4px 10px rgba(15,23,42,.18); }
+.node-port { position:absolute; top:var(--node-port-y, 50%); width:14px; height:14px; border-radius:50%; background:var(--card); border:1.8px solid var(--strong); transform:translateY(-50%); z-index:6; cursor:crosshair; opacity:0; pointer-events:none; transition:opacity .15s ease, background .15s ease, transform .15s ease, box-shadow .15s ease; box-shadow:0 4px 10px rgba(15,23,42,.18); }
 .node-port.port-in { left:-8px; }
 .node-port.port-out { right:-8px; }
 .image-node:hover .node-port, .image-node.selected .node-port, .image-node.port-hover .node-port { opacity:1; pointer-events:auto; }

@@ -2226,6 +2226,48 @@ function singleImageLayout(image, node, scale){
     }
     return {cols:1, rows:1, width:Math.round(260*scale), height:Math.round(180*scale), thumb:Math.round(96*scale), single:true};
 }
+function generationResultAccessoryHeight(images=[]){
+    const items = images || [];
+    const hasTailFrame = items.some(isReturnedVideoLastFrame);
+    const resultCount = generationResultIndexes(items).length;
+    const hasStrip = resultCount > 1 || hasTailFrame;
+    if(!hasStrip) return 0;
+    // Keep this in sync with .generation-result-strip and the stacked result
+    // layers: 38px thumbnail, optional tail frame, pair gap, strip padding,
+    // plus the stack's 3px-per-result offset.
+    const stackOffset = Math.min(3, Math.max(0, resultCount - 1)) * 3;
+    return (hasTailFrame ? 84 : 52) + stackOffset;
+}
+function generationImageLayout(images, node, scale){
+    const items = images || [];
+    const count = items.length;
+    if(!count) return null;
+    const requestedIndex = Number(node?.activeImageIndex) || 0;
+    const index = Math.max(0, Math.min(count - 1, requestedIndex));
+    const accessoryHeight = generationResultAccessoryHeight(items);
+    const explicitW = Number(node?.w);
+    const explicitH = Number(node?.h);
+    // Generation node w/h describe the complete card. Convert them to the
+    // media viewport before asking singleImageLayout to fit the media.
+    const mediaNode = {...node};
+    if(Number.isFinite(explicitW) && explicitW > 24) mediaNode.w = explicitW;
+    if(Number.isFinite(explicitH) && explicitH > 24) mediaNode.h = Math.max(48, explicitH - accessoryHeight);
+    const mediaLayout = singleImageLayout(items[index], mediaNode, scale);
+    const width = Number.isFinite(explicitW) && explicitW > 24 ? Math.round(explicitW) : mediaLayout.width;
+    const mediaHeight = Number.isFinite(explicitH) && explicitH > 24
+        ? Math.max(48, Math.round(explicitH - accessoryHeight))
+        : mediaLayout.height;
+    return {
+        ...mediaLayout,
+        width,
+        height:mediaHeight + accessoryHeight,
+        mediaWidth:width,
+        mediaHeight,
+        accessoryHeight,
+        hasResultStrip:accessoryHeight > 0,
+        portY:(mediaHeight + accessoryHeight) / 2
+    };
+}
 function groupImageGridLayout(count, explicitW, explicitH, maxThumb, pad=32, gap=8, maxVisibleRows=MEDIA_GROUP_MAX_VISIBLE_ROWS){
     let best = null;
     for(let cols = 1; cols <= count; cols++){
@@ -2483,15 +2525,7 @@ function imageLayout(images, scale=1, node=null){
     }
     const count = (images || []).length;
     if(isSmartGenerationNode(node) && count){
-        const requestedIndex = Number(node.activeImageIndex) || 0;
-        const index = Math.max(0, Math.min(count - 1, requestedIndex));
-        const mediaLayout = singleImageLayout(images[index], node, mediaNodeDefaultScale(node));
-        const hasReturnedTailFrame = images.some(isReturnedVideoLastFrame);
-        return {
-            ...mediaLayout,
-            mediaHeight:mediaLayout.height,
-            height:mediaLayout.height + (hasReturnedTailFrame ? 84 : count > 1 ? 52 : 0)
-        };
+        return generationImageLayout(images, node, mediaNodeDefaultScale(node));
     }
     const s = isSmartImageNode(node) ? mediaNodeDefaultScale(node) : (Number.isFinite(scale) && scale > 0 ? scale : 1);
     if(count === 0){
@@ -2564,6 +2598,15 @@ function nodeRect(node){
     }
     const layout = imageLayout(node.images || [], nodeScale(node), node);
     return {x:node.x || 0, y:node.y || 0, width:layout.width, height:layout.height};
+}
+function nodeConnectionPoint(node, side){
+    const rect = nodeRect(node);
+    const layout = isCanvasOrganizerNode(node) ? null : imageLayout(node.images || [], nodeScale(node), node);
+    const y = Number(layout?.portY) || rect.height / 2;
+    return {
+        x:side === 'out' ? rect.x + rect.width : rect.x,
+        y:rect.y + y
+    };
 }
 function connectedSmartClusterIds(seedId){
     const ids = new Set(nodes.map(n => n.id));
@@ -8550,10 +8593,12 @@ function renderConnections(){
         const isCascade = !isHistory && (edgeKeys.some(k => cascadeKeys.has(k)) || Boolean(cascadeState) || isInsertPreview);
         const isPendingLine = !isCascade && item.targets.some(t => nodes.find(n => n.id === t)?.pending);
         const isSelectedLine = selectedConnIds.size > 0 && (selectedConnIds.has(item.from) || selectedConnIds.has(item.toId) || item.targets.some(t => selectedConnIds.has(t)));
-        const fx = isHistory ? fr.x + fr.width / 2 : fr.x + fr.width;
-        const fy = isHistory ? fr.y + fr.height : fr.y + fr.height / 2;
-        const tx = isHistory ? tr.x + tr.width / 2 : tr.x;
-        const ty = isHistory ? tr.y : tr.y + tr.height / 2;
+        const fromPoint = isHistory ? {x:fr.x + fr.width / 2, y:fr.y + fr.height} : nodeConnectionPoint(fromNode, 'out');
+        const toPoint = isHistory ? {x:tr.x + tr.width / 2, y:tr.y} : nodeConnectionPoint(toNode, 'in');
+        const fx = fromPoint.x;
+        const fy = fromPoint.y;
+        const tx = toPoint.x;
+        const ty = toPoint.y;
         const dx = Math.max(50, Math.abs(tx - fx) * 0.45);
         const dy = Math.max(36, Math.abs(ty - fy) * 0.45);
         const curve = isHistory
@@ -8656,6 +8701,7 @@ function updateNodeElementDuringResize(node){
     const layout = imageLayout(imgs, nodeScale(node), node);
     el.style.width = `${layout.width}px`;
     el.style.height = `${layout.height}px`;
+    el.style.setProperty('--node-port-y', `${Number(layout.portY || layout.height / 2)}px`);
     const body = el.querySelector('.node-body');
     if(body){
         const loadingSingle = body.querySelector('.loading-cell.single');
@@ -8689,21 +8735,29 @@ function updateNodeElementDuringResize(node){
         }
         const wrap = body.querySelector('.image-wrap');
         if(wrap){
-            // 分组单图卡片含 16px 内边距（PAD=32），图片按内边距内的尺寸显示，避免溢出边框。
-            const wrapW = isSmartGroupNode(node) ? Math.max(24, Number(layout.innerW || 0) || (Number(layout.width) - 32)) : layout.width;
-            const wrapH = isSmartGroupNode(node) ? Math.max(24, Number(layout.innerH || 0) || (Number(layout.height) - 60)) : layout.height;
+            // All media surfaces use the content viewport from the same layout contract.
+            const wrapW = isSmartGroupNode(node)
+                ? Math.max(24, Number(layout.innerW || 0) || (Number(layout.width) - 32))
+                : (Number(layout.mediaWidth) || layout.width);
+            const wrapH = isSmartGroupNode(node)
+                ? Math.max(24, Number(layout.innerH || 0) || (Number(layout.height) - 60))
+                : (Number(layout.mediaHeight) || layout.height);
             wrap.style.setProperty('--node-img-w', `${wrapW}px`);
             wrap.style.setProperty('--node-img-h', `${wrapH}px`);
         }
         const media = body.querySelector('.node-img');
         if(media){
-            const mediaW = isSmartGroupNode(node) ? Math.max(24, Number(layout.innerW || 0) || (Number(layout.width) - 32)) : layout.width;
-            const mediaH = isSmartGroupNode(node) ? Math.max(24, Number(layout.innerH || 0) || (Number(layout.height) - 60)) : layout.height;
+            const mediaW = isSmartGroupNode(node)
+                ? Math.max(24, Number(layout.innerW || 0) || (Number(layout.width) - 32))
+                : (Number(layout.mediaWidth) || layout.width);
+            const mediaH = isSmartGroupNode(node)
+                ? Math.max(24, Number(layout.innerH || 0) || (Number(layout.height) - 60))
+                : (Number(layout.mediaHeight) || layout.height);
             media.style.width = `${mediaW}px`;
             media.style.height = `${mediaH}px`;
         }
     }
-    const active = selectedNode();
+    const active = composerActionNode?.() || activeComposerNode?.() || selectedNode();
     if(active?.id === node.id && !document.body.classList.contains('smart-canvas-interacting')) positionComposerForNode(active);
     scheduleInteractionLayerRefresh();
 }
@@ -10818,7 +10872,7 @@ function render(){
         const renderedNodeHeight = layout.height + (uploadResourceHeader ? 38 : 0);
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--upload-resource-base-height:${layout.height}px;height:${renderedNodeHeight}px">
+        const html = `<div class="image-node ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartGenerationNode(node) ? 'image-generation-node' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;--upload-resource-base-height:${layout.height}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
             ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartUploadNode(node) && imgs.length) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -11747,10 +11801,10 @@ function updatePortDragVisual(){
     if(!portDragState) return;
     const fromNode = nodes.find(n => n.id === portDragState.fromId);
     if(!fromNode) return;
-    const fr = nodeRect(fromNode);
     const isOut = portDragState.fromPort === 'out';
-    const fx = isOut ? fr.x + fr.width : fr.x;
-    const fy = fr.y + fr.height / 2;
+    const fromPoint = nodeConnectionPoint(fromNode, isOut ? 'out' : 'in');
+    const fx = fromPoint.x;
+    const fy = fromPoint.y;
     const tx = portDragState.currentWorld.x;
     const ty = portDragState.currentWorld.y;
     const dx = Math.max(50, Math.abs(tx - fx) * 0.45);
@@ -12180,15 +12234,17 @@ function selectGenerationResult(nodeId, requestedIndex){
     }
     const layout = imageLayout(node.images || [], nodeScale(node), node);
     const active = node.images[activeIndex];
+    const mediaWidth = Number(layout.mediaWidth) || layout.width;
     const mediaHeight = Number(layout.mediaHeight) || layout.height;
     nodeEl.style.width = `${layout.width}px`;
     nodeEl.style.height = `${layout.height}px`;
+    nodeEl.style.setProperty('--node-port-y', `${Number(layout.portY || layout.height / 2)}px`);
     main.dataset.imageIndex = String(activeIndex);
     main.dataset.mediaSignature = `${mediaKindForItem(active)}:${active?.url || ''}`;
-    main.style.setProperty('--node-img-w', `${layout.width}px`);
+    main.style.setProperty('--node-img-w', `${mediaWidth}px`);
     main.style.setProperty('--node-img-h', `${mediaHeight}px`);
     main.classList.add('image-selected');
-    main.innerHTML = `${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}`;
+    main.innerHTML = `${singleMediaHtml(active, mediaWidth, mediaHeight)}${imageResolutionBadgeHtml(active)}`;
     const strip = nodeEl.querySelector('.generation-result-strip');
     if(strip){
         strip.innerHTML = generationResultThumbnailHtml(node.images, activeIndex);
