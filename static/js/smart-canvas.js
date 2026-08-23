@@ -6749,7 +6749,16 @@ function beginSmartNodeExecution(node, options={}){
         execution.releaseId = setTimeout(() => {
             const current = liveSmartNode(node);
             if(!isCurrentSmartNodeExecution(current, execution)) return;
-            finishSmartNodeExecution(current, execution);
+            // API submissions have a brief UI cooldown so the Composer can be
+            // reused.  Releasing that lock is not the same as the upstream
+            // task finishing: marking it complete here froze the visible
+            // elapsed time at the two-second cooldown value.
+            if(execution.completeOnRelease) finishSmartNodeExecution(current, execution);
+            else {
+                smartNodeExecutions.delete(current.id);
+                smartNodeRunTokens.delete(current.id);
+                current.running = false;
+            }
             render();
         }, Math.max(1, Number(options.releaseAfterMs) || 1));
     }
@@ -19748,7 +19757,14 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
                 delete history.h;
                 outputSlot.images = [];
             }
-            outputSlot.pendingTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:taskResult.providerId, model:taskResult.model}));
+            outputSlot.pendingTasks = taskIds.map(taskId => ({
+                taskId,
+                kind:'image',
+                providerId:taskResult.providerId,
+                model:taskResult.model,
+                logRun:runLog,
+                logStartedAt:runLogStart
+            }));
             outputSlot.pending = Math.max(taskIds.length, Number(outputSlot.pending || 0) || taskIds.length);
             outputSlot.running = false;
             render();
@@ -19785,7 +19801,11 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
             runPath.states[edgeKey] = 'done';
             scheduleConnectionLayerRefresh();
         }
-        addSmartGenerationLog({run:{...runLog, kind:result.kind || logKind}, outputs:result.urls, runMs:nowMs() - runLogStart});
+        // Asynchronous API task completion records its own persisted task log
+        // in finalizeSmartPendingTask(), including after a page reload.
+        if(!(isApiLikeEngine(runSettings.engine) && runSettings.apiKind !== 'video')){
+            addSmartGenerationLog({run:{...runLog, kind:result.kind || logKind}, outputs:result.urls, runMs:nowMs() - runLogStart});
+        }
         return rememberRoundOutputs(ctx, outputSlot, additions);
     } catch(e) {
         if(handleJimengPendingSignal(outputSlot, e)){
@@ -20200,7 +20220,18 @@ async function runGeneration(targetNode=null){
         if(isApiLikeEngine(runSettings.engine) || rhModelMode){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
-            const submittedTasks = taskIds.map(taskId => ({taskId, kind:'image', providerId:outImages.providerId, model:outImages.model}));
+            // Store the log snapshot with the persisted task.  A reload can
+            // resume this task without the original runGeneration closure;
+            // keeping the snapshot here lets that recovery path log a result
+            // exactly once when it later succeeds.
+            const submittedTasks = taskIds.map(taskId => ({
+                taskId,
+                kind:'image',
+                providerId:outImages.providerId,
+                model:outImages.model,
+                logRun:runLog,
+                logStartedAt:runLogStart
+            }));
             const existingTaskIds = new Set(smartPendingTasks(pendingNode).map(task => task.taskId));
             delete pendingNode.submitting;
             pendingNode.pendingTasks = [...smartPendingTasks(pendingNode), ...submittedTasks.filter(task => !existingTaskIds.has(task.taskId))];
@@ -20222,7 +20253,6 @@ async function runGeneration(targetNode=null){
             }
             if(!(pendingNode.images || []).length) throw new Error(tr('smart.errNoOutImages'));
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
-            addSmartGenerationLog({run:runLog, outputs:pendingNode.images || [], runMs:nowMs() - runLogStart});
             scheduleSave();
             return;
         }
@@ -21055,11 +21085,25 @@ async function pollSmartCanvasTask(taskId, kind='image'){
         activeSmartTaskPolls.delete(taskId);
     }
 }
+function smartPendingTaskLogRun(node, task, kind='image'){
+    if(task?.logRun && typeof task.logRun === 'object') return task.logRun;
+    // Pending tasks saved before logRun was introduced can still complete
+    // after a reload.  Preserve a useful history entry from their node-level
+    // snapshot instead of silently dropping that successful result.
+    return smartRunSnapshot(
+        node,
+        node?.runModelPrompt || node?.runPrompt || '',
+        node?.runInputRefs || node?.runPromptRefs || [],
+        kind,
+        cloneSmartSettings(node?.runSettings || smartSettingsForNode(node) || settings)
+    );
+}
 function finalizeSmartPendingTask(node, taskId, images, kind='image'){
     if(!node || !taskId) return;
     // 同一 task 可能同时被自动恢复轮询和用户手动查询拿到成功结果；只有仍在
     // pendingTasks 中的第一次完成回调可以落盘，后续回调直接忽略。
-    if(!smartPendingTasks(node).some(task => task.taskId === taskId)) return false;
+    const completedTask = smartPendingTasks(node).find(task => task.taskId === taskId);
+    if(!completedTask) return false;
     node.pendingTasks = smartPendingTasks(node).filter(task => task.taskId !== taskId);
     node.pending = Math.max(0, Number(node.pending || 0) - 1);
     const ext = kind === 'video' ? 'mp4' : kind === 'audio' ? 'mp3' : kind === 'text' ? 'txt' : 'png';
@@ -21089,6 +21133,15 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
         delete node.w;
         delete node.h;
     }
+    // This is the shared successful-task terminal path for both the original
+    // request and reload recovery.  Logging here prevents recovered outputs
+    // from appearing on the canvas without a matching generation-history row.
+    addSmartGenerationLog({
+        run:smartPendingTaskLogRun(node, completedTask, kind),
+        outputs:uniqueAdditions.length ? uniqueAdditions : additions,
+        runMs:Math.max(0, nowMs() - Number(completedTask.logStartedAt || node.runStartedAt || nowMs()))
+    });
+    return true;
 }
 async function resumeSmartPendingNode(node, logContext={}){
     const requestedTaskIds = Array.isArray(logContext.taskIds) ? new Set(logContext.taskIds) : null;
