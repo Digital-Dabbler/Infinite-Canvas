@@ -2226,46 +2226,41 @@ function singleImageLayout(image, node, scale){
     }
     return {cols:1, rows:1, width:Math.round(260*scale), height:Math.round(180*scale), thumb:Math.round(96*scale), single:true};
 }
-function generationResultAccessoryHeight(images=[]){
-    const items = images || [];
-    const hasTailFrame = items.some(isReturnedVideoLastFrame);
-    const resultCount = generationResultIndexes(items).length;
-    const hasStrip = resultCount > 1 || hasTailFrame;
-    if(!hasStrip) return 0;
-    // Keep this in sync with .generation-result-strip and the stacked result
-    // layers: 38px thumbnail, optional tail frame, pair gap, strip padding,
-    // plus the stack's 3px-per-result offset.
-    const stackOffset = Math.min(3, Math.max(0, resultCount - 1)) * 3;
-    return (hasTailFrame ? 84 : 52) + stackOffset;
-}
 function generationImageLayout(images, node, scale){
     const items = images || [];
     const count = items.length;
     if(!count) return null;
     const requestedIndex = Number(node?.activeImageIndex) || 0;
     const index = Math.max(0, Math.min(count - 1, requestedIndex));
-    const accessoryHeight = generationResultAccessoryHeight(items);
     const explicitW = Number(node?.w);
     const explicitH = Number(node?.h);
-    // Generation node w/h describe the complete card. Convert them to the
-    // media viewport before asking singleImageLayout to fit the media.
+    // Generation node w/h are the main preview card. The result selector sits
+    // below that card and must not affect its resize, port, or toolbar geometry.
     const mediaNode = {...node};
     if(Number.isFinite(explicitW) && explicitW > 24) mediaNode.w = explicitW;
-    if(Number.isFinite(explicitH) && explicitH > 24) mediaNode.h = Math.max(48, explicitH - accessoryHeight);
+    if(Number.isFinite(explicitH) && explicitH > 24) mediaNode.h = explicitH;
     const mediaLayout = singleImageLayout(items[index], mediaNode, scale);
     const width = Number.isFinite(explicitW) && explicitW > 24 ? Math.round(explicitW) : mediaLayout.width;
     const mediaHeight = Number.isFinite(explicitH) && explicitH > 24
-        ? Math.max(48, Math.round(explicitH - accessoryHeight))
+        ? Math.max(48, Math.round(explicitH))
         : mediaLayout.height;
     return {
         ...mediaLayout,
         width,
-        height:mediaHeight + accessoryHeight,
+        height:mediaHeight,
         mediaWidth:width,
         mediaHeight,
-        accessoryHeight,
-        hasResultStrip:accessoryHeight > 0,
-        portY:(mediaHeight + accessoryHeight) / 2
+        portY:mediaHeight / 2
+    };
+}
+function generationResultStackOffset(images=[]){
+    return Math.min(3, Math.max(0, (images || []).length - 1)) * 3;
+}
+function generationResultMainSize(layout, images=[]){
+    const offset = generationResultStackOffset(images);
+    return {
+        width:Math.max(48, (Number(layout?.mediaWidth) || Number(layout?.width) || 0) - offset),
+        height:Math.max(48, (Number(layout?.mediaHeight) || Number(layout?.height) || 0) - offset)
     };
 }
 function groupImageGridLayout(count, explicitW, explicitH, maxThumb, pad=32, gap=8, maxVisibleRows=MEDIA_GROUP_MAX_VISIBLE_ROWS){
@@ -8736,23 +8731,25 @@ function updateNodeElementDuringResize(node){
         const wrap = body.querySelector('.image-wrap');
         if(wrap){
             // All media surfaces use the content viewport from the same layout contract.
+            const generationMainSize = isSmartGenerationNode(node) ? generationResultMainSize(layout, node.images || []) : null;
             const wrapW = isSmartGroupNode(node)
                 ? Math.max(24, Number(layout.innerW || 0) || (Number(layout.width) - 32))
-                : (Number(layout.mediaWidth) || layout.width);
+                : (generationMainSize?.width || Number(layout.mediaWidth) || layout.width);
             const wrapH = isSmartGroupNode(node)
                 ? Math.max(24, Number(layout.innerH || 0) || (Number(layout.height) - 60))
-                : (Number(layout.mediaHeight) || layout.height);
+                : (generationMainSize?.height || Number(layout.mediaHeight) || layout.height);
             wrap.style.setProperty('--node-img-w', `${wrapW}px`);
             wrap.style.setProperty('--node-img-h', `${wrapH}px`);
         }
         const media = body.querySelector('.node-img');
         if(media){
+            const generationMainSize = isSmartGenerationNode(node) ? generationResultMainSize(layout, node.images || []) : null;
             const mediaW = isSmartGroupNode(node)
                 ? Math.max(24, Number(layout.innerW || 0) || (Number(layout.width) - 32))
-                : (Number(layout.mediaWidth) || layout.width);
+                : (generationMainSize?.width || Number(layout.mediaWidth) || layout.width);
             const mediaH = isSmartGroupNode(node)
                 ? Math.max(24, Number(layout.innerH || 0) || (Number(layout.height) - 60))
-                : (Number(layout.mediaHeight) || layout.height);
+                : (generationMainSize?.height || Number(layout.mediaHeight) || layout.height);
             media.style.width = `${mediaW}px`;
             media.style.height = `${mediaH}px`;
         }
@@ -9754,12 +9751,12 @@ function nodeBodyHtml(node, layout){
         const active = imgs[activeIndex];
         const isAppending = Boolean(node.submitting || node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length);
         const stack = Math.min(3, Math.max(0, imgs.length - 1));
-        const mediaHeight = Number(layout.mediaHeight) || layout.height;
+        const mainSize = generationResultMainSize(layout, imgs);
         const thumbHtml = generationResultThumbnailHtml(imgs, activeIndex);
         return `<div class="generation-result-card" data-generation-results="1">
             <div class="generation-result-stack" style="--result-stack:${stack}">
-                ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer layer-${index + 1}"></span>`).join('')}
-                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${layout.width}px;--node-img-h:${mediaHeight}px">${singleMediaHtml(active, layout.width, mediaHeight)}${imageResolutionBadgeHtml(active)}</div>
+                ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer" style="--generation-layer-offset:${index * 3}px"></span>`).join('')}
+                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${mainSize.width}px;--node-img-h:${mainSize.height}px">${singleMediaHtml(active, mainSize.width, mainSize.height)}${imageResolutionBadgeHtml(active)}</div>
                 ${isAppending ? generationPendingCellHtml({overlay:true, submitting:Boolean(node.submitting && !node.pending), queued:Boolean(node.queued && !node.pending)}) : (node.lastRunError ? failedGenerationOverlayHtml(node) : '')}
                 ${resultIndexes.length > 1 ? `<div class="generation-result-count">${resultIndexes.length} 个结果</div><button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
             </div>
@@ -12234,8 +12231,9 @@ function selectGenerationResult(nodeId, requestedIndex){
     }
     const layout = imageLayout(node.images || [], nodeScale(node), node);
     const active = node.images[activeIndex];
-    const mediaWidth = Number(layout.mediaWidth) || layout.width;
-    const mediaHeight = Number(layout.mediaHeight) || layout.height;
+    const mainSize = generationResultMainSize(layout, node.images || []);
+    const mediaWidth = mainSize.width;
+    const mediaHeight = mainSize.height;
     nodeEl.style.width = `${layout.width}px`;
     nodeEl.style.height = `${layout.height}px`;
     nodeEl.style.setProperty('--node-port-y', `${Number(layout.portY || layout.height / 2)}px`);
