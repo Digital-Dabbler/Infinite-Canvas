@@ -1600,6 +1600,35 @@ function normalizeLegacySmartNode(node){
     }
     return node;
 }
+async function reconcileLegacyVideoTailFrames(){
+    const candidates = nodes.filter(node => isSmartVideoGenerationNode(node)
+        && node?.runSettings?.videoReturnLastFrame
+        && (node.images || []).some(isVideoMediaItem)
+        && !(node.images || []).some(isReturnedVideoLastFrame));
+    const videoUrls = [...new Set(candidates.flatMap(node => (node.images || []).filter(isVideoMediaItem).map(item => item.url)).filter(Boolean))];
+    if(!videoUrls.length) return false;
+    try {
+        const response = await fetch('/api/canvas-video-tail-frames', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({videos:videoUrls})
+        });
+        if(!response.ok) return false;
+        const recovered = resultMediaUrls((await response.json())?.media_items || []);
+        if(!recovered.length) return false;
+        let changed = false;
+        candidates.forEach(node => {
+            const existing = new Set((node.images || []).map(item => item?.url).filter(Boolean));
+            const additions = recovered.filter(item => isReturnedVideoLastFrame(item)
+                && (node.images || []).some(video => smartOriginalMediaUrl(video) === smartOriginalMediaUrl(item.last_frame_for))
+                && !existing.has(item.url));
+            if(additions.length){
+                node.images = [...(node.images || []), ...additions];
+                changed = true;
+            }
+        });
+        if(changed){ render(); scheduleSave(); }
+        return changed;
+    } catch(e) { return false; }
+}
 function migrateLegacySmartCanvasNodes(rawNodes=[], rawConnections=[]){
     const migrated = [];
     const idMap = new Map();
@@ -7923,6 +7952,7 @@ async function loadCanvas(){
         applyViewport();
         render();
         if(legacyMigration.changed || clearedTerminalTasks || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers) scheduleSave();
+        reconcileLegacyVideoTailFrames();
         resumeSmartPendingTasks();
         resumeJimengPendingNodes();
         startCanvasMetaPoll();
@@ -10867,10 +10897,13 @@ function render(){
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
         const uploadResourceHeader = uploadResourceHeaderHtml(node);
-        const renderedNodeHeight = layout.height + (uploadResourceHeader ? 38 : 0);
+        // The resource selector is an external accessory. Keep the node's
+        // geometry equal to its main card so resize handles and ports stay
+        // anchored to that card.
+        const renderedNodeHeight = layout.height;
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;--upload-resource-base-height:${layout.height}px;height:${renderedNodeHeight}px">
+        const html = `<div class="image-node ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
             ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartUploadNode(node) && imgs.length) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -12142,11 +12175,39 @@ function pickMediaForSmartNode(nodeId='', options={}){
     input.click();
 }
 function isReturnedVideoLastFrame(item){
-    return String(item?.role || '').toLowerCase() === 'last_frame';
+    const role = String(item?.role || item?.mediaRole || item?.media_role || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return ['last_frame', 'lastframe', 'tail_frame', 'tailframe'].includes(role)
+        || Boolean(item?.last_frame_for || item?.lastFrameFor);
 }
 function generationResultIndexes(images=[]){
     const indexes = images.map((_, index) => index).filter(index => !isReturnedVideoLastFrame(images[index]));
     return indexes.length ? indexes : images.map((_, index) => index);
+}
+function generationMediaIdentityUrls(item){
+    const values = [
+        item?.url,
+        item?.source_url,
+        item?.sourceUrl,
+        item?.original_url,
+        item?.originalUrl,
+        item?.originalLocalUrl
+    ];
+    return new Set(values.filter(Boolean).map(value => smartOriginalMediaUrl(value)));
+}
+function generationTailFrameIndex(images=[], resultIndex, resultIndexes=generationResultIndexes(images)){
+    const result = images[resultIndex];
+    const resultUrls = generationMediaIdentityUrls(result);
+    const tailIndexes = images.map((item, index) => ({item, index})).filter(({item}) => isReturnedVideoLastFrame(item));
+    const linked = tailIndexes.find(({item}) => {
+        const target = item?.last_frame_for || item?.lastFrameFor || '';
+        return target && resultUrls.has(smartOriginalMediaUrl(target));
+    });
+    if(linked) return linked.index;
+    // Some providers return a tail-frame list without per-item source links.
+    // Preserve the returned order only when the whole batch lacks those links.
+    if(tailIndexes.some(({item}) => item?.last_frame_for || item?.lastFrameFor)) return -1;
+    const position = resultIndexes.indexOf(resultIndex);
+    return position >= 0 ? (tailIndexes[position]?.index ?? -1) : -1;
 }
 function generationResultThumbnailHtml(images, activeIndex){
     const indexes = generationResultIndexes(images);
@@ -12154,7 +12215,7 @@ function generationResultThumbnailHtml(images, activeIndex){
     const start = Math.max(0, Math.min(activePosition - 4, indexes.length - 9));
     return indexes.slice(start, start + 9).map(index => {
         const img = images[index];
-        const tailFrameIndex = images.findIndex(item => isReturnedVideoLastFrame(item) && (item.last_frame_for === img.url || item.lastFrameFor === img.url));
+        const tailFrameIndex = generationTailFrameIndex(images, index, indexes);
         const tailFrame = tailFrameIndex >= 0 ? images[tailFrameIndex] : null;
         return `<div class="generation-result-thumb-pair"><button type="button" class="generation-result-thumb ${index === activeIndex ? 'active' : ''}" data-generation-result-index="${index}" title="${escapeAttr(img.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img, {selectOnly:true})}</button>${tailFrame ? `<button type="button" class="generation-result-tail-frame ${activeIndex === tailFrameIndex ? 'active' : ''}" data-generation-tail-frame-index="${tailFrameIndex}" title="返回尾帧：${escapeAttr(tailFrame.name || '')}">${thumbMediaHtml(tailFrame, {selectOnly:true})}</button>` : ''}</div>`;
     }).join('');
@@ -16834,6 +16895,7 @@ function updateComposer(){
     composer.classList.toggle('open', isSmartRunnableNode(node));
     if(!isSmartRunnableNode(node)){
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
+        if(runBtn) delete runBtn.dataset.nodeId;
         savePromptDraftForCurrent();
         composer.classList.remove('open');
         composer.querySelector('.composer-card')?.classList.remove('has-upstream-prompt');
@@ -16849,6 +16911,9 @@ function updateComposer(){
     const switchedNode = lastComposerNodeId !== composerKey;
     if(switchedNode) savePromptDraftForCurrent();
     setComposerSubject(subject);
+    // The Run button belongs to the visible Composer panel, not to a transient
+    // thumbnail/canvas selection that may change during the click sequence.
+    if(runBtn) runBtn.dataset.nodeId = subject.id;
     syncRunButtonState(subject);
     const hasPromptInput = promptInputNodesFor(node).length > 0;
     if(switchedNode){
@@ -22248,7 +22313,11 @@ if(promptResize){
         };
     });
 }
-runBtn.onclick = runGeneration;
+runBtn.onclick = () => {
+    const boundNodeId = String(runBtn.dataset.nodeId || '');
+    const boundNode = boundNodeId ? nodes.find(node => node.id === boundNodeId) : null;
+    runGeneration(boundNode || null);
+};
 if(cascadeRunBtn) cascadeRunBtn.onclick = () => {
     const node = composerActionNode();
     const loopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';

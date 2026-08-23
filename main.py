@@ -5240,6 +5240,9 @@ class CanvasVideoRequest(BaseModel):
     multimodal: bool = False
     trusted_asset: bool = False
 
+class CanvasVideoTailFrameReconcileRequest(BaseModel):
+    videos: List[str] = Field(default_factory=list, max_length=100)
+
 class TempShUploadRequest(BaseModel):
     url: str = ""
 
@@ -20904,6 +20907,54 @@ async def get_canvas_video_task(task_id: str, request: Request):
     if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
         raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
     return task
+
+@app.post("/api/canvas-video-tail-frames")
+async def reconcile_canvas_video_tail_frames(payload: CanvasVideoTailFrameReconcileRequest, request: Request):
+    """Recover tail frames omitted by older client polling, scoped to the owner task."""
+    user = require_authenticated(request)
+    requested = {
+        str(url or "").strip()
+        for url in payload.videos
+        if str(url or "").strip().startswith(("/assets/", "/output/"))
+    }
+    if not requested:
+        return {"media_items": []}
+    recovered = []
+    for task in load_canvas_tasks().values():
+        if task.get("type") != "online-video" or task.get("user_id") != user.get("id"):
+            continue
+        result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        videos = [str(url or "") for url in (result.get("videos") or []) if str(url or "")]
+        if not set(videos).intersection(requested):
+            continue
+        media_items = [dict(item) for item in (result.get("media_items") or []) if isinstance(item, dict)]
+        known_pairs = {
+            (str(item.get("last_frame_for") or ""), str(item.get("url") or ""))
+            for item in media_items
+            if str(item.get("role") or "").lower() == "last_frame"
+        }
+        tail_urls = video_last_frame_urls(result.get("raw") if isinstance(result.get("raw"), dict) else {})
+        changed = False
+        for index, remote_url in enumerate(tail_urls):
+            if not videos:
+                break
+            target = videos[min(index, len(videos) - 1)]
+            if target not in requested or any(pair[0] == target for pair in known_pairs):
+                continue
+            try:
+                local_url = await save_ai_image_to_output({"type": "url", "value": remote_url}, prefix="rh_last_frame_")
+            except Exception:
+                continue
+            if not local_url or (target, local_url) in known_pairs:
+                continue
+            item = {"url": local_url, "kind": "image", "role": "last_frame", "name": f"last-frame-{index + 1}.png", "last_frame_for": target}
+            media_items.append(item)
+            known_pairs.add((target, local_url))
+            recovered.append(item)
+            changed = True
+        if changed:
+            canvas_task_update(task.get("id"), {"result": {**result, "media_items": media_items}})
+    return {"media_items": recovered}
 
 @app.post("/api/canvas-video")
 async def canvas_video(payload: CanvasVideoRequest, request: Request):
