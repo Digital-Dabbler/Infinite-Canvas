@@ -6909,8 +6909,8 @@ function completeSmartNodeWithImages(node, images){
 }
 function syncRunButtonState(node=composerActionNode()){
     if(!runBtn) return;
-    // API 图片任务提交后由服务端队列独立运行，同一节点可继续追加任务。
-    // 视频、ComfyUI 和其他同步型运行仍保持单次执行，避免共享节点状态互相覆盖。
+    // API 图片和视频任务提交后都由服务端队列独立运行，同一节点可继续追加任务。
+    // ComfyUI 和其他同步型运行仍保持单次执行，避免共享节点状态互相覆盖。
     // 不再因为“画布上有任意循环/级联在跑”就全局禁用——跑循环时仍可对其他节点点生成。
     const runSettings = node ? smartSettingsForNode(node) : settings;
     const videoSelection = configuredVideoSelection(runSettings);
@@ -6920,10 +6920,13 @@ function syncRunButtonState(node=composerActionNode()){
         : '';
 }
 function smartNodeAllowsConcurrentSubmit(node){
-    if(!node || !isSmartImageGenerationNode(node)) return false;
+    if(!node || (!isSmartImageGenerationNode(node) && !isSmartVideoGenerationNode(node))) return false;
     const runSettings = smartSettingsForNode(node);
     const engine = runSettings?.engine || settings.engine;
     const apiKind = runSettings?.apiKind || settings.apiKind;
+    // 视频和图片的 API 生成都会先创建可持久化的画布任务，随后由同一套
+    // pendingTasks 轮询与恢复机制接管；不能因为上游仍在运行而锁住 Composer。
+    if(isSmartVideoGenerationNode(node)) return apiKind === 'video' && isApiLikeEngine(engine);
     return apiKind !== 'video' && (isApiLikeEngine(engine) || (engine === 'runninghub' && Boolean(runningHubSelectedModel(runSettings))));
 }
 function mergeSmartNode(local, remote){
@@ -20200,13 +20203,31 @@ async function runGeneration(targetNode=null){
                 return;
         }
         if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video'){
-            const outVideos = await runApiVideoGeneration(prompt, refs, runSettings, pendingNode);
-            if(!outVideos.length) throw new Error(tr('smart.errNoOutVideos'));
-            finalizePendingNode(pendingNode, outVideos, pendingMeta, 'video');
+            const taskResult = await runApiVideoGeneration(prompt, refs, runSettings, null, {deferPolling:true});
+            const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
+            if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
+            const submittedTasks = taskIds.map(taskId => ({
+                taskId,
+                kind:'video',
+                providerId:taskResult.providerId,
+                model:taskResult.model,
+                logRun:runLog,
+                logStartedAt:runLogStart
+            }));
+            const existingTaskIds = new Set(smartPendingTasks(pendingNode).map(task => task.taskId));
+            delete pendingNode.submitting;
+            pendingNode.pendingTasks = [...smartPendingTasks(pendingNode), ...submittedTasks.filter(task => !existingTaskIds.has(task.taskId))];
+            pendingNode.pending = pendingNode.pendingTasks.length;
+            if(!pendingNode.runStartedAt) pendingNode.runStartedAt = nowMs();
+            pendingNode.runTimerHidden = false;
+            pendingNode.running = false;
+            render();
+            scheduleSave();
+            await saveCanvas();
+            serverTasksSubmitted = true;
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
-            addSmartGenerationLog({run:runLog, outputs:outVideos, runMs:nowMs() - runLogStart});
             clearPromptInputForNode(node, {preserveDraft:true});
-                scheduleSave();
+            await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
             return;
         }
         const rhModelMode = runSettings.engine === 'runninghub' && Boolean(runningHubSelectedModel(runSettings));
@@ -20489,7 +20510,7 @@ async function runRunningHubGeneration(prompt, refs, runSettings=settings){
     }
     throw new Error(tr('smart.rhTimeout'));
 }
-async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=null){
+async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=null, options={}){
     const videoSelection = configuredVideoSelection(runSettings);
     if(!videoSelection.ok) throw new Error(tr(videoSelection.reason === 'provider' ? 'smart.noVideoPlatform' : 'smart.errNoVideoModel'));
     try {
@@ -20563,6 +20584,9 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=nu
         }).then(async r => { if(!r.ok) throw new Error(await smartResponseErrorMessage(r, tr('smart.errRunFailed'))); return r.json(); });
         const taskId = submitted?.task_id || '';
         if(!taskId) throw new Error(tr('smart.errRunFailed'));
+        if(options.deferPolling){
+            return {taskIds:[taskId], providerId:payload.provider_id, model:payload.model};
+        }
         const live = node ? nodes.find(item => item.id === node.id) : null;
         if(live){
             live.pendingTasks = [
