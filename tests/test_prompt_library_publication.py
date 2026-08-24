@@ -116,6 +116,17 @@ class PromptLibraryPublicationTests(unittest.TestCase):
         bob_view = main.public_prompt_libraries_for_user(main.load_prompt_libraries(), self.bob)
         self.assertNotIn(snapshot["id"], {item["id"] for item in bob_view["inspiration"]})
 
+    def test_admin_my_publications_excludes_other_users_snapshots(self):
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            result = asyncio.run(main.publish_prompt_library_item(
+                "alice_prompt", main.PromptLibraryPublishRequest(published=True), object()
+            ))
+
+        admin = {"id": "admin", "username": "Admin", "role": "admin"}
+        admin_view = main.public_prompt_libraries_for_user(main.load_prompt_libraries(), admin)
+        self.assertEqual(admin_view["published"], [])
+        self.assertIn(result["snapshot"]["id"], {item["id"] for item in admin_view["inspiration"]})
+
     def test_publish_configuration_overrides_only_the_public_snapshot(self):
         source = self.data["libraries"][0]["items"][0]
         source.update({"category": "style", "subcategory": "real"})

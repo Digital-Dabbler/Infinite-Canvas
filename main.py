@@ -11330,7 +11330,10 @@ def public_prompt_libraries_for_user(data, user):
         *next((library.get("items") or [] for library in visible_libraries if library.get("id") == "system"), []),
         *all_published,
     ]
-    public["published"] = [item for item in all_published if item.get("owner_id") == user_id or admin]
+    # “我的发布” is a personal view for every role.  Administrators can still
+    # see all public snapshots in Inspiration and retain their governance
+    # permissions, but other users' publications must not appear as theirs.
+    public["published"] = [item for item in all_published if str(item.get("owner_id") or "") == user_id]
     public["viewer"] = {"user_id": user_id, "is_admin": admin}
     personal_id = personal_prompt_library_id(user_id)
     if any(item.get("id") == personal_id for item in public.get("libraries", [])):
