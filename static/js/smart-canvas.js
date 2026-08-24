@@ -24,6 +24,7 @@ const minimap = document.getElementById('minimap');
 const minimapContent = document.getElementById('minimapContent');
 const smartArrangeBtn = document.getElementById('smartArrangeBtn');
 const imageEditModal = document.getElementById('imageEditModal');
+const angleControlModal = document.getElementById('angleControlModal');
 let outpaintRunSettings = null;
 let outpaintFillColor = '#ffffff';
 const imageActionToolbar = document.getElementById('imageActionToolbar');
@@ -274,6 +275,8 @@ let cropDrag = null;
 let cropAspectPreset = 'free';
 let cropAspectRatio = null;
 let imageEditMode = 'crop';
+let angleControlState = {nodeId:'', imageIndex:0, target:'online', azimuth:0, elevation:0, distance:1};
+let angleCubeDrag = null;
 let imageEditModeTouched = false;
 let imageResizeScale = 0.5;
 let editDrawState = null;
@@ -10369,6 +10372,10 @@ function runImageToolbarAction(action){
         createImageEditGenerationNode(node);
         return;
     }
+    if(action === 'angle'){
+        openAngleControl(node, index);
+        return;
+    }
     if(action === 'remove-background'){
         runSmartBackgroundRemoval(node, index);
         return;
@@ -10402,6 +10409,200 @@ imageActionToolbar?.addEventListener('click', event => {
     event.stopPropagation();
     runImageToolbarAction(button.dataset.imageToolbarAction || '');
 });
+const ANGLE_AZIMUTHS = [
+    {zh:'正面', en:'front view', angle:0}, {zh:'右前', en:'front-right quarter view', angle:45},
+    {zh:'右侧', en:'right side view', angle:90}, {zh:'右后', en:'back-right quarter view', angle:135},
+    {zh:'背面', en:'back view', angle:180}, {zh:'左后', en:'back-left quarter view', angle:225},
+    {zh:'左侧', en:'left side view', angle:270}, {zh:'左前', en:'front-left quarter view', angle:315}
+];
+const ANGLE_ELEVATIONS = [
+    {zh:'仰视', en:'low-angle shot', angle:-30}, {zh:'平视', en:'eye-level shot', angle:0},
+    {zh:'轻俯视', en:'elevated shot', angle:30}, {zh:'高俯视', en:'high-angle shot', angle:60}
+];
+const ANGLE_DISTANCES = [
+    {zh:'特写', en:'close-up', value:0}, {zh:'中景', en:'medium shot', value:1}, {zh:'广角远景', en:'wide shot', value:2}
+];
+const ANGLE_RESULT_PRESETS = [
+    {zh:'正面头像', azimuth:0, elevation:0, distance:0}, {zh:'四分之三侧肖像', azimuth:45, elevation:0, distance:0},
+    {zh:'侧脸特写', azimuth:90, elevation:0, distance:0}, {zh:'正面半身', azimuth:0, elevation:0, distance:1},
+    {zh:'轻俯视人像', azimuth:45, elevation:30, distance:1}, {zh:'仰视英雄角度', azimuth:45, elevation:-30, distance:1},
+    {zh:'背面环境人像', azimuth:180, elevation:0, distance:2}, {zh:'侧后方全身', azimuth:135, elevation:0, distance:2}
+];
+function angleNormalizeAzimuth(value){ return Math.max(0, Math.min(360, Math.round(Number(value) || 0))); }
+function angleAzimuthSnapNodes(){ return [...ANGLE_AZIMUTHS, {...ANGLE_AZIMUTHS[0], angle:360}]; }
+function angleNearest(items, value, circular=false){
+    const v = Number(value) || 0;
+    return items.reduce((best, item) => {
+        const delta = circular ? Math.min(Math.abs(item.angle - v), 360 - Math.abs(item.angle - v)) : Math.abs(item.angle - v);
+        const bestDelta = circular ? Math.min(Math.abs(best.angle - v), 360 - Math.abs(best.angle - v)) : Math.abs(best.angle - v);
+        return delta < bestDelta ? item : best;
+    }, items[0]);
+}
+function angleCurrentPose(){
+    const azimuthValue = angleNormalizeAzimuth(angleControlState.azimuth);
+    return {
+        azimuth:azimuthValue >= 338 ? ANGLE_AZIMUTHS[0] : angleNearest(ANGLE_AZIMUTHS, azimuthValue),
+        elevation:angleNearest(ANGLE_ELEVATIONS, angleControlState.elevation),
+        distance:angleNearest(ANGLE_DISTANCES.map(item => ({...item, angle:item.value})), angleControlState.distance)
+    };
+}
+function angleSnap(value, nodes, tolerance, circular=false){
+    const normalized = circular ? angleNormalizeAzimuth(value) : Number(value) || 0;
+    const nearest = angleNearest(nodes, normalized, circular);
+    const delta = circular ? Math.min(Math.abs(nearest.angle - normalized), 360 - Math.abs(nearest.angle - normalized)) : Math.abs(nearest.angle - normalized);
+    return delta <= tolerance ? nearest.angle : normalized;
+}
+function setAngleControlValue(key, value, {snap=true}={}){
+    if(key === 'azimuth') angleControlState.azimuth = snap ? angleSnap(value, angleAzimuthSnapNodes(), 8) : angleNormalizeAzimuth(value);
+    else if(key === 'elevation') angleControlState.elevation = Math.max(-30, Math.min(60, snap ? angleSnap(value, ANGLE_ELEVATIONS, 5) : Number(value) || 0));
+    else angleControlState.distance = Math.max(0, Math.min(2, snap ? angleSnap(value, ANGLE_DISTANCES.map(item => ({...item, angle:item.value})), .16) : Number(value) || 0));
+}
+function angleTickHtml(items, value, range, key, circular=false){
+    return items.map(item => {
+        const itemValue = item.angle ?? item.value;
+        const pct = circular ? itemValue / 360 * 100 : ((itemValue - range.min) / (range.max - range.min)) * 100;
+        const actual = circular ? angleNormalizeAzimuth(value) : Number(value);
+        const delta = circular ? Math.min(Math.abs(itemValue - actual), 360 - Math.abs(itemValue - actual)) : Math.abs(itemValue - actual);
+        const active = delta < (key === 'azimuth' ? 1 : key === 'elevation' ? 1 : .02);
+        return `<button type="button" data-angle-tick="${key}" data-angle-value="${itemValue}" data-label="${escapeAttr(item.zh)}" class="${active ? 'active' : ''}" style="left:${pct}%" aria-label="${escapeAttr(item.zh)}"></button>`;
+    }).join('');
+}
+function anglePromptForCurrentPose(){
+    const pose = angleCurrentPose();
+    const loraPrompt = `<sks> ${pose.azimuth.en} ${pose.elevation.en} ${pose.distance.en}`;
+    if(angleControlState.target === 'comfy') return loraPrompt;
+    return `保持参考图主体的身份、服装、环境和光线一致；呈现主体${pose.azimuth.zh}方向约 ${angleNormalizeAzimuth(angleControlState.azimuth)}°，${pose.elevation.zh}约 ${Math.round(angleControlState.elevation)}°，${pose.distance.zh}构图。`;
+}
+function syncAngleRangeVisual(id, value, min, max){
+    const control = document.getElementById(id);
+    if(!control) return;
+    const progress = Math.max(0, Math.min(1, (Number(value) - min) / (max - min)));
+    control.style.setProperty('--angle-progress', String(progress));
+}
+function renderAngleControl(){
+    if(!angleControlModal?.classList.contains('open')) return;
+    const pose = angleCurrentPose();
+    const byId = id => document.getElementById(id);
+    const cube = byId('angleCube');
+    if(cube){
+        cube.style.setProperty('--cube-y', `${angleNormalizeAzimuth(angleControlState.azimuth)}deg`);
+        cube.style.setProperty('--cube-x', `${-Math.round(angleControlState.elevation)}deg`);
+        cube.style.setProperty('--cube-scale', String(1.18 - angleControlState.distance * .22));
+    }
+    byId('anglePoseLabel').textContent = `${pose.azimuth.zh} ${angleNormalizeAzimuth(angleControlState.azimuth)}° · ${pose.elevation.zh} ${Math.round(angleControlState.elevation)}° · ${pose.distance.zh}`;
+    byId('angleAzimuth').value = String(angleNormalizeAzimuth(angleControlState.azimuth));
+    byId('angleElevation').value = String(angleControlState.elevation);
+    byId('angleDistance').value = String(angleControlState.distance);
+    byId('angleAzimuthValue').textContent = `${pose.azimuth.zh} ${angleNormalizeAzimuth(angleControlState.azimuth)}°`;
+    byId('angleElevationValue').textContent = `${pose.elevation.zh} ${Math.round(angleControlState.elevation)}°`;
+    byId('angleDistanceValue').textContent = pose.distance.zh;
+    byId('anglePromptPreview').textContent = anglePromptForCurrentPose();
+    syncAngleRangeVisual('angleAzimuthControl', angleNormalizeAzimuth(angleControlState.azimuth), 0, 360);
+    syncAngleRangeVisual('angleElevationControl', angleControlState.elevation, -30, 60);
+    syncAngleRangeVisual('angleDistanceControl', angleControlState.distance, 0, 2);
+    byId('angleAzimuthTicks').innerHTML = angleTickHtml(ANGLE_AZIMUTHS, angleControlState.azimuth, {min:0,max:360}, 'azimuth');
+    byId('angleElevationTicks').innerHTML = angleTickHtml(ANGLE_ELEVATIONS, angleControlState.elevation, {min:-30,max:60}, 'elevation');
+    byId('angleDistanceTicks').innerHTML = angleTickHtml(ANGLE_DISTANCES, angleControlState.distance, {min:0,max:2}, 'distance');
+    angleControlModal.querySelectorAll('[data-angle-target]').forEach(button => button.classList.toggle('active', button.dataset.angleTarget === angleControlState.target));
+    const grid = byId('anglePresetGrid');
+    grid.innerHTML = ANGLE_RESULT_PRESETS.map((item, index) => `<button type="button" data-angle-result-preset="${index}" class="${Math.abs(angleNormalizeAzimuth(angleControlState.azimuth) - item.azimuth) < 1 && Math.abs(angleControlState.elevation - item.elevation) < 1 && Math.abs(angleControlState.distance - item.distance) < .02 ? 'active' : ''}">${escapeHtml(item.zh)}</button>`).join('');
+    refreshIcons();
+}
+function openAngleControl(node, imageIndex=0){
+    const item = imageForDisplay(node?.images?.[imageIndex]);
+    if(!node || !item?.url || mediaKindForItem(item) !== 'image') return;
+    angleControlState = {nodeId:node.id, imageIndex, target:smartSettingsForNode(node)?.engine === 'comfy' ? 'comfy' : 'online', azimuth:0, elevation:0, distance:1};
+    angleControlModal.classList.add('open');
+    angleControlModal.setAttribute('aria-hidden', 'false');
+    renderAngleControl();
+}
+function closeAngleControl(){
+    angleControlModal?.classList.remove('open');
+    angleControlModal?.setAttribute('aria-hidden', 'true');
+}
+function angleSettingsForTarget(){
+    if(angleControlState.target === 'comfy'){
+        const saved = recentSmartSettingsForMode('comfy:edit');
+        const selected = Object.keys(saved).length ? saved : cloneSmartSettings(settings);
+        return {...selected, engine:'comfy', comfyMode:selected.comfyMode || 'edit', apiKind:'image'};
+    }
+    // 角度控制的在线分支固定走 RunningHub NanoBanana Pro 低价图生图，
+    // 不继承 Composer 当前的平台或模型选择，避免视觉控制结果被错误路由到其他模型。
+    return {
+        ...cloneSmartSettings(settings),
+        engine:'api',
+        apiKind:'image',
+        provider_id:'runninghub',
+        model:'nano-banana-pro/edit-channel-low-price',
+        ratio:'adaptive',
+        resolution:'2k',
+        rhCapability:'model',
+        rhConfigKey:''
+    };
+}
+async function generateAngleImage(){
+    const source = nodes.find(node => node.id === angleControlState.nodeId);
+    const sourceItem = imageForDisplay(source?.images?.[angleControlState.imageIndex]);
+    if(!source || !sourceItem?.url){ closeAngleControl(); return; }
+    const runSettings = angleSettingsForTarget();
+    if(runSettings.engine === 'comfy' && !runSettings.comfyWorkflow){ toast(tr('smart.errNeedWorkflow')); return; }
+    pushUndo();
+    const rect = nodeRect(source);
+    const output = createImageGenerationNode({x:rect.x + rect.width + 210, y:rect.y + rect.height / 2}, {skipUndo:true, select:true, deferRender:true, deferSave:true});
+    output.title = '角度生成';
+    output.runSettings = cloneSmartSettings(runSettings);
+    output.promptDraftText = anglePromptForCurrentPose();
+    output.promptDraftHtml = escapeHtml(output.promptDraftText);
+    output.promptDraftTouched = true;
+    output.angleControl = {...angleControlState, pose:angleCurrentPose()};
+    connectInputNode(source.id, output.id);
+    selectedId = output.id;
+    selectedIds = [];
+    selectedImage = {nodeId:source.id, index:angleControlState.imageIndex};
+    render();
+    updateComposer();
+    scheduleSave();
+    closeAngleControl();
+    await runGeneration(output);
+}
+angleControlModal?.addEventListener('click', event => { if(event.target === angleControlModal) closeAngleControl(); });
+angleControlModal?.addEventListener('mousedown', event => event.stopPropagation());
+document.getElementById('angleControlClose')?.addEventListener('click', closeAngleControl);
+document.getElementById('angleControlReset')?.addEventListener('click', () => { angleControlState.azimuth = 0; angleControlState.elevation = 0; angleControlState.distance = 1; renderAngleControl(); });
+document.getElementById('angleControlGenerate')?.addEventListener('click', generateAngleImage);
+['angleAzimuth','angleElevation','angleDistance'].forEach((id, index) => document.getElementById(id)?.addEventListener('input', event => { setAngleControlValue(['azimuth','elevation','distance'][index], event.target.value); renderAngleControl(); }));
+angleControlModal?.addEventListener('click', event => {
+    const target = event.target.closest?.('[data-angle-target]')?.dataset?.angleTarget;
+    if(target){ angleControlState.target = target; renderAngleControl(); return; }
+    const tick = event.target.closest?.('[data-angle-tick]');
+    if(tick){ setAngleControlValue(tick.dataset.angleTick, tick.dataset.angleValue, {snap:false}); renderAngleControl(); return; }
+    const presetIndex = event.target.closest?.('[data-angle-result-preset]')?.dataset?.angleResultPreset;
+    if(presetIndex !== undefined){ const preset = ANGLE_RESULT_PRESETS[Number(presetIndex)]; if(preset){ angleControlState.azimuth = preset.azimuth; angleControlState.elevation = preset.elevation; angleControlState.distance = preset.distance; renderAngleControl(); } }
+});
+const angleCubeStage = document.getElementById('angleCubeStage');
+angleCubeStage?.addEventListener('pointerdown', event => {
+    if(event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+    angleCubeDrag = {pointerId:event.pointerId, x:event.clientX, y:event.clientY, azimuth:angleControlState.azimuth, elevation:angleControlState.elevation};
+    angleCubeStage.classList.add('dragging');
+    angleCubeStage.setPointerCapture?.(event.pointerId);
+});
+angleCubeStage?.addEventListener('pointermove', event => {
+    if(!angleCubeDrag || event.pointerId !== angleCubeDrag.pointerId) return;
+    const dx = event.clientX - angleCubeDrag.x;
+    const dy = event.clientY - angleCubeDrag.y;
+    setAngleControlValue('azimuth', angleCubeDrag.azimuth + dx * 0.72, {snap:false});
+    setAngleControlValue('elevation', angleCubeDrag.elevation - dy * 0.42, {snap:false});
+    renderAngleControl();
+});
+function endAngleCubeDrag(event){
+    if(!angleCubeDrag || (event && event.pointerId !== angleCubeDrag.pointerId)) return;
+    angleCubeStage?.releasePointerCapture?.(angleCubeDrag.pointerId);
+    angleCubeDrag = null;
+    angleCubeStage?.classList.remove('dragging');
+}
+angleCubeStage?.addEventListener('pointerup', endAngleCubeDrag);
+angleCubeStage?.addEventListener('pointercancel', endAngleCubeDrag);
 function smartNodeToolbarHtml(node){
     return '';
 }
@@ -21512,7 +21713,7 @@ function createNodeFromMenu(type){
 }
 // 画布平移：鼠标中键在画布任意位置（包括节点、工作流分组内部）都固定为移动画布，
 // 避免鼠标落在分组/节点上时误触发移动分组。左键空白处拖拽的既有行为保持不变。
-const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.upload-resource-picker,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';
+const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.upload-resource-picker,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.angle-control-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';
 function startCanvasPan(e){
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
@@ -21693,6 +21894,7 @@ shell.onclick = e => {
 };
 window.addEventListener('keydown', e => {
     if(e.key === 'Escape'){
+        if(angleControlModal?.classList.contains('open')){ closeAngleControl(); return; }
         closeWorkflowGroupLayoutMenu(true);
         closeWorkflowGroupColorMenu(true);
         closePortConnectMenu();
@@ -22193,7 +22395,7 @@ window.onmouseup = e => {
 }
 };
 shell.addEventListener('wheel', e => {
-    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
+    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.angle-control-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
     e.preventDefault();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
