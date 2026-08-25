@@ -10428,7 +10428,21 @@ const ANGLE_RESULT_PRESETS = [
     {zh:'轻俯视人像', azimuth:45, elevation:30, distance:1}, {zh:'仰视英雄角度', azimuth:45, elevation:-30, distance:1},
     {zh:'背面环境人像', azimuth:180, elevation:0, distance:2}, {zh:'侧后方全身', azimuth:135, elevation:0, distance:2}
 ];
-function angleNormalizeAzimuth(value){ return Math.max(0, Math.min(360, Math.round(Number(value) || 0))); }
+function angleNormalizeAzimuth(value){
+    const degrees = Math.round(Number(value) || 0);
+    return ((degrees % 360) + 360) % 360;
+}
+// The state describes the viewer's position around the subject, not the CSS transform.
+// Keep this conversion in one place: CSS rotates the subject in the opposite direction
+// of the viewer. This makes the visible face, the pose label, and the generated prompt
+// all derive from the same semantic angle.
+function angleCubePreviewTransform(){
+    return {
+        x:-Math.round(angleControlState.elevation),
+        y:-angleNormalizeAzimuth(angleControlState.azimuth),
+        scale:1.18 - angleControlState.distance * .22
+    };
+}
 function angleAzimuthSnapNodes(){ return [...ANGLE_AZIMUTHS, {...ANGLE_AZIMUTHS[0], angle:360}]; }
 function angleNearest(items, value, circular=false){
     const v = Number(value) || 0;
@@ -10485,9 +10499,10 @@ function renderAngleControl(){
     const byId = id => document.getElementById(id);
     const cube = byId('angleCube');
     if(cube){
-        cube.style.setProperty('--cube-y', `${angleNormalizeAzimuth(angleControlState.azimuth)}deg`);
-        cube.style.setProperty('--cube-x', `${-Math.round(angleControlState.elevation)}deg`);
-        cube.style.setProperty('--cube-scale', String(1.18 - angleControlState.distance * .22));
+        const transform = angleCubePreviewTransform();
+        cube.style.setProperty('--cube-y', `${transform.y}deg`);
+        cube.style.setProperty('--cube-x', `${transform.x}deg`);
+        cube.style.setProperty('--cube-scale', String(transform.scale));
     }
     byId('anglePoseLabel').textContent = `${pose.azimuth.zh} ${angleNormalizeAzimuth(angleControlState.azimuth)}° · ${pose.elevation.zh} ${Math.round(angleControlState.elevation)}° · ${pose.distance.zh}`;
     byId('angleAzimuth').value = String(angleNormalizeAzimuth(angleControlState.azimuth));
@@ -10591,8 +10606,11 @@ angleCubeStage?.addEventListener('pointermove', event => {
     if(!angleCubeDrag || event.pointerId !== angleCubeDrag.pointerId) return;
     const dx = event.clientX - angleCubeDrag.x;
     const dy = event.clientY - angleCubeDrag.y;
-    setAngleControlValue('azimuth', angleCubeDrag.azimuth + dx * 0.72, {snap:false});
-    setAngleControlValue('elevation', angleCubeDrag.elevation - dy * 0.42, {snap:false});
+    // Dragging left moves the viewer to the subject's right; dragging upward
+    // moves the viewer below the subject. Those are the same semantic values
+    // used by the labels and generation prompt.
+    setAngleControlValue('azimuth', angleCubeDrag.azimuth - dx * 0.72, {snap:false});
+    setAngleControlValue('elevation', angleCubeDrag.elevation + dy * 0.42, {snap:false});
     renderAngleControl();
 });
 function endAngleCubeDrag(event){
