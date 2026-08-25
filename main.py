@@ -735,6 +735,9 @@ APIMART_IMAGE_TASK_TIMEOUT = float(os.getenv("APIMART_IMAGE_TASK_TIMEOUT", "1800
 APIMART_IMAGE_POLL_INTERVAL = float(os.getenv("APIMART_IMAGE_POLL_INTERVAL", "5"))
 APIMART_IMAGE_INITIAL_POLL_DELAY = float(os.getenv("APIMART_IMAGE_INITIAL_POLL_DELAY", "10"))
 VIDEO_POLL_TIMEOUT = float(os.getenv("VIDEO_POLL_TIMEOUT", "1800"))
+RUNNINGHUB_EXPLICIT_PENDING_MAX_SECONDS = max(60.0, min(7200.0, float(os.getenv("RUNNINGHUB_EXPLICIT_PENDING_MAX_SECONDS", "3600"))))
+RUNNINGHUB_QUERY_REQUEST_TIMEOUT_SECONDS = max(5.0, min(120.0, float(os.getenv("RUNNINGHUB_QUERY_REQUEST_TIMEOUT_SECONDS", "20"))))
+RUNNINGHUB_INDETERMINATE_MAX = max(1, min(10, int(os.getenv("RUNNINGHUB_INDETERMINATE_MAX", "3"))))
 ONLINE_IMAGE_PROMPT_MAX_LENGTH = int(os.getenv("ONLINE_IMAGE_PROMPT_MAX_LENGTH", "20000"))
 VIDEO_PROMPT_MAX_LENGTH = int(os.getenv("VIDEO_PROMPT_MAX_LENGTH", "4000"))
 LLM_MESSAGE_MAX_LENGTH = int(os.getenv("LLM_MESSAGE_MAX_LENGTH", "20000"))
@@ -14973,6 +14976,37 @@ def runninghub_query_status(raw):
             return str(value).lower()
     return ""
 
+RUNNINGHUB_SUCCESS_STATUSES = {"SUCCESS", "SUCCEEDED", "COMPLETED", "COMPLETE", "FINISHED", "FINISH", "DONE", "3"}
+RUNNINGHUB_FAILED_STATUSES = {"FAILED", "FAIL", "ERROR", "CANCEL", "CANCELED", "CANCELLED", "4", "TIMEOUT", "REJECTED", "EXPIRED"}
+RUNNINGHUB_PENDING_STATUSES = {"PENDING", "QUEUED", "QUEUE", "RUNNING", "PROCESSING", "IN_PROGRESS", "WAITING", "804", "813"}
+
+def runninghub_poll_state(raw, code=None):
+    """Classify only provider-declared states; everything else is indeterminate."""
+    value = str(runninghub_query_status(raw) or code or "").strip().upper()
+    if value in RUNNINGHUB_SUCCESS_STATUSES:
+        return "succeeded"
+    if value in RUNNINGHUB_FAILED_STATUSES:
+        return "failed"
+    if value in RUNNINGHUB_PENDING_STATUSES:
+        return "pending"
+    return "indeterminate"
+
+def runninghub_recoverable_poll_error(status_code, detail, task_id):
+    exc = HTTPException(status_code=status_code, detail=detail)
+    exc.upstream_task_id = str(task_id or "")
+    exc.recovery_available = True
+    return exc
+
+async def runninghub_poll_post(client, url, *, deadline, **kwargs):
+    """Bound one query so a stalled socket cannot outlive the whole poll window."""
+    remaining = max(0.0, float(deadline) - time.monotonic())
+    if remaining <= 0:
+        raise asyncio.TimeoutError("RunningHub polling deadline reached")
+    return await asyncio.wait_for(
+        client.post(url, **kwargs),
+        timeout=min(RUNNINGHUB_QUERY_REQUEST_TIMEOUT_SECONDS, remaining),
+    )
+
 def runninghub_extract_task_id(raw):
     if not isinstance(raw, dict):
         return ""
@@ -15199,24 +15233,37 @@ async def wait_for_runninghub_image_task(client, provider, task_id):
         metadata={"use_wallet": True},
     )
     query_url = runninghub_openapi_url(provider, "query")
-    deadline = time.monotonic() + 1800
+    deadline = time.monotonic() + RUNNINGHUB_EXPLICIT_PENDING_MAX_SECONDS
     last_payload = None
+    indeterminate_count = 0
     while time.monotonic() < deadline:
         await asyncio.sleep(2)
-        response = await client.post(query_url, headers=runninghub_api_headers(provider), json={"taskId": task_id})
-        response.raise_for_status()
-        raw = response.json()
+        try:
+            response = await runninghub_poll_post(client, query_url, deadline=deadline, headers=runninghub_api_headers(provider), json={"taskId": task_id})
+            response.raise_for_status()
+            raw = response.json()
+        except Exception as exc:
+            indeterminate_count += 1
+            if indeterminate_count >= RUNNINGHUB_INDETERMINATE_MAX:
+                raise runninghub_recoverable_poll_error(502, f"RunningHub 任务状态暂无法确认：连续查询异常（任务 ID：{task_id}）", task_id) from exc
+            continue
         last_payload = raw
-        status = runninghub_query_status(raw)
-        if status in {"success", "succeeded", "completed", "complete", "finished", "finish", "done", "3"}:
+        state = runninghub_poll_state(raw)
+        if state == "succeeded":
             return raw
-        if status in {"failed", "fail", "error", "canceled", "cancelled", "4"}:
+        if state == "failed":
             raise HTTPException(status_code=502, detail=f"RunningHub 任务失败：{raw}")
+        if state == "pending":
+            indeterminate_count = 0
+            continue
+        indeterminate_count += 1
+        if indeterminate_count >= RUNNINGHUB_INDETERMINATE_MAX:
+            raise runninghub_recoverable_poll_error(502, f"RunningHub 返回未知任务状态（任务 ID：{task_id}）", task_id)
         try:
             return {"data": {"results": [runninghub_extract_image(raw)]}}
         except HTTPException:
             pass
-    raise HTTPException(status_code=504, detail=f"RunningHub 生图任务超时：{last_payload}")
+    raise runninghub_recoverable_poll_error(504, f"RunningHub 仍在处理中，可稍后查询结果（任务 ID：{task_id}）", task_id)
 
 RUNNINGHUB_ENTRY_MODEL_RE = re.compile(r"^(app|workflow):(.+)$")
 
@@ -15632,12 +15679,19 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             raise HTTPException(status_code=502, detail=f"RunningHub 未返回 taskId：{raw}")
 
         query_url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
-        deadline = time.monotonic() + 1800
+        deadline = time.monotonic() + RUNNINGHUB_EXPLICIT_PENDING_MAX_SECONDS
         last_payload = None
+        indeterminate_count = 0
         while time.monotonic() < deadline:
             await asyncio.sleep(2.5)
-            query_response = await client.post(query_url, headers=runninghub_app_headers(True, use_wallet, provider), json={"apiKey": api_key, "taskId": task_id})
-            query_raw = query_response.json()
+            try:
+                query_response = await runninghub_poll_post(client, query_url, deadline=deadline, headers=runninghub_app_headers(True, use_wallet, provider), json={"apiKey": api_key, "taskId": task_id})
+                query_raw = query_response.json()
+            except Exception as exc:
+                indeterminate_count += 1
+                if indeterminate_count >= RUNNINGHUB_INDETERMINATE_MAX:
+                    raise runninghub_recoverable_poll_error(502, f"RunningHub 任务状态暂无法确认：连续查询异常（任务 ID：{task_id}）", task_id) from exc
+                continue
             if runninghub_should_retry_body_key_only(query_raw):
                 query_response = await client.post(query_url, headers=runninghub_app_headers(True, use_wallet, provider, include_authorization=False), json={"apiKey": api_key, "taskId": task_id})
                 query_raw = query_response.json()
@@ -15658,8 +15712,13 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
                 raise HTTPException(status_code=502, detail=f"RunningHub 任务无图片输出：{query_raw}")
             if code in (805, "805"):
                 raise HTTPException(status_code=502, detail=f"RunningHub 任务失败：{runninghub_fail_reason(query_raw) or query_raw}")
-            # 804 运行中 / 813 排队中 / 其他状态继续轮询
-        raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload}")
+            if runninghub_poll_state(query_raw, code) == "pending":
+                indeterminate_count = 0
+                continue
+            indeterminate_count += 1
+            if indeterminate_count >= RUNNINGHUB_INDETERMINATE_MAX:
+                raise runninghub_recoverable_poll_error(502, f"RunningHub 返回未知任务状态（任务 ID：{task_id}）", task_id)
+        raise runninghub_recoverable_poll_error(504, f"RunningHub 仍在处理中，可稍后查询结果（任务 ID：{task_id}）", task_id)
 
 async def generate_runninghub_provider_image(
     prompt, size, model, reference_images=None, provider=None,
@@ -15756,22 +15815,35 @@ async def wait_for_runninghub_openapi_task(client, provider, task_id, output_kin
         metadata={"use_wallet": True, "output_kind": output_kind},
     )
     query_url = runninghub_openapi_url(provider, "query")
-    deadline = time.monotonic() + 1800
+    deadline = time.monotonic() + RUNNINGHUB_EXPLICIT_PENDING_MAX_SECONDS
     last_payload = None
+    indeterminate_count = 0
     while time.monotonic() < deadline:
         await asyncio.sleep(3)
-        response = await client.post(query_url, headers=runninghub_json_headers(provider), json={"taskId": task_id})
-        response.raise_for_status()
-        raw = response.json()
+        try:
+            response = await runninghub_poll_post(client, query_url, deadline=deadline, headers=runninghub_json_headers(provider), json={"taskId": task_id})
+            response.raise_for_status()
+            raw = response.json()
+        except Exception as exc:
+            indeterminate_count += 1
+            if indeterminate_count >= RUNNINGHUB_INDETERMINATE_MAX:
+                raise runninghub_recoverable_poll_error(502, f"RunningHub 任务状态暂无法确认：连续查询异常（任务 ID：{task_id}）", task_id) from exc
+            continue
         last_payload = raw
-        status = runninghub_query_status(raw).upper()
-        if status in {"SUCCESS", "SUCCEEDED", "COMPLETED", "COMPLETE", "FINISHED", "DONE", "3"}:
+        state = runninghub_poll_state(raw)
+        if state == "succeeded":
             return raw
-        if status in {"FAILED", "FAIL", "ERROR", "CANCEL", "CANCELED", "CANCELLED", "4"}:
+        if state == "failed":
             raise HTTPException(status_code=502, detail=f"RunningHub 任务失败：{runninghub_fail_reason(raw) or raw}")
         if output_kind == "video" and video_output_urls(raw):
             return raw
-    raise HTTPException(status_code=504, detail=f"RunningHub 任务超时：{last_payload or task_id}")
+        if state == "pending":
+            indeterminate_count = 0
+        else:
+            indeterminate_count += 1
+            if indeterminate_count >= RUNNINGHUB_INDETERMINATE_MAX:
+                raise runninghub_recoverable_poll_error(502, f"RunningHub 返回未知任务状态（任务 ID：{task_id}）", task_id)
+    raise runninghub_recoverable_poll_error(504, f"RunningHub 仍在处理中，可稍后查询结果（任务 ID：{task_id}）", task_id)
 
 async def generate_runninghub_video(payload, provider):
     model_def = await runninghub_model_definition(provider, payload.model)
@@ -19162,7 +19234,10 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
         upstream_task_id = getattr(exc, "upstream_task_id", "") or extract_task_id_from_text(detail)
         # Upstreams can return a task ID together with a terminal rejection (for
         # example, a safety block). Only a local polling timeout is queryable.
-        recovery_available = bool(upstream_task_id) and int(status_code or 0) in {408, 504}
+        recovery_available = bool(upstream_task_id) and (
+            bool(getattr(exc, "recovery_available", False))
+            or int(status_code or 0) in {408, 504}
+        )
         if upstream_task_id:
             try:
                 context = upstream_context_for_profile_id(
@@ -20907,7 +20982,10 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
             getattr(exc, "upstream_task_id", "")
             or extract_task_id_from_text(detail)
         )
-        recovery_available = bool(upstream_task_id) and int(getattr(exc, "status_code", 500) or 0) in {408, 504}
+        recovery_available = bool(upstream_task_id) and (
+            bool(getattr(exc, "recovery_available", False))
+            or int(getattr(exc, "status_code", 500) or 0) in {408, 504}
+        )
         canvas_task_update(task_id, {
             "status": "failed",
             "error": str(detail),

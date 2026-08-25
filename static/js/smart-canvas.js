@@ -20885,7 +20885,10 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=nu
                     pendingTask.providerId = error.providerId || pendingTask.providerId || payload.provider_id;
                     pendingTask.error = error.message || tr('smart.errRunFailed');
                 }
-                live.pending = smartPendingTasks(live).length;
+                // A recoverable upstream task is no longer actively polled by
+                // this canvas session. Keep its query affordance, but stop the
+                // live "creating" timer until the user asks to check again.
+                live.pending = 0;
                 live.running = false;
                 toast('任务未丢失，可稍后手动查询结果');
                 scheduleSave();
@@ -21469,7 +21472,9 @@ async function resumeSmartPendingNode(node, logContext={}){
                 task.providerId = e.providerId || task.providerId || providerIdForSmartTask(node, task);
                 task.error = e.message || tr('smart.errRunFailed');
                 node.running = false;
-                node.pending = smartPendingTasks(node).length;
+                // Preserve the recoverable task record for manual querying,
+                // without presenting it as an actively running generation.
+                node.pending = 0;
                 logTaskFailure(task.error, task);
                 toast('任务未丢失，可稍后手动查询结果');
                 render();

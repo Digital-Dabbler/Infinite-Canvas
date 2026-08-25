@@ -52,6 +52,14 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("clearPromptInputForNode(node, {preserveDraft:true});", run_body)
         self.assertIn("await runGeneration(node);", source)
 
+    def test_recoverable_upstream_task_stops_the_live_timer(self):
+        source = self.smart_canvas_js
+        recover_start = source.index("if(e && e.imageTaskRecover && e.recoverTaskId){")
+        recover_end = source.index("return;", recover_start)
+        recover_body = source[recover_start:recover_end]
+        self.assertIn("node.pending = 0;", recover_body)
+        self.assertIn("node.running = false;", recover_body)
+
 
 if __name__ == "__main__":
     unittest.main()
