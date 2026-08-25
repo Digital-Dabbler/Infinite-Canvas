@@ -10410,17 +10410,17 @@ imageActionToolbar?.addEventListener('click', event => {
     runImageToolbarAction(button.dataset.imageToolbarAction || '');
 });
 const ANGLE_AZIMUTHS = [
-    {zh:'正面', en:'front view', angle:0}, {zh:'右前', en:'front-right quarter view', angle:45},
-    {zh:'右侧', en:'right side view', angle:90}, {zh:'右后', en:'back-right quarter view', angle:135},
-    {zh:'背面', en:'back view', angle:180}, {zh:'左后', en:'back-left quarter view', angle:225},
-    {zh:'左侧', en:'left side view', angle:270}, {zh:'左前', en:'front-left quarter view', angle:315}
+    {zh:'正面', en:'front view', onlineZh:'主体正面直视镜头', angle:0}, {zh:'右前', en:'front-right quarter view', onlineZh:'镜头从主体右前方的四分之三视角观察', angle:45},
+    {zh:'右侧', en:'right side view', onlineZh:'主体正右侧面', angle:90}, {zh:'右后', en:'back-right quarter view', onlineZh:'镜头从主体右后方的四分之三视角观察', angle:135},
+    {zh:'背面', en:'back view', onlineZh:'主体背面', angle:180}, {zh:'左后', en:'back-left quarter view', onlineZh:'镜头从主体左后方的四分之三视角观察', angle:225},
+    {zh:'左侧', en:'left side view', onlineZh:'主体正左侧面', angle:270}, {zh:'左前', en:'front-left quarter view', onlineZh:'镜头从主体左前方的四分之三视角观察', angle:315}
 ];
 const ANGLE_ELEVATIONS = [
-    {zh:'仰视', en:'low-angle shot', angle:-30}, {zh:'平视', en:'eye-level shot', angle:0},
-    {zh:'轻俯视', en:'elevated shot', angle:30}, {zh:'高俯视', en:'high-angle shot', angle:60}
+    {zh:'仰视', en:'low-angle shot', onlineZh:'低机位仰视', angle:-30}, {zh:'平视', en:'eye-level shot', onlineZh:'平视', angle:0},
+    {zh:'轻俯视', en:'elevated shot', onlineZh:'轻微俯拍', angle:30}, {zh:'高俯视', en:'high-angle shot', onlineZh:'高机位俯拍', angle:60}
 ];
 const ANGLE_DISTANCES = [
-    {zh:'特写', en:'close-up', value:0}, {zh:'中景', en:'medium shot', value:1}, {zh:'广角远景', en:'wide shot', value:2}
+    {zh:'特写', en:'close-up', onlineZh:'紧凑特写构图', value:0}, {zh:'中景', en:'medium shot', onlineZh:'中景构图', value:1}, {zh:'广角远景', en:'wide shot', onlineZh:'广角远景构图', value:2}
 ];
 const ANGLE_RESULT_PRESETS = [
     {zh:'正面头像', azimuth:0, elevation:0, distance:0}, {zh:'四分之三侧肖像', azimuth:45, elevation:0, distance:0},
@@ -10464,6 +10464,22 @@ function angleCurrentPose(){
         distance:angleNearest(ANGLE_DISTANCES.map(item => ({...item, angle:item.value})), angleControlState.distance)
     };
 }
+function angleAzimuthDelta(a, b){ return Math.min(Math.abs(a - b), 360 - Math.abs(a - b)); }
+function angleOnlinePromptForCurrentPose(){
+    const pose = angleCurrentPose();
+    const azimuth = angleNormalizeAzimuth(angleControlState.azimuth);
+    const azimuthAtNode = angleAzimuthDelta(azimuth, pose.azimuth.angle) <= 8;
+    const elevationAtNode = Math.abs(angleControlState.elevation - pose.elevation.angle) <= 5;
+    const distanceAtNode = Math.abs(angleControlState.distance - pose.distance.value) <= .16;
+    const viewPhrase = azimuthAtNode ? pose.azimuth.onlineZh : `接近${pose.azimuth.zh}方向的斜侧视角`;
+    const elevationPhrase = elevationAtNode ? pose.elevation.onlineZh : `接近${pose.elevation.zh}的机位`;
+    const distancePhrase = distanceAtNode ? pose.distance.onlineZh : `偏${pose.distance.zh}的构图距离`;
+    const references = [];
+    if(!azimuthAtNode) references.push(`方位约 ${azimuth}°`);
+    if(!elevationAtNode) references.push(`俯仰约 ${Math.round(angleControlState.elevation)}°`);
+    if(!distanceAtNode) references.push(`构图距离约 ${angleControlState.distance.toFixed(1)}`);
+    return `${viewPhrase}，${elevationPhrase}，${distancePhrase}。${references.length ? `角度参考：${references.join('、')}。` : ''}`;
+}
 function angleSnap(value, nodes, tolerance, circular=false){
     const normalized = circular ? angleNormalizeAzimuth(value) : Number(value) || 0;
     const nearest = angleNearest(nodes, normalized, circular);
@@ -10493,7 +10509,7 @@ function anglePromptForCurrentPose(){
     const pose = angleCurrentPose();
     const loraPrompt = `<sks> ${pose.azimuth.en} ${pose.elevation.en} ${pose.distance.en}`;
     if(angleControlState.target === 'comfy') return loraPrompt;
-    return `保持参考图主体的身份、服装、环境和光线一致；呈现主体${pose.azimuth.zh}方向约 ${angleNormalizeAzimuth(angleControlState.azimuth)}°，${pose.elevation.zh}约 ${Math.round(angleControlState.elevation)}°，${pose.distance.zh}构图。`;
+    return `保持参考图主体的身份、服装、环境和光线一致；${angleOnlinePromptForCurrentPose()}`;
 }
 function syncAngleRangeVisual(id, value, min, max){
     const control = document.getElementById(id);
