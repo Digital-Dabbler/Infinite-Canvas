@@ -10551,7 +10551,7 @@ function renderAngleControl(){
 function openAngleControl(node, imageIndex=0){
     const item = imageForDisplay(node?.images?.[imageIndex]);
     if(!node || !item?.url || mediaKindForItem(item) !== 'image') return;
-    angleControlState = {nodeId:node.id, imageIndex, target:smartSettingsForNode(node)?.engine === 'comfy' ? 'comfy' : 'online', azimuth:0, elevation:0, distance:1};
+    angleControlState = {nodeId:node.id, imageIndex, target:'comfy', azimuth:0, elevation:0, distance:1};
     angleControlModal.classList.add('open');
     angleControlModal.setAttribute('aria-hidden', 'false');
     renderAngleControl();
