@@ -29,6 +29,7 @@ import contextvars
 import secrets
 import html
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 from threading import Lock, RLock, Thread
@@ -5719,20 +5720,44 @@ def get_best_backend(required_images: List[str] = None):
 
     return best_backend
 
-def reserve_best_backend(required_images: List[str] = None):
+def _comfy_backend_stats(addr: str, required_images: List[str] = None) -> Dict[str, Any]:
+    """Fetch the small, comparable backend snapshot used for one reservation."""
+    with urllib.request.urlopen(f"http://{addr}/queue", timeout=1) as response:
+        data = json.loads(response.read())
+    running = len(data.get('queue_running', []))
+    pending = len(data.get('queue_pending', []))
+    return {
+        "remote_load": running + pending,
+        "queue_running": running,
+        "queue_pending": pending,
+        "has_images": check_images_exist(addr, required_images),
+    }
+
+def reserve_best_backend(required_images: List[str] = None, workflow_name: str = ""):
+    # A validation failure only means this particular workflow cannot run on the
+    # worker. Prefer workers not in the temporary compatibility cooldown, but
+    # retain all workers if every one is currently cooling down.
+    candidate_backends = list(COMFYUI_INSTANCES)
+    compatible_backends = [
+        addr for addr in candidate_backends
+        if not workflow_name or not comfy_backend_is_skipped(workflow_name, addr)
+    ]
+    if compatible_backends:
+        candidate_backends = compatible_backends
+
     backend_stats = {}
-    for addr in COMFYUI_INSTANCES:
-        try:
-            with urllib.request.urlopen(f"http://{addr}/queue", timeout=1) as response:
-                data = json.loads(response.read())
-                remote_load = len(data.get('queue_running', [])) + len(data.get('queue_pending', []))
-                has_images = check_images_exist(addr, required_images)
-                backend_stats[addr] = {"remote_load": remote_load, "has_images": has_images}
-        except Exception as e:
-            print(f"Backend {addr} unreachable: {e}")
-            continue
+    # Probes are independent. Serial probing made an unavailable worker add its
+    # timeout directly to every request's backend selection latency.
+    with ThreadPoolExecutor(max_workers=max(1, len(candidate_backends))) as executor:
+        pending = {executor.submit(_comfy_backend_stats, addr, required_images): addr for addr in candidate_backends}
+        for future in as_completed(pending):
+            addr = pending[future]
+            try:
+                backend_stats[addr] = future.result()
+            except Exception as e:
+                print(f"Backend {addr} unreachable: {e}")
     with LOAD_LOCK:
-        best_backend = COMFYUI_INSTANCES[0]
+        best_backend = candidate_backends[0] if candidate_backends else COMFYUI_INSTANCES[0]
         min_load = float('inf')
         if backend_stats:
             for addr, stats in backend_stats.items():
@@ -5741,7 +5766,7 @@ def reserve_best_backend(required_images: List[str] = None):
                     min_load = load
                     best_backend = addr
         BACKEND_LOCAL_LOAD[best_backend] = BACKEND_LOCAL_LOAD.get(best_backend, 0) + 1
-        return best_backend
+        return best_backend, backend_stats
 
 def comfy_submission_should_failover(error: Exception) -> bool:
     """Only move a prompt to another ComfyUI instance when that instance is unusable/incompatible."""
@@ -5758,6 +5783,23 @@ def comfy_backend_is_skipped(workflow_name: str, backend: str) -> bool:
 
 def mark_comfy_backend_incompatible(workflow_name: str, backend: str):
     COMFY_WORKFLOW_BACKEND_SKIP[(workflow_name, backend)] = time.time() + COMFY_WORKFLOW_BACKEND_SKIP_SECONDS
+
+def comfy_queue_snapshot(backend: str, prompt_id: str = "") -> Dict[str, Any]:
+    """Return queue occupancy and, when possible, this prompt's own queue state."""
+    with urllib.request.urlopen(f"http://{backend}/queue", timeout=1) as response:
+        data = json.loads(response.read())
+    snapshot = {
+        "queue_running": len(data.get("queue_running", [])),
+        "queue_pending": len(data.get("queue_pending", [])),
+    }
+    if prompt_id:
+        prompt_state = "not_listed"
+        for state, items in (("running", data.get("queue_running", [])), ("pending", data.get("queue_pending", []))):
+            if any(isinstance(item, (list, tuple)) and len(item) > 1 and str(item[1]) == str(prompt_id) for item in items):
+                prompt_state = state
+                break
+        snapshot["prompt_state"] = prompt_state
+    return snapshot
 
 # --- 辅助工具 ---
 
@@ -25503,8 +25545,16 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         timings = {}
         required_images = collect_required_comfy_media(req.params)
 
-        target_backend = reserve_best_backend(required_images)
+        target_backend, backend_stats = reserve_best_backend(required_images, req.workflow_json)
         timings["backend_select_ms"] = round((time.perf_counter() - timing_started) * 1000)
+        timings["backend_selection"] = {
+            "selected_backend": target_backend,
+            "probed_backends": backend_stats,
+            "temporarily_skipped_backends": [
+                addr for addr in COMFYUI_INSTANCES
+                if comfy_backend_is_skipped(req.workflow_json, addr)
+            ],
+        }
         input_sync_started = time.perf_counter()
 
         for image_name in required_images:
@@ -25582,27 +25632,45 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         candidate_backends = [target_backend] + [addr for addr in COMFYUI_INSTANCES if addr != target_backend]
         candidate_backends.sort(key=lambda addr: (comfy_backend_is_skipped(req.workflow_json, addr), addr != target_backend))
         submission_errors = []
+        submission_attempts = []
         prompt_id = None
         initial_backend = target_backend
         submission_started = time.perf_counter()
         for backend in candidate_backends:
+            attempt_started = time.perf_counter()
+            fallback_input_sync_ms = 0
             try:
                 # The selected backend has already received the referenced inputs above.
                 # Copy them to a fallback worker before submitting the same workflow there.
                 if backend != initial_backend:
+                    fallback_sync_started = time.perf_counter()
                     for image_name in required_images:
                         source = requests.get(f"http://{initial_backend}/view?filename={urllib.parse.quote(image_name)}&type=input", timeout=5)
                         if source.status_code == 200:
                             requests.post(f"http://{backend}/upload/image", files={"image": (image_name, source.content, source.headers.get("Content-Type", "image/png"))}, timeout=10).raise_for_status()
+                    fallback_input_sync_ms = round((time.perf_counter() - fallback_sync_started) * 1000)
                 post_req = urllib.request.Request(f"http://{backend}/prompt", data=data)
                 prompt_id = json.loads(urllib.request.urlopen(post_req, timeout=10).read())['prompt_id']
                 target_backend = backend
+                submission_attempts.append({
+                    "backend": backend,
+                    "status": "submitted",
+                    "elapsed_ms": round((time.perf_counter() - attempt_started) * 1000),
+                    "fallback_input_sync_ms": fallback_input_sync_ms,
+                })
                 break
             except urllib.error.HTTPError as e:
                 error_body = e.read().decode('utf-8')
                 error = Exception(f"HTTP Error {e.code}: {error_body}")
             except Exception as e:
                 error = e
+            submission_attempts.append({
+                "backend": backend,
+                "status": "failed",
+                "elapsed_ms": round((time.perf_counter() - attempt_started) * 1000),
+                "fallback_input_sync_ms": fallback_input_sync_ms,
+                "error": str(error),
+            })
             submission_errors.append(f"{backend}: {error}")
             if "prompt_outputs_failed_validation" in str(error).lower() and "value_not_in_list" in str(error).lower():
                 mark_comfy_backend_incompatible(req.workflow_json, backend)
@@ -25611,11 +25679,24 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         if not prompt_id:
             raise Exception("所有 ComfyUI 后端提交失败：" + " | ".join(submission_errors))
         timings["submission_ms"] = round((time.perf_counter() - submission_started) * 1000)
+        timings["submission_attempts"] = submission_attempts
+        try:
+            timings["queue_at_submit"] = comfy_queue_snapshot(target_backend, prompt_id)
+        except Exception as e:
+            timings["queue_at_submit_error"] = str(e)
 
         history_data = None
         history_wait_started = time.perf_counter()
+        prompt_started_at = None
         for i in range(COMFYUI_HISTORY_TIMEOUT):
             try:
+                if prompt_started_at is None:
+                    try:
+                        queue_state = comfy_queue_snapshot(target_backend, prompt_id).get("prompt_state")
+                        if queue_state == "running":
+                            prompt_started_at = time.perf_counter()
+                    except Exception:
+                        pass
                 res = get_comfy_history(target_backend, prompt_id)
                 if prompt_id in res:
                     history_data = res[prompt_id]
@@ -25627,6 +25708,9 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         if not history_data:
             raise Exception("ComfyUI 渲染超时")
         timings["comfy_wait_ms"] = round((time.perf_counter() - history_wait_started) * 1000)
+        if prompt_started_at is not None:
+            timings["queue_wait_ms"] = round((prompt_started_at - history_wait_started) * 1000)
+            timings["execution_and_history_ms"] = round((time.perf_counter() - prompt_started_at) * 1000)
 
         local_images = []
         local_videos = []
