@@ -14,6 +14,18 @@
       "type": "prompt",
       "node": "112",
       "input": "prompt"
+    },
+    {
+      "id": "seed",
+      "label": "随机种子",
+      "type": "number",
+      "node": "106",
+      "input": "seed",
+      "default": 1,
+      "min": 1,
+      "max": 4294967295,
+      "step": 1,
+      "random_enabled": true
     }
   ]
 }

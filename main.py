@@ -1950,6 +1950,10 @@ def update_env_values(updates):
         f.write("\n".join(next_lines).rstrip() + "\n")
 
 BACKEND_LOCAL_LOAD = {addr: 0 for addr in COMFYUI_INSTANCES}
+COMFY_WORKFLOW_BACKEND_SKIP = {}
+# A missing model can be repaired while the service stays online. Recheck after a
+# bounded cooldown so a recovered worker returns without repeated failed submissions.
+COMFY_WORKFLOW_BACKEND_SKIP_SECONDS = 30 * 60
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(ASSETS_DIR, exist_ok=True)
@@ -5747,6 +5751,13 @@ def comfy_submission_should_failover(error: Exception) -> bool:
     # Different workers may intentionally host different model sets. ComfyUI emits this
     # validation shape when the selected worker does not have a requested model/LoRA/CLIP.
     return "prompt_outputs_failed_validation" in text and "value_not_in_list" in text
+
+def comfy_backend_is_skipped(workflow_name: str, backend: str) -> bool:
+    expires_at = COMFY_WORKFLOW_BACKEND_SKIP.get((workflow_name, backend), 0)
+    return expires_at > time.time()
+
+def mark_comfy_backend_incompatible(workflow_name: str, backend: str):
+    COMFY_WORKFLOW_BACKEND_SKIP[(workflow_name, backend)] = time.time() + COMFY_WORKFLOW_BACKEND_SKIP_SECONDS
 
 # --- 辅助工具 ---
 
@@ -25488,9 +25499,13 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         QUEUE.append(current_task)
 
     try:
+        timing_started = time.perf_counter()
+        timings = {}
         required_images = collect_required_comfy_media(req.params)
 
         target_backend = reserve_best_backend(required_images)
+        timings["backend_select_ms"] = round((time.perf_counter() - timing_started) * 1000)
+        input_sync_started = time.perf_counter()
 
         for image_name in required_images:
             need_sync = False
@@ -25523,6 +25538,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                         requests.post(f"http://{target_backend}/upload/image", files=files, timeout=10)
                     except Exception as e:
                         print(f"Sync upload failed: {e}")
+        timings["input_sync_ms"] = round((time.perf_counter() - input_sync_started) * 1000)
 
         workflow_path = os.path.join(WORKFLOW_DIR, req.workflow_json)
         if not os.path.exists(workflow_path) and req.workflow_json == "Z-Image.json":
@@ -25564,9 +25580,11 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         p = {"prompt": workflow, "client_id": CLIENT_ID}
         data = json.dumps(p).encode('utf-8')
         candidate_backends = [target_backend] + [addr for addr in COMFYUI_INSTANCES if addr != target_backend]
+        candidate_backends.sort(key=lambda addr: (comfy_backend_is_skipped(req.workflow_json, addr), addr != target_backend))
         submission_errors = []
         prompt_id = None
         initial_backend = target_backend
+        submission_started = time.perf_counter()
         for backend in candidate_backends:
             try:
                 # The selected backend has already received the referenced inputs above.
@@ -25586,12 +25604,16 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
             except Exception as e:
                 error = e
             submission_errors.append(f"{backend}: {error}")
+            if "prompt_outputs_failed_validation" in str(error).lower() and "value_not_in_list" in str(error).lower():
+                mark_comfy_backend_incompatible(req.workflow_json, backend)
             if not comfy_submission_should_failover(error):
                 raise error
         if not prompt_id:
             raise Exception("所有 ComfyUI 后端提交失败：" + " | ".join(submission_errors))
+        timings["submission_ms"] = round((time.perf_counter() - submission_started) * 1000)
 
         history_data = None
+        history_wait_started = time.perf_counter()
         for i in range(COMFYUI_HISTORY_TIMEOUT):
             try:
                 res = get_comfy_history(target_backend, prompt_id)
@@ -25604,6 +25626,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
 
         if not history_data:
             raise Exception("ComfyUI 渲染超时")
+        timings["comfy_wait_ms"] = round((time.perf_counter() - history_wait_started) * 1000)
 
         local_images = []
         local_videos = []
@@ -25613,6 +25636,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         local_items = []
         local_urls = []
         current_timestamp = time.time()
+        output_download_started = time.perf_counter()
         if 'outputs' in history_data:
             # 先把所有节点的输出收集为候选（带上 class_type），再决定下载哪些，
             # 避免把冗余的预览/对比图、调试文本一起下载进结果（后端层过滤，历史记录也更干净）。
@@ -25682,6 +25706,9 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                 local_items.append(entry)
                 local_urls.append(local_path)
 
+        timings["output_download_ms"] = round((time.perf_counter() - output_download_started) * 1000)
+        timings["total_ms"] = round((time.perf_counter() - timing_started) * 1000)
+
         result = {
             "prompt": req.prompt if req.prompt else "Detail Enhance",
             "images": local_images,
@@ -25698,6 +25725,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
             "task_id": task_id,
             "prompt_id": prompt_id,
             "backend": target_backend,
+            "timings": timings,
             "params": req.params
         }
         save_to_history(result)
