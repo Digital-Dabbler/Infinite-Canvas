@@ -10571,14 +10571,14 @@ function angleSettingsForTarget(){
             apiKind:'image'
         };
     }
-    // 角度控制的在线分支固定走 RunningHub NanoBanana Pro 低价图生图，
+    // 角度控制的在线分支固定走 RunningHub NanoBanana 2 低价图生图，
     // 不继承 Composer 当前的平台或模型选择，避免视觉控制结果被错误路由到其他模型。
     return {
         ...cloneSmartSettings(settings),
         engine:'api',
         apiKind:'image',
         provider_id:'runninghub',
-        model:'nano-banana-pro/edit-channel-low-price',
+        model:'nano-banana2-gemini31flash/image-to-image-channel-low-price',
         ratio:'adaptive',
         resolution:'2k',
         rhCapability:'model',
