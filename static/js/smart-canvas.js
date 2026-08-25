@@ -10629,6 +10629,18 @@ function endAngleCubeDrag(event){
 }
 angleCubeStage?.addEventListener('pointerup', endAngleCubeDrag);
 angleCubeStage?.addEventListener('pointercancel', endAngleCubeDrag);
+angleCubeStage?.addEventListener('wheel', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    const lineHeight = 16;
+    const wheelPixels = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * lineHeight : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.deltaY * 400 : event.deltaY;
+    const distanceDelta = Math.max(-.16, Math.min(.16, wheelPixels / 600));
+    if(!distanceDelta) return;
+    // Up is closer (negative deltaY); down is farther. The same state drives
+    // the cube scale, range control, pose label, and generation prompt.
+    setAngleControlValue('distance', angleControlState.distance + distanceDelta, {snap:false});
+    renderAngleControl();
+}, {passive:false});
 function smartNodeToolbarHtml(node){
     return '';
 }
