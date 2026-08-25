@@ -60,6 +60,20 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("node.pending = 0;", recover_body)
         self.assertIn("node.running = false;", recover_body)
 
+    def test_canvas_media_catalog_preserves_replaced_media_for_authorized_lookup(self):
+        canvas = {
+            "nodes": [],
+            "media_catalog": [{"url": "/output/previous-image.png", "kind": "image"}],
+        }
+        self.assertTrue(main.canvas_contains_media(canvas, "/output/previous-image.png"))
+
+    def test_canvas_save_contract_and_picker_include_media_catalog(self):
+        payload = main.CanvasSaveRequest(media_catalog=[{"url": "/output/previous-image.png"}])
+        self.assertEqual(payload.media_catalog[0]["url"], "/output/previous-image.png")
+        self.assertIn("function mergeCanvasMediaCatalog", self.smart_canvas_js)
+        self.assertIn("media_catalog:storageCanvas.media_catalog || []", self.smart_canvas_js)
+        self.assertIn("function removeCanvasMediaCatalogItem", self.smart_canvas_js)
+
 
 if __name__ == "__main__":
     unittest.main()

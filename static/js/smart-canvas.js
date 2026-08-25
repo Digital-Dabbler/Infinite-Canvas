@@ -973,6 +973,7 @@ function canvasForStorage(){
         if(Array.isArray(node.images)) node.images = node.images.map(mediaItemForStorage);
         if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
     });
+    if(Array.isArray(clean.media_catalog)) clean.media_catalog = clean.media_catalog.map(mediaItemForStorage);
     return clean;
 }
 function apiErrorMessage(data, fallback='请求失败'){
@@ -6994,6 +6995,7 @@ function applyMergedServerCanvas(serverCanvas){
     const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes);
     const nodeIds = new Set(mergedNodes.map(n => n.id));
     nodes = mergedNodes;
+    mergeCanvasMediaCatalog(serverCanvas.media_catalog || []);
     cleanupWorkflowOrganizerMemberships();
     canvas.connections = mergeSmartConnections(canvas.connections, serverCanvas.connections, nodeIds);
     const cleanedState = clearCompletedNodeBusyStates();
@@ -7932,6 +7934,7 @@ async function loadCanvas(){
         });
         const legacyMigration = migrateLegacySmartCanvasNodes(Array.isArray(canvas.nodes) ? canvas.nodes : [], Array.isArray(canvas.connections) ? canvas.connections : []);
         nodes = legacyMigration.nodes;
+        const catalogMigrated = mergeCanvasMediaCatalog(canvas.media_catalog || []);
         cleanupWorkflowOrganizerMemberships();
         migrateSmartGroupImageMembers();
         canvas.connections = legacyMigration.connections;
@@ -7966,7 +7969,7 @@ async function loadCanvas(){
         updateProviderModels();
         applyViewport();
         render();
-        if(legacyMigration.changed || clearedTerminalTasks || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers) scheduleSave();
+        if(legacyMigration.changed || catalogMigrated || clearedTerminalTasks || cleanedDetachedInputs || cleanedCompletedState || recoveredLoopOutputs || hiddenCompletedTimers) scheduleSave();
         reconcileLegacyVideoTailFrames();
         resumeSmartPendingTasks();
         resumeJimengPendingNodes();
@@ -7984,6 +7987,7 @@ async function saveCanvas(){
         node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
         if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
     });
+    mergeCanvasMediaCatalog();
     canvas.nodes = nodes;
     canvas.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
     canvas.viewport = {...viewport};
@@ -8002,6 +8006,7 @@ async function saveCanvas(){
                 logs:storageCanvas.logs || [],
                 settings:storageCanvas.settings,
                 deleted_node_ids:storageCanvas.deleted_node_ids || [],
+                media_catalog:storageCanvas.media_catalog || [],
                 base_updated_at:storageCanvas.updated_at || canvas.updated_at || 0,
                 client_id:smartClientId
             })
@@ -12184,7 +12189,7 @@ function handlePortDrop(drag, e){
     render();
     requestAnimationFrame(() => openPortConnectMenu(drag.fromId, drag.fromPort, e, {worldPoint:screenToWorld(e)}));
 }
-const uploadResourcePickerState = {open:false, nodeId:'', imageIndex:-1, tab:'all', query:'', view:'grid', sort:'recent', trigger:null};
+const uploadResourcePickerState = {open:false, nodeId:'', imageIndex:-1, tab:'all', scope:'all', query:'', view:'grid', sort:'recent', trigger:null};
 let uploadResourcePickerEl = null;
 const uploadResourceFingerprintByUrl = new Map();
 let uploadResourceFingerprintRequestKey = '';
@@ -12195,6 +12200,38 @@ function canvasUploadResourceIdentity(raw){
     const url = String(raw?.url || '');
     const fingerprint = uploadResourceFingerprintByUrl.get(url);
     return fingerprint ? `sha256:${fingerprint}` : `url:${mediaOutputIdentity(raw) || url}`;
+}
+function mediaCatalogSourceForNode(node){
+    return isSmartUploadNode(node) ? 'imported' : (isSmartGenerationNode(node) ? 'generated' : '');
+}
+function mergeCanvasMediaCatalog(remoteEntries=[]){
+    if(!canvas) return false;
+    const existing = Array.isArray(canvas.media_catalog) ? canvas.media_catalog : [];
+    const candidates = [...existing, ...(Array.isArray(remoteEntries) ? remoteEntries : [])];
+    (nodes || []).forEach(node => {
+        const source = mediaCatalogSourceForNode(node);
+        if(!source) return;
+        (node.images || []).forEach((item, imageIndex) => {
+            if(item?.loopInputPreview || isReturnedVideoLastFrame(item)) return;
+            candidates.push({...item, source, source_node_id:node.id, source_image_index:imageIndex, added_at:Date.now()});
+        });
+    });
+    const seen = new Set();
+    const catalog = [];
+    candidates.forEach(raw => {
+        if(!raw?.url) return;
+        const item = mediaItemForStorage(stripImageGenerationMeta({...raw}));
+        const identity = mediaOutputIdentity(item) || item.url;
+        if(!identity || seen.has(identity)) return;
+        seen.add(identity);
+        item.source = item.source === 'generated' ? 'generated' : 'imported';
+        item.added_at = Number(item.added_at) || Date.now();
+        catalog.push(item);
+    });
+    const next = catalog.slice(-5000);
+    const changed = JSON.stringify(existing) !== JSON.stringify(next);
+    canvas.media_catalog = next;
+    return changed;
 }
 function isLocalCanvasMediaUrl(url){
     return /^\/(?:assets|output|api\/storage-files)\//.test(String(url || ''));
@@ -12236,6 +12273,11 @@ function currentCanvasUploadResourceItems(){
     const resources = [];
     const target = nodes.find(node => node.id === uploadResourcePickerState.nodeId);
     const targetKind = isSmartUploadNode(target) ? uploadMediaKindForNode(target) : 'image';
+    mergeCanvasMediaCatalog();
+    const activeIdentities = new Set();
+    (nodes || []).forEach(node => (node.images || []).forEach(raw => {
+        if(raw?.url && !raw?.loopInputPreview && !isReturnedVideoLastFrame(raw)) activeIdentities.add(canvasUploadResourceIdentity(raw));
+    }));
     const add = (raw, source, node, imageIndex) => {
         if(!raw?.url || mediaKindForItem(imageForDisplay(raw)) !== targetKind) return;
         const identity = canvasUploadResourceIdentity(raw);
@@ -12247,17 +12289,11 @@ function currentCanvasUploadResourceItems(){
             nodeId:node.id,
             imageIndex,
             identity,
+            active:activeIdentities.has(identity),
             name:imageNameLabel(raw, uploadResourceLabel(targetKind))
         });
     };
-    nodes.forEach(node => {
-        const source = isSmartUploadNode(node) ? 'imported' : (isSmartGenerationNode(node) ? 'generated' : '');
-        if(!source) return;
-        (node.images || []).forEach((image, imageIndex) => {
-            if(image?.loopInputPreview || isReturnedVideoLastFrame(image)) return;
-            add(image, source, node, imageIndex);
-        });
-    });
+    (canvas?.media_catalog || []).forEach((item, index) => add(item, item.source, {id:item.source_node_id || ''}, index));
     return resources;
 }
 function filteredCanvasUploadResourceItems(){
@@ -12267,6 +12303,7 @@ function filteredCanvasUploadResourceItems(){
     const targetIdentity = canvasUploadResourceIdentity(target);
     let items = currentCanvasUploadResourceItems()
         .filter(item => state.tab === 'all' || item.source === state.tab)
+        .filter(item => state.scope === 'all' || (state.scope === 'active' ? item.active : !item.active))
         .filter(item => !keyword || `${item.name} ${uploadResourceSourceLabel(item.source)}`.toLocaleLowerCase().includes(keyword));
     if(state.sort === 'name-asc') items.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
     else if(state.sort === 'name-desc') items.sort((a, b) => b.name.localeCompare(a.name, 'zh-CN'));
@@ -12304,6 +12341,18 @@ function uploadResourceSortLabel(){
     if(uploadResourcePickerState.sort === 'name-desc') return tr('smart.resourceSortNameDesc');
     return tr('smart.resourceSortRecent');
 }
+function uploadResourceScopeLabel(){
+    return uploadResourcePickerState.scope === 'active' ? tr('smart.resourceScopeActive') : uploadResourcePickerState.scope === 'history' ? tr('smart.resourceScopeHistory') : tr('smart.resourceScopeAll');
+}
+function removeCanvasMediaCatalogItem(identity){
+    if(!canvas || !identity) return false;
+    const before = Array.isArray(canvas.media_catalog) ? canvas.media_catalog : [];
+    const next = before.filter(item => (mediaOutputIdentity(item) || item?.url) !== identity);
+    if(next.length === before.length) return false;
+    canvas.media_catalog = next;
+    scheduleSave();
+    return true;
+}
 function renderUploadResourcePicker({focusSearch=false}={}){
     const picker = ensureUploadResourcePicker();
     const state = uploadResourcePickerState;
@@ -12324,12 +12373,13 @@ function renderUploadResourcePicker({focusSearch=false}={}){
     <div class="upload-resource-toolbar">
         <label class="upload-resource-search"><i data-lucide="search"></i><input data-upload-resource-search type="search" value="${escapeAttr(state.query)}" placeholder="${escapeAttr(tr('smart.resourceSearch'))}" aria-label="${escapeAttr(tr('smart.resourceSearch'))}"></label>
         <button class="upload-resource-tool" type="button" data-upload-resource-sort title="${escapeAttr(uploadResourceSortLabel())}" aria-label="${escapeAttr(uploadResourceSortLabel())}"><i data-lucide="${uploadResourceSortIcon()}"></i></button>
+        <button class="upload-resource-tool" type="button" data-upload-resource-scope title="${escapeAttr(uploadResourceScopeLabel())}" aria-label="${escapeAttr(uploadResourceScopeLabel())}"><i data-lucide="${state.scope === 'history' ? 'history' : state.scope === 'active' ? 'eye' : 'layers'}"></i></button>
         <button class="upload-resource-tool ${state.view === 'grid' ? 'active' : ''}" type="button" data-upload-resource-view="grid" title="${escapeAttr(tr('smart.resourceGridView'))}" aria-label="${escapeAttr(tr('smart.resourceGridView'))}" aria-pressed="${state.view === 'grid'}"><i data-lucide="grid-2x2"></i></button>
         <button class="upload-resource-tool ${state.view === 'list' ? 'active' : ''}" type="button" data-upload-resource-view="list" title="${escapeAttr(tr('smart.resourceListView'))}" aria-label="${escapeAttr(tr('smart.resourceListView'))}" aria-pressed="${state.view === 'list'}"><i data-lucide="list"></i></button>
     </div>
     <div class="upload-resource-count" aria-live="polite">${escapeHtml(trf('smart.resourceCanvasMediaCount', {n:items.length, kind:kindLabel}))}</div>
     <div class="upload-resource-grid ${state.view === 'list' ? 'is-list' : ''}" role="listbox" aria-label="${escapeAttr(trf('smart.resourcePickerLabel', {kind:kindLabel}))}">
-        ${items.length ? items.map((item, index) => `<button class="upload-resource-item ${(item.identity === targetIdentity) ? 'selected' : ''}" type="button" role="option" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb">${thumbMediaHtml(imageForDisplay(item), {selectOnly:true})}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${uploadResourceSourceLabel(item.source)}</span></button>`).join('') : `<div class="upload-resource-empty"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`}
+        ${items.length ? items.map((item, index) => `<div class="upload-resource-item ${(item.identity === targetIdentity) ? 'selected' : ''}"><button class="upload-resource-select-item" type="button" role="option" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb">${thumbMediaHtml(imageForDisplay(item), {selectOnly:true})}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${uploadResourceSourceLabel(item.source)}</span></button>${state.scope === 'history' && !item.active ? `<button class="upload-resource-remove" type="button" data-upload-resource-remove="${index}" title="${escapeAttr(tr('smart.resourceRemoveHistory'))}" aria-label="${escapeAttr(tr('smart.resourceRemoveHistory'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>`).join('') : `<div class="upload-resource-empty"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`}
     </div>`;
     picker.querySelectorAll('[data-upload-resource-tab]').forEach(button => {
         button.addEventListener('click', () => {
@@ -12343,6 +12393,10 @@ function renderUploadResourcePicker({focusSearch=false}={}){
     });
     picker.querySelector('[data-upload-resource-sort]')?.addEventListener('click', () => {
         state.sort = state.sort === 'recent' ? 'name-asc' : (state.sort === 'name-asc' ? 'name-desc' : 'recent');
+        renderUploadResourcePicker();
+    });
+    picker.querySelector('[data-upload-resource-scope]')?.addEventListener('click', () => {
+        state.scope = state.scope === 'all' ? 'active' : (state.scope === 'active' ? 'history' : 'all');
         renderUploadResourcePicker();
     });
     picker.querySelectorAll('[data-upload-resource-view]').forEach(button => {
@@ -12367,6 +12421,19 @@ function renderUploadResourcePicker({focusSearch=false}={}){
             closeUploadResourcePicker({restoreFocus:false});
             appendImagesToSmartNode([{...selected, kind:targetKind}], nodeId, {replaceIndex:imageIndex});
             toast(tr('smart.resourceReplaced'));
+        });
+    });
+    picker.querySelectorAll('[data-upload-resource-remove]').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const item = items[Number(button.dataset.uploadResourceRemove)];
+            if(!item || item.active) return;
+            if(!window.confirm(trf('smart.resourceRemoveHistoryConfirm', {name:item.name}))) return;
+            if(removeCanvasMediaCatalogItem(item.identity)){
+                toast(tr('smart.resourceRemovedHistory'));
+                renderUploadResourcePicker();
+            }
         });
     });
     picker.querySelector('.upload-resource-grid')?.addEventListener('keydown', event => {
@@ -12422,6 +12489,7 @@ function openUploadResourcePicker(nodeId, imageIndex, trigger){
     state.nodeId = nodeId;
     state.imageIndex = imageIndex;
     state.tab = 'all';
+    state.scope = 'all';
     state.query = '';
     state.sort = 'recent';
     state.trigger = trigger || null;
@@ -17758,6 +17826,7 @@ async function uploadFiles(files){
 function appendImagesToSmartNode(uploaded, targetId='', opts={}){
     const media = [...(uploaded || [])].filter(file => file?.url).map(file => ({...file, kind:normalizedUploadMediaKind(file.kind || mediaKindForItem(file))}));
     if(!media.length) return null;
+    mergeCanvasMediaCatalog(media.map(item => ({...item, source:'imported', added_at:Date.now()})));
     const mediaKind = media[0].kind;
     if(media.some(file => file.kind !== mediaKind)){
         toast(tr('smart.uploadMixedKinds'));

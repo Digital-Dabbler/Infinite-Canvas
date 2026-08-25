@@ -5434,6 +5434,7 @@ class CanvasSaveRequest(BaseModel):
     client_id: str = ""
     base_updated_at: int = 0
     deleted_node_ids: List[str] = []
+    media_catalog: List[Dict[str, Any]] = []
 
 class PhotoshopBridgeCreateRequest(BaseModel):
     canvas_id: str = ""
@@ -6179,6 +6180,7 @@ def new_canvas(title="智能画布", icon="sparkles", project=None, board_x=None
         "created_at": timestamp,
         "updated_at": timestamp,
         "nodes": [],
+        "media_catalog": [],
         "connections": [],
         "viewport": {"x": 0, "y": 0, "scale": 1},
     }
@@ -6280,6 +6282,8 @@ def canvas_contains_media(canvas, url, source_node_id=""):
     for item in canvas_media_entries(canvas):
         if item["url"] == target and (not source_id or item["node_id"] == source_id):
             return True
+    if not source_id and any(canvas_media_url(item) == target for item in (canvas.get("media_catalog") or [])):
+        return True
     for log in canvas.get("logs") or []:
         if source_id and str((log or {}).get("nodeId") or "") != source_id:
             continue
@@ -24459,6 +24463,17 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
             canvas["viewport"] = payload.viewport
             canvas["logs"] = payload.logs[-500:]
             canvas["settings"] = payload.settings or {}
+            existing_catalog = [item for item in (canvas.get("media_catalog") or []) if isinstance(item, dict) and canvas_media_url(item)]
+            incoming_catalog = [item for item in (payload.media_catalog or []) if isinstance(item, dict) and canvas_media_url(item)]
+            catalog_seen = set()
+            merged_catalog = []
+            for item in [*existing_catalog, *incoming_catalog]:
+                url = canvas_media_url(item)
+                if url in catalog_seen:
+                    continue
+                catalog_seen.add(url)
+                merged_catalog.append(item)
+            canvas["media_catalog"] = merged_catalog[-5000:]
             ensure_canvas_cover(canvas)
             save_canvas(canvas)
             return canvas
