@@ -5739,6 +5739,15 @@ def reserve_best_backend(required_images: List[str] = None):
         BACKEND_LOCAL_LOAD[best_backend] = BACKEND_LOCAL_LOAD.get(best_backend, 0) + 1
         return best_backend
 
+def comfy_submission_should_failover(error: Exception) -> bool:
+    """Only move a prompt to another ComfyUI instance when that instance is unusable/incompatible."""
+    text = str(error or "").lower()
+    if any(token in text for token in ("timed out", "connection refused", "connection reset", "network is unreachable", "url error", "http error 502", "http error 503", "http error 504")):
+        return True
+    # Different workers may intentionally host different model sets. ComfyUI emits this
+    # validation shape when the selected worker does not have a requested model/LoRA/CLIP.
+    return "prompt_outputs_failed_validation" in text and "value_not_in_list" in text
+
 # --- 辅助工具 ---
 
 def download_image(comfy_address, comfy_url_path, prefix="studio_"):
@@ -25554,12 +25563,33 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
 
         p = {"prompt": workflow, "client_id": CLIENT_ID}
         data = json.dumps(p).encode('utf-8')
-        try:
-            post_req = urllib.request.Request(f"http://{target_backend}/prompt", data=data)
-            prompt_id = json.loads(urllib.request.urlopen(post_req, timeout=10).read())['prompt_id']
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode('utf-8')
-            raise Exception(f"HTTP Error {e.code}: {error_body}")
+        candidate_backends = [target_backend] + [addr for addr in COMFYUI_INSTANCES if addr != target_backend]
+        submission_errors = []
+        prompt_id = None
+        initial_backend = target_backend
+        for backend in candidate_backends:
+            try:
+                # The selected backend has already received the referenced inputs above.
+                # Copy them to a fallback worker before submitting the same workflow there.
+                if backend != initial_backend:
+                    for image_name in required_images:
+                        source = requests.get(f"http://{initial_backend}/view?filename={urllib.parse.quote(image_name)}&type=input", timeout=5)
+                        if source.status_code == 200:
+                            requests.post(f"http://{backend}/upload/image", files={"image": (image_name, source.content, source.headers.get("Content-Type", "image/png"))}, timeout=10).raise_for_status()
+                post_req = urllib.request.Request(f"http://{backend}/prompt", data=data)
+                prompt_id = json.loads(urllib.request.urlopen(post_req, timeout=10).read())['prompt_id']
+                target_backend = backend
+                break
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode('utf-8')
+                error = Exception(f"HTTP Error {e.code}: {error_body}")
+            except Exception as e:
+                error = e
+            submission_errors.append(f"{backend}: {error}")
+            if not comfy_submission_should_failover(error):
+                raise error
+        if not prompt_id:
+            raise Exception("所有 ComfyUI 后端提交失败：" + " | ".join(submission_errors))
 
         history_data = None
         for i in range(COMFYUI_HISTORY_TIMEOUT):

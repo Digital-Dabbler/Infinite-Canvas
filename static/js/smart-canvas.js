@@ -10422,6 +10422,7 @@ const ANGLE_ELEVATIONS = [
 const ANGLE_DISTANCES = [
     {zh:'特写', en:'close-up', onlineZh:'紧凑特写构图', value:0}, {zh:'中景', en:'medium shot', onlineZh:'中景构图', value:1}, {zh:'广角远景', en:'wide shot', onlineZh:'广角远景构图', value:2}
 ];
+const SMART_MULTIPLE_ANGLES_WORKFLOW = 'comfyui-workflow-multiple-angles-api.json';
 const ANGLE_RESULT_PRESETS = [
     {zh:'正面头像', azimuth:0, elevation:0, distance:0}, {zh:'四分之三侧肖像', azimuth:45, elevation:0, distance:0},
     {zh:'侧脸特写', azimuth:90, elevation:0, distance:0}, {zh:'正面半身', azimuth:0, elevation:0, distance:1},
@@ -10561,9 +10562,14 @@ function closeAngleControl(){
 }
 function angleSettingsForTarget(){
     if(angleControlState.target === 'comfy'){
-        const saved = recentSmartSettingsForMode('comfy:edit');
-        const selected = Object.keys(saved).length ? saved : cloneSmartSettings(settings);
-        return {...selected, engine:'comfy', comfyMode:selected.comfyMode || 'edit', apiKind:'image'};
+        return {
+            ...cloneSmartSettings(settings),
+            engine:'comfy',
+            comfyMode:'custom',
+            comfyWorkflow:SMART_MULTIPLE_ANGLES_WORKFLOW,
+            comfyParams:{},
+            apiKind:'image'
+        };
     }
     // 角度控制的在线分支固定走 RunningHub NanoBanana Pro 低价图生图，
     // 不继承 Composer 当前的平台或模型选择，避免视觉控制结果被错误路由到其他模型。

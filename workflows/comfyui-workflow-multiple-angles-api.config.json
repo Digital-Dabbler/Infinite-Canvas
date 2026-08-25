@@ -1,0 +1,19 @@
+{
+  "title": "多角度参考图生成",
+  "fields": [
+    {
+      "id": "reference_image",
+      "label": "参考图",
+      "type": "image",
+      "node": "41",
+      "input": "image"
+    },
+    {
+      "id": "angle_prompt",
+      "label": "角度提示词",
+      "type": "prompt",
+      "node": "112",
+      "input": "prompt"
+    }
+  ]
+}
