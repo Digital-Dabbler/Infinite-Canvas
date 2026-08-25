@@ -10432,14 +10432,18 @@ function angleNormalizeAzimuth(value){
     const degrees = Math.round(Number(value) || 0);
     return ((degrees % 360) + 360) % 360;
 }
+function angleNearestAzimuthTurn(value, reference=angleControlState.azimuth){
+    const displayAngle = angleNormalizeAzimuth(value);
+    return displayAngle + Math.round((Number(reference) - displayAngle) / 360) * 360;
+}
 // The state describes the viewer's position around the subject, not the CSS transform.
-// Keep this conversion in one place: CSS rotates the subject in the opposite direction
-// of the viewer. This makes the visible face, the pose label, and the generated prompt
-// all derive from the same semantic angle.
+// Its azimuth deliberately stays unbounded while dragging: 359 -> 360 must remain a
+// one-degree visual rotation. Only labels, prompts, and the range input use 0-359.
+// CSS rotates the subject in the opposite direction of the viewer.
 function angleCubePreviewTransform(){
     return {
         x:-Math.round(angleControlState.elevation),
-        y:-angleNormalizeAzimuth(angleControlState.azimuth),
+        y:-Number(angleControlState.azimuth || 0),
         scale:1.18 - angleControlState.distance * .22
     };
 }
@@ -10466,8 +10470,12 @@ function angleSnap(value, nodes, tolerance, circular=false){
     const delta = circular ? Math.min(Math.abs(nearest.angle - normalized), 360 - Math.abs(nearest.angle - normalized)) : Math.abs(nearest.angle - normalized);
     return delta <= tolerance ? nearest.angle : normalized;
 }
-function setAngleControlValue(key, value, {snap=true}={}){
-    if(key === 'azimuth') angleControlState.azimuth = snap ? angleSnap(value, angleAzimuthSnapNodes(), 8) : angleNormalizeAzimuth(value);
+function setAngleControlValue(key, value, {snap=true, continuous=false}={}){
+    if(key === 'azimuth'){
+        const rawAngle = Number(value) || 0;
+        const displayAngle = snap ? angleSnap(angleNormalizeAzimuth(rawAngle), angleAzimuthSnapNodes(), 8) : angleNormalizeAzimuth(rawAngle);
+        angleControlState.azimuth = continuous ? rawAngle : angleNearestAzimuthTurn(displayAngle);
+    }
     else if(key === 'elevation') angleControlState.elevation = Math.max(-30, Math.min(60, snap ? angleSnap(value, ANGLE_ELEVATIONS, 5) : Number(value) || 0));
     else angleControlState.distance = Math.max(0, Math.min(2, snap ? angleSnap(value, ANGLE_DISTANCES.map(item => ({...item, angle:item.value})), .16) : Number(value) || 0));
 }
@@ -10569,7 +10577,7 @@ async function generateAngleImage(){
     output.promptDraftText = anglePromptForCurrentPose();
     output.promptDraftHtml = escapeHtml(output.promptDraftText);
     output.promptDraftTouched = true;
-    output.angleControl = {...angleControlState, pose:angleCurrentPose()};
+    output.angleControl = {...angleControlState, azimuth:angleNormalizeAzimuth(angleControlState.azimuth), pose:angleCurrentPose()};
     connectInputNode(source.id, output.id);
     selectedId = output.id;
     selectedIds = [];
@@ -10609,7 +10617,7 @@ angleCubeStage?.addEventListener('pointermove', event => {
     // Dragging left moves the viewer to the subject's right; dragging upward
     // moves the viewer below the subject. Those are the same semantic values
     // used by the labels and generation prompt.
-    setAngleControlValue('azimuth', angleCubeDrag.azimuth - dx * 0.72, {snap:false});
+    setAngleControlValue('azimuth', angleCubeDrag.azimuth - dx * 0.72, {snap:false, continuous:true});
     setAngleControlValue('elevation', angleCubeDrag.elevation + dy * 0.42, {snap:false});
     renderAngleControl();
 });
