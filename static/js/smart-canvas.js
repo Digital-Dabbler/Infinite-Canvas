@@ -9894,8 +9894,22 @@ function positionImageActionToolbar(target=currentMediaToolbarTarget()){
     const width = imageActionToolbar.offsetWidth || 1;
     const height = imageActionToolbar.offsetHeight || 42;
     const centerX = Math.max(width / 2 + 14, Math.min(shellRect.width - width / 2 - 14, nodeRect.left - shellRect.left + nodeRect.width / 2));
-    const above = nodeRect.top - shellRect.top - height - 36;
-    const top = Math.max(12, above);
+    // The node type label sits above the media card. Keep the global action
+    // bar outside that label's occupied area instead of relying on a fixed
+    // offset that only works for nodes without the label.
+    const roleLabel = nodeEl.querySelector(':scope > .node-role-label');
+    const roleRect = roleLabel?.getClientRects().length ? roleLabel.getBoundingClientRect() : null;
+    const edge = 12;
+    const gap = 10;
+    const occupiedTop = Math.min(nodeRect.top, roleRect?.top ?? nodeRect.top);
+    const above = occupiedTop - shellRect.top - height - gap;
+    // If the node is near the canvas top, use the gap between its type label
+    // and card when available; otherwise keep the bar inside the canvas edge.
+    const belowLabel = roleRect ? roleRect.bottom - shellRect.top + gap : 0;
+    const cardTop = nodeRect.top - shellRect.top;
+    const top = above >= edge
+        ? above
+        : (roleRect && belowLabel + height <= cardTop - gap ? belowLabel : edge);
     imageActionToolbar.style.left = `${Math.round(centerX)}px`;
     imageActionToolbar.style.top = `${Math.round(top)}px`;
 }
