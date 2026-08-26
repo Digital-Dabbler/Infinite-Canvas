@@ -5933,6 +5933,32 @@ def collect_comfy_file_items(node_output):
                 items.append((key, item))
     return items
 
+def comfy_history_execution_failure(history_data):
+    """Return an explicit ComfyUI execution error eligible for backend retry."""
+    status = history_data.get("status") if isinstance(history_data, dict) else {}
+    messages = status.get("messages") if isinstance(status, dict) else []
+    for message in messages if isinstance(messages, list) else []:
+        if not isinstance(message, (list, tuple)) or not message:
+            continue
+        kind = str(message[0] or "").strip().lower()
+        payload = message[1] if len(message) > 1 else ""
+        if kind not in {"execution_error", "execution_exception"}:
+            continue
+        try:
+            detail = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            detail = str(payload)
+        return detail[:1200] or kind
+    return ""
+
+def comfy_execution_retry_backends(candidate_backends, failed_backend):
+    """Return every configured backend after the one with an eligible execution failure."""
+    backends = list(candidate_backends)
+    try:
+        return backends[backends.index(failed_backend) + 1:]
+    except ValueError:
+        return []
+
 # 纯预览/对比类节点：其输出只用于界面展示（PreviewImage、rgthree 的 Image Comparer 等），
 # 工作流里通常还有 SaveImage 产出真正结果，故有正式产出时应丢弃这些冗余预览/对比图。
 COMFY_PREVIEW_CLASS_HINTS = ("previewimage", "comparer", "imagecompare", "image compare")
@@ -25771,12 +25797,6 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                 raise error
         if not prompt_id:
             raise Exception("所有 ComfyUI 后端提交失败：" + " | ".join(submission_errors))
-        timings["submission_ms"] = round((time.perf_counter() - submission_started) * 1000)
-        timings["submission_attempts"] = submission_attempts
-        try:
-            timings["queue_at_submit"] = comfy_queue_snapshot(target_backend, prompt_id)
-        except Exception as e:
-            timings["queue_at_submit_error"] = str(e)
 
         history_data = None
         history_wait_started = time.perf_counter()
@@ -25800,6 +25820,100 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
 
         if not history_data:
             raise Exception("ComfyUI 渲染超时")
+        execution_failover_attempts = []
+        execution_failure = comfy_history_execution_failure(history_data)
+        if execution_failure:
+            mark_comfy_backend_incompatible(req.workflow_json, target_backend)
+            execution_failover_attempts.append({
+                "backend": target_backend,
+                "prompt_id": prompt_id,
+                "status": "execution_failed",
+                "error": execution_failure,
+            })
+            source_backend = target_backend
+            for backend in comfy_execution_retry_backends(candidate_backends, target_backend):
+                retry_started = time.perf_counter()
+                fallback_input_sync_ms = 0
+                try:
+                    fallback_sync_started = time.perf_counter()
+                    for image_name in required_images:
+                        source = requests.get(f"http://{source_backend}/view?filename={urllib.parse.quote(image_name)}&type=input", timeout=5)
+                        if source.status_code == 200:
+                            requests.post(f"http://{backend}/upload/image", files={"image": (image_name, source.content, source.headers.get("Content-Type", "image/png"))}, timeout=10).raise_for_status()
+                    fallback_input_sync_ms = round((time.perf_counter() - fallback_sync_started) * 1000)
+                    post_req = urllib.request.Request(f"http://{backend}/prompt", data=data)
+                    retry_prompt_id = json.loads(urllib.request.urlopen(post_req, timeout=10).read())["prompt_id"]
+                except urllib.error.HTTPError as e:
+                    error = Exception(f"HTTP Error {e.code}: {e.read().decode('utf-8')}")
+                except Exception as e:
+                    error = e
+                else:
+                    submission_attempts.append({
+                        "backend": backend,
+                        "status": "submitted_after_execution_failure",
+                        "elapsed_ms": round((time.perf_counter() - retry_started) * 1000),
+                        "fallback_input_sync_ms": fallback_input_sync_ms,
+                    })
+                    retry_history = None
+                    retry_wait_started = time.perf_counter()
+                    for _ in range(COMFYUI_HISTORY_TIMEOUT):
+                        try:
+                            res = get_comfy_history(backend, retry_prompt_id)
+                            if retry_prompt_id in res:
+                                retry_history = res[retry_prompt_id]
+                                break
+                        except Exception:
+                            pass
+                        time.sleep(1)
+                    if not retry_history:
+                        raise Exception(f"ComfyUI 后端 {backend} 渲染超时")
+                    retry_failure = comfy_history_execution_failure(retry_history)
+                    if retry_failure:
+                        mark_comfy_backend_incompatible(req.workflow_json, backend)
+                        execution_failover_attempts.append({
+                            "backend": backend,
+                            "prompt_id": retry_prompt_id,
+                            "status": "execution_failed",
+                            "elapsed_ms": round((time.perf_counter() - retry_started) * 1000),
+                            "comfy_wait_ms": round((time.perf_counter() - retry_wait_started) * 1000),
+                            "error": retry_failure,
+                        })
+                        continue
+                    target_backend = backend
+                    prompt_id = retry_prompt_id
+                    history_data = retry_history
+                    history_wait_started = retry_wait_started
+                    prompt_started_at = None
+                    execution_failover_attempts.append({
+                        "backend": backend,
+                        "prompt_id": retry_prompt_id,
+                        "status": "succeeded",
+                        "elapsed_ms": round((time.perf_counter() - retry_started) * 1000),
+                        "comfy_wait_ms": round((time.perf_counter() - retry_wait_started) * 1000),
+                    })
+                    break
+                submission_attempts.append({
+                    "backend": backend,
+                    "status": "failed_after_execution_failure",
+                    "elapsed_ms": round((time.perf_counter() - retry_started) * 1000),
+                    "fallback_input_sync_ms": fallback_input_sync_ms,
+                    "error": str(error),
+                })
+                if "prompt_outputs_failed_validation" in str(error).lower() and "value_not_in_list" in str(error).lower():
+                    mark_comfy_backend_incompatible(req.workflow_json, backend)
+                if not comfy_submission_should_failover(error):
+                    raise error
+            else:
+                details = " | ".join(f"{item['backend']}: {item['error']}" for item in execution_failover_attempts if item.get("error"))
+                raise Exception("所有 ComfyUI 后端执行失败：" + details)
+        timings["submission_ms"] = round((time.perf_counter() - submission_started) * 1000)
+        timings["submission_attempts"] = submission_attempts
+        if execution_failover_attempts:
+            timings["execution_failover_attempts"] = execution_failover_attempts
+        try:
+            timings["queue_at_submit"] = comfy_queue_snapshot(target_backend, prompt_id)
+        except Exception as e:
+            timings["queue_at_submit_error"] = str(e)
         timings["comfy_wait_ms"] = round((time.perf_counter() - history_wait_started) * 1000)
         if prompt_started_at is not None:
             timings["queue_wait_ms"] = round((prompt_started_at - history_wait_started) * 1000)
