@@ -358,7 +358,7 @@ let settings = {
     provider_id:'',
     model:'',
     ratio:'square',
-    resolution:'4k',
+    resolution:'2k',
     customRatio:'',
     customRatioWidth:'',
     customRatioHeight:'',
@@ -952,7 +952,7 @@ function isGptImageAutoSizeModel(model){
         || compact.endsWith('gptimage2');
 }
 function defaultSmartApiResolution(model){
-    return isGptImageAutoSizeModel(model) ? '4k' : '1k';
+    return isGptImageAutoSizeModel(model) ? '2k' : '1k';
 }
 function mediaItemForStorage(item){
     if(!item || typeof item !== 'object') return item;
