@@ -116,6 +116,95 @@ class M5TaskPersistenceTests(unittest.TestCase):
         self.assertFalse(task["recovery_available"])
 
 
+class CanvasTaskAtomicCompletionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.tasks_path = os.path.join(self.temp_dir.name, "canvas_tasks.json")
+        self.canvas_dir = os.path.join(self.temp_dir.name, "canvases")
+        os.makedirs(self.canvas_dir)
+        self.patchers = [
+            patch.object(main, "CANVAS_TASKS_FILE", self.tasks_path),
+            patch.object(main, "CANVAS_DIR", self.canvas_dir),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        with main.CANVAS_TASK_LOCK:
+            main.CANVAS_TASKS.clear()
+            main.CANVAS_TASKS_LOADED = False
+        self.canvas = {
+            "id": "canvas-bound", "kind": "smart", "title": "bound", "updated_at": 1,
+            "nodes": [{"id": "node-bound", "type": "smart-image-generation", "images": []}],
+            "logs": [], "connections": [],
+        }
+        main.save_canvas(self.canvas)
+
+    def tearDown(self):
+        with main.CANVAS_TASK_LOCK:
+            main.CANVAS_TASKS.clear()
+            main.CANVAS_TASKS_LOADED = False
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp_dir.cleanup()
+
+    def _task(self, task_id="canvas_img_bound"):
+        return {
+            "id": task_id, "type": "online-image", "status": "running",
+            "provider_id": "runninghub", "model": "model-a", "created_at": time.time(), "updated_at": time.time(),
+            "canvas_binding": {
+                "canvas_id": "canvas-bound", "node_id": "node-bound", "batch_id": "batch-a",
+                "batch_index": 0,
+            },
+        }
+
+    def test_bound_completion_is_idempotent_and_updates_current_canvas_node(self):
+        task = main.canvas_task_create(self._task())
+        main.register_bound_canvas_task(task, {"prompt": "test", "nodeType": "smart-image-generation"}, main.now_ms())
+        first = main.finalize_bound_canvas_task(task["id"], {"image_items": [{"url": "/output/result.png", "kind": "image"}]})
+        second = main.finalize_bound_canvas_task(task["id"], {"image_items": [{"url": "/output/result.png", "kind": "image"}]})
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        saved = main.load_canvas("canvas-bound")
+        node = saved["nodes"][0]
+        self.assertEqual([item["url"] for item in node["images"]], ["/output/result.png"])
+        self.assertEqual(node.get("pending"), 0)
+        self.assertNotIn("pendingTasks", node)
+        self.assertEqual(len(saved["logs"]), 1)
+        self.assertEqual(saved["logs"][0]["local_task_id"], task["id"])
+        self.assertEqual(saved["logs"][0]["prompt"], "test")
+        self.assertNotIn("log_run", main.canvas_task_get(task["id"])["canvas_binding"])
+
+    def test_bound_completion_does_not_revive_deleted_node(self):
+        task = main.canvas_task_create(self._task("canvas_img_deleted"))
+        main.register_bound_canvas_task(task, {"prompt": "test"}, main.now_ms())
+        saved = main.load_canvas("canvas-bound")
+        saved["nodes"] = []
+        main.save_canvas(saved)
+
+        self.assertIsNone(main.finalize_bound_canvas_task(task["id"], {"images": ["/output/result.png"]}))
+        self.assertEqual(main.canvas_task_get(task["id"])["canvas_attach_status"], "node_missing")
+
+    def test_bound_batch_results_keep_submission_order_when_completion_reverses(self):
+        first = self._task("canvas_img_first")
+        second = self._task("canvas_img_second")
+        first["canvas_binding"]["batch_index"] = 0
+        second["canvas_binding"]["batch_index"] = 1
+        first = main.canvas_task_create(first)
+        second = main.canvas_task_create(second)
+        started_at = main.now_ms()
+        main.register_bound_canvas_task(first, {"prompt": "test"}, started_at)
+        main.register_bound_canvas_task(second, {"prompt": "test"}, started_at)
+
+        main.finalize_bound_canvas_task(second["id"], {"images": ["/output/second.png"]})
+        main.finalize_bound_canvas_task(first["id"], {"images": ["/output/first.png"]})
+
+        saved = main.load_canvas("canvas-bound")
+        self.assertEqual(
+            [item["url"] for item in saved["nodes"][0]["images"]],
+            ["/output/first.png", "/output/second.png"],
+        )
+
+
 class M5TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_canvas_task_is_visible_only_to_owner_or_admin(self):
         task = {

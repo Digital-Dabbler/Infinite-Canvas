@@ -5082,6 +5082,14 @@ class OnlineImageRequest(BaseModel):
     # operation="upscale" 走即梦 image_upscale（对一张已有图片放大），resolution_type ∈ {2k,4k,8k}
     operation: str = ""
     resolution_type: str = ""
+    # New smart-canvas clients bind the server task to one durable canvas node.
+    # These fields are optional so older callers keep their existing behavior.
+    canvas_id: str = ""
+    node_id: str = ""
+    batch_id: str = ""
+    batch_index: int = 0
+    log_run: Dict[str, Any] = Field(default_factory=dict)
+    log_started_at: int = 0
 
 class VideoTrimRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
@@ -5172,6 +5180,159 @@ def canvas_task_get(task_id):
         load_canvas_tasks()
         return dict(CANVAS_TASKS.get(str(task_id or "")) or {})
 
+def canvas_task_binding_from_payload(payload):
+    canvas_id = str(getattr(payload, "canvas_id", "") or "").strip()
+    node_id = str(getattr(payload, "node_id", "") or "").strip()
+    batch_id = str(getattr(payload, "batch_id", "") or "").strip()
+    if not (canvas_id and node_id and batch_id):
+        return {}
+    # canvas_path performs the canonical ID validation before a background
+    # worker ever attempts to touch the canvas file.
+    canvas_path(canvas_id)
+    return {
+        "canvas_id": canvas_id,
+        "node_id": node_id,
+        "batch_id": batch_id,
+        "batch_index": max(0, int(getattr(payload, "batch_index", 0) or 0)),
+    }
+
+def canvas_task_output_items(task, result):
+    result = result if isinstance(result, dict) else {}
+    raw = result.get("media_items") or result.get("image_items") or result.get("videos") or result.get("images") or []
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    kind = "video" if str(task.get("type") or "") == "online-video" else "image"
+    items, seen = [], set()
+    for value in raw:
+        if isinstance(value, str):
+            item = {"url": value, "kind": kind}
+        elif isinstance(value, dict):
+            url = str(value.get("url") or value.get("path") or value.get("src") or "").strip()
+            item = {**value, "url": url, "kind": value.get("kind") or kind}
+        else:
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        item.setdefault("name", os.path.basename(urllib.parse.urlparse(url).path) or f"output-{len(items) + 1}")
+        item["generatedResult"] = True
+        items.append(item)
+    return items
+
+def register_bound_canvas_task(task, log_run=None, log_started_at=0):
+    binding = task.get("canvas_binding") if isinstance(task, dict) else {}
+    if not isinstance(binding, dict) or not binding:
+        return None
+    canvas_id, node_id, task_id = binding.get("canvas_id"), binding.get("node_id"), task.get("id")
+    with CANVAS_LOCK:
+        try:
+            canvas = load_canvas(canvas_id)
+        except HTTPException:
+            return None
+        node = next((item for item in (canvas.get("nodes") or []) if str(item.get("id") or "") == str(node_id)), None)
+        if not isinstance(node, dict):
+            return None
+        pending = [item for item in (node.get("pendingTasks") or []) if isinstance(item, dict) and item.get("taskId")]
+        if not any(str(item.get("taskId")) == str(task_id) for item in pending):
+            pending.append({
+                "taskId": task_id,
+                "kind": "video" if task.get("type") == "online-video" else "image",
+                "providerId": task.get("provider_id") or "",
+                "model": task.get("model") or "",
+                "batchId": binding.get("batch_id"),
+                "batchIndex": binding.get("batch_index", 0),
+                "batchStartedAt": int(log_started_at or now_ms()),
+                "serverManaged": True,
+                "logRun": dict(log_run or {}),
+                "logStartedAt": int(log_started_at or now_ms()),
+            })
+        node["pendingTasks"] = pending
+        node["pending"] = len(pending)
+        node["running"] = False
+        node["runStartedAt"] = int(node.get("runStartedAt") or log_started_at or now_ms())
+        node.pop("runFinishedAt", None)
+        node.pop("runElapsedMs", None)
+        node["runTimerHidden"] = False
+        save_canvas(canvas)
+        return canvas
+
+def finalize_bound_canvas_task(task_id, result=None, error=""):
+    task = canvas_task_get(task_id)
+    binding = task.get("canvas_binding") if isinstance(task, dict) else {}
+    if not isinstance(binding, dict) or not binding:
+        return None
+    canvas_id, node_id = binding.get("canvas_id"), binding.get("node_id")
+    with CANVAS_LOCK:
+        try:
+            canvas = load_canvas(canvas_id)
+        except HTTPException:
+            canvas_task_update(task_id, {"canvas_attach_status": "canvas_missing"})
+            return None
+        node = next((item for item in (canvas.get("nodes") or []) if str(item.get("id") or "") == str(node_id)), None)
+        if not isinstance(node, dict):
+            canvas_task_update(task_id, {"canvas_attach_status": "node_missing"})
+            return None
+        existing_logs = canvas.get("logs") or []
+        if any(str(item.get("local_task_id") or "") == str(task_id) for item in existing_logs if isinstance(item, dict)):
+            canvas_task_update(task_id, {"canvas_attach_status": "attached"})
+            return canvas
+        pending = [item for item in (node.get("pendingTasks") or []) if isinstance(item, dict) and item.get("taskId")]
+        pending_task = next((item for item in pending if str(item.get("taskId")) == str(task_id) and str(item.get("batchId") or "") == str(binding.get("batch_id") or "")), None)
+        if not pending_task:
+            canvas_task_update(task_id, {"canvas_attach_status": "binding_stale"})
+            return None
+        node["pendingTasks"] = [item for item in pending if item is not pending_task]
+        node["pending"] = len(node["pendingTasks"])
+        if not node["pendingTasks"]:
+            node.pop("pendingTasks", None)
+            node["running"] = False
+            node["runFinishedAt"] = now_ms()
+            node["runElapsedMs"] = max(0, int(node["runFinishedAt"]) - int(node.get("runStartedAt") or node["runFinishedAt"]))
+        log_run = pending_task.get("logRun") if isinstance(pending_task.get("logRun"), dict) else {}
+        outputs = [] if error else canvas_task_output_items(task, result)
+        if outputs:
+            for output in outputs:
+                # Preserve append semantics even if different submissions finish
+                # out of order.  Older, untagged media stays in its original
+                # position for backward compatibility.
+                output["canvasBatchId"] = binding.get("batch_id") or ""
+                output["canvasBatchIndex"] = int(pending_task.get("batchIndex") or 0)
+                output["canvasBatchStartedAt"] = int(pending_task.get("batchStartedAt") or 0)
+            current = [item for item in (node.get("images") or []) if isinstance(item, dict)]
+            known = {str(item.get("url") or "") for item in current}
+            current.extend(item for item in outputs if str(item.get("url") or "") not in known)
+            legacy = [item for item in current if not item.get("canvasBatchId")]
+            ordered = [item for item in current if item.get("canvasBatchId")]
+            ordered.sort(key=lambda item: (
+                int(item.get("canvasBatchStartedAt") or 0),
+                int(item.get("canvasBatchIndex") or 0),
+            ))
+            current = legacy + ordered
+            node["images"] = current
+            output_urls = {str(item.get("url") or "") for item in outputs}
+            node["activeImageIndex"] = next(
+                (idx for idx, item in enumerate(current) if str(item.get("url") or "") in output_urls),
+                max(0, len(current) - 1),
+            )
+            node["outputKind"] = outputs[0].get("kind") or "image"
+            node["title"] = "视频生成" if node.get("type") == "smart-video-generation" else "图片生成"
+        elif error:
+            node["lastRunError"] = str(error)
+        entry = {
+            "id": f"log_{uuid.uuid4().hex}", "createdAt": now_ms(),
+            "status": "failed" if error else "success", "platform": task.get("provider_id") or "",
+            "nodeId": node_id, "nodeType": log_run.get("nodeType") or node.get("type") or "smart-image-generation",
+            "model": task.get("model") or "", "request": {"provider_id": task.get("provider_id") or "", "model": task.get("model") or ""},
+            "prompt": log_run.get("prompt") or "", "outputs": outputs,
+            "refs": log_run.get("refs") or [], "runMs": max(0, now_ms() - int(pending_task.get("logStartedAt") or now_ms())),
+            "error": str(error or ""), "local_task_id": task_id,
+        }
+        canvas["logs"] = [entry, *existing_logs][:500]
+        save_canvas(canvas)
+    canvas_task_update(task_id, {"canvas_attach_status": "attached"})
+    return canvas
+
 def recover_canvas_tasks_after_restart():
     """恢复可查询状态，但绝不自动重提可能收费的上游任务。"""
     interrupted = []
@@ -5199,6 +5360,10 @@ def recover_canvas_tasks_after_restart():
         event = latest_events.get(str(task.get("usage_event_id") or ""))
         if event and event.get("status") in {"queued", "running"}:
             finish_usage_event(event, "failed", task["error"])
+        # A server-managed node must never survive restart as an infinite
+        # browser timer.  We deliberately do not re-submit an upstream job;
+        # this terminal update removes only the exact persisted local task.
+        finalize_bound_canvas_task(task.get("id"), error=task["error"])
     return interrupted
 
 def capture_canvas_upstream_task(provider, upstream_task_id, credential_kind="api_key", metadata=None):
@@ -5247,6 +5412,12 @@ class CanvasVideoRequest(BaseModel):
     generate_audio: bool = False
     multimodal: bool = False
     trusted_asset: bool = False
+    canvas_id: str = ""
+    node_id: str = ""
+    batch_id: str = ""
+    batch_index: int = 0
+    log_run: Dict[str, Any] = Field(default_factory=dict)
+    log_started_at: int = 0
 
 class CanvasVideoTailFrameReconcileRequest(BaseModel):
     videos: List[str] = Field(default_factory=list, max_length=100)
@@ -19227,6 +19398,9 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
             "result": result,
             "error": "",
         })
+        canvas = finalize_bound_canvas_task(task_id, result)
+        if canvas:
+            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
     except JimengPendingError as exc:
         if event:
             finish_usage_event(event, "queued")
@@ -19300,11 +19474,16 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
             "upstream_task_id": upstream_task_id,
             "recovery_available": recovery_available,
         })
+        canvas = finalize_bound_canvas_task(task_id, error=str(detail))
+        if canvas:
+            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
     finally:
         ACTIVE_CANVAS_TASK_ID.reset(capture_token)
 
 @app.post("/api/canvas-image-tasks")
 async def create_canvas_image_task(payload: OnlineImageRequest, request: Request):
+    # Validate any optional canvas target before opening a billable usage event.
+    canvas_binding = canvas_task_binding_from_payload(payload)
     event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n, "entry": "canvas"})
     request.state.usage_event = event
     request.state.usage_async = True
@@ -19328,7 +19507,10 @@ async def create_canvas_image_task(payload: OnlineImageRequest, request: Request
         "model": payload.model,
         "user_id": event["user_id"],
         "usage_event_id": event["id"],
+        "canvas_binding": canvas_binding,
     })
+    task = canvas_task_get(task_id)
+    canvas = register_bound_canvas_task(task, payload.log_run, payload.log_started_at)
     remember_upstream_task_scope(
         request,
         task_id,
@@ -19336,7 +19518,9 @@ async def create_canvas_image_task(payload: OnlineImageRequest, request: Request
         metadata={"kind": "canvas-image", "model": payload.model},
     )
     asyncio.create_task(run_canvas_image_task(task_id, payload, event, event.get("api_profile_id", "")))
-    return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
+    if canvas:
+        await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+    return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"], "canvas_bound": bool(canvas)}
 
 @app.get("/api/canvas-image-tasks/{task_id}")
 async def get_canvas_image_task(task_id: str, request: Request):
@@ -20976,6 +21160,9 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
             "result": result,
             "error": "",
         })
+        canvas = finalize_bound_canvas_task(task_id, result)
+        if canvas:
+            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
     except JimengPendingError as exc:
         if event:
             finish_usage_event(event, "queued")
@@ -21023,11 +21210,16 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
             "upstream_task_id": upstream_task_id,
             "recovery_available": recovery_available,
         })
+        canvas = finalize_bound_canvas_task(task_id, error=str(detail))
+        if canvas:
+            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
     finally:
         ACTIVE_CANVAS_TASK_ID.reset(capture_token)
 
 @app.post("/api/canvas-video-tasks")
 async def create_canvas_video_task(payload: CanvasVideoRequest, request: Request):
+    # Validate any optional canvas target before opening a billable usage event.
+    canvas_binding = canvas_task_binding_from_payload(payload)
     event = begin_usage_event(
         request,
         "video",
@@ -21061,7 +21253,10 @@ async def create_canvas_video_task(payload: CanvasVideoRequest, request: Request
         "model": payload.model,
         "user_id": event["user_id"],
         "usage_event_id": event["id"],
+        "canvas_binding": canvas_binding,
     })
+    task = canvas_task_get(task_id)
+    canvas = register_bound_canvas_task(task, payload.log_run, payload.log_started_at)
     remember_upstream_task_scope(
         request,
         task_id,
@@ -21069,7 +21264,9 @@ async def create_canvas_video_task(payload: CanvasVideoRequest, request: Request
         metadata={"kind": "canvas-video", "model": payload.model},
     )
     asyncio.create_task(run_canvas_video_task(task_id, payload, event))
-    return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"]}
+    if canvas:
+        await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+    return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"], "canvas_bound": bool(canvas)}
 
 @app.get("/api/canvas-video-tasks/{task_id}")
 async def get_canvas_video_task(task_id: str, request: Request):

@@ -20593,6 +20593,16 @@ async function runGeneration(targetNode=null){
     if(shouldCreateBranchOutput) branchNode = createPendingOutputFromSource(node, expectedCount, pendingMeta, {connectSource:false, selectOutput:true, refs});
     undoSuppressed = false;
     const pendingNode = branchNode || node;
+    // Regular API tasks are attached by the server to this exact node/batch.
+    // Direct RunningHub, ComfyUI, loop, and cascade paths do not pass this
+    // binding and therefore retain their existing completion mechanics.
+    const canvasTaskBinding = {
+        canvas_id:canvasId,
+        node_id:pendingNode.id,
+        batch_id:uid('batch'),
+        log_run:runLog,
+        log_started_at:runLogStart
+    };
     // Starting a new attempt must immediately retire the message from the
     // previous one, including on a node that already has earlier results.
     delete pendingNode.lastRunError;
@@ -20617,6 +20627,11 @@ async function runGeneration(targetNode=null){
         syncRunButtonState();
     }
     render();
+    // Persist a newly-created branch (and its node ID) before a regular API
+    // request is allowed to bind the server task to it.  Without this, a fast
+    // request could legitimately reach the server before the branch exists in
+    // the canvas file, silently falling back to the old client-owned path.
+    if(apiConcurrentRun) await saveCanvas();
     let serverTasksSubmitted = false;
     try {
         if(runSettings.engine === 'comfy'){
@@ -20626,7 +20641,10 @@ async function runGeneration(targetNode=null){
                 return;
         }
         if(isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video'){
-            const taskResult = await runApiVideoGeneration(prompt, refs, runSettings, null, {deferPolling:true});
+            // 即梦仍需由浏览器接管其 submitId 队列恢复；不要把它送入
+            // 常规 API 的服务端终态回写，否则会丢失即梦专用续查状态。
+            const videoCanvasBinding = isJimengProviderId(runSettings.videoProvider) ? null : canvasTaskBinding;
+            const taskResult = await runApiVideoGeneration(prompt, refs, runSettings, null, {deferPolling:true, canvasBinding:videoCanvasBinding});
             const taskIds = Array.isArray(taskResult?.taskIds) ? taskResult.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
             const submittedTasks = taskIds.map(taskId => ({
@@ -20634,6 +20652,8 @@ async function runGeneration(targetNode=null){
                 kind:'video',
                 providerId:taskResult.providerId,
                 model:taskResult.model,
+                batchId:canvasTaskBinding.batch_id,
+                serverManaged:taskResult.canvasBound === true,
                 logRun:runLog,
                 logStartedAt:runLogStart
             }));
@@ -20650,17 +20670,22 @@ async function runGeneration(targetNode=null){
             serverTasksSubmitted = true;
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             clearPromptInputForNode(node, {preserveDraft:true});
+            if(taskResult.canvasBound){
+                await mergeReloadCanvasNow();
+                return;
+            }
             await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
             return;
         }
         const rhModelMode = runSettings.engine === 'runninghub' && Boolean(runningHubSelectedModel(runSettings));
+        const imageCanvasBinding = isJimengProviderId(runSettings.provider_id) ? null : canvasTaskBinding;
         const outImages = rhModelMode
-            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(runSettings))
+            ? await runApiGeneration(prompt, refs, runningHubModelApiSettings(runSettings), imageCanvasBinding)
             : runSettings.engine === 'runninghub'
                 ? await runRunningHubGeneration(prompt, refs, runSettings)
                 : runSettings.engine === 'modelscope'
                 ? await runModelscopeGeneration(prompt, refs, runSettings)
-                : await runApiGeneration(prompt, refs, runSettings);
+                : await runApiGeneration(prompt, refs, runSettings, imageCanvasBinding);
         if(isApiLikeEngine(runSettings.engine) || rhModelMode){
             const taskIds = Array.isArray(outImages?.taskIds) ? outImages.taskIds : [];
             if(!taskIds.length) throw new Error(tr('smart.errRunFailed'));
@@ -20673,6 +20698,8 @@ async function runGeneration(targetNode=null){
                 kind:'image',
                 providerId:outImages.providerId,
                 model:outImages.model,
+                batchId:canvasTaskBinding.batch_id,
+                serverManaged:outImages.canvasBound === true,
                 logRun:runLog,
                 logStartedAt:runLogStart
             }));
@@ -20689,7 +20716,13 @@ async function runGeneration(targetNode=null){
             serverTasksSubmitted = true;
             // 服务端已接管任务后立即释放 composer，用户可继续填写并提交下一项。
             clearPromptInputForNode(node, {preserveDraft:true});
-                await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
+            if(outImages.canvasBound){
+                await mergeReloadCanvasNow();
+                if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
+                scheduleSave();
+                return;
+            }
+            await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
             if(pendingNode.jimengPending || smartRecoverableImageTask(pendingNode)){
                 if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
                 scheduleSave();
@@ -20839,7 +20872,7 @@ function comfyFieldKind(field){
     if(field?.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
     return 'setting';
 }
-async function runApiGeneration(prompt, refs, runSettings=settings){
+async function runApiGeneration(prompt, refs, runSettings=settings, canvasBinding=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const runningHub = isRunningHubVideoProvider(runSettings.provider_id);
@@ -20866,8 +20899,16 @@ async function runApiGeneration(prompt, refs, runSettings=settings){
         reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX),
         model_params:runningHub && runSettings.imageModelParams && typeof runSettings.imageModelParams === 'object' ? runSettings.imageModelParams : {}
     };
-    const tasks = await Promise.all(Array.from({length:count}, () => submitCanvasImageTask(payload)));
-    return {taskIds:tasks.map(task => task.task_id).filter(Boolean), count, providerId:payload.provider_id, model:payload.model};
+    const tasks = await Promise.all(Array.from({length:count}, (_, batchIndex) => submitCanvasImageTask(canvasBinding ? {
+        ...payload,
+        ...canvasBinding,
+        batch_index:batchIndex
+    } : payload)));
+    return {
+        taskIds:tasks.map(task => task.task_id).filter(Boolean), count,
+        providerId:payload.provider_id, model:payload.model,
+        canvasBound:Boolean(canvasBinding) && tasks.every(task => task.canvas_bound === true)
+    };
 }
 const SMART_IMAGE_SUBMIT_TIMEOUT_MS = 20000;
 async function submitCanvasImageTask(payload){
@@ -20998,7 +21039,8 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=nu
             generate_audio: Boolean(runSettings.videoGenerateAudio),
             return_last_frame: Boolean(runSettings.videoReturnLastFrame),
             multimodal: Boolean(runSettings.videoMultimodal),
-            trusted_asset: useAssetUris
+            trusted_asset: useAssetUris,
+            ...(options.canvasBinding || {})
         };
         const submitted = await fetch('/api/canvas-video-tasks', {
             method:'POST',
@@ -21008,7 +21050,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=nu
         const taskId = submitted?.task_id || '';
         if(!taskId) throw new Error(tr('smart.errRunFailed'));
         if(options.deferPolling){
-            return {taskIds:[taskId], providerId:payload.provider_id, model:payload.model};
+            return {taskIds:[taskId], providerId:payload.provider_id, model:payload.model, canvasBound:submitted?.canvas_bound === true};
         }
         const live = node ? nodes.find(item => item.id === node.id) : null;
         if(live){
@@ -21595,7 +21637,10 @@ function finalizeSmartPendingTask(node, taskId, images, kind='image'){
 }
 async function resumeSmartPendingNode(node, logContext={}){
     const requestedTaskIds = Array.isArray(logContext.taskIds) ? new Set(logContext.taskIds) : null;
-    const tasks = smartPendingTasks(node).filter(task => !requestedTaskIds || requestedTaskIds.has(task.taskId));
+    // Bound regular API tasks are completed atomically by the server.  Letting
+    // a restored browser poll and finalize them as well would reintroduce the
+    // old double-writer race this path is meant to eliminate.
+    const tasks = smartPendingTasks(node).filter(task => task.serverManaged !== true && (!requestedTaskIds || requestedTaskIds.has(task.taskId)));
     if(!node || !tasks.length) return;
     const logTaskFailure = (message, task) => {
         if(!logContext?.run || !message) return;
