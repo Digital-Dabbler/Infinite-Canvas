@@ -256,6 +256,7 @@ async def startup_event():
         print(f"初始化 API 配置组失败，将继续使用现有全局配置: {exc}")
     try:
         recover_canvas_tasks_after_restart()
+        reconcile_bound_canvas_tasks()
     except Exception as exc:
         print(f"恢复画布任务状态失败: {exc}")
     try:
@@ -5180,6 +5181,50 @@ def canvas_task_get(task_id):
         load_canvas_tasks()
         return dict(CANVAS_TASKS.get(str(task_id or "")) or {})
 
+def canvas_task_is_terminal(task):
+    return str((task or {}).get("status") or "").lower() in {
+        "succeeded", "success", "failed", "cancelled", "canceled", "interrupted",
+    }
+
+def merge_canvas_logs(server_logs, incoming_logs):
+    """Keep server terminal logs when a browser saves an older canvas copy."""
+    merged, seen = [], set()
+    for entry in [*(server_logs or []), *(incoming_logs or [])]:
+        if not isinstance(entry, dict):
+            continue
+        local_task_id = str(entry.get("local_task_id") or "").strip()
+        log_id = str(entry.get("id") or "").strip()
+        key = f"task:{local_task_id}" if local_task_id else f"log:{log_id}"
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(entry)
+    merged.sort(key=lambda item: int(item.get("createdAt") or 0), reverse=True)
+    return merged[:500]
+
+def drop_terminal_server_managed_pending_tasks(nodes):
+    """Do not allow an old browser save to revive a server-terminal task."""
+    cleaned = []
+    for node in nodes or []:
+        if not isinstance(node, dict):
+            continue
+        item = dict(node)
+        pending = []
+        for task_ref in item.get("pendingTasks") or []:
+            if not isinstance(task_ref, dict) or not task_ref.get("taskId"):
+                continue
+            if task_ref.get("serverManaged") and canvas_task_is_terminal(canvas_task_get(task_ref.get("taskId"))):
+                continue
+            pending.append(task_ref)
+        if pending:
+            item["pendingTasks"] = pending
+            item["pending"] = len(pending)
+        elif item.get("pendingTasks"):
+            item.pop("pendingTasks", None)
+            item["pending"] = 0
+        cleaned.append(item)
+    return cleaned
+
 def canvas_task_binding_from_payload(payload):
     canvas_id = str(getattr(payload, "canvas_id", "") or "").strip()
     node_id = str(getattr(payload, "node_id", "") or "").strip()
@@ -5332,6 +5377,45 @@ def finalize_bound_canvas_task(task_id, result=None, error=""):
         save_canvas(canvas)
     canvas_task_update(task_id, {"canvas_attach_status": "attached"})
     return canvas
+
+def reconcile_bound_canvas_tasks(canvas_id=""):
+    """Restore a terminal task if a stale client save erased its canvas log.
+
+    Only durable terminal tasks are considered; this never submits upstream work
+    and never recreates a missing node.
+    """
+    canvas_id = str(canvas_id or "").strip()
+    candidates = []
+    for task in load_canvas_tasks().values():
+        binding = task.get("canvas_binding") if isinstance(task, dict) else {}
+        if not isinstance(binding, dict) or not canvas_task_is_terminal(task):
+            continue
+        if canvas_id and str(binding.get("canvas_id") or "") != canvas_id:
+            continue
+        candidates.append(dict(task))
+    for task in candidates:
+        binding = task.get("canvas_binding") or {}
+        task_id = task.get("id")
+        try:
+            canvas = load_canvas(binding.get("canvas_id"))
+        except HTTPException:
+            continue
+        node = next((item for item in (canvas.get("nodes") or []) if str(item.get("id") or "") == str(binding.get("node_id") or "")), None)
+        if not isinstance(node, dict):
+            continue
+        has_log = any(
+            str(item.get("local_task_id") or "") == str(task_id)
+            for item in (canvas.get("logs") or []) if isinstance(item, dict)
+        )
+        if has_log:
+            continue
+        pending = [item for item in (node.get("pendingTasks") or []) if isinstance(item, dict)]
+        if not any(str(item.get("taskId") or "") == str(task_id) for item in pending):
+            register_bound_canvas_task(task)
+        if str(task.get("status") or "").lower() in {"succeeded", "success"}:
+            finalize_bound_canvas_task(task_id, task.get("result") or {})
+        else:
+            finalize_bound_canvas_task(task_id, error=str(task.get("error") or "任务未完成"))
 
 def recover_canvas_tasks_after_restart():
     """恢复可查询状态，但绝不自动重提可能收费的上游任务。"""
@@ -24674,17 +24758,18 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
             deleted_node_ids = list(old_deleted | new_deleted)[-2000:]
             deleted_set = set(deleted_node_ids)
             canvas["deleted_node_ids"] = deleted_node_ids
-            canvas["nodes"] = [
+            incoming_nodes = [
                 node for node in (payload.nodes or [])
                 if not str((node or {}).get("id") or "").strip() or str((node or {}).get("id") or "").strip() not in deleted_set
             ]
+            canvas["nodes"] = drop_terminal_server_managed_pending_tasks(incoming_nodes)
             canvas["connections"] = [
                 conn for conn in (payload.connections or [])
                 if str((conn or {}).get("from") or "").strip() not in deleted_set
                 and str((conn or {}).get("to") or "").strip() not in deleted_set
             ]
             canvas["viewport"] = payload.viewport
-            canvas["logs"] = payload.logs[-500:]
+            canvas["logs"] = merge_canvas_logs(canvas.get("logs") or [], payload.logs or [])
             canvas["settings"] = payload.settings or {}
             existing_catalog = [item for item in (canvas.get("media_catalog") or []) if isinstance(item, dict) and canvas_media_url(item)]
             incoming_catalog = [item for item in (payload.media_catalog or []) if isinstance(item, dict) and canvas_media_url(item)]
@@ -24702,6 +24787,8 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
             return canvas
 
     canvas = await asyncio.to_thread(mutate_canvas)
+    await asyncio.to_thread(reconcile_bound_canvas_tasks, canvas_id)
+    canvas = await asyncio.to_thread(load_canvas, canvas_id)
     await manager.broadcast_canvas_updated(canvas_id, int(canvas.get("updated_at") or now_ms()), payload.client_id)
     return {"canvas": canvas}
 

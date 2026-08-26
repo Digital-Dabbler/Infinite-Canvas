@@ -204,6 +204,39 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
             ["/output/first.png", "/output/second.png"],
         )
 
+    def test_stale_save_cannot_restore_terminal_server_task_or_replace_log(self):
+        task = main.canvas_task_create(self._task("canvas_img_terminal_save"))
+        main.canvas_task_update(task["id"], {"status": "succeeded"})
+        incoming = [{
+            "id": "node-bound",
+            "pending": 1,
+            "pendingTasks": [{"taskId": task["id"], "serverManaged": True}],
+        }]
+        cleaned = main.drop_terminal_server_managed_pending_tasks(incoming)
+        self.assertNotIn("pendingTasks", cleaned[0])
+        self.assertEqual(cleaned[0]["pending"], 0)
+        merged = main.merge_canvas_logs(
+            [{"id": "server-log", "local_task_id": task["id"], "createdAt": 20}],
+            [{"id": "stale-log", "createdAt": 10}],
+        )
+        self.assertEqual([item["id"] for item in merged], ["server-log", "stale-log"])
+
+    def test_reconciliation_restores_missing_log_from_terminal_task(self):
+        task = main.canvas_task_create(self._task("canvas_img_reconcile"))
+        main.register_bound_canvas_task(task, {"prompt": "repair me"}, main.now_ms())
+        main.canvas_task_update(task["id"], {
+            "status": "succeeded",
+            "result": {"image_items": [{"url": "/output/reconciled.png", "kind": "image"}]},
+        })
+
+        main.reconcile_bound_canvas_tasks("canvas-bound")
+
+        saved = main.load_canvas("canvas-bound")
+        node = saved["nodes"][0]
+        self.assertEqual([item["url"] for item in node["images"]], ["/output/reconciled.png"])
+        self.assertNotIn("pendingTasks", node)
+        self.assertEqual(saved["logs"][0]["local_task_id"], task["id"])
+
 
 class M5TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_canvas_task_is_visible_only_to_owner_or_admin(self):

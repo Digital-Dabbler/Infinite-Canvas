@@ -6773,6 +6773,45 @@ function mergeSmartImageLists(localImgs, remoteImgs){
     });
     return out;
 }
+function smartTaskMergeKey(task){
+    return String(task?.taskId || '');
+}
+function smartServerManagedTasks(node){
+    return smartPendingTasks(node).filter(task => task.serverManaged === true);
+}
+function mergeServerManagedNode(local, remote, images){
+    // The server is the sole terminal writer for these tasks.  Carrying a
+    // stale local record back into a save would revive an already-finished
+    // spinner, so remote server-managed records always win.
+    const remoteTasks = smartPendingTasks(remote);
+    const remoteIds = new Set(remoteTasks.map(smartTaskMergeKey));
+    const localUnmanaged = smartPendingTasks(local).filter(task => task.serverManaged !== true && !remoteIds.has(smartTaskMergeKey(task)));
+    const pendingTasks = [...remoteTasks, ...localUnmanaged];
+    const merged = {...remote, images};
+    if(pendingTasks.length){
+        merged.pendingTasks = pendingTasks;
+        merged.pending = pendingTasks.length;
+        merged.running = false;
+        return merged;
+    }
+    return smartNodeHasDisplayResult(merged) ? completeSmartNodeWithImages(merged, images) : merged;
+}
+function smartCanvasLogKey(entry){
+    const taskId = String(entry?.local_task_id || '');
+    return taskId ? `task:${taskId}` : `log:${String(entry?.id || '')}`;
+}
+function mergeSmartCanvasLogs(localLogs, remoteLogs){
+    const out = [];
+    const seen = new Set();
+    [...(remoteLogs || []), ...(localLogs || [])].forEach(entry => {
+        if(!entry || typeof entry !== 'object') return;
+        const key = smartCanvasLogKey(entry);
+        if(!key || key === 'log:' || seen.has(key)) return;
+        seen.add(key);
+        out.push(entry);
+    });
+    return out.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)).slice(0, 500);
+}
 function smartNodeInFlight(node){
     if(smartNodeHasCompletedResult(node)) return false;
     return Boolean(node && (node.submitting || node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
@@ -7008,6 +7047,9 @@ function smartNodeAllowsConcurrentSubmit(node){
 }
 function mergeSmartNode(local, remote){
     const images = mergeSmartImageLists(local.images, remote.images);
+    if(smartServerManagedTasks(local).length || smartServerManagedTasks(remote).length){
+        return mergeServerManagedNode(local, remote, images);
+    }
     const localDone = smartNodeHasCompletedResult(local);
     const remoteDone = smartNodeHasCompletedResult(remote);
     const localBusy = smartNodeInFlight(local);
@@ -7068,6 +7110,7 @@ function applyMergedServerCanvas(serverCanvas){
     const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes);
     const nodeIds = new Set(mergedNodes.map(n => n.id));
     nodes = mergedNodes;
+    canvas.logs = mergeSmartCanvasLogs(canvas.logs, serverCanvas.logs);
     mergeCanvasMediaCatalog(serverCanvas.media_catalog || []);
     cleanupWorkflowOrganizerMemberships();
     canvas.connections = mergeSmartConnections(canvas.connections, serverCanvas.connections, nodeIds);
