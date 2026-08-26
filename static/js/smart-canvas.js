@@ -131,6 +131,7 @@ const videoModelCapabilityCache = new Map();
 const videoModelCapabilityRequests = new Map();
 const videoProviderCapabilityRequests = new Map();
 let comfyWorkflows = [];
+let comfyCustomWorkflows = [];
 let comfyInstanceCount = 1;
 let assetLibrary = {categories:[]};
 let assetUrlLibrary = {items:[], updated_at:0};
@@ -4293,7 +4294,8 @@ function renderComfyParams(){
         ['custom', tr('canvas.comfyModeCustom') || '自定义']
     ];
     if(settings.comfyMode === 'custom'){
-        if(!settings.comfyWorkflow || !comfyWorkflows.some(w => w.name === settings.comfyWorkflow)) settings.comfyWorkflow = comfyWorkflows[0]?.name || '';
+        const selectedSystemWorkflow = String(settings.comfyWorkflow || '').startsWith('system/');
+        if(!selectedSystemWorkflow && (!settings.comfyWorkflow || !comfyCustomWorkflows.some(w => w.name === settings.comfyWorkflow))) settings.comfyWorkflow = comfyCustomWorkflows[0]?.name || '';
         if(settings.comfyWorkflow && !comfyWorkflowCache[settings.comfyWorkflow]) ensureComfyWorkflow(settings.comfyWorkflow).then(renderDynamicParams);
     }
     let html = '';
@@ -4313,8 +4315,10 @@ function renderComfyParams(){
         html += renderComfyWorkflowControl();
         html += fields.length ? fields.map(renderComfySettingField).join('') : (settings.comfyWorkflow ? '' : `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`);
     }
-    dynamicParams.innerHTML = `
-        <div class="smart-control comfy-mode-control">
+    const systemWorkflow = settings.comfyMode === 'custom' && String(settings.comfyWorkflow || '').startsWith('system/');
+    const modeControl = systemWorkflow
+        ? `<div class="smart-control comfy-mode-control"><span class="smart-pill"><i data-lucide="package"></i><span>${escapeHtml(tr('smart.systemWorkflow'))}</span></span></div>`
+        : `<div class="smart-control comfy-mode-control">
             <button class="smart-pill" type="button"><i data-lucide="workflow"></i><span>${escapeHtml(modeOptions.find(([v]) => v === settings.comfyMode)?.[1] || 'ComfyUI')}</span></button>
             <div class="smart-popover compact-popover">
                 <div class="smart-popover-title">${escapeHtml(tr('smart.comfyMode'))}</div>
@@ -4322,7 +4326,9 @@ function renderComfyParams(){
                     ${modeOptions.map(([value, label]) => `<button type="button" class="direct-option ${value === settings.comfyMode ? 'active' : ''}" data-smart-param="comfyMode" data-smart-value="${escapeHtml(value)}"><span>${escapeHtml(label)}</span></button>`).join('')}
                 </div>
             </div>
-        </div>
+        </div>`;
+    dynamicParams.innerHTML = `
+        ${modeControl}
         ${html}
     `;
 }
@@ -4340,15 +4346,18 @@ function renderUpscalePill(paramKey, current){
     </div>`;
 }
 function renderComfyWorkflowControl(){
-    if(!comfyWorkflows.length) return `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`;
-    const current = comfyWorkflows.find(w => w.name === settings.comfyWorkflow) || comfyWorkflows[0];
-    const label = current?.title || (current?.name || '').replace('.json','') || tr('smart.workflow');
+    const isSystem = String(settings.comfyWorkflow || '').startsWith('system/');
+    const current = comfyWorkflows.find(w => w.name === settings.comfyWorkflow);
+    if(isSystem) return `<div class="smart-control workflow-control"><span class="smart-pill"><i data-lucide="package"></i><span class="sub">${escapeHtml(current?.title || settings.comfyWorkflow.replace(/^system\//, '').replace('.json', ''))}</span></span></div>`;
+    if(!comfyCustomWorkflows.length) return `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`;
+    const selected = current || comfyCustomWorkflows[0];
+    const label = selected?.title || (selected?.name || '').replace('.json','') || tr('smart.workflow');
     return `<div class="smart-control workflow-control">
         <button class="smart-pill" type="button"><i data-lucide="layers"></i><span class="sub">${escapeHtml(label)}</span></button>
         <div class="smart-popover compact-popover">
             <div class="smart-popover-title">${escapeHtml(tr('smart.workflow'))}</div>
             <div class="model-list">
-                ${comfyWorkflows.map(w => `<button type="button" class="direct-option ${w.name === settings.comfyWorkflow ? 'active' : ''}" data-smart-param="comfyWorkflow" data-smart-value="${escapeHtml(w.name)}"><span>${escapeHtml(w.title || w.name.replace('.json',''))}</span></button>`).join('')}
+                ${comfyCustomWorkflows.map(w => `<button type="button" class="direct-option ${w.name === settings.comfyWorkflow ? 'active' : ''}" data-smart-param="comfyWorkflow" data-smart-value="${escapeHtml(w.name)}"><span>${escapeHtml(w.title || w.name.replace('.json',''))}</span></button>`).join('')}
             </div>
         </div>
     </div>`;
@@ -5828,8 +5837,12 @@ async function loadConfig(options={}){
         // 提供商配置已就绪即先渲染参数面板，避免等工作流/RunningHub 预取完成后参数才「突然刷新出来」。
         sanitizeSmartApiSelection(settings);
         if(renderDuringLoad) updateProviderModels();
-        const wf = await fetch('/api/workflows').then(r => r.json()).catch(() => ({workflows:[]}));
-        comfyWorkflows = Array.isArray(wf.workflows) ? wf.workflows : [];
+        const [customWf, systemWf] = await Promise.all([
+            fetch('/api/workflows?source=custom').then(r => r.ok ? r.json() : ({workflows:[]})),
+            fetch('/api/workflows?source=system').then(r => r.ok ? r.json() : ({workflows:[]})),
+        ]).catch(() => ([{workflows:[]}, {workflows:[]}]));
+        comfyCustomWorkflows = Array.isArray(customWf.workflows) ? customWf.workflows : [];
+        comfyWorkflows = [...(Array.isArray(systemWf.workflows) ? systemWf.workflows : []), ...comfyCustomWorkflows];
         runningHubWorkflowCache = {};
         const rhProvider = apiProviders.find(p => p.id === 'runninghub');
         const rhWorkflowIds = (rhProvider?.rh_workflows || []).map(item => String(item.workflowId || item.id || '').trim()).filter(Boolean);
@@ -10441,7 +10454,7 @@ const ANGLE_ELEVATIONS = [
 const ANGLE_DISTANCES = [
     {zh:'特写', en:'close-up', onlineZh:'紧凑特写构图', value:0}, {zh:'中景', en:'medium shot', onlineZh:'中景构图', value:1}, {zh:'广角远景', en:'wide shot', onlineZh:'广角远景构图', value:2}
 ];
-const SMART_MULTIPLE_ANGLES_WORKFLOW = 'comfyui-workflow-multiple-angles-api.json';
+const SMART_MULTIPLE_ANGLES_WORKFLOW = 'system/comfyui-workflow-multiple-angles-api.json';
 const ANGLE_RESULT_PRESETS = [
     {zh:'正面头像', azimuth:0, elevation:0, distance:0}, {zh:'四分之三侧肖像', azimuth:45, elevation:0, distance:0},
     {zh:'侧脸特写', azimuth:90, elevation:0, distance:0}, {zh:'正面半身', azimuth:0, elevation:0, distance:1},
@@ -10786,7 +10799,7 @@ async function runJimengUpscale(node, index){
         scheduleSave();
     }
 }
-const SMART_BACKGROUND_REMOVAL_WORKFLOW = '抠图_api.json';
+const SMART_BACKGROUND_REMOVAL_WORKFLOW = 'system/抠图_api.json';
 const SMART_BACKGROUND_REMOVAL_VARIANTS = {
     '4':'RMBG-2.0',
     '8':'INSPYRENET'
@@ -19887,14 +19900,14 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
     const imageRefs = imageRefsOnly(allRefs);
     const mode = runSettings.comfyMode || 'text';
     if(mode === 'text'){
-        const data = await runQueuedSmartComfyGenerate({prompt, width:Number(runSettings.width || 1024), height:Number(runSettings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId});
+        const data = await runQueuedSmartComfyGenerate({prompt, width:Number(runSettings.width || 1024), height:Number(runSettings.height || 1024), workflow_json:'system/Z-Image.json', type:'zimage', client_id:smartClientId});
         const urls = resultMediaUrls(data);
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
     if(mode === 'enhance'){
         if(!imageRefs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
         const inputName = await comfyNameForRef(imageRefs[0]);
-        const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(runSettings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
+        const data = await runQueuedSmartComfyGenerate({workflow_json:'system/Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(runSettings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
         let urls = resultMediaUrls(data);
         if(runSettings.enhanceUpscale && urls[0]){
             const upscale = await runSmartComfyUpscale(urls[0], runSettings.enhanceUpscaleRes || 2048);
@@ -19906,7 +19919,7 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
         if(!imageRefs.length) throw new Error(tr('smart.errEditNeedRefs'));
         const names = [];
         for(const ref of imageRefs.slice(0, 3)) names.push(await comfyNameForRef(ref));
-        const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
+        const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'system/Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
         let urls = resultMediaUrls(data);
         if(runSettings.editUpscale && urls[0]){
             const upscale = await runSmartComfyUpscale(urls[0], runSettings.editUpscaleRes || 2048);
@@ -19914,7 +19927,7 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
         }
         return {urls, kind:mediaKindForUrls(urls, 'image')};
     }
-    const workflowName = runSettings.comfyWorkflow || comfyWorkflows[0]?.name || '';
+    const workflowName = runSettings.comfyWorkflow || '';
     if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
     const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
         if(!r.ok) throw new Error(await r.text());
@@ -21052,7 +21065,7 @@ async function runSmartComfyUpscale(imageUrl, resolution){
     if(!imageUrl) throw new Error(tr('smart.errRunFailed'));
     const inputName = await comfyNameForRef({url:imageUrl, name:'smart-upscale-input.png'});
     return runQueuedSmartComfyGenerate({
-        workflow_json:'upscale.json',
+        workflow_json:'system/upscale.json',
         params:{
             "15":{image:inputName},
             "172":{seed:Math.floor(Math.random() * 4294967295), resolution:Number(resolution || 2048)}
@@ -21068,7 +21081,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSett
     if(mode === 'text') return runComfyText(node, prompt, pendingNode, meta, runSettings);
     if(mode === 'enhance') return runComfyEnhance(node, refs, pendingNode, meta, runSettings);
     if(mode === 'edit') return runComfyEdit(node, prompt, refs, pendingNode, meta, runSettings);
-    const workflowName = runSettings.comfyWorkflow || comfyWorkflows[0]?.name || '';
+    const workflowName = runSettings.comfyWorkflow || '';
     if(!workflowName) throw new Error(tr('smart.errNeedWorkflow'));
     const wf = await fetch(`/api/workflows/${encodeURIComponent(workflowName)}`).then(async r => {
         if(!r.ok) throw new Error(await r.text());
@@ -21111,7 +21124,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSett
     scheduleSave();
 }
 async function runComfyText(node, prompt, pendingNode, meta, runSettings=settings){
-    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(runSettings.width || 1024), height:Number(runSettings.height || 1024), workflow_json:'Z-Image.json', type:'zimage', client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({prompt, width:Number(runSettings.width || 1024), height:Number(runSettings.height || 1024), workflow_json:'system/Z-Image.json', type:'zimage', client_id:smartClientId});
     const out = data.outputs || data.images || [];
     if(!out.length) throw new Error(tr('smart.errComfyNoImages'));
     if(pendingNode){
@@ -21125,7 +21138,7 @@ async function runComfyText(node, prompt, pendingNode, meta, runSettings=setting
 async function runComfyEnhance(node, refs, pendingNode, meta, runSettings=settings){
     if(!refs.length) throw new Error(tr('smart.errEnhanceNeedRefs'));
     const inputName = await comfyNameForRef(refs[0]);
-    const data = await runQueuedSmartComfyGenerate({workflow_json:'Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(runSettings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({workflow_json:'system/Z-Image-Enhance.json', type:'enhance', params:{"15":{image:inputName},"204":{value:Number(runSettings.enhanceStrength ?? 0.5)}}, client_id:smartClientId});
     //修复超分勾选
     let out = data.outputs || data.images || [];
     if(runSettings.enhanceUpscale && out[0]){
@@ -21144,7 +21157,7 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta, runSettings=s
     if(!refs.length) throw new Error(tr('smart.errEditNeedRefs'));
     const names = [];
     for(const ref of refs.slice(0, 3)) names.push(await comfyNameForRef(ref));
-    const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
+    const data = await runQueuedSmartComfyGenerate({prompt, workflow_json:'system/Flux2-Klein.json', type:'klein', params:{"168":{text:prompt},"158":{noise_seed:Math.floor(Math.random()*1000000)},"278":{image:names[0] || ""},"270":{image:names[1] || ""},"292":{image:names[2] || ""},"313":{value:Boolean(names[1])},"314":{value:Boolean(names[2])}}, client_id:smartClientId});
     //修复超分勾选
     let out = data.outputs || data.images || [];
     if(runSettings.editUpscale && out[0]){

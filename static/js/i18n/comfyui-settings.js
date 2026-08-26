@@ -44,6 +44,8 @@
         "comfy.fieldCount": { zh: "{count} 个字段", en: "{count} field(s)" },
         "comfy.nodeStats": { zh: "{nodes} 个节点 · 已暴露 {fields} 个字段", en: "{nodes} nodes · {fields} exposed field(s)" },
         "comfy.builtin": { zh: "内置", en: "Built-in" },
+        "comfy.systemWorkflows": { zh: "系统工作流", en: "System workflows" },
+        "comfy.customWorkflows": { zh: "自定义工作流", en: "Custom workflows" },
         "comfy.configurableCount": { zh: "{count} 个可配字段", en: "{count} configurable field(s)" },
         "comfy.exposedCount": { zh: "{count} 已暴露", en: "{count} exposed" },
         "comfy.usedCount": { zh: "{count} 已用", en: "{count} used" },

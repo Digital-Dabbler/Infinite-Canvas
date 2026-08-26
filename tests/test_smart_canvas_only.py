@@ -74,6 +74,45 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("media_catalog:storageCanvas.media_catalog || []", self.smart_canvas_js)
         self.assertIn("function removeCanvasMediaCatalogItem", self.smart_canvas_js)
 
+    def test_comfy_workflow_sources_are_separated_with_legacy_system_names(self):
+        system_name = "comfyui-workflow-multiple-angles-api.json"
+        self.assertEqual(
+            main.normalized_workflow_name(system_name),
+            f"system/{system_name}",
+        )
+        system_items = main.list_workflows(source="system")["workflows"]
+        custom_items = main.list_workflows(source="custom")["workflows"]
+        self.assertTrue(system_items)
+        self.assertTrue(all(item["source"] == "system" for item in system_items))
+        self.assertTrue(all(item["source"] == "custom" for item in custom_items))
+        with self.assertRaises(HTTPException) as caught:
+            main.delete_workflow(f"system/{system_name}")
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_comfy_execution_failover_only_accepts_explicit_node_errors(self):
+        execution_error = {
+            "status": {
+                "messages": [["execution_error", {
+                    "node_id": "2",
+                    "node_type": "Mask_Remove_bg2",
+                    "exception_message": "model file not found",
+                }]],
+            },
+        }
+        self.assertIn("model file not found", main.comfy_history_execution_failure(execution_error))
+        self.assertEqual(main.comfy_history_execution_failure({"outputs": {}}), "")
+        self.assertEqual(
+            main.comfy_history_execution_failure({"status": {"messages": [["execution_cached", {"node_id": "2"}]]}}),
+            "",
+        )
+
+    def test_comfy_execution_failover_walks_all_remaining_backends(self):
+        self.assertEqual(
+            main.comfy_execution_retry_backends(["first:8188", "second:8188", "third:8188"], "first:8188"),
+            ["second:8188", "third:8188"],
+        )
+        self.assertEqual(main.comfy_execution_retry_backends(["first:8188"], "first:8188"), [])
+
 
 if __name__ == "__main__":
     unittest.main()

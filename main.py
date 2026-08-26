@@ -25647,6 +25647,7 @@ async def ms_generate(req: MsGenerateRequest, request: Request):
 
 @app.post("/api/generate")
 def generate(req: GenerateRequest, request: Request = None, notification_user_id: str = ""):
+    req.workflow_json = normalized_workflow_name(req.workflow_json)
     if request is not None:
         request.state.usage_event = begin_usage_event(request, "image", "comfyui", req.workflow_json, {"workflow": req.workflow_json, "width": req.width, "height": req.height, "entry": "generate"})
         notification_user_id = str(require_authenticated(request).get("id") or "")
@@ -25709,11 +25710,10 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                         print(f"Sync upload failed: {e}")
         timings["input_sync_ms"] = round((time.perf_counter() - input_sync_started) * 1000)
 
-        workflow_path = os.path.join(WORKFLOW_DIR, req.workflow_json)
-        if not os.path.exists(workflow_path) and req.workflow_json == "Z-Image.json":
-            workflow_path = WORKFLOW_PATH
+        workflow_name = normalized_workflow_name(req.workflow_json)
+        workflow_path = workflow_path_from_name(workflow_name)
         if not os.path.exists(workflow_path):
-            raise Exception(f"Workflow file not found: {req.workflow_json}")
+            raise Exception(f"Workflow file not found: {workflow_name}")
 
         with open(workflow_path, 'r', encoding='utf-8') as f:
             workflow = json.load(f)
@@ -26040,10 +26040,10 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
 
 # --- ComfyUI 工作流管理 ---
 
-BUILTIN_WORKFLOWS = {"Z-Image.json", "Z-Image-Enhance.json", "2511.json", "klein-enhance.json", "Flux2-Klein.json", "upscale.json"}
+SYSTEM_WORKFLOW_FOLDER = "system"
 CUSTOM_WORKFLOW_FOLDER = "custom"
 LEGACY_CUSTOM_WORKFLOW_FOLDER = "自定义"
-WORKFLOW_NAME_RE = re.compile(rf"^(?:(?:{CUSTOM_WORKFLOW_FOLDER}|{LEGACY_CUSTOM_WORKFLOW_FOLDER})/)?[a-zA-Z0-9_一-龥\.\-]+\.json$")
+WORKFLOW_NAME_RE = re.compile(rf"^(?:(?:{SYSTEM_WORKFLOW_FOLDER}|{CUSTOM_WORKFLOW_FOLDER}|{LEGACY_CUSTOM_WORKFLOW_FOLDER})/)?[^/\\]+\.json$")
 
 class WorkflowField(BaseModel):
     id: str
@@ -26072,7 +26072,27 @@ class WorkflowRunRequest(BaseModel):
     config: WorkflowConfig
     client_id: str = ""
 
+def normalized_workflow_name(name: str) -> str:
+    name = str(name or "").strip().replace("\\", "/")
+    if not WORKFLOW_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="Invalid workflow name")
+    if "/" not in name:
+        # 旧画布保存的是根目录名称；根目录工作流迁入 system 后保持其可运行性。
+        system_name = f"{SYSTEM_WORKFLOW_FOLDER}/{name}"
+        if os.path.exists(os.path.join(WORKFLOW_DIR, *system_name.split("/"))):
+            return system_name
+    return name
+
+def workflow_source_from_name(name: str) -> str:
+    normalized = normalized_workflow_name(name)
+    if normalized.startswith(f"{SYSTEM_WORKFLOW_FOLDER}/"):
+        return "system"
+    if normalized.startswith(f"{CUSTOM_WORKFLOW_FOLDER}/") or normalized.startswith(f"{LEGACY_CUSTOM_WORKFLOW_FOLDER}/"):
+        return "custom"
+    raise HTTPException(status_code=400, detail="Workflow source is no longer supported")
+
 def workflow_path_from_name(name: str) -> str:
+    name = normalized_workflow_name(name)
     if not WORKFLOW_NAME_RE.match(name):
         raise HTTPException(status_code=400, detail="Invalid workflow name")
     path = os.path.abspath(os.path.join(WORKFLOW_DIR, *name.split("/")))
@@ -26085,7 +26105,7 @@ def workflow_config_path(name: str) -> str:
     return workflow_path_from_name(name).replace(".json", ".config.json")
 
 def is_builtin_workflow(name: str) -> bool:
-    return "/" not in name and os.path.basename(name) in BUILTIN_WORKFLOWS
+    return workflow_source_from_name(name) == "system"
 
 def runninghub_workflow_store_path() -> str:
     return RUNNINGHUB_WORKFLOW_STORE_FILE
@@ -26562,18 +26582,22 @@ def save_comfyui_instances(payload: ComfyInstancesPayload):
     return {"instances": COMFYUI_INSTANCES}
 
 @app.get("/api/workflows")
-def list_workflows():
+def list_workflows(source: str = ""):
+    source = str(source or "").strip().lower()
+    if source and source not in {"system", "custom"}:
+        raise HTTPException(status_code=400, detail="Invalid workflow source")
     if not os.path.isdir(WORKFLOW_DIR):
         return {"workflows": []}
     items = []
     for root, dirs, files in os.walk(WORKFLOW_DIR):
         if os.path.abspath(root) == os.path.abspath(WORKFLOW_DIR):
-            dirs[:] = [d for d in dirs if d in {CUSTOM_WORKFLOW_FOLDER, LEGACY_CUSTOM_WORKFLOW_FOLDER}]
+            dirs[:] = [d for d in dirs if d in {SYSTEM_WORKFLOW_FOLDER, CUSTOM_WORKFLOW_FOLDER, LEGACY_CUSTOM_WORKFLOW_FOLDER}]
         for fn in sorted(files):
             if not fn.endswith(".json") or fn.endswith(".config.json"):
                 continue
             rel = os.path.relpath(os.path.join(root, fn), WORKFLOW_DIR).replace("\\", "/")
-            if is_builtin_workflow(rel):
+            workflow_source = workflow_source_from_name(rel)
+            if source and workflow_source != source:
                 continue
             cfg = {}
             cfg_path = workflow_config_path(rel)
@@ -26586,16 +26610,16 @@ def list_workflows():
             items.append({
                 "name": rel,
                 "title": cfg.get("title") or fn.replace(".json", ""),
-                "builtin": False,
+                "source": workflow_source,
+                "builtin": workflow_source == "system",
                 "field_count": len(cfg.get("fields") or []),
             })
-    items.sort(key=lambda item: (0 if item["name"].startswith(f"{CUSTOM_WORKFLOW_FOLDER}/") else 1, item["title"]))
+    items.sort(key=lambda item: (0 if item["source"] == "system" else 1, item["title"]))
     return {"workflows": items}
 
 @app.get("/api/workflows/{name:path}")
 def get_workflow(name: str):
-    if not WORKFLOW_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Invalid workflow name")
+    name = normalized_workflow_name(name)
     workflow_path = workflow_path_from_name(name)
     if not os.path.exists(workflow_path):
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -26609,7 +26633,8 @@ def get_workflow(name: str):
                 cfg = json.load(f) or cfg
         except Exception:
             pass
-    return {"name": name, "workflow": workflow, "config": cfg, "builtin": is_builtin_workflow(name)}
+    source = workflow_source_from_name(name)
+    return {"name": name, "workflow": workflow, "config": cfg, "source": source, "builtin": source == "system"}
 
 @app.post("/api/workflows")
 def upload_workflow(payload: WorkflowUploadRequest):
@@ -26634,8 +26659,7 @@ def upload_workflow(payload: WorkflowUploadRequest):
 
 @app.put("/api/workflows/{name:path}/config")
 def save_workflow_config(name: str, payload: WorkflowConfig):
-    if not WORKFLOW_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Invalid workflow name")
+    name = normalized_workflow_name(name)
     workflow_path = workflow_path_from_name(name)
     if not os.path.exists(workflow_path):
         raise HTTPException(status_code=404, detail="Workflow not found")
@@ -26646,10 +26670,9 @@ def save_workflow_config(name: str, payload: WorkflowConfig):
 
 @app.delete("/api/workflows/{name:path}")
 def delete_workflow(name: str):
-    if not WORKFLOW_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Invalid workflow name")
-    if is_builtin_workflow(name):
-        raise HTTPException(status_code=400, detail="内置工作流不可删除")
+    name = normalized_workflow_name(name)
+    if workflow_source_from_name(name) == "system":
+        raise HTTPException(status_code=400, detail="系统工作流不可删除")
     workflow_path = workflow_path_from_name(name)
     cfg_path = workflow_config_path(name)
     if not os.path.exists(workflow_path):
@@ -26661,8 +26684,7 @@ def delete_workflow(name: str):
 
 @app.post("/api/workflows/{name:path}/run")
 def run_workflow(name: str, payload: WorkflowRunRequest):
-    if not WORKFLOW_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Invalid workflow name")
+    name = normalized_workflow_name(name)
     if not os.path.exists(workflow_path_from_name(name)):
         raise HTTPException(status_code=404, detail="Workflow not found")
     # 根据 config 的字段把值映射成 params 节点覆盖

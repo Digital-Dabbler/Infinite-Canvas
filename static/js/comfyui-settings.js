@@ -275,16 +275,22 @@ window.addEventListener('pageshow', () => {
 });
 
 function renderList(){
-    listEl.innerHTML = workflows.map(w => `
+    const renderItems = (items, source) => items.map(w => `
         <button class="workflow-card ${w.name===selectedName?'active':''}" type="button" onclick="selectWorkflow('${escapeHtml(w.name)}')">
-            <span class="workflow-icon"><i data-lucide="${w.builtin?'package':'file-json-2'}" class="w-3.5 h-3.5"></i></span>
+            <span class="workflow-icon"><i data-lucide="${source === 'system'?'package':'file-json-2'}" class="w-3.5 h-3.5"></i></span>
             <span class="min-w-0" style="flex:1">
                 <div class="workflow-name">${escapeHtml(w.title)}</div>
                 <div class="workflow-meta">${tf('comfy.fieldCount', {count:w.field_count})}</div>
             </span>
-            ${w.builtin?`<span class="builtin-badge">${tr('comfy.builtin')}</span>`:''}
+            ${source === 'system'?`<span class="builtin-badge">${tr('comfy.systemWorkflows')}</span>`:''}
         </button>
     `).join('');
+    const system = workflows.filter(w => w.source === 'system');
+    const custom = workflows.filter(w => w.source === 'custom');
+    listEl.innerHTML = `
+        ${system.length ? `<div class="workflow-group-title">${escapeHtml(tr('comfy.systemWorkflows'))}</div>${renderItems(system, 'system')}` : ''}
+        ${custom.length ? `<div class="workflow-group-title">${escapeHtml(tr('comfy.customWorkflows'))}</div>${renderItems(custom, 'custom')}` : ''}
+    `;
     refreshIcons();
 }
 
@@ -298,7 +304,7 @@ async function selectWorkflow(name){
         currentConfig = data.config || { title:name.replace('.json',''), fields:[] };
         if(!currentConfig.fields) currentConfig.fields = [];
         if(!currentConfig.mini_cards) currentConfig.mini_cards = {};
-        isBuiltin = !!data.builtin;
+        isBuiltin = data.source === 'system';
         miniCards = {...defaultMiniCards(), ...currentConfig.mini_cards};
         currentConfig.mini_cards = miniCards;
         // 释放上一次的图片 blob URL

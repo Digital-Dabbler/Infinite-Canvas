@@ -9,6 +9,7 @@
         "canvas.color": { zh: "颜色", en: "Color" },
         "canvas.comfyCustom": { zh: "自定义", en: "Custom" },
         "canvas.comfyModeCustom": { zh: "自定义", en: "Custom" },
+        "smart.systemWorkflow": { zh: "系统工作流", en: "System workflow" },
         "canvas.comfyModeEdit": { zh: "图片编辑", en: "Image Edit" },
         "canvas.comfyModeEnhance": { zh: "细节增强", en: "Detail Enhance" },
         "canvas.comfyModeText": { zh: "文生图", en: "Text to Image" },
