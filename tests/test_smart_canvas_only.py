@@ -52,6 +52,16 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("clearPromptInputForNode(node, {preserveDraft:true});", run_body)
         self.assertIn("await runGeneration(node);", source)
 
+    def test_generation_settings_memory_is_canvas_scoped_and_context_isolated(self):
+        source = self.smart_canvas_js
+        self.assertIn("const SMART_GENERATION_SETTINGS_MEMORY_VERSION = 1;", source)
+        self.assertIn("canvas.generationSettingsMemory = {version:SMART_GENERATION_SETTINGS_MEMORY_VERSION, contexts:{}};", source)
+        self.assertIn("`${kind}::${engine}::${provider || '__default__'}::${hasReference ? 'reference' : 'text'}`", source)
+        self.assertIn("settingsMemoryManaged:options.settingsMemory !== false", source)
+        self.assertIn("restoreSmartGenerationSettingsMemory(subject);", source)
+        self.assertIn("rememberSmartGenerationSettingsMemory(subject, settings);", source)
+        self.assertIn("if(!isVideo) base.resolution = smartFreshImageResolution(base);", source)
+
     def test_recoverable_upstream_task_stops_the_live_timer(self):
         source = self.smart_canvas_js
         recover_start = source.index("if(e && e.imageTaskRecover && e.recoverTaskId){")

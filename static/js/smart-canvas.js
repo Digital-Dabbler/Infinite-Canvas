@@ -1719,6 +1719,65 @@ function smartSettingsForNode(node){
     normalizeSmartVideoModeSettings(base, true);
     return base;
 }
+const SMART_GENERATION_SETTINGS_MEMORY_VERSION = 1;
+function smartGenerationSettingsMemory(){
+    if(!canvas || typeof canvas !== 'object') return {};
+    const saved = canvas.generationSettingsMemory;
+    if(!saved || typeof saved !== 'object' || saved.version !== SMART_GENERATION_SETTINGS_MEMORY_VERSION || !saved.contexts || typeof saved.contexts !== 'object'){
+        canvas.generationSettingsMemory = {version:SMART_GENERATION_SETTINGS_MEMORY_VERSION, contexts:{}};
+    }
+    return canvas.generationSettingsMemory.contexts;
+}
+function smartGenerationSettingsContextKey(node, source=settings){
+    const isVideo = isSmartVideoGenerationNode(node) || source?.apiKind === 'video';
+    const kind = isVideo ? 'video' : 'image';
+    const engine = String(source?.engine || 'api');
+    const provider = engine === 'modelscope'
+        ? `modelscope:${modelscopeSelectedImageModel(source) || '__default__'}`
+        : (engine === 'runninghub'
+            ? `runninghub:${String(source?.rhCapability || 'model')}`
+            : String(isVideo ? source?.videoProvider : source?.provider_id || '__default__'));
+    const hasReference = imageRefsOnly(node ? visibleReferenceImagesFor(node) : []).length > 0;
+    return `${kind}::${engine}::${provider || '__default__'}::${hasReference ? 'reference' : 'text'}`;
+}
+function smartFreshImageResolution(source){
+    const capability = imageModelCapabilityFor(source?.provider_id || '', source?.model || '');
+    const field = videoCapabilityField(capability, 'resolution');
+    const options = videoCapabilityOptions(field);
+    const twoK = options.find(option => String(option.value || '').toLowerCase() === '2k');
+    if(twoK) return String(twoK.value);
+    if(capability?.discovered && field) return String(field.default ?? options[0]?.value ?? source?.resolution ?? '1k');
+    return isGptImageAutoSizeModel(source?.model) ? '2k' : '1k';
+}
+function smartSettingsMemorySeed(node, source=settings){
+    const base = cloneSmartSettings(canvasDefaultSmartSettings || initialSmartSettings);
+    const isVideo = isSmartVideoGenerationNode(node);
+    base.apiKind = isVideo ? 'video' : 'image';
+    if(!isVideo) base.resolution = smartFreshImageResolution(base);
+    return base;
+}
+function restoreSmartGenerationSettingsMemory(node){
+    if(!node?.settingsMemoryManaged) return false;
+    const current = cloneSmartSettings(settings);
+    const key = smartGenerationSettingsContextKey(node, current);
+    if(node.settingsMemoryContextKey === key) return false;
+    const stored = smartGenerationSettingsMemory()[key];
+    const next = stored && typeof stored === 'object'
+        ? {...smartSettingsMemorySeed(node, current), ...cloneSmartSettings(stored)}
+        : smartSettingsMemorySeed(node, current);
+    next.apiKind = isSmartVideoGenerationNode(node) ? 'video' : 'image';
+    normalizeSmartVideoModeSettings(next, true);
+    settings = next;
+    node.runSettings = settingsForStorage(next);
+    node.settingsMemoryContextKey = key;
+    return true;
+}
+function rememberSmartGenerationSettingsMemory(node, source=settings){
+    if(!node?.settingsMemoryManaged) return;
+    const key = smartGenerationSettingsContextKey(node, source);
+    smartGenerationSettingsMemory()[key] = settingsForStorage(source);
+    node.settingsMemoryContextKey = key;
+}
 function activeSettingsSubject(){
     return activeComposerNode();
 }
@@ -1732,6 +1791,7 @@ function persistActiveSmartSettings(){
     const subject = activeComposerNode();
     if(!subject) return;
     subject.runSettings = settingsForStorage(settings);
+    rememberSmartGenerationSettingsMemory(subject, settings);
     rememberRecentSmartSettings(settings, subject);
 }
 function rememberCanvasListProject(projectId){
@@ -8091,7 +8151,9 @@ function createMediaGenerationNode(kind='image', point=viewportCenter(), options
         id:uid(isVideo ? 'video' : 'generate'), type:isVideo ? 'smart-video-generation' : 'smart-image-generation',
         x:Math.round((point?.x || 0) - 160), y:Math.round((point?.y || 0) - 118),
         title:isVideo ? '视频生成' : '图片生成', images:[], activeImageIndex:0,
-        promptPresets:[], runSettings:{apiKind:isVideo ? 'video' : 'image'}, created_at:Date.now()
+        promptPresets:[], runSettings:{apiKind:isVideo ? 'video' : 'image'},
+        settingsMemoryManaged:options.settingsMemory !== false,
+        created_at:Date.now()
     };
     node.scale = MEDIA_NODE_DEFAULT_SCALE;
     nodes.push(node);
@@ -10625,7 +10687,7 @@ async function generateAngleImage(){
     if(runSettings.engine === 'comfy' && !runSettings.comfyWorkflow){ toast(tr('smart.errNeedWorkflow')); return; }
     pushUndo();
     const rect = nodeRect(source);
-    const output = createImageGenerationNode({x:rect.x + rect.width + 210, y:rect.y + rect.height / 2}, {skipUndo:true, select:true, deferRender:true, deferSave:true});
+    const output = createImageGenerationNode({x:rect.x + rect.width + 210, y:rect.y + rect.height / 2}, {skipUndo:true, select:true, deferRender:true, deferSave:true, settingsMemory:false});
     output.title = '角度生成';
     output.runSettings = cloneSmartSettings(runSettings);
     output.promptDraftText = anglePromptForCurrentPose();
@@ -10840,7 +10902,8 @@ async function runSmartBackgroundRemoval(sourceNode, imageIndex){
         skipUndo:true,
         select:true,
         deferRender:true,
-        deferSave:true
+        deferSave:true,
+        settingsMemory:false
     });
     const sourceRef = {url:item.url, name:item.name || smartImageNameFromUrl(item.url), kind:'image', nodeId:source.id, imageIndex:index};
     const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_BACKGROUND_REMOVAL_WORKFLOW, apiKind:'image'};
@@ -16919,7 +16982,7 @@ async function runImageOutpaint(){
         const rect = nodeRect(node);
         const output = createImageGenerationNode(
             {x:rect.x + rect.width + 260, y:rect.y + rect.height / 2},
-            {skipUndo:true, select:true, deferRender:true, deferSave:true}
+            {skipUndo:true, select:true, deferRender:true, deferSave:true, settingsMemory:false}
         );
         output.title = '扩图生成';
         const colorName = outpaintFillColorName();
@@ -17290,6 +17353,7 @@ function updateComposer(){
         if(isSmartVideoGenerationNode(subject)) settings.apiKind = 'video';
         loadPromptDraft(subject);
     }
+    restoreSmartGenerationSettingsMemory(subject);
     if(promptInput){
         promptInput.dataset.placeholder = isSmartVideoGenerationNode(subject) ? '描述你想生成的视频...' : '描述你想生成或编辑的图片...';
     }
@@ -17318,6 +17382,8 @@ function renderInputPromptPreview(node){
 }
 function renderInputThumbsRow(node){
     if(!inputThumbsRow) return;
+    const restoredSettings = activeComposerNode()?.id === node?.id && restoreSmartGenerationSettingsMemory(node);
+    if(restoredSettings) scheduleDynamicParamsRefresh(80);
     const imageModelSelection = syncImageModelForCurrentInputs(node);
     if(imageModelSelection.changed) scheduleDynamicParamsRefresh(80);
     const videoModelSelection = syncVideoModelForCurrentInputs(node);
