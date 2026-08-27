@@ -3,6 +3,8 @@
     window.StudioI18n.register({
         "canvas.adaptiveRatio": { zh: "适配比例", en: "Adaptive Ratio" },
         "canvas.applyCrop": { zh: "应用裁剪", en: "Apply Crop" },
+        "canvas.applyMask": { zh: "保存遮罩", en: "Save Mask" },
+        "canvas.applyBrush": { zh: "保存批注", en: "Save Annotation" },
         "canvas.backToList": { zh: "返回画布列表", en: "Back to canvases" },
         "canvas.brushSize": { zh: "笔刷", en: "Brush" },
         "canvas.clear": { zh: "清空", en: "Clear" },
