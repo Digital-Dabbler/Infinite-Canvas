@@ -246,7 +246,11 @@ function snapshotForUndo(){
         connections: JSON.parse(JSON.stringify(canvas?.connections || [])),
         selectedId,
         selectedIds: selectedIds.slice(),
-        selectedImage: {...selectedImage}
+        selectedImage: {...selectedImage},
+        // 墓碑与未同步标记必须随快照一起还原：撤销删除后，节点不能被
+        // 下一次合并/保存当成熟人再次丢掉（新建节点路径会清理墓碑，撤销路径不能漏）。
+        deletedIds: [...localDeletedNodeIds],
+        unsyncedIds: [...localUnsyncedNodeIds]
     };
 }
 function pushUndo(){
@@ -264,6 +268,14 @@ function performUndo(){
     selectedId = snap.selectedId;
     selectedIds = snap.selectedIds;
     selectedImage = snap.selectedImage;
+    if(Array.isArray(snap.deletedIds)){
+        localDeletedNodeIds.clear();
+        snap.deletedIds.forEach(id => localDeletedNodeIds.add(id));
+    }
+    if(Array.isArray(snap.unsyncedIds)){
+        localUnsyncedNodeIds.clear();
+        snap.unsyncedIds.forEach(id => localUnsyncedNodeIds.add(id));
+    }
     clearComposerSubject();
     render();
     scheduleSave();
@@ -6756,6 +6768,10 @@ let canvasSyncInFlight = false;
 let canvasSyncTimer = null;
 let canvasMetaPollTimer = null;
 let connectionLayerRaf = 0;
+// 本地是否有未保存改动：有则任何服务端状态（广播/轮询/主动合并）都不得覆盖内存，
+// 等保存成功后再补拉（pendingRemoteMerge）。这是所有“服务端→客户端”状态的唯一闸门。
+let canvasDirty = false;
+let pendingRemoteMerge = false;
 function mergeSmartImageLists(localImgs, remoteImgs){
     const out = [];
     const seen = new Set();
@@ -7045,7 +7061,7 @@ function smartNodeAllowsConcurrentSubmit(node){
     if(isSmartVideoGenerationNode(node)) return apiKind === 'video' && isApiLikeEngine(engine);
     return apiKind !== 'video' && (isApiLikeEngine(engine) || (engine === 'runninghub' && Boolean(runningHubSelectedModel(runSettings))));
 }
-function mergeSmartNode(local, remote){
+function mergeSmartNode(local, remote, preferLocal=false){
     const images = mergeSmartImageLists(local.images, remote.images);
     if(smartServerManagedTasks(local).length || smartServerManagedTasks(remote).length){
         return mergeServerManagedNode(local, remote, images);
@@ -7055,7 +7071,15 @@ function mergeSmartNode(local, remote){
     const localBusy = smartNodeInFlight(local);
     const remoteBusy = smartNodeInFlight(remote);
     if(localDone && remoteBusy && !remoteDone) return completeSmartNodeWithImages(local, images);
-    if(remoteDone && localBusy && !localDone) return completeSmartNodeWithImages(remote, images);
+    if(remoteDone && localBusy && !localDone){
+        // 本地这轮运行比服务端记录的完成时间更晚 → 本地是新一轮生成，
+        // 绝不能被服务端上一轮的旧完成态冲掉（否则新任务状态会消失）。
+        // runStartedAt 缺失时回退为“以服务端完成态为准”（与旧行为一致）。
+        if(Number(local.runStartedAt || 0) > Number(remote.runFinishedAt || 0)){
+            return completeSmartNodeWithImages(local, images);
+        }
+        return completeSmartNodeWithImages(remote, images);
+    }
     if(localDone && remoteDone){
         const localFinished = Number(local.runFinishedAt || 0);
         const remoteFinished = Number(remote.runFinishedAt || 0);
@@ -7065,13 +7089,14 @@ function mergeSmartNode(local, remote){
     if(smartNodeInFlight(local)){
         return {...local, images};
     }
-    // 否则以对方（最新保存方）的布局/标题/设置为基底，但图片取并集——双方生成结果都不丢
-    const merged = {...remote, images};
+    // 否则以对方（最新保存方）的布局/标题/设置为基底，但图片取并集——双方生成结果都不丢。
+    // 409 冲突合并（本地正带着自己的编辑在保存）时反转为以本地为准，避免刚做的编辑被旧快照覆盖。
+    const merged = preferLocal ? {...local, images} : {...remote, images};
     return smartNodeHasDisplayResult(merged) && (merged.pending || merged.queued || smartPendingTasks(merged).length)
         ? completeSmartNodeWithImages(merged, images)
         : merged;
 }
-function mergeSmartNodeLists(localNodes, remoteNodes){
+function mergeSmartNodeLists(localNodes, remoteNodes, preferLocal=false){
     const localById = new Map((localNodes || []).map(n => [n.id, n]));
     const remoteById = new Map((remoteNodes || []).map(n => [n.id, n]));
     const order = [];
@@ -7085,7 +7110,7 @@ function mergeSmartNodeLists(localNodes, remoteNodes){
         if(local && !remote && localUnsyncedNodeIds.has(id)) return local;
         if(local && !remote) return local;     // 仅本地存在：保留（我新建的节点；对方删了也宁可复活也不丢结果）
         if(remote && !local) return remote;     // 仅对方存在：加入对方新建的节点
-        return mergeSmartNode(local, remote);
+        return mergeSmartNode(local, remote, preferLocal);
     }).filter(Boolean);
 }
 function mergeSmartConnections(localConns, remoteConns, nodeIds){
@@ -7100,14 +7125,26 @@ function mergeSmartConnections(localConns, remoteConns, nodeIds){
     });
     return out;
 }
-function applyMergedServerCanvas(serverCanvas){
-    if(!serverCanvas || !canvas) return false;
+// 服务端墓碑 ↔ 存活节点双向收敛：
+// - 服务端 deleted_node_ids 并入本地墓碑（保留删除意图，防止合并复活已删节点）；
+// - 服务端 nodes 里实际存在的 id 从本地墓碑移除（服务端有它=它活着，
+//   撤销恢复的节点不会被下次合并/保存永久误杀）。
+function syncTombstonesFromServer(serverCanvas){
+    if(!serverCanvas) return;
     (serverCanvas.deleted_node_ids || []).forEach(id => {
         const value = String(id || '').trim();
         if(value) localDeletedNodeIds.add(value);
     });
+    (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).forEach(node => {
+        const value = String(node?.id || '').trim();
+        if(value) localDeletedNodeIds.delete(value);
+    });
+}
+function applyMergedServerCanvas(serverCanvas, options={}){
+    if(!serverCanvas || !canvas) return false;
+    syncTombstonesFromServer(serverCanvas);
     const remoteNodes = (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
-    const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes);
+    const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes, options.preferLocal === true);
     const nodeIds = new Set(mergedNodes.map(n => n.id));
     nodes = mergedNodes;
     canvas.logs = mergeSmartCanvasLogs(canvas.logs, serverCanvas.logs);
@@ -7131,6 +7168,11 @@ function applyMergedServerCanvas(serverCanvas){
 }
 async function mergeReloadCanvasNow(){
     if(!canvasId) return;
+    if(canvasDirty){
+        // 本地还有未保存改动：服务端旧快照不得覆盖内存，等保存成功后再补拉。
+        pendingRemoteMerge = true;
+        return;
+    }
     if(dragState || selectionState){
         // 用户正在拖拽/框选，稍后再合并，别打断操作
         scheduleCanvasMergeReload(600);
@@ -8039,15 +8081,14 @@ async function loadCanvas(){
         if(!res.ok) return;
         const data = await res.json();
         canvas = data.canvas;
+        canvasDirty = false;
+        pendingRemoteMerge = false;
         rememberCanvasListProject(canvas.project || 'default');
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
         document.getElementById('smartTitle').textContent = canvas.title || tr('canvas.smartCanvas');
         localDeletedNodeIds.clear();
-        (canvas.deleted_node_ids || []).forEach(id => {
-            const value = String(id || '').trim();
-            if(value) localDeletedNodeIds.add(value);
-        });
+        syncTombstonesFromServer(canvas);
         const legacyMigration = migrateLegacySmartCanvasNodes(Array.isArray(canvas.nodes) ? canvas.nodes : [], Array.isArray(canvas.connections) ? canvas.connections : []);
         nodes = legacyMigration.nodes;
         const catalogMigrated = mergeCanvasMediaCatalog(canvas.media_catalog || []);
@@ -8093,6 +8134,7 @@ async function loadCanvas(){
     } catch(e) { toast(tr('smart.toastCanvasFail')); }
 }
 function scheduleSave(){
+    canvasDirty = true;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
 }
@@ -8131,21 +8173,27 @@ async function saveCanvas(){
             const data = await res.json();
             if(data.canvas){
                 if(data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
-                (data.canvas.deleted_node_ids || []).forEach(id => {
-                    const value = String(id || '').trim();
-                    if(value) localDeletedNodeIds.add(value);
-                });
+                syncTombstonesFromServer(data.canvas);
                 (data.canvas.nodes || []).forEach(node => {
                     if(node?.id) localUnsyncedNodeIds.delete(node.id);
                 });
             }
+            // 保存成功即视为“本地已无未保存改动”，门控放行；保存期间被请求过的
+            // 远端状态（广播/轮询在 dirty 时置位）此刻补拉，保证协作同步不倒退。
+            canvasDirty = false;
+            if(pendingRemoteMerge){
+                pendingRemoteMerge = false;
+                scheduleCanvasMergeReload(200);
+            }
         } else if(res.status === 409) {
             // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
             // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。
+            // 本地此时正带着自己的未保存编辑在保存，合并以本地为准（preferLocal）：
+            // 对方新增的节点/连线/图片仍并集，但共享节点的布局/文本不被旧快照覆盖。
             const data = await res.json().catch(() => ({}));
             const serverCanvas = data.detail?.canvas;
             if(serverCanvas){
-                applyMergedServerCanvas(serverCanvas);
+                applyMergedServerCanvas(serverCanvas, {preferLocal:true});
                 nodes.forEach(node => {
                     node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
                     if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
@@ -9558,6 +9606,7 @@ async function deleteCanvasLogEntry(logId, deleteMedia=false){
         if(!res.ok) throw new Error(data.detail || tr('canvas.logDeleteFailed'));
         canvas.logs = data.canvas?.logs || (canvas.logs || []).filter(item => item.id !== logId);
         if(data.canvas?.nodes){
+            syncTombstonesFromServer(data.canvas);
             canvas.nodes = data.canvas.nodes;
             canvas.connections = data.canvas.connections || [];
             nodes = canvas.nodes;
@@ -11279,6 +11328,15 @@ function render(){
         const node = nodes.find(n => n.id === el.dataset.id);
         if(smartNodeHasLiveMedia(node)) reusableNodes.set(node.id, el);
     });
+    // 正在编辑的文本节点：本次重渲染保留其 DOM（含聚焦的 textarea），不销毁重建。
+    // 否则重建 DOM 会触发 blur → onblur 把编辑态与生成面板永久关闭，
+    // 并打断输入法合成会话导致已输入内容丢失。保留后，无论触发源是
+    // 轮询合并/广播/409/配置刷新还是其他 render 调用，都不会再打断编辑。
+    const editingNodeIds = new Set();
+    world.querySelectorAll('.image-node[data-id]').forEach(el => {
+        const node = nodes.find(n => n.id === el.dataset.id);
+        if(node && promptTextEditingIds.has(node.id)) editingNodeIds.add(node.id);
+    });
     const nodeHtmlEntries = nodes
         .filter(node => node.id !== SMART_LOG_PREVIEW_NODE_ID)
         // 分组节点先渲染（DOM 靠前→层级在下），作为成员的背板；成员渲染在后、盖在分组之上，
@@ -11339,6 +11397,11 @@ function render(){
     const keepEls = new Set();
     reusableNodes.forEach(el => keepEls.add(el));
     if(composerEl) keepEls.add(composerEl);
+    if(editingNodeIds.size){
+        world.querySelectorAll('.image-node[data-id]').forEach(el => {
+            if(editingNodeIds.has(el.dataset.id)) keepEls.add(el);
+        });
+    }
     [...world.childNodes].forEach(child => {
         if(!keepEls.has(child)) child.remove();
     });
@@ -11347,6 +11410,7 @@ function render(){
     if(composerEl && !promptHadFocus) world.appendChild(composerEl);
     world.insertAdjacentHTML('beforeend', renderConnections());
     nodeHtmlEntries.forEach(entry => {
+        if(editingNodeIds.has(entry.node.id)) return; // 编辑中的文本节点保留旧 DOM，避免失焦/打断输入法
         const fresh = renderedNodeEls.get(entry.node.id);
         if(!fresh) return;
         world.appendChild(fresh);
@@ -11618,6 +11682,22 @@ function renderTextNodePanel(){
     if(!open){
         textNodePanelLayer.innerHTML = '';
         textPanelAutoPanKey = '';
+        return;
+    }
+    // 面板内部正在输入（如指令框）且面板仍属于当前选中节点时，不要重建面板 DOM：
+    // 重建会失焦并打断输入法合成。只重定位；等焦点离开面板后的下一次渲染再刷新内容。
+    const activePanelEl = textNodePanelLayer.querySelector('[data-text-generation-panel]');
+    const activeInsidePanel = Boolean(
+        activePanelEl
+        && String(activePanelEl.dataset?.nodeId || '') === String(node.id || '')
+        && document.activeElement
+        && textNodePanelLayer.contains(document.activeElement)
+    );
+    if(activeInsidePanel){
+        requestAnimationFrame(() => {
+            const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+            if(nodeEl) positionTextNodePanel(nodeEl);
+        });
         return;
     }
     textNodePanelLayer.innerHTML = textNodeGenerationPanelHtml(node);

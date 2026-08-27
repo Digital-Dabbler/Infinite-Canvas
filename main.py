@@ -24756,6 +24756,15 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
             old_deleted = {str(item or "").strip() for item in (canvas.get("deleted_node_ids") or []) if str(item or "").strip()}
             new_deleted = {str(item or "").strip() for item in (payload.deleted_node_ids or []) if str(item or "").strip()}
             deleted_node_ids = list(old_deleted | new_deleted)[-2000:]
+            # 墓碑只增不减会让“撤销恢复”的节点被永久误杀：本次 payload 中实际存在的
+            # 节点视为存活，把它们的 id 从墓碑里移除，让复活在所有客户端收敛。
+            incoming_ids = {
+                str((node or {}).get("id") or "").strip()
+                for node in (payload.nodes or [])
+                if isinstance(node, dict) and str((node or {}).get("id") or "").strip()
+            }
+            if incoming_ids:
+                deleted_node_ids = [item for item in deleted_node_ids if item not in incoming_ids]
             deleted_set = set(deleted_node_ids)
             canvas["deleted_node_ids"] = deleted_node_ids
             incoming_nodes = [
