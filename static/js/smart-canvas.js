@@ -293,6 +293,8 @@ let angleCubeDrag = null;
 let imageEditModeTouched = false;
 let imageResizeScale = 0.5;
 let editDrawState = null;
+let localEditKind = 'mask';
+let localEditDrafts = {mask:null, brush:null};
 let editTextItems = [];
 let editTextSelectedId = '';
 let editTextDrag = null;
@@ -10582,7 +10584,7 @@ function runImageToolbarAction(action){
         runJimengUpscale(node, index);
         return;
     }
-    if(!['crop','outpaint','mask','brush','grid'].includes(action)) return;
+    if(!['crop','outpaint','local','mask','brush','grid'].includes(action)) return;
     openImageEditor(node.id, index);
     setImageEditMode(action, true);
     if(action === 'grid' && canGridJoinCurrentNode()) setGridOperationMode('join');
@@ -14165,9 +14167,14 @@ function setImageEditMode(mode, userTouched=false){
     const isVideoPreview = editKind === 'video';
     if(isVideoPreview && mode !== 'preview') mode = 'preview';
     if(userTouched) imageEditModeTouched = true;
+    const requestedLocalKind = mode === 'local' ? localEditKind : (mode === 'mask' || mode === 'brush' ? mode : '');
+    if(requestedLocalKind) localEditKind = requestedLocalKind;
     const prev = imageEditMode;
+    const nextMode = requestedLocalKind || mode;
+    const switchedLocalKind = (prev === 'mask' || prev === 'brush') && requestedLocalKind && prev !== requestedLocalKind;
+    if(switchedLocalKind || ((prev === 'mask' || prev === 'brush') && !requestedLocalKind)) saveLocalEditDraft(prev);
     if(mode !== 'brush') removeEditTextInlineEditor(true);
-    imageEditMode = ['preview','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';
+    imageEditMode = ['preview','crop','outpaint','mask','brush','resize','grid'].includes(nextMode) ? nextMode : 'preview';
     const cropCanvasEl = document.getElementById('cropCanvas');
     const previewStageEl = document.getElementById('previewStage');
     const editStageEl = document.getElementById('imageEditStage');
@@ -14206,11 +14213,24 @@ function setImageEditMode(mode, userTouched=false){
     cropCanvasEl.classList.toggle('outpaint-mode', imageEditMode === 'outpaint');
     if(imageEditMode === 'outpaint') syncOutpaintFillColor();
     syncGridCustomCursor();
-    document.querySelectorAll('[data-image-edit-mode]').forEach(btn => btn.classList.toggle('active', btn.dataset.imageEditMode === imageEditMode));
+    document.querySelectorAll('[data-image-edit-mode]').forEach(btn => {
+        const buttonMode = btn.dataset.imageEditMode;
+        btn.classList.toggle('active', buttonMode === 'local' ? (imageEditMode === 'mask' || imageEditMode === 'brush') : buttonMode === imageEditMode);
+    });
+    document.querySelectorAll('[data-local-edit-kind]').forEach(btn => {
+        const active = btn.dataset.localEditKind === imageEditMode;
+        btn.classList.toggle('primary', active);
+        btn.classList.toggle('secondary', !active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
     document.getElementById('imageCropTools')?.classList.toggle('active', imageEditMode === 'crop');
+    const isLocalEdit = imageEditMode === 'mask' || imageEditMode === 'brush';
+    document.getElementById('imageLocalEditModeTools')?.classList.toggle('active', isLocalEdit);
     document.getElementById('imageMaskTools').classList.toggle('active', imageEditMode === 'mask');
     document.getElementById('imageBrushTools').classList.toggle('active', imageEditMode === 'brush');
+    const localEditStatus = document.getElementById('localEditStatus');
+    if(localEditStatus) localEditStatus.textContent = isLocalEdit ? tr(imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : 'canvas.localEditAnnotateStatus') : '';
     document.getElementById('imageResizeTools')?.classList.toggle('active', imageEditMode === 'resize');
     document.getElementById('imageGridTools').classList.toggle('active', imageEditMode === 'grid');
     if(imageEditMode === 'grid' && gridOperationMode === 'join' && !canGridJoinCurrentNode()) gridOperationMode = 'split';
@@ -14238,8 +14258,8 @@ function setImageEditMode(mode, userTouched=false){
         } else {
             const icon = imageEditMode === 'crop' ? 'crop' : imageEditMode === 'outpaint' ? 'expand' : imageEditMode === 'mask' ? 'brush' : imageEditMode === 'brush' ? 'paintbrush' : 'grid-3x3';
             const labelKey = imageEditMode === 'crop' ? 'canvas.applyCrop' : imageEditMode === 'outpaint' ? 'canvas.applyOutpaint' : imageEditMode === 'mask' ? 'canvas.applyMask' : imageEditMode === 'brush' ? 'canvas.applyBrush' : 'canvas.applyGrid';
-            const titleKey = imageEditMode === 'crop' ? 'canvas.cropImage' : imageEditMode === 'outpaint' ? 'canvas.outpaintImage' : imageEditMode === 'mask' ? 'canvas.maskEdit' : imageEditMode === 'brush' ? 'canvas.brushEdit' : 'canvas.modeGrid';
-            const subKey = imageEditMode === 'crop' ? 'canvas.cropHint' : imageEditMode === 'outpaint' ? 'canvas.outpaintHint' : imageEditMode === 'mask' ? 'canvas.maskHint2' : imageEditMode === 'brush' ? 'canvas.brushHint' : 'canvas.gridHint';
+            const titleKey = imageEditMode === 'crop' ? 'canvas.cropImage' : imageEditMode === 'outpaint' ? 'canvas.outpaintImage' : imageEditMode === 'mask' || imageEditMode === 'brush' ? 'canvas.modeLocalEdit' : 'canvas.modeGrid';
+            const subKey = imageEditMode === 'crop' ? 'canvas.cropHint' : imageEditMode === 'outpaint' ? 'canvas.outpaintHint' : imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : imageEditMode === 'brush' ? 'canvas.localEditAnnotateStatus' : 'canvas.gridHint';
             document.getElementById('imageEditTitle').textContent = tr(titleKey);
             document.getElementById('imageEditSub').textContent = tr(subKey);
             const applyLabel = imageEditMode === 'grid' && gridOperationMode === 'join' ? '输出拼接' : tr(labelKey);
@@ -14261,6 +14281,7 @@ function setImageEditMode(mode, userTouched=false){
     resizeEditDrawCanvas();
     if(imageEditMode === 'grid') refreshGridSplitPreview();
     else if(imageEditMode === 'crop' || imageEditMode === 'resize' || imageEditMode === 'outpaint' || prev === 'grid') clearEditDrawing(true);
+    if(switchedLocalKind) restoreLocalEditDraft(imageEditMode);
     syncEditDrawingHistoryButtons();
     syncBrushToolButtons();
     syncTextToolState(true);
@@ -15563,6 +15584,20 @@ function editDrawSnapshot(){
         textSelectedId:editTextSelectedId || ''
     };
 }
+function saveLocalEditDraft(kind=imageEditMode){
+    if(kind !== 'mask' && kind !== 'brush') return;
+    localEditDrafts[kind] = {snapshot:editDrawSnapshot(), undo:editDrawUndoStack.slice(), redo:editDrawRedoStack.slice()};
+}
+function restoreLocalEditDraft(kind=imageEditMode){
+    const draft = localEditDrafts[kind];
+    clearEditDrawing(true);
+    editDrawUndoStack = [];
+    editDrawRedoStack = [];
+    if(!draft) return;
+    restoreEditDrawSnapshot(draft.snapshot);
+    editDrawUndoStack = draft.undo.slice();
+    editDrawRedoStack = draft.redo.slice();
+}
 function restoreEditDrawSnapshot(snapshot){
     if(!snapshot) return;
     removeEditTextInlineEditor(false);
@@ -16749,6 +16784,7 @@ function openImageEditor(nodeId, imageIndex=0){
     gridCustomMode = false; gridCustomLines = []; gridCustomHistory = []; gridCustomDrag = null; gridCustomOrientation = 'h';
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
+    localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null};
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
     const toggle = document.getElementById('gridCustomToggle');
@@ -16848,7 +16884,7 @@ function closeImageEditor(){
         previewVideo.style.display = 'none';
     }
     clearEditDrawing(true);
-    cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
+    cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
     previewNavState = {nodeId:'', index:0, count:0};
     videoTrimState = {source:'', start:0, end:0, mute:false, previewing:false, speed:1};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
@@ -23444,6 +23480,12 @@ document.querySelectorAll('[data-image-edit-mode]').forEach(btn => {
     btn.addEventListener('click', event => {
         event.stopPropagation();
         setImageEditMode(btn.dataset.imageEditMode || 'crop', true);
+    });
+});
+document.querySelectorAll('[data-local-edit-kind]').forEach(btn => {
+    btn.addEventListener('click', event => {
+        event.stopPropagation();
+        setImageEditMode(btn.dataset.localEditKind || 'mask', true);
     });
 });
 document.querySelectorAll('[data-outpaint-color]').forEach(button => {
