@@ -33,6 +33,37 @@
         accountPopover?.classList.remove('open');
         balancePopover?.classList.remove('open');
     }
+    function syncCanvasAccountFontScaleUI(){
+        const percent = Math.round(canvasFontScale * 100);
+        const slider = document.getElementById('rhAccountFontScale');
+        const output = document.getElementById('rhAccountFontScaleValue');
+        if(slider) slider.value = String(percent);
+        if(output) output.textContent = `${percent}%`;
+    }
+    function setCanvasAccountFontScale(scale, persist=false){
+        const next = clampCanvasFontScale(scale);
+        applyCanvasFontScale(next);
+        syncCanvasAccountFontScaleUI();
+        try { localStorage.setItem(canvasFontScaleCacheKey(user?.id), String(next)); } catch(e) {}
+        try { parent.postMessage({type:'studio-font-scale', scale:next}, location.origin); } catch(e) {}
+        if(persist) saveCanvasAccountFontScale(next);
+    }
+    async function saveCanvasAccountFontScale(scale){
+        try {
+            const response = await fetch('/api/auth/me/preferences', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ canvas_font_scale: scale })
+            });
+            if(!response.ok) throw new Error('save failed');
+            const data = await response.json();
+            if(user) user.preferences = data.preferences || {};
+        } catch(e){
+            // 保存失败时回滚到服务端值，避免本地与线上不一致。
+            const serverScale = clampCanvasFontScale(user?.preferences?.canvas_font_scale ?? 1);
+            setCanvasAccountFontScale(serverScale, false);
+        }
+    }
     async function loadAccount(){
         try {
             const response = await fetch('/api/auth/me',{cache:'no-store'});
@@ -46,6 +77,8 @@
             document.getElementById('rhAccountDepartment').textContent = user.department || '—';
             document.getElementById('rhAccountRole').textContent = user.role === 'admin' ? '管理员' : '普通用户';
             document.getElementById('rhAccountProfile').textContent = user.api_profile_name || '默认配置';
+            applyCanvasFontScale(clampCanvasFontScale((user.preferences || {}).canvas_font_scale || 1));
+            syncCanvasAccountFontScaleUI();
         } catch(e){}
     }
     function formatAmount(item){
@@ -311,7 +344,7 @@
     };
     document.getElementById('rhAgentClose').onclick = () => toggleSurface('agent', false);
     document.getElementById('rhAnnouncementBtn').onclick = () => parent.postMessage({type:'studio:open-announcement'},location.origin);
-    document.getElementById('rhAccountBtn').onclick = event => { event.stopPropagation(); balancePopover.classList.remove('open'); accountPopover.classList.toggle('open'); };
+    document.getElementById('rhAccountBtn').onclick = event => { event.stopPropagation(); balancePopover.classList.remove('open'); accountPopover.classList.toggle('open'); syncCanvasAccountFontScaleUI(); };
     document.getElementById('rhBalanceBtn').onclick = event => { event.stopPropagation(); accountPopover.classList.remove('open'); balancePopover.classList.toggle('open'); };
     document.getElementById('rhBalanceRefresh').onclick = () => loadBalances(true);
     shellTitle.onclick = () => {
@@ -333,6 +366,18 @@
     document.addEventListener('click', event => {
         if(!event.target.closest('#rhAccountPopover,#rhAccountBtn')) accountPopover.classList.remove('open');
         if(!event.target.closest('#rhBalancePopover,#rhBalanceBtn')) balancePopover.classList.remove('open');
+    });
+    const accountFontScaleSlider = document.getElementById('rhAccountFontScale');
+    const accountFontScaleReset = document.getElementById('rhAccountFontScaleReset');
+    if(accountFontScaleSlider){
+        accountFontScaleSlider.addEventListener('input', () => setCanvasAccountFontScale(Number(accountFontScaleSlider.value) / 100, false));
+        accountFontScaleSlider.addEventListener('change', () => setCanvasAccountFontScale(Number(accountFontScaleSlider.value) / 100, true));
+    }
+    if(accountFontScaleReset){
+        accountFontScaleReset.addEventListener('click', () => setCanvasAccountFontScale(1, true));
+    }
+    window.addEventListener('storage', event => {
+        if(event.key && event.key.startsWith('canvas_font_scale:')) syncCanvasAccountFontScaleUI();
     });
     shell.addEventListener('wheel', () => requestAnimationFrame(syncZoom),{passive:true});
     shellTitle.textContent = oldTitle?.textContent || 'Untitled';

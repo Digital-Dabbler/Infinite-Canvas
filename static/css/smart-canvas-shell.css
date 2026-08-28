@@ -71,6 +71,15 @@
 .rh-account-profile > span { width:42px; height:42px; display:grid; place-items:center; border-radius:50%; background:var(--rh-brand); color:#07110b; font-weight:900; }
 .rh-account-profile > div { display:flex; flex-direction:column; gap:3px; }.rh-account-profile small { color:var(--muted); }
 .rh-account-popover dl { margin:10px 0 0; }.rh-account-popover dl div { display:flex; justify-content:space-between; gap:12px; padding:7px 2px; font-size:calc(11px * var(--canvas-font-scale, 1)); }.rh-account-popover dt { color:var(--muted); }.rh-account-popover dd { margin:0; text-align:right; }
+.rh-account-preference { margin-top:12px; padding:11px 2px 0; border-top:1px solid var(--line); }
+.rh-account-preference-label { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight:800; }
+.rh-account-preference-label svg { width:13px; height:13px; }
+.rh-account-font-scale { display:flex; align-items:center; gap:9px; margin-top:9px; }
+.rh-account-font-scale input[type="range"] { flex:1; min-width:0; margin:0; accent-color:var(--rh-brand); }
+.rh-account-font-scale output { min-width:42px; text-align:right; color:var(--text); font-size:calc(12px * var(--canvas-font-scale, 1)); font-weight:850; font-variant-numeric:tabular-nums; }
+.rh-account-font-scale button { height:24px; padding:0 9px; border:1px solid var(--line); border-radius:8px; background:var(--soft); color:var(--muted); font-size:calc(10px * var(--canvas-font-scale, 1)); font-weight:800; cursor:pointer; }
+.rh-account-font-scale button:hover { color:var(--text); border-color:var(--rh-brand); }
+.rh-account-preference-hint { display:block; margin-top:7px; color:var(--faint); font-size:calc(9.5px * var(--canvas-font-scale, 1)); }
 .rh-balance-popover header { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; border-bottom:1px solid var(--line); }.rh-balance-popover header button { width:30px; height:30px; display:grid; place-items:center; border-radius:9px; background:var(--soft); color:var(--muted); }
 .rh-balance-details { display:grid; gap:7px; padding-top:10px; }.rh-balance-item { display:flex; align-items:center; justify-content:space-between; padding:9px 10px; border-radius:10px; background:var(--soft); font-size:calc(11px * var(--canvas-font-scale, 1)); }.rh-balance-item span { color:var(--muted); }
 .create-menu { width:286px; max-height:calc(100dvh - 24px); padding:6px; overflow:auto; overscroll-behavior:contain; border-radius:14px; background:var(--panel); }.create-menu-grid { grid-template-columns:1fr; gap:2px; }

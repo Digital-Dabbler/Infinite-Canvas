@@ -111,6 +111,15 @@
         <section id="rhAccountPopover" class="rh-account-popover">
             <div class="rh-account-profile"><span id="rhAccountLarge">IC</span><div><strong id="rhAccountName">用户</strong><small id="rhAccountUsername">@user</small></div></div>
             <dl><div><dt>部门</dt><dd id="rhAccountDepartment">—</dd></div><div><dt>角色</dt><dd id="rhAccountRole">—</dd></div><div><dt>API 配置组</dt><dd id="rhAccountProfile">—</dd></div></dl>
+            <div class="rh-account-preference">
+                <span class="rh-account-preference-label"><i data-lucide="type"></i><span>画布字体大小</span></span>
+                <div class="rh-account-font-scale">
+                    <input id="rhAccountFontScale" type="range" min="80" max="150" step="5" value="100" aria-label="画布字体大小">
+                    <output id="rhAccountFontScaleValue" for="rhAccountFontScale">100%</output>
+                    <button id="rhAccountFontScaleReset" type="button" title="恢复默认">重置</button>
+                </div>
+                <small class="rh-account-preference-hint">仅对当前账号生效，默认 100%</small>
+            </div>
         </section>
         <section id="rhBalancePopover" class="rh-balance-popover">
             <header><strong>平台余额</strong><button id="rhBalanceRefresh" type="button" aria-label="刷新平台余额"><i data-lucide="refresh-cw"></i></button></header>

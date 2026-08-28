@@ -80,11 +80,17 @@ class UserPreferencesTests(unittest.TestCase):
         index_html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
         shell_js = (ROOT / "static" / "js" / "studio-shell.js").read_text(encoding="utf-8")
         canvas_js = (ROOT / "static" / "js" / "smart-canvas.js").read_text(encoding="utf-8")
+        canvas_shell_js = (ROOT / "static" / "js" / "smart-canvas-shell.js").read_text(encoding="utf-8")
+        smart_canvas_html = (ROOT / "static" / "smart-canvas.html").read_text(encoding="utf-8")
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
         self.assertIn('id="accountFontScale"', index_html)
         self.assertIn("studio-font-scale", shell_js)
         self.assertIn("studio-font-scale", canvas_js)
         self.assertIn("--canvas-font-scale", canvas_js)
+        # 画布右上角头像账户弹层也应提供同一滑条。
+        self.assertIn('id="rhAccountFontScale"', smart_canvas_html)
+        self.assertIn("rhAccountFontScale", canvas_shell_js)
+        self.assertIn("studio-font-scale", canvas_shell_js)
         self.assertIn("/api/auth/me/preferences", main_source)
 
     def test_preferences_route_is_registered(self):

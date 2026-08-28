@@ -290,6 +290,10 @@
         if(message.type==='studio:toggle-settings' && fromWorkbench) toggleSettings();
         if(message.type==='studio:close-panel' && fromActivePanel) closePanel();
         if(message.type==='studio:open-announcement' && fromWorkbench) window.openSiteAnnouncement?.();
+        if(message.type==='studio-font-scale' && fromWorkbench){
+            currentFontScale = clampFontScale(message.scale || 1);
+            setCanvasFontScale(currentFontScale, false);
+        }
     });
     workbench.addEventListener('load', () => syncFramePreferences(workbench));
     window.addEventListener('popstate', () => {
