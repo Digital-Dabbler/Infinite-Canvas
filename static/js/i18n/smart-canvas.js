@@ -7,6 +7,7 @@
         "canvas.applyBrush": { zh: "保存批注", en: "Save Annotation" },
         "canvas.backToList": { zh: "返回画布列表", en: "Back to canvases" },
         "canvas.brushSize": { zh: "笔刷", en: "Brush" },
+        "canvas.brushSizeHint": { zh: "调整笔刷大小", en: "Adjust brush size" },
         "canvas.clear": { zh: "清空", en: "Clear" },
         "canvas.color": { zh: "颜色", en: "Color" },
         "canvas.comfyCustom": { zh: "自定义", en: "Custom" },

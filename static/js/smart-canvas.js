@@ -14294,6 +14294,7 @@ function setImageEditMode(mode, userTouched=false){
     cropCanvasEl.classList.toggle('outpaint-mode', imageEditMode === 'outpaint');
     if(imageEditMode === 'outpaint') syncOutpaintFillColor();
     syncGridCustomCursor();
+    syncEditBrushCursorVisibility();
     document.querySelectorAll('[data-image-edit-mode]').forEach(btn => {
         const buttonMode = btn.dataset.imageEditMode;
         btn.classList.toggle('active', buttonMode === 'local' ? (imageEditMode === 'mask' || imageEditMode === 'brush') : buttonMode === imageEditMode);
@@ -15751,6 +15752,7 @@ function setBrushTool(tool){
     brushTool = ['free','rect','ellipse','label','text'].includes(tool) ? tool : 'free';
     syncBrushToolButtons();
     syncTextToolState(true);
+    syncEditBrushCursorVisibility();
 }
 function syncBrushToolButtons(){
     document.querySelectorAll('[data-brush-tool]').forEach(btn => {
@@ -15786,6 +15788,59 @@ function setGridCustomLinePos(index, point){
 const MASK_BRUSH_ALPHA = 115;
 const MASK_BRUSH_COLOR = `rgba(255,255,255,${MASK_BRUSH_ALPHA / 255})`;
 function editBrushSize(){ return Number(document.getElementById(imageEditMode === 'mask' ? 'maskBrushSize' : 'paintBrushSize')?.value || 20); }
+let lastEditBrushCursorPoint = null;
+function editBrushCursorVisible(){
+    return (imageEditMode === 'mask' || imageEditMode === 'brush') && !(imageEditMode === 'brush' && brushTool === 'text');
+}
+function editBrushCursorDiameter(){
+    const canvasEl = editDrawCanvas();
+    if(!canvasEl || !canvasEl.width) return 0;
+    const rect = canvasEl.getBoundingClientRect();
+    if(!rect.width) return 0;
+    return Math.max(1, editBrushSize() * (rect.width / Math.max(1, canvasEl.width)));
+}
+function positionEditBrushCursor(event){
+    const cursor = document.getElementById('editBrushCursor');
+    const crop = document.getElementById('cropCanvas');
+    if(!cursor || !crop) return;
+    const diameter = editBrushCursorDiameter();
+    cursor.style.width = `${diameter}px`;
+    cursor.style.height = `${diameter}px`;
+    const rect = crop.getBoundingClientRect();
+    cursor.style.left = `${event.clientX - rect.left}px`;
+    cursor.style.top = `${event.clientY - rect.top}px`;
+}
+function updateEditBrushCursor(event){
+    if(!editBrushCursorVisible()) return;
+    const cursor = document.getElementById('editBrushCursor');
+    if(cursor) cursor.style.display = 'block';
+    positionEditBrushCursor(event);
+    lastEditBrushCursorPoint = event;
+}
+function syncEditBrushCursorVisibility(){
+    const cursor = document.getElementById('editBrushCursor');
+    if(!cursor) return;
+    const show = editBrushCursorVisible() && !!lastEditBrushCursorPoint;
+    cursor.style.display = show ? 'block' : 'none';
+    if(show){
+        positionEditBrushCursor(lastEditBrushCursorPoint);
+    } else {
+        lastEditBrushCursorPoint = null;
+    }
+}
+function adjustEditBrushSize(delta){
+    const range = document.getElementById(imageEditMode === 'mask' ? 'maskBrushSize' : 'paintBrushSize');
+    if(!range) return;
+    const min = Number(range.min || 1), max = Number(range.max || 200);
+    const step = Math.max(1, Math.round((max - min) / 60));
+    const current = Number(range.value || min);
+    const next = Math.max(min, Math.min(max, current + (delta > 0 ? step : -step)));
+    if(next === current) return;
+    range.value = String(next);
+    range.dispatchEvent(new Event('input', {bubbles:true}));
+    range.dispatchEvent(new Event('change', {bubbles:true}));
+    syncEditBrushCursorVisibility();
+}
 function brushColor(){ return document.getElementById('paintBrushColor')?.value || '#ff2d55'; }
 function setupDrawStyle(ctx){
     ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = editBrushSize();
@@ -23071,6 +23126,15 @@ window.addEventListener('keydown', e => {
             return;
         }
     }
+    // 局部编辑笔刷大小快捷调整：[ 缩小，] 放大。
+    if(imageEditModal.classList.contains('open') && (imageEditMode === 'mask' || imageEditMode === 'brush') && !isEditableTarget(e.target)){
+        if(e.key === '[' || e.key === ']'){
+            e.preventDefault();
+            e.stopPropagation();
+            adjustEditBrushSize(e.key === '[' ? -1 : 1);
+            return;
+        }
+    }
     if(!e.ctrlKey && !e.metaKey && !e.altKey && !isEditableTarget(e.target)){
         if(key === 'z'){
             if(e.repeat) return;
@@ -23756,6 +23820,28 @@ document.getElementById('editDrawCanvas').addEventListener('pointermove', moveEd
 document.getElementById('editDrawCanvas').addEventListener('pointerup', endEditDraw);
 document.getElementById('editDrawCanvas').addEventListener('pointercancel', endEditDraw);
 document.getElementById('editDrawCanvas').addEventListener('pointerleave', endEditDraw);
+{
+    const drawCanvasEl = document.getElementById('editDrawCanvas');
+    if(drawCanvasEl){
+        // 笔刷光标叠加层跟随指针；直接绑在绘制画布上，绘制期间(pointer capture)也能持续跟随。
+        drawCanvasEl.addEventListener('pointermove', updateEditBrushCursor);
+        drawCanvasEl.addEventListener('pointerenter', updateEditBrushCursor);
+        drawCanvasEl.addEventListener('pointerleave', () => {
+            lastEditBrushCursorPoint = null;
+            const cursor = document.getElementById('editBrushCursor');
+            if(cursor) cursor.style.display = 'none';
+        });
+    }
+    const cropCanvasEl = document.getElementById('cropCanvas');
+    if(cropCanvasEl){
+        cropCanvasEl.addEventListener('pointermove', updateEditBrushCursor);
+        cropCanvasEl.addEventListener('pointerleave', () => {
+            lastEditBrushCursorPoint = null;
+            const cursor = document.getElementById('editBrushCursor');
+            if(cursor) cursor.style.display = 'none';
+        });
+    }
+}
 document.getElementById('gridJoinCanvas')?.addEventListener('pointerdown', beginGridJoinDrag);
 document.getElementById('gridJoinCanvas')?.addEventListener('pointermove', moveGridJoinDrag);
 document.getElementById('gridJoinCanvas')?.addEventListener('pointerup', endGridJoinDrag);
@@ -23780,6 +23866,11 @@ document.getElementById('editTextCanvas')?.addEventListener('dblclick', event =>
     if(!control) return;
     control.addEventListener('input', syncSelectedEditTextStyleFromBrush);
     control.addEventListener('change', () => { editTextDirty = false; });
+});
+['maskBrushSize','paintBrushSize'].forEach(id => {
+    const control = document.getElementById(id);
+    if(!control) return;
+    control.addEventListener('input', syncEditBrushCursorVisibility);
 });
 ['gridHorizontalLines','gridVerticalLines','gridGapSize'].forEach(id => {
     document.getElementById(id).addEventListener('input', () => {

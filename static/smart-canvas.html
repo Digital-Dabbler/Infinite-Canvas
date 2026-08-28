@@ -384,6 +384,7 @@
                 </div>
                 <div id="imageMaskTools" class="image-edit-tools">
                     <label><span data-i18n="canvas.brushSize">笔刷</span> <input id="maskBrushSize" type="range" min="4" max="160" value="42"></label>
+                    <span class="brush-size-hint"><kbd>[</kbd><kbd>]</kbd><span data-i18n="canvas.brushSizeHint">调整笔刷大小</span></span>
                     <button id="maskUndoBtn" class="image-edit-btn secondary" type="button" onclick="undoEditDrawing()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i></button>
                     <button id="maskRedoBtn" class="image-edit-btn secondary" type="button" onclick="redoEditDrawing()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i></button>
                     <button class="image-edit-btn secondary" type="button" onclick="clearEditDrawing()"><i data-lucide="eraser" class="w-4 h-4"></i><span data-i18n="canvas.clear">清空</span></button>
@@ -397,6 +398,7 @@
                     <button class="image-edit-btn secondary" type="button" data-brush-tool="text" onclick="setBrushTool('text')" title="文字标签"><i data-lucide="type" class="w-4 h-4"></i></button>
                     <label><span data-i18n="canvas.color">颜色</span> <input id="paintBrushColor" type="color" value="#ff2d55"></label>
                     <label><span data-i18n="canvas.brushSize">笔刷</span> <input id="paintBrushSize" type="range" min="2" max="80" value="14"></label>
+                    <span class="brush-size-hint"><kbd>[</kbd><kbd>]</kbd><span data-i18n="canvas.brushSizeHint">调整笔刷大小</span></span>
                     <button id="brushUndoBtn" class="image-edit-btn secondary" type="button" onclick="undoEditDrawing()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i></button>
                     <button id="brushRedoBtn" class="image-edit-btn secondary" type="button" onclick="redoEditDrawing()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i></button>
                     <button class="image-edit-btn secondary" type="button" onclick="clearEditDrawing()"><i data-lucide="eraser" class="w-4 h-4"></i><span data-i18n="canvas.clear">清空</span></button>
@@ -473,6 +475,7 @@
                             <div id="gridJoinCanvas" class="grid-join-canvas"></div>
                             <canvas id="editDrawCanvas" class="edit-draw-canvas"></canvas>
                             <canvas id="editTextCanvas" class="edit-text-canvas"></canvas>
+                            <div id="editBrushCursor" class="edit-brush-cursor" aria-hidden="true"></div>
                             <div id="cropBox" class="crop-box">
                                 <div class="crop-handle" data-crop-handle="nw"></div>
                                 <div class="crop-handle" data-crop-handle="n"></div>
