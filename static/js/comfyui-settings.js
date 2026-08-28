@@ -395,6 +395,7 @@ function guessType(value, inputName){
         if(/prompt|text|description/.test(lc) || (value && value.length > 60)) return 'textarea';
         if(/video|movie|mp4|webm|mov|m4v|vhs/.test(lc) || /\.(mp4|webm|mov|m4v|avi|mkv)(\?|$)/i.test(value)) return 'video';
         if(/audio|sound|music|voice|wav|mp3/.test(lc) || /\.(mp3|wav|m4a|aac|ogg|flac)(\?|$)/i.test(value)) return 'audio';
+        if(/^(mask|mask_input|input_mask)$/i.test(lc)) return 'mask';
         if(/image|img|mask|filename|file/.test(lc) || /\.(png|jpe?g|webp|gif|bmp|tiff?)(\?|$)/i.test(value)) return 'image';
         return 'text';
     }
@@ -761,7 +762,7 @@ document.addEventListener('keydown', e => {
 function renderInputRow(nodeId, inputKey, rawValue){
     const f = fieldFor(nodeId, inputKey);
     const active = !!f;
-    const showExtras = active && (f.type === 'slider' || f.type === 'number' || f.type === 'dropdown');
+    const showExtras = active && (f.type === 'slider' || f.type === 'number' || f.type === 'dropdown' || f.type === 'mask');
     // 原始值类型徽章
     let valueBadge = '';
     const typeOf = typeof rawValue;
@@ -796,6 +797,14 @@ function renderInputRow(nodeId, inputKey, rawValue){
 }
 
 function renderExtras(f){
+    if(f.type === 'mask'){
+        // 遮罩字段是声明型字段：选择它跟随哪个图片字段，运行前把画布遮罩合成进该图片的 alpha 通道。
+        const imageFields = currentConfig.fields.filter(x => x.type === 'image' && x.id !== f.id);
+        const opts = imageFields.map(x => `<option value="${escapeAttr(x.id)}" ${f.for === x.id ? 'selected' : ''}>${escapeHtml(x.name || x.input || x.id)}</option>`).join('');
+        return `<div class="extras-row">
+            <div class="extra-pair">${escapeHtml(tr('comfy.maskFollowField'))}<select class="small-select" onchange="updateField('${escapeAttr(f.id)}','for',this.value)">${opts || `<option value="">${escapeHtml(tr('comfy.noImageField'))}</option>`}</select></div>
+        </div>`;
+    }
     if(f.type === 'slider' || f.type === 'number'){
         const randomToggle = f.type === 'number'
             ? `<label class="random-toggle" onclick="event.stopPropagation()"><input type="checkbox" ${f.random_enabled === true ? 'checked' : ''} onchange="updateField('${f.id}','random_enabled',this.checked)">随机数</label>`

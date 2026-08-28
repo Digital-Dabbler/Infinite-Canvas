@@ -20158,19 +20158,44 @@ async function comfyNameForMaskedRef(imageRef, maskRef){
     try { return await comfyNameForRef({url:tempUrl, name:`${base}_mask_input.png`}); }
     finally { URL.revokeObjectURL(tempUrl); }
 }
-async function assignComfyWorkflowMediaValues(fields, values, allRefs){
+async function assignComfyWorkflowMediaValues(fields, values, allRefs, workflowJson){
     const images = (allRefs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'image');
     const imageFields = fields.filter(field => comfyFieldKind(field) === 'image');
     for(let i = 0; i < imageFields.length && i < images.length; i++){
         const field = imageFields[i];
-        const hasMask = fields.some(candidate => comfyFieldKind(candidate) === 'mask' && String(candidate.for || '') === String(field.id));
-        const mask = hasMask ? images[i].mask : null;
-        values[field.id] = mask ? await comfyNameForMaskedRef(images[i], mask) : await comfyNameForRef(images[i]);
+        const ref = images[i];
+        const mask = ref.mask || null;
+        const explicitMask = fields.some(candidate => comfyFieldKind(candidate) === 'mask' && String(candidate.for || '') === String(field.id));
+        if(explicitMask && mask){
+            // 配置显式声明了遮罩字段：遮罩必须合成进 alpha，失败直接报错。
+            values[field.id] = await comfyNameForMaskedRef(ref, mask);
+            continue;
+        }
+        if(mask && comfyImageFieldConsumesMask(workflowJson, field)){
+            // 全局根治规则：映射节点是标准 LoadImage（MASK 输出直接来自图片 alpha 通道）时，
+            // 画布遮罩自动合成进 alpha，任何以 LoadImage 为入口的工作流都无需在 config 声明遮罩。
+            // 自动合成失败时退回普通上传，避免阻断原本可用（不带遮罩）的工作流。
+            try {
+                values[field.id] = await comfyNameForMaskedRef(ref, mask);
+            } catch(e){
+                console.warn('画布遮罩自动合成失败，已退回普通图片上传：', e);
+                values[field.id] = await comfyNameForRef(ref);
+            }
+            continue;
+        }
+        values[field.id] = await comfyNameForRef(ref);
     }
     for(const [kind, refs] of [['video', videoRefsOnly(allRefs)], ['audio', audioRefsOnly(allRefs)]]){
         const mediaFields = fields.filter(field => comfyFieldKind(field) === kind);
         for(let i = 0; i < mediaFields.length && i < refs.length; i++) values[mediaFields[i].id] = await comfyNameForRef(refs[i]);
     }
+}
+function comfyImageFieldConsumesMask(workflowJson, field){
+    // 标准 LoadImage 节点从图片 alpha 通道导出 MASK；把画布遮罩合成进 alpha 后上传，
+    // 该 MASK 输出即为遮罩。这是 ComfyUI 原生且最通用的遮罩传递方式。
+    if(!workflowJson || !field?.node) return false;
+    const node = workflowJson[field.node];
+    return Boolean(node && typeof node === 'object' && node.class_type === 'LoadImage');
 }
 function buildPromptRequestForNode(node, defaultImages, ctx=smartLoopContext, consumeDefault=false){
     const oldHtml = promptInput.innerHTML;
@@ -20259,7 +20284,7 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
     fields.filter(f => comfyFieldKind(f) === 'prompt').forEach((field, index) => {
         values[field.id] = index === 0 ? prompt : (field.default ?? '');
     });
-    await assignComfyWorkflowMediaValues(fields, values, allRefs);
+    await assignComfyWorkflowMediaValues(fields, values, allRefs, wf.workflow);
     fields.filter(f => comfyFieldKind(f) === 'setting').forEach(field => {
         if(comfyRandomEnabledField(field) && smartComfyRandomActiveFor(runSettings, field.id)){
             values[field.id] = smartComfyRandomValue(field);
@@ -21448,7 +21473,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSett
     fields.filter(f => comfyFieldKind(f) === 'prompt').forEach((field, index) => {
         values[field.id] = index === 0 ? prompt : (field.default ?? '');
     });
-    await assignComfyWorkflowMediaValues(fields, values, allRefs);
+    await assignComfyWorkflowMediaValues(fields, values, allRefs, wf.workflow);
     fields.filter(f => comfyFieldKind(f) === 'setting').forEach(field => {
         if(comfyRandomEnabledField(field) && smartComfyRandomActive(field.id)){
             values[field.id] = smartComfyRandomValue(field);
