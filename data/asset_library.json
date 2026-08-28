@@ -11,7 +11,11 @@
           "name": "角色",
           "type": "image",
           "items": [],
-          "dir": "角色"
+          "dir": "角色",
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "default"
         },
         {
           "id": "scenes",
@@ -24,7 +28,12 @@
               "url": "/assets/library/%E5%9C%BA%E6%99%AF/lib_e6093a8eda56_output.png",
               "kind": "image",
               "created_at": 1780563494821,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "default",
+              "category_id": "scenes"
             },
             {
               "id": "asset_255e1158d809",
@@ -32,67 +41,46 @@
               "url": "/assets/library/%E5%9C%BA%E6%99%AF/lib_680a91d107fb_output.png",
               "kind": "image",
               "created_at": 1780560852050,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "default",
+              "category_id": "scenes"
             }
           ],
-          "dir": "场景"
+          "dir": "场景",
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "default"
         },
         {
           "id": "workflows",
           "name": "快速开始",
           "type": "workflow",
-          "items": [
-            {
-              "id": "wf_ca4c70de60fd",
-              "name": "修复图片质量变差",
-              "url": "/assets/library/workflow_95e0163f1154_徐豪康-20260625T194943.zip",
-              "kind": "workflow",
-              "type": "workflow",
-              "format": "zip",
-              "size": 3662442,
-              "created_at": 1782416983341,
-              "node_count": 4,
-              "connection_count": 4,
-              "resource_count": 1,
-              "registrations": {}
-            },
-            {
-              "id": "wf_08e2b48d7466",
-              "name": "生成九宫格表情包",
-              "url": "/assets/library/workflow_9acdeef77514_徐豪康-20260625T103622.zip",
-              "kind": "workflow",
-              "type": "workflow",
-              "format": "zip",
-              "size": 7524968,
-              "created_at": 1782383795155,
-              "node_count": 4,
-              "connection_count": 1,
-              "resource_count": 2,
-              "registrations": {}
-            },
-            {
-              "id": "wf_1ad99440c204",
-              "name": "去除背景",
-              "url": "/assets/library/workflow_534a4d26bf4f_徐豪康-20260624T035813.zip",
-              "kind": "workflow",
-              "type": "workflow",
-              "format": "zip",
-              "size": 6083806,
-              "created_at": 1782273504707,
-              "node_count": 2,
-              "connection_count": 1,
-              "resource_count": 3,
-              "registrations": {}
-            }
-          ]
+          "items": [],
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "default"
         },
         {
           "id": "cat_8515861f96cc",
           "name": "徐豪康",
           "type": "workflow",
-          "items": []
+          "items": [],
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "default"
         }
-      ]
+      ],
+      "owner_type": "system",
+      "owner_id": "",
+      "created_by": "system",
+      "system": true,
+      "fixed": true
     },
     {
       "id": "lib_ba09248687e6",
@@ -104,20 +92,32 @@
           "name": "默认分组",
           "type": "image",
           "items": [],
-          "dir": "默认分组_2"
+          "dir": "默认分组_2",
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6"
         },
         {
           "id": "wf_b15e511b38d4",
           "name": "工作流",
           "type": "workflow",
-          "items": []
+          "items": [],
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6"
         },
         {
           "id": "cat_031eb11349c0",
           "name": "角色",
           "type": "image",
           "items": [],
-          "dir": "角色_3"
+          "dir": "角色_3",
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6"
         },
         {
           "id": "cat_2a8b73fb14dd",
@@ -130,7 +130,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_e9739540de69_output.png",
               "kind": "image",
               "created_at": 1784573453966,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_65ed0c25a27e",
@@ -138,7 +143,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_33de81e33644_output.png",
               "kind": "image",
               "created_at": 1784573451257,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_83338e094783",
@@ -146,7 +156,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_897013ac53e8_output.png",
               "kind": "image",
               "created_at": 1784570902383,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_c00b5ecd3c03",
@@ -154,7 +169,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_512fcb15b165_output.png",
               "kind": "image",
               "created_at": 1784570900047,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_d0020bcc04aa",
@@ -162,7 +182,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_0302f2af117d_output.png",
               "kind": "image",
               "created_at": 1784570897602,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_35e925789de9",
@@ -170,7 +195,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_5e729748afee_output.png",
               "kind": "image",
               "created_at": 1784570333804,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_077ddb3b1655",
@@ -178,7 +208,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_89b597b4ada0_output.png",
               "kind": "image",
               "created_at": 1784570331746,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_5a846c3827a4",
@@ -186,7 +221,12 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_6073ee46f10f_output.png",
               "kind": "image",
               "created_at": 1784570328862,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             },
             {
               "id": "asset_0005dbe4bb15",
@@ -194,12 +234,95 @@
               "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_31a80617aec8_output.png",
               "kind": "image",
               "created_at": 1784570326706,
-              "registrations": {}
+              "registrations": {},
+              "owner_type": "system",
+              "owner_id": "",
+              "created_by": "system",
+              "library_id": "lib_ba09248687e6",
+              "category_id": "cat_2a8b73fb14dd"
             }
           ],
-          "dir": "婚礼_Wedding"
+          "dir": "婚礼_Wedding",
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6"
         }
-      ]
+      ],
+      "owner_type": "system",
+      "owner_id": "",
+      "created_by": "system",
+      "system": true,
+      "fixed": false
+    },
+    {
+      "id": "personal_5fd63041f1564052b424b55d50f2311",
+      "name": "系统管理员的资产库",
+      "type": "asset",
+      "personal": true,
+      "fixed": true,
+      "owner_type": "user",
+      "owner_id": "5fd63041f1564052b424b55d50f23113",
+      "created_by": "5fd63041f1564052b424b55d50f23113",
+      "categories": [
+        {
+          "id": "wf_167cbb7a41a1",
+          "name": "工作流",
+          "type": "workflow",
+          "items": [],
+          "owner_type": "user",
+          "owner_id": "5fd63041f1564052b424b55d50f23113",
+          "created_by": "5fd63041f1564052b424b55d50f23113",
+          "library_id": "personal_5fd63041f1564052b424b55d50f2311"
+        }
+      ],
+      "system": false
+    },
+    {
+      "id": "personal_0347f391bafd454a846aea0aa2d8518",
+      "name": "小白的资产库",
+      "type": "asset",
+      "personal": true,
+      "fixed": true,
+      "owner_type": "user",
+      "owner_id": "0347f391bafd454a846aea0aa2d85186",
+      "created_by": "0347f391bafd454a846aea0aa2d85186",
+      "categories": [
+        {
+          "id": "wf_34a699167404",
+          "name": "工作流",
+          "type": "workflow",
+          "items": [],
+          "owner_type": "user",
+          "owner_id": "0347f391bafd454a846aea0aa2d85186",
+          "created_by": "0347f391bafd454a846aea0aa2d85186",
+          "library_id": "personal_0347f391bafd454a846aea0aa2d8518"
+        }
+      ],
+      "system": false
+    },
+    {
+      "id": "personal_435237d8d606450aa42550393ad4e53",
+      "name": "测试用户的资产库",
+      "type": "asset",
+      "personal": true,
+      "fixed": true,
+      "owner_type": "user",
+      "owner_id": "435237d8d606450aa42550393ad4e536",
+      "created_by": "435237d8d606450aa42550393ad4e536",
+      "categories": [
+        {
+          "id": "wf_34c2d3a55ca7",
+          "name": "工作流",
+          "type": "workflow",
+          "items": [],
+          "owner_type": "user",
+          "owner_id": "435237d8d606450aa42550393ad4e536",
+          "created_by": "435237d8d606450aa42550393ad4e536",
+          "library_id": "personal_435237d8d606450aa42550393ad4e53"
+        }
+      ],
+      "system": false
     }
   ],
   "categories": [
@@ -208,20 +331,32 @@
       "name": "默认分组",
       "type": "image",
       "items": [],
-      "dir": "默认分组_2"
+      "dir": "默认分组_2",
+      "owner_type": "system",
+      "owner_id": "",
+      "created_by": "system",
+      "library_id": "lib_ba09248687e6"
     },
     {
       "id": "wf_b15e511b38d4",
       "name": "工作流",
       "type": "workflow",
-      "items": []
+      "items": [],
+      "owner_type": "system",
+      "owner_id": "",
+      "created_by": "system",
+      "library_id": "lib_ba09248687e6"
     },
     {
       "id": "cat_031eb11349c0",
       "name": "角色",
       "type": "image",
       "items": [],
-      "dir": "角色_3"
+      "dir": "角色_3",
+      "owner_type": "system",
+      "owner_id": "",
+      "created_by": "system",
+      "library_id": "lib_ba09248687e6"
     },
     {
       "id": "cat_2a8b73fb14dd",
@@ -234,7 +369,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_e9739540de69_output.png",
           "kind": "image",
           "created_at": 1784573453966,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_65ed0c25a27e",
@@ -242,7 +382,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_33de81e33644_output.png",
           "kind": "image",
           "created_at": 1784573451257,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_83338e094783",
@@ -250,7 +395,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_897013ac53e8_output.png",
           "kind": "image",
           "created_at": 1784570902383,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_c00b5ecd3c03",
@@ -258,7 +408,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_512fcb15b165_output.png",
           "kind": "image",
           "created_at": 1784570900047,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_d0020bcc04aa",
@@ -266,7 +421,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_0302f2af117d_output.png",
           "kind": "image",
           "created_at": 1784570897602,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_35e925789de9",
@@ -274,7 +434,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_5e729748afee_output.png",
           "kind": "image",
           "created_at": 1784570333804,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_077ddb3b1655",
@@ -282,7 +447,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_89b597b4ada0_output.png",
           "kind": "image",
           "created_at": 1784570331746,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_5a846c3827a4",
@@ -290,7 +460,12 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_6073ee46f10f_output.png",
           "kind": "image",
           "created_at": 1784570328862,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         },
         {
           "id": "asset_0005dbe4bb15",
@@ -298,11 +473,20 @@
           "url": "/assets/library/%E5%A9%9A%E7%A4%BC_Wedding/lib_31a80617aec8_output.png",
           "kind": "image",
           "created_at": 1784570326706,
-          "registrations": {}
+          "registrations": {},
+          "owner_type": "system",
+          "owner_id": "",
+          "created_by": "system",
+          "library_id": "lib_ba09248687e6",
+          "category_id": "cat_2a8b73fb14dd"
         }
       ],
-      "dir": "婚礼_Wedding"
+      "dir": "婚礼_Wedding",
+      "owner_type": "system",
+      "owner_id": "",
+      "created_by": "system",
+      "library_id": "lib_ba09248687e6"
     }
   ],
-  "updated_at": 1784573454302
+  "updated_at": 1787936234724
 }

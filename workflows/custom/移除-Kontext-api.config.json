@@ -1,0 +1,37 @@
+{
+  "title": "custom/移除-Kontext-api",
+  "fields": [
+    {
+      "id": "f_6s3ilrp",
+      "node": "240",
+      "input": "image",
+      "name": "图片",
+      "type": "image",
+      "default": "clipspace-painted-masked-1787936102021.png [input]",
+      "min": null,
+      "max": null,
+      "step": null,
+      "options": [],
+      "random_enabled": false,
+      "for": ""
+    }
+  ],
+  "mini_cards": {
+    "prompt": {
+      "x": 24,
+      "y": 30
+    },
+    "image": {
+      "x": 24,
+      "y": 210
+    },
+    "custom": {
+      "x": 280,
+      "y": 78
+    },
+    "output": {
+      "x": 540,
+      "y": 120
+    }
+  }
+}
