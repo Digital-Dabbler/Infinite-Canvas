@@ -9212,7 +9212,7 @@ function maskOverlayPreviewHtml(img, className='', w=0, h=0){
     const source = escapeAttr(displayMediaUrl(img));
     const mask = escapeAttr(displayMediaUrl(img.mask));
     const size = w && h ? `width:${w}px;height:${h}px;` : '';
-    return `<div class="${escapeAttr(className)} mask-overlay-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:cover;display:block"><img src="${mask}" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.58;mix-blend-mode:screen;filter:sepia(1) saturate(6) hue-rotate(287deg)"><span style="position:absolute;top:7px;left:7px;padding:2px 6px;border-radius:999px;background:rgba(65,10,55,.82);border:1px solid rgba(251,207,232,.8);color:#fce7f3;font-size:11px;line-height:1.25">遮罩</span></div>`;
+    return `<div class="${escapeAttr(className)} mask-overlay-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><img src="${mask}" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:.58;mix-blend-mode:screen;filter:sepia(1) saturate(6) hue-rotate(287deg)"><span class="mask-overlay-label">遮罩</span></div>`;
 }
 function smartNodeHasLiveMedia(node){
     return Boolean(!node?.pending && (node?.images || []).some(img => img?.url));
@@ -9984,9 +9984,9 @@ function nodeBodyHtml(node, layout){
         return `<div class="generation-result-card" data-generation-results="1">
             <div class="generation-result-stack" style="--result-stack:${stack}">
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer" style="--generation-layer-offset:${index * 3}px"></span>`).join('')}
-                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${mainSize.width}px;--node-img-h:${mainSize.height}px">${singleMediaHtml(active, mainSize.width, mainSize.height)}${imageResolutionBadgeHtml(active)}</div>
+                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${mainSize.width}px;--node-img-h:${mainSize.height}px">${singleMediaHtml(active, mainSize.width, mainSize.height)}${imageResolutionBadgeHtml(active)}${resultIndexes.length > 1 ? `<div class="generation-result-count">${resultIndexes.length} 个结果</div>` : ''}</div>
                 ${isAppending ? generationPendingCellHtml({overlay:true, submitting:Boolean(node.submitting && !node.pending), queued:Boolean(node.queued && !node.pending)}) : (node.lastRunError ? failedGenerationOverlayHtml(node) : '')}
-                ${resultIndexes.length > 1 ? `<div class="generation-result-count">${resultIndexes.length} 个结果</div><button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
+                ${resultIndexes.length > 1 ? `<button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
             </div>
             ${resultIndexes.length > 1 || imgs.some(isReturnedVideoLastFrame) ? `<div class="generation-result-strip">${thumbHtml}</div>` : ''}
         </div>`;
@@ -12868,7 +12868,7 @@ function selectGenerationResult(nodeId, requestedIndex){
     main.style.setProperty('--node-img-w', `${mediaWidth}px`);
     main.style.setProperty('--node-img-h', `${mediaHeight}px`);
     main.classList.add('image-selected');
-    main.innerHTML = `${singleMediaHtml(active, mediaWidth, mediaHeight)}${imageResolutionBadgeHtml(active)}`;
+    main.innerHTML = `${singleMediaHtml(active, mediaWidth, mediaHeight)}${imageResolutionBadgeHtml(active)}${count > 1 ? `<div class="generation-result-count">${count} 个结果</div>` : ''}`;
     const strip = nodeEl.querySelector('.generation-result-strip');
     if(strip){
         strip.innerHTML = generationResultThumbnailHtml(node.images, activeIndex);
