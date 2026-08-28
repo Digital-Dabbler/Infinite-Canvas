@@ -9105,7 +9105,7 @@ function mediaKindForUrls(urls, fallback='image'){
     return fallback;
 }
 function imageRefsOnly(refs){
-    return (refs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'image').slice(0, SMART_REFERENCE_IMAGE_MAX);
+    return (refs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'image' && String(ref.role || '').toLowerCase() !== 'mask').slice(0, SMART_REFERENCE_IMAGE_MAX);
 }
 function looksLikeImageMediaUrl(url){
     const text = String(url || '').trim().toLowerCase();
@@ -9133,6 +9133,7 @@ function thumbMediaHtml(img, options={}){
         if(options.selectOnly) return `<div class="media-thumb video-thumb">${smartVideoPreviewHtml(img, 512, 'alt=""')}</div>`;
         return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     }
+    if(img?.mask?.url) return maskOverlayPreviewHtml(img, 'media-thumb');
     return smartPreviewImgHtml(img, 512, 'draggable="false"');
 }
 function imageResolutionLabel(img){
@@ -9204,7 +9205,14 @@ function singleMediaHtml(img, w, h){
     if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i></div><div class="media-card-title">${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</div><div class="media-card-sub">${isTextMediaItem(img) ? 'TEXT' : 'FILE'}</div></div>`;
     if(isAudioMediaItem(img)) return `<div class="node-img media-card media-audio-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file-audio"></i></div><div class="media-card-title">${escapeHtml(img.name || 'Audio')}</div><div class="media-card-sub">AUDIO</div><audio src="${escapeAttr(img.url || '')}" data-url="${escapeAttr(img.url || '')}" controls preload="metadata"></audio></div>`;
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card" style="width:${w}px;height:${h}px">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 768, 'alt=""')}<button class="smart-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
+    if(img?.mask?.url) return maskOverlayPreviewHtml(img, 'node-img', w, h);
     return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
+}
+function maskOverlayPreviewHtml(img, className='', w=0, h=0){
+    const source = escapeAttr(displayMediaUrl(img));
+    const mask = escapeAttr(displayMediaUrl(img.mask));
+    const size = w && h ? `width:${w}px;height:${h}px;` : '';
+    return `<div class="${escapeAttr(className)} mask-overlay-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:cover;display:block"><img src="${mask}" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:.58;mix-blend-mode:screen;filter:sepia(1) saturate(6) hue-rotate(287deg)"><span style="position:absolute;top:7px;left:7px;padding:2px 6px;border-radius:999px;background:rgba(65,10,55,.82);border:1px solid rgba(251,207,232,.8);color:#fce7f3;font-size:11px;line-height:1.25">遮罩</span></div>`;
 }
 function smartNodeHasLiveMedia(node){
     return Boolean(!node?.pending && (node?.images || []).some(img => img?.url));
@@ -17175,13 +17183,15 @@ async function runImageOutpaint(){
 }
 async function applyImageMask(){
     if(!cropState || !editCanvasHasPixels()) return;
-    const {node, image} = currentEditImage();
+    const {node, index, image} = currentEditImage();
     if(!node || !image) return;
     const mask = maskCanvasFromDrawCanvas(editDrawCanvas());
     const blob = await new Promise(resolve => mask.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_mask.png`) : null;
-    if(file && replaceEditedImage(file, {role:'mask'})){
+    if(file){
+        pushUndo();
+        node.images[index] = {...node.images[index], mask:{url:file.url, name:file.name, kind:'image'}};
         closeImageEditor(); render(); scheduleSave();
     }
 }
@@ -20076,6 +20086,46 @@ function comfyParamsFromWorkflowValues(config, values={}){
     });
     return params;
 }
+function loadComfyMaskImage(ref){
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('无法读取遮罩图片'));
+        image.src = displayMediaUrl(ref);
+    });
+}
+async function comfyNameForMaskedRef(imageRef, maskRef){
+    const [source, mask] = await Promise.all([loadComfyMaskImage(imageRef), loadComfyMaskImage(maskRef)]);
+    const width = source.naturalWidth || source.width, height = source.naturalHeight || source.height;
+    if(!width || !height) throw new Error('遮罩原图尺寸无效');
+    const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext('2d', {willReadFrequently:true}); ctx.drawImage(source, 0, 0, width, height);
+    const maskCanvas = document.createElement('canvas'); maskCanvas.width = width; maskCanvas.height = height;
+    const maskCtx = maskCanvas.getContext('2d', {willReadFrequently:true}); maskCtx.drawImage(mask, 0, 0, width, height);
+    const pixels = ctx.getImageData(0, 0, width, height), maskPixels = maskCtx.getImageData(0, 0, width, height).data;
+    for(let i = 0; i < pixels.data.length; i += 4) pixels.data[i + 3] = 255 - Math.max(maskPixels[i], maskPixels[i + 1], maskPixels[i + 2]);
+    ctx.putImageData(pixels, 0, 0);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    if(!blob) throw new Error('遮罩合成失败');
+    const base = safeExportFileName((imageRef.name || 'image').replace(/\.[^.]+$/, ''), 'image');
+    const tempUrl = URL.createObjectURL(blob);
+    try { return await comfyNameForRef({url:tempUrl, name:`${base}_mask_input.png`}); }
+    finally { URL.revokeObjectURL(tempUrl); }
+}
+async function assignComfyWorkflowMediaValues(fields, values, allRefs){
+    const images = (allRefs || []).filter(ref => ref?.url && mediaKindForItem(ref) === 'image');
+    const imageFields = fields.filter(field => comfyFieldKind(field) === 'image');
+    for(let i = 0; i < imageFields.length && i < images.length; i++){
+        const field = imageFields[i];
+        const hasMask = fields.some(candidate => comfyFieldKind(candidate) === 'mask' && String(candidate.for || '') === String(field.id));
+        const mask = hasMask ? images[i].mask : null;
+        values[field.id] = mask ? await comfyNameForMaskedRef(images[i], mask) : await comfyNameForRef(images[i]);
+    }
+    for(const [kind, refs] of [['video', videoRefsOnly(allRefs)], ['audio', audioRefsOnly(allRefs)]]){
+        const mediaFields = fields.filter(field => comfyFieldKind(field) === kind);
+        for(let i = 0; i < mediaFields.length && i < refs.length; i++) values[mediaFields[i].id] = await comfyNameForRef(refs[i]);
+    }
+}
 function buildPromptRequestForNode(node, defaultImages, ctx=smartLoopContext, consumeDefault=false){
     const oldHtml = promptInput.innerHTML;
     loadNodePromptDraftToInput(node);
@@ -20163,14 +20213,7 @@ async function generateComfyUrlsWithSettings(runSettings, prompt, refs){
     fields.filter(f => comfyFieldKind(f) === 'prompt').forEach((field, index) => {
         values[field.id] = index === 0 ? prompt : (field.default ?? '');
     });
-    const assignMediaFields = async (mediaFields, mediaRefs) => {
-        for(let i = 0; i < mediaFields.length && i < mediaRefs.length; i++){
-            values[mediaFields[i].id] = await comfyNameForRef(mediaRefs[i]);
-        }
-    };
-    await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'image'), imageRefs);
-    await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'video'), videoRefsOnly(allRefs));
-    await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'audio'), audioRefsOnly(allRefs));
+    await assignComfyWorkflowMediaValues(fields, values, allRefs);
     fields.filter(f => comfyFieldKind(f) === 'setting').forEach(field => {
         if(comfyRandomEnabledField(field) && smartComfyRandomActiveFor(runSettings, field.id)){
             values[field.id] = smartComfyRandomValue(field);
@@ -21026,7 +21069,7 @@ async function runPromptLLMNode(nodeId){
     }
 }
 function comfyFieldKind(field){
-    if(['image','video','audio'].includes(field?.type)) return field.type;
+    if(['image','mask','video','audio'].includes(field?.type)) return field.type;
     const key = `${field?.input || ''} ${field?.name || ''}`.toLowerCase();
     if(field?.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
     return 'setting';
@@ -21055,7 +21098,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, canvasBindin
         resolution:hasDimensions && !runSettings.resolution ? '__custom_dimensions__' : (runSettings.resolution || ''),
         quality:runSettings.quality || 'auto',
         n:1,
-        reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX),
+        reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(ref => ({...ref, mask_url:ref.mask?.url || ''})),
         model_params:runningHub && runSettings.imageModelParams && typeof runSettings.imageModelParams === 'object' ? runSettings.imageModelParams : {}
     };
     const tasks = await Promise.all(Array.from({length:count}, (_, batchIndex) => submitCanvasImageTask(canvasBinding ? {
@@ -21359,14 +21402,7 @@ async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSett
     fields.filter(f => comfyFieldKind(f) === 'prompt').forEach((field, index) => {
         values[field.id] = index === 0 ? prompt : (field.default ?? '');
     });
-    const assignMediaFields = async (mediaFields, mediaRefs) => {
-        for(let i = 0; i < mediaFields.length && i < mediaRefs.length; i++){
-            values[mediaFields[i].id] = await comfyNameForRef(mediaRefs[i]);
-        }
-    };
-    await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'image'), refs);
-    await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'video'), videoRefsOnly(allRefs));
-    await assignMediaFields(fields.filter(f => comfyFieldKind(f) === 'audio'), audioRefsOnly(allRefs));
+    await assignComfyWorkflowMediaValues(fields, values, allRefs);
     fields.filter(f => comfyFieldKind(f) === 'setting').forEach(field => {
         if(comfyRandomEnabledField(field) && smartComfyRandomActive(field.id)){
             values[field.id] = smartComfyRandomValue(field);

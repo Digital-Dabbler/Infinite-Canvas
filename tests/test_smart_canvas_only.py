@@ -123,6 +123,17 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         )
         self.assertEqual(main.comfy_execution_retry_backends(["first:8188"], "first:8188"), [])
 
+    def test_comfy_mask_field_is_persisted_and_composed_with_its_image_field(self):
+        field = main.WorkflowField(id="source_mask", type="mask", **{"for": "source"})
+        self.assertEqual(field.for_field, "source")
+        self.assertEqual(field.dict(by_alias=True)["for"], "source")
+        self.assertIn("function assignComfyWorkflowMediaValues", self.smart_canvas_js)
+        self.assertIn("function comfyNameForMaskedRef", self.smart_canvas_js)
+        self.assertIn("mask:{url:file.url, name:file.name, kind:'image'}", self.smart_canvas_js)
+        self.assertIn("mask_url:ref.mask?.url || ''", self.smart_canvas_js)
+        self.assertIn("String(ref.role || '').toLowerCase() !== 'mask'", self.smart_canvas_js)
+        self.assertIn("['image','mask','video','audio']", self.smart_canvas_js)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -5065,6 +5065,7 @@ class AIReference(BaseModel):
     role: str = ""
     kind: str = ""
     mime: str = ""
+    mask_url: str = ""
     original_url: str = ""
     source_url: str = ""
     originalLocalUrl: str = ""
@@ -16292,6 +16293,12 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
     ):
         return await generate_grok_image(prompt, size, model, reference_images, provider, aspect_ratio)
     is_gpt2 = is_gpt_image_2_model(model)
+    if is_gpt2:
+        reference_images = list(reference_images or []) + [
+            {"url": ref.get("mask_url"), "name": "canvas_mask.png", "role": "mask"}
+            for ref in (reference_images or [])
+            if isinstance(ref, dict) and ref.get("mask_url")
+        ]
     # 不对 GPT 尺寸做任何缩小/拦截：用户选什么尺寸就原样发给上游；
     # 若超过 GPT 的最大像素限制被上游拒绝，再由 friendly_image_error_detail 给出友好的像素上限提示。
     quality = str(quality or "").strip().lower()
@@ -26350,6 +26357,7 @@ class WorkflowField(BaseModel):
     step: Optional[float] = None
     options: List[str] = []
     random_enabled: bool = False
+    for_field: str = Field("", alias="for")
 
 class WorkflowConfig(BaseModel):
     title: str = ""
@@ -26958,8 +26966,8 @@ def save_workflow_config(name: str, payload: WorkflowConfig):
         raise HTTPException(status_code=404, detail="Workflow not found")
     cfg_path = workflow_config_path(name)
     with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump(payload.dict(), f, ensure_ascii=False, indent=2)
-    return {"config": payload.dict()}
+        json.dump(payload.dict(by_alias=True), f, ensure_ascii=False, indent=2)
+    return {"config": payload.dict(by_alias=True)}
 
 @app.delete("/api/workflows/{name:path}")
 def delete_workflow(name: str):
