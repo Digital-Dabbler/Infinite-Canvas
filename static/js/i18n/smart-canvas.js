@@ -128,6 +128,7 @@
         "smart.kindImage": { zh: "图片", en: "Image" },
         "smart.kindVideo": { zh: "视频", en: "Video" },
         "smart.promptPlaceholder": { zh: "描述你想生成或编辑的图片...", en: "Describe what you want to generate or edit..." },
+        "smart.comfyNoPromptHint": { zh: "该工作流无需提示词，可留空直接运行", en: "This workflow does not use a prompt — leave blank and run" },
         "smart.promptTemplateLibrary": { zh: "模板库", en: "Templates" },
         "smart.copyText": { zh: "复制文本", en: "Copy text" },
         "smart.copied": { zh: "已复制", en: "Copied" },

@@ -137,6 +137,13 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("String(ref.role || '').toLowerCase() !== 'mask'", self.smart_canvas_js)
         self.assertIn("['image','mask','video','audio']", self.smart_canvas_js)
 
+    def test_comfy_custom_workflow_without_prompt_field_does_not_require_prompt(self):
+        # 未映射提示词字段的自定义工作流不应强制要求提示词，也不应显示“需要提示词”的占位提示。
+        self.assertIn("function smartRunNeedsPrompt", self.smart_canvas_js)
+        self.assertIn("comfyWorkflowCache[sourceSettings.comfyWorkflow]?.config?.fields", self.smart_canvas_js)
+        self.assertIn("function ensureComfyWorkflowCachedForPromptCheck", self.smart_canvas_js)
+        self.assertIn("smart.comfyNoPromptHint", self.smart_canvas_js)
+
 
 if __name__ == "__main__":
     unittest.main()

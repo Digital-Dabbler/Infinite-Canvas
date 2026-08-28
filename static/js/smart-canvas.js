@@ -3161,7 +3161,19 @@ function smartRunNeedsPrompt(sourceSettings=settings){
     sourceSettings = sourceSettings || settings;
     if(sourceSettings.engine === 'runninghub') return runningHubRunNeedsPrompt(sourceSettings);
     if(sourceSettings.engine === 'comfy' && sourceSettings.comfyMode === 'enhance') return false;
+    if(sourceSettings.engine === 'comfy' && sourceSettings.comfyMode === 'custom'){
+        // 自定义工作流只有映射了提示词字段才需要提示词；未映射时提示词不会生效，也不应强制输入。
+        const fields = comfyWorkflowCache[sourceSettings.comfyWorkflow]?.config?.fields || [];
+        return fields.some(field => comfyFieldKind(field) === 'prompt');
+    }
     return true;
+}
+async function ensureComfyWorkflowCachedForPromptCheck(runSettings){
+    // 提示词是否必需取决于工作流 config 里是否映射了提示词字段；
+    // 校验前先确保工作流配置已缓存，避免缓存未命中时误判。
+    if(runSettings?.engine === 'comfy' && runSettings.comfyMode === 'custom' && runSettings.comfyWorkflow && !comfyWorkflowCache[runSettings.comfyWorkflow]){
+        await ensureComfyWorkflow(runSettings.comfyWorkflow);
+    }
 }
 function sortRunningHubFields(fields){
     return [...(fields || [])].sort((a, b) => {
@@ -4416,7 +4428,12 @@ function renderComfyParams(){
     } else {
         const wf = comfyWorkflowCache[settings.comfyWorkflow];
         const fields = (wf?.config?.fields || []).filter(f => comfyFieldKind(f) === 'setting');
+        const promptFields = (wf?.config?.fields || []).filter(f => comfyFieldKind(f) === 'prompt');
         html += renderComfyWorkflowControl();
+        // 工作流未映射提示词字段时提示用户无需填写提示词，避免误解。
+        if(wf && !promptFields.length){
+            html += `<div class="muted-note">${escapeHtml(tr('smart.comfyNoPromptHint'))}</div>`;
+        }
         html += fields.length ? fields.map(renderComfySettingField).join('') : (settings.comfyWorkflow ? '' : `<div class="muted-note">${escapeHtml(tr('smart.noWorkflow'))}</div>`);
     }
     const systemWorkflow = settings.comfyMode === 'custom' && String(settings.comfyWorkflow || '').startsWith('system/');
@@ -5149,6 +5166,16 @@ function rhDefaultPromptSuggestion(){
 }
 function updatePromptPlaceholder(){
     if(!promptInput) return;
+    if(settings.engine === 'comfy' && settings.comfyMode === 'custom' && settings.comfyWorkflow){
+        const wf = comfyWorkflowCache[settings.comfyWorkflow];
+        if(wf){
+            const fields = wf.config?.fields || [];
+            const needsPrompt = fields.some(field => comfyFieldKind(field) === 'prompt');
+            // 工作流未映射提示词字段时，输入框提示留空即可，避免用户以为必须填写。
+            promptInput.dataset.placeholder = needsPrompt ? tr('smart.promptPlaceholder') : tr('smart.comfyNoPromptHint');
+            return;
+        }
+    }
     const suggestion = rhDefaultPromptSuggestion();
     promptInput.dataset.placeholder = suggestion || tr('smart.promptPlaceholder');
 }
@@ -20316,6 +20343,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     );
     const prompt = (request.prompt || '').trim();
     const displayPrompt = (request.displayPrompt || '').trim();
+    await ensureComfyWorkflowCachedForPromptCheck(runSettings);
     if((!prompt || !displayPrompt) && smartRunNeedsPrompt(runSettings)){
         settings = previousSettings;
         throw new Error('链路节点缺少提示词');
@@ -20410,6 +20438,7 @@ async function runLoopRoundIntoSlot(loopNode, rootNode, outputSlot, loopIndex, c
         const request = buildPromptRequestForNode(rootNode, refsForRequest.length ? refsForRequest : null, ctx);
         const prompt = (request.prompt || '').trim();
         const displayPrompt = (request.displayPrompt || '').trim();
+        await ensureComfyWorkflowCachedForPromptCheck(runSettings);
         if((!prompt || !displayPrompt) && smartRunNeedsPrompt(runSettings)) throw new Error('链路节点缺少提示词');
         const meta = {
             prompt,
@@ -20831,6 +20860,7 @@ async function runGeneration(targetNode=null){
     if(appendingToPendingNode && !smartNodeAllowsConcurrentSubmit(node)){
         return;
     }
+    await ensureComfyWorkflowCachedForPromptCheck(runSettings);
     if(!prompt && smartRunNeedsPrompt(runSettings)){
         toast(tr('smart.toastNeedPrompt'));
         return;
