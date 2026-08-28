@@ -887,11 +887,12 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .image-node.selected:not(.smart-group-node) { z-index:10; }
 .image-node.dragging:not(.smart-group-node) { z-index:12; }
 .image-node.smart-group-node.dragging { z-index:3; }
-.node-resize-handle { position:absolute; right:7px; bottom:7px; width:18px; height:18px; border-radius:8px; cursor:nwse-resize; background:rgba(255,255,255,.86); border:1px solid #e8edf3; display:flex; align-items:center; justify-content:center; color:#94a3b8; opacity:0; transition:all .18s ease; z-index:5; }
-.node-resize-handle::before { content:""; width:8px; height:8px; border-right:2px solid currentColor; border-bottom:2px solid currentColor; }
-.node-resize-handle:hover { color:#111827; border-color:#cbd5e1; background:#fff; }
-.theme-dark .node-resize-handle { background:rgba(15,23,42,.86); border-color:rgba(148,163,184,.28); color:#94a3b8; }
-.theme-dark .node-resize-handle:hover { color:#f8fafc; border-color:rgba(203,213,225,.5); background:rgba(30,41,59,.96); }
+.node-resize-handle { position:absolute; right:4px; bottom:4px; width:14px; height:14px; border-radius:3px; cursor:nwse-resize; background:transparent; border:0; display:flex; align-items:center; justify-content:center; color:rgba(148,163,184,.72); opacity:0; transition:all .18s ease; z-index:5; }
+.node-resize-handle::before { content:""; position:absolute; width:10px; height:10px; background:transparent; }
+.node-resize-handle::after { content:""; position:absolute; width:8px; height:8px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(-45deg); }
+.node-resize-handle:hover { color:var(--strong); }
+.theme-dark .node-resize-handle { color:rgba(148,163,184,.58); }
+.theme-dark .node-resize-handle:hover { color:var(--strong); }
 .image-node.selected .node-resize-handle, .image-node:hover .node-resize-handle { opacity:1; }
 .image-node.dragging .node-resize-handle { opacity:0 !important; pointer-events:none !important; }
 .node-port { position:absolute; top:var(--node-port-y, 50%); width:14px; height:14px; border-radius:50%; background:var(--card); border:1.8px solid var(--strong); transform:translateY(-50%); z-index:6; cursor:crosshair; opacity:0; pointer-events:none; transition:opacity .15s ease, background .15s ease, transform .15s ease, box-shadow .15s ease; box-shadow:0 4px 10px rgba(15,23,42,.18); }
@@ -2179,16 +2180,17 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .workflow-create-actions #workflowCreateConfirm { border-color:transparent; background:var(--rh-brand); color:#07110b; }
 .workflow-organizer-node .node-resize-handle,.smart-note-node .node-resize-handle { pointer-events:auto; cursor:se-resize;
     display:block;
-    width:24px;
-    height:24px;
-    right:0;
-    bottom:0;
+    width:16px;
+    height:16px;
+    right:2px;
+    bottom:2px;
     opacity:0 !important;
-    border-color:transparent;
+    border:0;
     background:transparent;
     color:transparent;
 }
 .workflow-organizer-node .node-resize-handle::before,.smart-note-node .node-resize-handle::before { opacity:0; }
+.workflow-organizer-node .node-resize-handle::after,.smart-note-node .node-resize-handle::after { opacity:0; }
 .workflow-organizer-node .node-port,.smart-note-node .node-port,.workflow-organizer-node .node-head,.smart-note-node .node-head { display:none; }
 .smart-note-node { z-index:1; box-sizing:border-box; border:1px solid color-mix(in srgb, var(--organizer-color) 55%, transparent); border-radius:14px; background:color-mix(in srgb, var(--organizer-color) 22%, var(--panel)); box-shadow:0 12px 28px var(--shadow); padding:12px; }
 .smart-note-node.selected { box-shadow:0 0 0 2px var(--organizer-color),0 12px 28px var(--shadow); }
