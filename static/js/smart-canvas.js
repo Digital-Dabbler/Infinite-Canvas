@@ -19228,6 +19228,19 @@ function originalPromptTextFromParts(parts){
     });
     return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
+function promptRequestRefs(refs){
+    return (refs || []).map((img, index) => ({
+        url:img.url,
+        name:img.name || `图${index + 1}`,
+        mediaInstanceId:img.mediaInstanceId || '',
+        kind:img.kind || mediaKindForItem(img),
+        asset_uris:img.asset_uris || {},
+        role:`image_${index + 1}`,
+        // 画布上绘制的遮罩必须随引用图一起传给生成路径：ComfyUI 的 LoadImage
+        // 会从图片 alpha 通道读取遮罩，前端据此把遮罩合成进 PNG 再上传。
+        mask:img.mask ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined
+    }));
+}
 function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=false, ctx=smartLoopContext){
     const parts = collectPromptParts();
     const originalPrompt = originalPromptTextFromParts(parts);
@@ -19242,7 +19255,7 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
         return {
             prompt:upstreamPromptOnly,
             displayPrompt:upstreamPromptOnly,
-            refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, mediaInstanceId:img.mediaInstanceId || '', kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
+            refs:promptRequestRefs(refs),
             mentioned:false
         };
     }
@@ -19289,14 +19302,14 @@ function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=fal
         return {
             prompt:`${tr('smart.refMapHeader')}\n${mapText}\n\n${tr('smart.refUserNeed')}\n${body}`,
             displayPrompt,
-            refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, mediaInstanceId:img.mediaInstanceId || '', kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
+            refs:promptRequestRefs(refs),
             mentioned:true
         };
     }
     return {
         prompt:body,
         displayPrompt,
-        refs:refs.map((img, index) => ({url:img.url, name:img.name || `图${index + 1}`, mediaInstanceId:img.mediaInstanceId || '', kind:img.kind || mediaKindForItem(img), asset_uris:img.asset_uris || {}, role:`image_${index + 1}`})),
+        refs:promptRequestRefs(refs),
         mentioned:false
     };
 }
@@ -20100,6 +20113,9 @@ function comfyParamsFromWorkflowValues(config, values={}){
     const params = {};
     (config?.fields || []).forEach(field => {
         if(!field?.node || !field?.input) return;
+        // 遮罩字段只是声明「对应图片字段需要把画布遮罩合成进 alpha 通道」，
+        // 本身不是 ComfyUI 节点输入（LoadImage 的 mask 来自图片 alpha），不能注入 params。
+        if(field.type === 'mask') return;
         let value = values[field.id];
         if(value === undefined) value = field.default;
         if(field.type === 'number' || field.type === 'slider'){

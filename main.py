@@ -27020,6 +27020,10 @@ def run_workflow(name: str, payload: WorkflowRunRequest):
     for field in payload.config.fields:
         if not field.node or not field.input:
             continue
+        if field.type == "mask":
+            # 遮罩字段仅声明对应图片字段需要把画布遮罩合成进 alpha 通道，
+            # 不是 ComfyUI 节点输入（LoadImage 的 mask 来自图片 alpha），不能注入 params。
+            continue
         if field.id in payload.fields:
             value = payload.fields[field.id]
             # 类型转换

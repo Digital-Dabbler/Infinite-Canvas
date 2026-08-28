@@ -162,6 +162,7 @@ body.studio-theme-dark .extras-row textarea { background:var(--soft); border-col
 .preview-empty { padding:32px 16px; text-align:center; color:var(--faint); font-size:12px; font-weight:700; line-height:1.6; border:1px dashed var(--line); border-radius:12px; }
 .pfield { display:flex; flex-direction:column; gap:6px; }
 .pfield-label { color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.02em; }
+.pfield-mask-note { padding:8px 12px; border:1px dashed var(--line-strong); border-radius:10px; background:var(--soft); color:var(--muted); font-size:11.5px; font-weight:700; line-height:1.5; }
 .pfield-input, .pfield-textarea, .pfield-select { width:100%; padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:var(--soft); color:var(--text); outline:none; font-size:13px; font-weight:650; font-family:inherit; }
 .pfield-textarea { min-height:70px; resize:vertical; line-height:1.5; }
 .pfield-input:focus, .pfield-textarea:focus, .pfield-select:focus { border-color:var(--text); background:var(--panel); }

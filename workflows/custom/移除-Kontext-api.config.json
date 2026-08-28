@@ -14,6 +14,34 @@
       "options": [],
       "random_enabled": false,
       "for": ""
+    },
+    {
+      "id": "f_6s3ilrp_mask",
+      "node": "240",
+      "input": "mask",
+      "name": "遮罩",
+      "type": "mask",
+      "default": "",
+      "min": null,
+      "max": null,
+      "step": null,
+      "options": [],
+      "random_enabled": false,
+      "for": "f_6s3ilrp"
+    },
+    {
+      "id": "f_fpjv9pk",
+      "node": "210:55",
+      "input": "seed",
+      "name": "随机种子",
+      "type": "number",
+      "default": 1098334618826248,
+      "min": 0.0,
+      "max": 2196669237652496.0,
+      "step": 1.0,
+      "options": [],
+      "random_enabled": true,
+      "for": ""
     }
   ],
   "mini_cards": {

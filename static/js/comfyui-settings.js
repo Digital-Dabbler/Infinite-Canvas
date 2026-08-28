@@ -23,6 +23,7 @@ const TYPES = [
     { v:'slider', zh:'滑块', en:'Slider' },
     { v:'dropdown', zh:'下拉框', en:'Dropdown' },
     { v:'image', zh:'图片', en:'Image' },
+    { v:'mask', zh:'蒙版', en:'Mask' },
     { v:'video', zh:'视频', en:'Video' },
     { v:'audio', zh:'音频', en:'Audio' },
     { v:'boolean', zh:'开关', en:'Switch' },
@@ -149,7 +150,7 @@ function setStatus(text){ statusEl.textContent = text || ''; }
 function escapeHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(s){ return escapeHtml(s); }
 function fieldKind(f){
-    if(['image','video','audio'].includes(f.type)) return f.type;
+    if(['image','mask','video','audio'].includes(f.type)) return f.type;
     const key = `${f.input || ''} ${f.name || ''}`.toLowerCase();
     if(f.type === 'textarea' || /prompt|text|提示词|正向|负向/.test(key)) return 'prompt';
     return 'setting';
@@ -981,6 +982,11 @@ function renderPreviewField(f){
         const opts = (f.options || []).map(o => `<option value="${escapeAttr(o)}" ${String(v)===String(o)?'selected':''}>${escapeHtml(o)}</option>`).join('');
         return `<div class="pfield">${label}<select class="pfield-select" onchange="setPreviewValue('${f.id}',this.value)">${opts || `<option value="">${tr('comfy.noOptions')}</option>`}</select></div>`;
     }
+    if(f.type === 'mask'){
+        const linked = currentConfig.fields.find(x => x.id === f.for);
+        const note = linked ? tf('comfy.maskAutoFollowNamed', {name:linked.name || linked.input || ''}) : tr('comfy.maskAutoFollow');
+        return `<div class="pfield">${label}<div class="pfield-mask-note">${escapeHtml(note)}</div></div>`;
+    }
     if(isMediaField(f)){
         // 浏览器显示用本地 blob URL；如果没有就尝试用 /output/ 之类的可访问 URL；都没有显示占位文字
         const displayUrl = previewImageUrls[f.id] || (typeof v === 'string' && /^(\/|https?:|blob:|data:)/.test(v) ? v : '');
@@ -1124,6 +1130,11 @@ function renderMiniField(f){
     if(f.type === 'dropdown'){
         const opts = (f.options || []).map(o => `<option value="${escapeAttr(o)}" ${String(v)===String(o)?'selected':''}>${escapeHtml(o)}</option>`).join('');
         return `<div class="pfield">${label}<select class="pfield-select" onchange="setPreviewValue('${f.id}',this.value)">${opts || `<option value="">${tr('comfy.noOptions')}</option>`}</select></div>`;
+    }
+    if(f.type === 'mask'){
+        const linked = currentConfig.fields.find(x => x.id === f.for);
+        const note = linked ? tf('comfy.maskAutoFollowNamed', {name:linked.name || linked.input || ''}) : tr('comfy.maskAutoFollow');
+        return `<div class="pfield">${label}<div class="pfield-mask-note">${escapeHtml(note)}</div></div>`;
     }
     if(f.type === 'boolean'){
         return `<div class="pfield">${label}<div class="pfield-bool"><div class="pfield-bool-track ${v?'on':''}" onclick="setPreviewValue('${f.id}',!${!!v});this.classList.toggle('on')"><div class="pfield-bool-thumb"></div></div></div></div>`;

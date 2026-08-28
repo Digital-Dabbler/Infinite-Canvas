@@ -68,6 +68,8 @@
         "comfy.deleteFailed": { zh: "删除失败", en: "Delete failed" },
         "comfy.runFailed": { zh: "运行失败", en: "Run failed" },
         "comfy.invalidJson": { zh: "不是有效的 JSON 文件", en: "Not a valid JSON file" },
+        "comfy.maskAutoFollow": { zh: "遮罩自动跟随对应图片字段（运行前合成进图片 alpha 通道）", en: "Mask automatically follows the linked image field (composited into the image alpha channel before running)" },
+        "comfy.maskAutoFollowNamed": { zh: "遮罩自动跟随图片字段「{name}」并合成进 alpha 通道", en: "Mask automatically follows image field \"{name}\" and is composited into its alpha channel" },
         "comfy.namePrompt": { zh: "给这个工作流起个名字（中文/英文/数字/_-.）：", en: "Name this workflow (letters/numbers/_-.):" },
         "comfy.uploaded": { zh: "已上传：", en: "Uploaded: " }
     });
