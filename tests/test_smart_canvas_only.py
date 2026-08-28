@@ -142,7 +142,10 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("function smartRunNeedsPrompt", self.smart_canvas_js)
         self.assertIn("comfyWorkflowCache[sourceSettings.comfyWorkflow]?.config?.fields", self.smart_canvas_js)
         self.assertIn("function ensureComfyWorkflowCachedForPromptCheck", self.smart_canvas_js)
+        self.assertIn("function hideComfyNoPromptHint", self.smart_canvas_js)
         self.assertIn("smart.comfyNoPromptHint", self.smart_canvas_js)
+        smart_canvas_html = (self.root / "static" / "smart-canvas.html").read_text(encoding="utf-8")
+        self.assertIn('id="comfyNoPromptHint"', smart_canvas_html)
 
 
 if __name__ == "__main__":

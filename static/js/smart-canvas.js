@@ -5164,17 +5164,33 @@ function rhDefaultPromptSuggestion(){
     }
     return '';
 }
+function hideComfyNoPromptHint(){
+    const hintEl = document.getElementById('comfyNoPromptHint');
+    if(hintEl){
+        hintEl.hidden = true;
+        hintEl.textContent = '';
+    }
+}
 function updatePromptPlaceholder(){
+    const hintEl = document.getElementById('comfyNoPromptHint');
     if(!promptInput) return;
     if(settings.engine === 'comfy' && settings.comfyMode === 'custom' && settings.comfyWorkflow){
         const wf = comfyWorkflowCache[settings.comfyWorkflow];
         if(wf){
             const fields = wf.config?.fields || [];
             const needsPrompt = fields.some(field => comfyFieldKind(field) === 'prompt');
-            // 工作流未映射提示词字段时，输入框提示留空即可，避免用户以为必须填写。
+            // 工作流未映射提示词字段时，输入框提示留空即可，并在头部常驻提示，避免用户以为必须填写。
             promptInput.dataset.placeholder = needsPrompt ? tr('smart.promptPlaceholder') : tr('smart.comfyNoPromptHint');
+            if(hintEl){
+                hintEl.hidden = needsPrompt;
+                hintEl.textContent = needsPrompt ? '' : tr('smart.comfyNoPromptHint');
+            }
             return;
         }
+    }
+    if(hintEl){
+        hintEl.hidden = true;
+        hintEl.textContent = '';
     }
     const suggestion = rhDefaultPromptSuggestion();
     promptInput.dataset.placeholder = suggestion || tr('smart.promptPlaceholder');
@@ -17547,6 +17563,7 @@ function updateComposer(){
         composer.classList.remove('open');
         if(cascadeRunBtn) cascadeRunBtn.style.display = 'none';
         clearComposerSubject();
+        hideComfyNoPromptHint();
         return;
     }
     composer.classList.toggle('open', isSmartRunnableNode(node));
@@ -17560,6 +17577,7 @@ function updateComposer(){
         setPromptInputLocked(false);
         if(!node) setPromptText('');
         window.syncPromptPresetComposer?.();
+        hideComfyNoPromptHint();
         return;
     }
     // composer 只绑定节点本身：图片只是素材/结果，不携带提示词或参数状态。

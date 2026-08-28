@@ -1100,7 +1100,7 @@ body.smart-canvas-interacting .smart-node-floating-menu { box-shadow:0 6px 16px 
 .engine-select option { color:var(--text); font-weight:600; }
 .engine-select:hover { border-color:var(--text); }
 .engine-select:focus { border-color:var(--strong); }
-.composer-head-hint { color:var(--faint); font-size:calc(9.5px * var(--canvas-font-scale, 1)); font-weight:600; letter-spacing:.06em; text-transform:uppercase; margin-left:2px; }
+.composer-head-hint { margin-left:auto; color:var(--muted); font-size:calc(10px * var(--canvas-font-scale, 1)); font-weight:650; letter-spacing:.02em; padding:3px 10px; border-radius:999px; border:1px dashed var(--line-strong); background:var(--soft); white-space:nowrap; max-width:240px; overflow:hidden; text-overflow:ellipsis; }
 .kind-toggle { display:inline-flex; align-items:center; gap:2px; padding:2px; border-radius:999px; border:1px solid var(--line); background:var(--card); }
 .kind-toggle button { height:20px; padding:0 8px; border-radius:999px; border:0; background:transparent; color:var(--muted); font-size:calc(10.5px * var(--canvas-font-scale, 1)); font-weight:500; display:inline-flex; align-items:center; gap:4px; cursor:pointer; transition:background .14s ease, color .14s ease; }
 .kind-toggle button i, .kind-toggle button svg { width:11px !important; height:11px !important; stroke-width:2; }
