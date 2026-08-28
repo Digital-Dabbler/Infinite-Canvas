@@ -2218,6 +2218,7 @@ def public_user(user):
         "api_profile_id": str(user.get("api_profile_id") or ""),
         "enabled": bool(user.get("enabled", True)), "must_change_password": bool(user.get("must_change_password")),
         "quota": user.get("quota") or {}, "created_at": user.get("created_at", 0),
+        "preferences": user.get("preferences") or {},
     }
 
 def ensure_admin_bootstrap():
@@ -3756,6 +3757,9 @@ class AuthPasswordResetRequest(BaseModel):
     department: str = Field(min_length=1, max_length=80)
     new_password: str = Field(min_length=10, max_length=200)
 
+class AuthPreferencesRequest(BaseModel):
+    canvas_font_scale: Optional[float] = None
+
 class AdminUserUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
     role: Optional[str] = None
@@ -3874,6 +3878,29 @@ async def auth_me(request: Request):
     profile = api_profile_by_id(str(user.get("api_profile_id") or ""))
     public["api_profile_name"] = str((profile or {}).get("name") or "")
     return {"user": public}
+
+@app.put("/api/auth/me/preferences")
+async def auth_update_preferences(payload: AuthPreferencesRequest, request: Request):
+    """更新当前用户的个性化展示偏好（画布字体缩放等），仅影响本人。"""
+    user = require_authenticated(request)
+    scale = payload.canvas_font_scale
+    if scale is not None:
+        if not (0.8 <= scale <= 1.5):
+            raise HTTPException(status_code=400, detail="画布字体缩放需在 80%–150% 之间。")
+        scale = round(scale, 3)
+    with AUTH_LOCK:
+        data = load_auth_users()
+        record = next((item for item in data["users"] if item.get("id") == user["id"]), None)
+        if not record:
+            raise HTTPException(status_code=404, detail="用户不存在。")
+        preferences = dict(record.get("preferences") or {})
+        if scale is not None:
+            preferences["canvas_font_scale"] = scale
+        else:
+            preferences.pop("canvas_font_scale", None)
+        record["preferences"] = preferences
+        save_auth_users(data)
+    return {"ok": True, "preferences": preferences}
 
 @app.post("/api/auth/password")
 async def auth_change_password(payload: AuthPasswordRequest, request: Request):

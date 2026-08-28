@@ -75,7 +75,7 @@
     border-radius: 11px;
     background: transparent;
     color: var(--muted);
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     font-weight: 700;
     cursor: pointer;
     transition: background .16s ease, color .16s ease;
@@ -130,7 +130,7 @@
     border: 0;
     background: transparent;
     color: var(--text);
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     outline: none;
 }
 
@@ -209,7 +209,7 @@
     border-radius: 11px;
     background: var(--soft);
     color: var(--muted);
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 700;
     cursor: pointer;
     transition: background .16s ease, color .16s ease, border-color .16s ease;
@@ -298,7 +298,7 @@
     box-sizing: border-box;
     background: repeating-linear-gradient(135deg, var(--soft), var(--soft) 8px, color-mix(in srgb, var(--soft) 80%, var(--card)) 8px, color-mix(in srgb, var(--soft) 80%, var(--card)) 16px);
     color: var(--faint);
-    font-size: 11px;
+    font-size:calc(11px * var(--canvas-font-scale, 1));
     font-weight: 700;
     text-align: center;
 }
@@ -313,7 +313,7 @@
 }
 
 .library-card-title {
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     font-weight: 750;
     color: var(--text);
     line-height: 1.25;
@@ -325,7 +325,7 @@
 
 .library-card-meta {
     margin-top: 6px;
-    font-size: 11px;
+    font-size:calc(11px * var(--canvas-font-scale, 1));
     color: var(--muted);
     display: flex;
     align-items: center;
@@ -359,7 +359,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 750;
     backdrop-filter: blur(10px);
     cursor: pointer;
@@ -397,7 +397,7 @@
     border-radius: 9px;
     background: rgba(0,0,0,.55);
     color: #fff;
-    font-size: 11px;
+    font-size:calc(11px * var(--canvas-font-scale, 1));
     font-weight: 750;
     backdrop-filter: blur(10px);
 }
@@ -464,13 +464,13 @@
 }
 
 .library-empty-title {
-    font-size: 16px;
+    font-size:calc(16px * var(--canvas-font-scale, 1));
     font-weight: 800;
     color: var(--text);
 }
 
 .library-empty-desc {
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     color: var(--muted);
     max-width: 360px;
 }
@@ -486,7 +486,7 @@
     border-radius: 12px;
     background: var(--rh-brand);
     color: #07110b;
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     font-weight: 800;
     cursor: pointer;
     transition: transform .16s ease, box-shadow .16s ease;
@@ -519,7 +519,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     color: var(--muted);
 }
 
@@ -543,7 +543,7 @@
     border-radius: 10px;
     background: var(--card);
     color: var(--text);
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 700;
     cursor: pointer;
 }
@@ -569,7 +569,7 @@
     border-radius: 11px;
     background: var(--soft);
     color: var(--text);
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     font-weight: 750;
     cursor: pointer;
     transition: background .16s ease, transform .16s ease;
@@ -622,7 +622,7 @@
     align-items: center;
     justify-content: center;
     gap: 8px;
-    font-size: 15px;
+    font-size:calc(15px * var(--canvas-font-scale, 1));
     font-weight: 800;
     color: var(--text);
 }
@@ -634,7 +634,7 @@
 }
 
 .library-choice-desc {
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     color: var(--muted);
 }
 
@@ -694,7 +694,7 @@
     border-radius: 10px;
     background: var(--soft);
     color: var(--text);
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 700;
     outline: none;
 }
@@ -709,7 +709,7 @@
     border-radius: 10px;
     background: var(--soft);
     color: var(--text);
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 750;
     cursor: pointer;
     transition: background .16s ease, border-color .16s ease;
@@ -748,7 +748,7 @@
     border-radius: 9px;
     background: var(--card);
     color: var(--muted);
-    font-size: 11px;
+    font-size:calc(11px * var(--canvas-font-scale, 1));
     font-weight: 700;
     cursor: pointer;
 }
@@ -817,7 +817,7 @@
     flex: 1 1 140px;
     min-width: 0;
     margin-right: auto;
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 700;
     color: var(--muted);
 }
@@ -902,7 +902,7 @@
     background: transparent;
     color: rgba(255,255,255,.92);
     font: inherit;
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 700;
     text-align: left;
     white-space: nowrap;
@@ -1012,7 +1012,7 @@
     justify-content: space-between;
     gap: 12px;
     color: rgba(255,255,255,.94);
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 800;
     line-height: 1;
     pointer-events: none;
@@ -1020,13 +1020,13 @@
 }
 
 .library-folder-cover-count {
-    font-size: 15px;
+    font-size:calc(15px * var(--canvas-font-scale, 1));
     letter-spacing: -.02em;
 }
 
 .library-folder-cover-label {
     color: rgba(255,255,255,.65);
-    font-size: 11px;
+    font-size:calc(11px * var(--canvas-font-scale, 1));
     font-weight: 700;
 }
 
@@ -1041,7 +1041,7 @@
 }
 
 .library-folder-count {
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 800;
     color: var(--muted);
     border: 1px solid var(--line);
@@ -1067,7 +1067,7 @@
     border-radius: 10px;
     background: var(--soft);
     color: var(--text);
-    font-size: 12px;
+    font-size:calc(12px * var(--canvas-font-scale, 1));
     font-weight: 750;
     cursor: pointer;
     transition: background .16s ease;
@@ -1083,7 +1083,7 @@
 }
 
 .library-folder-back-name {
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     font-weight: 800;
     color: var(--text);
 }
@@ -1099,7 +1099,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 15px;
+    font-size:calc(15px * var(--canvas-font-scale, 1));
     font-weight: 800;
     color: var(--text);
 }
@@ -1157,7 +1157,7 @@
     border-radius: 12px;
     background: var(--soft);
     color: var(--text);
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
     padding: 10px 12px;
     outline: none;
     font-family: inherit;
@@ -1217,7 +1217,7 @@
     justify-content: center;
     gap: 12px;
     color: var(--muted);
-    font-size: 13px;
+    font-size:calc(13px * var(--canvas-font-scale, 1));
 }
 
 .library-loading svg {

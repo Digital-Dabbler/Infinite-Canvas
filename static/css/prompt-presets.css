@@ -3,9 +3,9 @@
 .composer-preset-controls { padding: 2px 0 8px; }
 .composer-preset-controls:empty { display: none; }
 .prompt-preset-row { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; align-items: start; gap: 8px; min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--soft) 62%, transparent); }
-.prompt-preset-row::before { content: '提示词预设'; padding-top: 5px; color: var(--faint); font-size: 9px; font-weight: 850; letter-spacing: .1em; }
+.prompt-preset-row::before { content: '提示词预设'; padding-top: 5px; color: var(--faint); font-size:calc(9px * var(--canvas-font-scale, 1)); font-weight: 850; letter-spacing: .1em; }
 .prompt-preset-chips { display: flex; flex-wrap: wrap; gap: 5px; min-height: 26px; padding: 0; }
-.prompt-preset-chip { position:relative; display: inline-flex; align-items: center; max-width: 180px; min-height: 25px; gap: 5px; padding: 0 5px 0 8px; border: 1px solid color-mix(in srgb, var(--rh-brand) 52%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--rh-brand) 12%, var(--card)); color: var(--text); font-size: 11px; font-weight: 750; cursor: grab; touch-action: none; }
+.prompt-preset-chip { position:relative; display: inline-flex; align-items: center; max-width: 180px; min-height: 25px; gap: 5px; padding: 0 5px 0 8px; border: 1px solid color-mix(in srgb, var(--rh-brand) 52%, var(--line)); border-radius: 8px; background: color-mix(in srgb, var(--rh-brand) 12%, var(--card)); color: var(--text); font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight: 750; cursor: grab; touch-action: none; }
 .prompt-preset-chip:focus-visible { outline:2px solid var(--strong); outline-offset:2px; }
 .prompt-preset-chip.dragging { opacity: .45; }
 .prompt-preset-chip.drop-before::before,
@@ -16,15 +16,15 @@
 .prompt-preset-chip button { display: grid; place-items: center; width: 17px; height: 17px; border-radius: 5px; color: var(--muted); background: transparent; }
 .prompt-preset-chip button:hover { color: var(--text); background: var(--line); }
 .prompt-preset-chip svg { width: 11px; height: 11px; }
-.prompt-preset-empty, .prompt-preset-upstream { color: var(--faint); font-size: 11px; line-height: 25px; }
+.prompt-preset-empty, .prompt-preset-upstream { color: var(--faint); font-size:calc(11px * var(--canvas-font-scale, 1)); line-height: 25px; }
 .prompt-preset-upstream { color: var(--muted); }
 .prompt-preset-actions { display: flex; gap: 4px; }
-.prompt-preset-actions button { height: 27px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--muted); font-size: 11px; font-weight: 750; transition: border-color .15s ease, color .15s ease, background .15s ease; }
+.prompt-preset-actions button { height: 27px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--muted); font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight: 750; transition: border-color .15s ease, color .15s ease, background .15s ease; }
 .prompt-preset-actions button:hover:not(:disabled) { border-color: var(--rh-brand); color: var(--text); background: color-mix(in srgb, var(--rh-brand) 10%, var(--card)); }
 .prompt-preset-actions button:disabled { opacity: .38; cursor: not-allowed; }
 .prompt-preset-actions svg { width: 13px; height: 13px; }
 .prompt-preset-final { padding: 0 8px; }
-.prompt-preset-final summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; padding: 4px 0; cursor: pointer; color: var(--muted); font-size: 10px; font-weight: 750; list-style: none; touch-action: manipulation; }
+.prompt-preset-final summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 30px; padding: 4px 0; cursor: pointer; color: var(--muted); font-size:calc(10px * var(--canvas-font-scale, 1)); font-weight: 750; list-style: none; touch-action: manipulation; }
 .prompt-preset-final summary:focus-visible { outline: 2px solid var(--strong); outline-offset: 2px; border-radius: 5px; }
 .prompt-preset-final summary::-webkit-details-marker { display: none; }
 .prompt-preset-final summary::before { content: '▸'; margin-right: 5px; color: var(--faint); }

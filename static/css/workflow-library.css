@@ -14,7 +14,7 @@
 }
 .workflow-cover-placeholder svg { width: 48px; height: 48px; }
 .workflow-meta {
-    margin-top: 6px; font-size: 11px; color: var(--muted);
+    margin-top: 6px; font-size: calc(11px * var(--canvas-font-scale, 1)); color: var(--muted);
     display: flex; align-items: center; gap: 10px;
 }
 .workflow-node-count { display: flex; align-items: center; gap: 4px; }
@@ -25,6 +25,6 @@
 .workflow-library-card .library-card-cover img { width:100%; height:100%; object-fit:cover; }
 .workflow-card-actions { opacity:0; transition:opacity .16s ease; }
 .workflow-library-card:hover .workflow-card-actions { opacity:1; }
-.workflow-card-actions button { height:32px; border:0; border-radius:8px; padding:0 10px; background:rgba(255,255,255,.92); color:#18202b; font:inherit; font-size:12px; font-weight:800; cursor:pointer; }
+.workflow-card-actions button { height:32px; border:0; border-radius:8px; padding:0 10px; background:rgba(255,255,255,.92); color:#18202b; font:inherit; font-size:calc(12px * var(--canvas-font-scale, 1)); font-weight:800; cursor:pointer; }
 .workflow-card-actions button.publish { background:transparent; border:1px solid var(--rh-brand); color:var(--rh-brand); }
 .workflow-card-actions button.danger { background:transparent; color:#fff; }

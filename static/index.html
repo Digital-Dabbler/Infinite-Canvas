@@ -72,6 +72,15 @@
                 <div><dt>角色</dt><dd id="accountRole">—</dd></div>
                 <div><dt>API 配置组</dt><dd id="accountProfile">—</dd></div>
             </dl>
+            <div class="studio-account-preference">
+                <span class="studio-account-preference-label"><i data-lucide="type"></i><span>画布字体大小</span></span>
+                <div class="studio-account-font-scale">
+                    <input id="accountFontScale" type="range" min="80" max="150" step="5" value="100" aria-label="画布字体大小">
+                    <output id="accountFontScaleValue" for="accountFontScale">100%</output>
+                    <button id="accountFontScaleReset" type="button" title="恢复默认">重置</button>
+                </div>
+                <small class="studio-account-preference-hint">仅对当前账号生效，默认 100%</small>
+            </div>
         </section>
 
         <section id="panelOverlay" class="studio-panel-overlay" aria-hidden="true">

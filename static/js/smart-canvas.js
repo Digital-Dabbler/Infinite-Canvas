@@ -1853,6 +1853,36 @@ function applyTheme(theme){
     document.body?.classList.toggle('theme-dark', dark);
     document.body?.classList.toggle('studio-theme-dark', dark);
 }
+let canvasFontScale = 1;
+function clampCanvasFontScale(value){
+    const next = Number(value);
+    return Number.isFinite(next) ? Math.max(0.8, Math.min(1.5, next)) : 1;
+}
+function canvasFontScaleCacheKey(userId){
+    return `canvas_font_scale:${String(userId || '').trim()}`;
+}
+function applyCanvasFontScale(scale){
+    canvasFontScale = clampCanvasFontScale(scale);
+    document.documentElement.style.setProperty('--canvas-font-scale', String(canvasFontScale));
+}
+function readCanvasFontScaleCache(){
+    try {
+        return clampCanvasFontScale(localStorage.getItem(canvasFontScaleCacheKey(currentApiUserId)) || 1);
+    } catch(e) { return 1; }
+}
+async function loadCanvasFontScale(){
+    // 先用按用户隔离的本地缓存快速生效，避免闪回默认字号。
+    applyCanvasFontScale(readCanvasFontScaleCache());
+    // 再以服务端偏好为准：换机器/换浏览器也能取回本人设置。
+    try {
+        const res = await fetch('/api/auth/me', {cache:'no-store'});
+        if(!res.ok) return;
+        const data = await res.json();
+        const serverScale = clampCanvasFontScale((data?.user?.preferences || {}).canvas_font_scale || 1);
+        try { localStorage.setItem(canvasFontScaleCacheKey(currentApiUserId), String(serverScale)); } catch(e) {}
+        applyCanvasFontScale(serverScale);
+    } catch(e) {}
+}
 function toast(text){
     const el = document.getElementById('toast');
     if(!el) return;
@@ -23766,11 +23796,17 @@ window.addEventListener('focus', () => {
 window.addEventListener('message', event => {
     if(event.origin && event.origin !== location.origin) return;
     if(event.data?.type === 'studio-theme') applyTheme(event.data.theme || 'light');
+    if(event.data?.type === 'studio-font-scale') applyCanvasFontScale(event.data.scale || 1);
     scheduleSmartConfigRefreshFromEvent(event.data);
     if(event.data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(event.data);
     if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
     if(event.data?.type === 'studio-lang' && window.StudioI18n) {
         window.StudioI18n.set(event.data.lang || 'zh');
+    }
+});
+window.addEventListener('storage', event => {
+    if(event.key && event.key.startsWith('canvas_font_scale:')) {
+        applyCanvasFontScale(event.newValue || 1);
     }
 });
 window.addEventListener('studio-lang-change', () => {
@@ -23793,6 +23829,7 @@ window.onload = async () => {
     if(window.lucide) lucide.createIcons();
     connectAssetLibrarySyncSocket();
     await loadConfig();
+    await loadCanvasFontScale();
     await loadAssetLibrary();
     await loadCanvas();
     syncApiKindToggleVisibility();

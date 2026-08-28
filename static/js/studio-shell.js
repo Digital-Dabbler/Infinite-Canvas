@@ -22,6 +22,47 @@
     let activePanelFrame = null;
     let activePanelName = '';
     let currentUser = null;
+    let currentFontScale = 1;
+
+    function clampFontScale(value){
+        const next = Number(value);
+        return Number.isFinite(next) ? Math.max(0.8, Math.min(1.5, next)) : 1;
+    }
+    function fontScaleCacheKey(userId){
+        return `canvas_font_scale:${String(userId || '').trim()}`;
+    }
+    function syncFontScaleUI(){
+        const percent = Math.round(currentFontScale * 100);
+        const slider = document.getElementById('accountFontScale');
+        const output = document.getElementById('accountFontScaleValue');
+        if(slider) slider.value = String(percent);
+        if(output) output.textContent = `${percent}%`;
+        notifyFrames('studio-font-scale', { scale: currentFontScale });
+    }
+    function setCanvasFontScale(scale, persist=false){
+        currentFontScale = clampFontScale(scale);
+        try {
+            if(currentUser?.id) localStorage.setItem(fontScaleCacheKey(currentUser.id), String(currentFontScale));
+        } catch(e) {}
+        syncFontScaleUI();
+        if(persist) saveFontScalePreference(currentFontScale);
+    }
+    async function saveFontScalePreference(scale){
+        try {
+            const res = await fetch('/api/auth/me/preferences', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ canvas_font_scale: scale })
+            });
+            if(!res.ok) throw new Error('save failed');
+            const data = await res.json();
+            if(currentUser) currentUser.preferences = data.preferences || {};
+        } catch(e) {
+            // 保存失败时回滚到服务端值，避免本地与线上不一致。
+            const serverScale = clampFontScale(currentUser?.preferences?.canvas_font_scale ?? 1);
+            setCanvasFontScale(serverScale, false);
+        }
+    }
 
     function initials(user){
         const source = String(user?.name || user?.username || 'IC').trim();
@@ -48,6 +89,7 @@
         try {
             frame.contentWindow.postMessage({type:'studio-theme',theme},location.origin);
             frame.contentWindow.postMessage({type:'studio-lang',lang},location.origin);
+            frame.contentWindow.postMessage({type:'studio-font-scale',scale:currentFontScale},location.origin);
         } catch(e){}
     }
     function configurePanelFrame(name, frame){
@@ -125,6 +167,7 @@
         document.getElementById('accountDepartment').textContent = user.department || '—';
         document.getElementById('accountRole').textContent = user.role === 'admin' ? '管理员' : '普通用户';
         document.getElementById('accountProfile').textContent = user.api_profile_name || '默认配置';
+        syncFontScaleUI();
         backdrop?.classList.add('modal');
         setOpen(accountCard, true); setOpen(backdrop, true);
     }
@@ -134,12 +177,14 @@
             if(res.status === 401){ location.href='/static/login.html'; return; }
             const data = await res.json();
             currentUser = data.user || {};
+            currentFontScale = clampFontScale(currentUser.preferences?.canvas_font_scale ?? 1);
             const avatar = initials(currentUser);
             document.getElementById('settingsAvatar').textContent = avatar;
             document.getElementById('settingsUserName').textContent = currentUser.name || currentUser.username || 'Infinite Canvas';
             document.getElementById('settingsUserMeta').textContent = [currentUser.department,currentUser.api_profile_name].filter(Boolean).join(' · ') || '本地创作工作台';
             document.getElementById('adminEntry').hidden = currentUser.role !== 'admin';
             document.getElementById('apiSettingsEntry').hidden = currentUser.role !== 'admin';
+            syncFontScaleUI();
         } catch(e){}
     }
     async function loadVersion(){
@@ -259,9 +304,22 @@
     if(initialPanel) openPanel(initialPanel,false);
     const initialTheme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark';
     applyTheme(initialTheme);
+    const fontScaleSlider = document.getElementById('accountFontScale');
+    const fontScaleReset = document.getElementById('accountFontScaleReset');
+    if(fontScaleSlider){
+        fontScaleSlider.addEventListener('input', () => setCanvasFontScale(Number(fontScaleSlider.value) / 100, false));
+        fontScaleSlider.addEventListener('change', () => setCanvasFontScale(Number(fontScaleSlider.value) / 100, true));
+    }
+    if(fontScaleReset){
+        fontScaleReset.addEventListener('click', () => setCanvasFontScale(1, true));
+    }
     window.addEventListener('storage', event => {
         if(event.key === 'studio_theme' || event.key === 'canvas_theme'){
             applyTheme(localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark');
+        }
+        if(currentUser?.id && event.key === fontScaleCacheKey(currentUser.id)){
+            currentFontScale = clampFontScale(event.newValue || 1);
+            syncFontScaleUI();
         }
     });
     loadSession(); loadVersion(); lucide?.createIcons();

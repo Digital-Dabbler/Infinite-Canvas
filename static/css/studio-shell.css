@@ -54,6 +54,15 @@ html.studio-theme-dark .studio-theme-icon-sun { display:none; }
 .studio-account-card dl { margin:22px 0 0; display:grid; gap:1px; overflow:hidden; border:1px solid var(--shell-line); border-radius:12px; background:var(--shell-line); }
 .studio-account-card dl div { display:flex; justify-content:space-between; gap:18px; padding:11px 13px; background:var(--shell-layer); font-size:12px; }
 .studio-account-card dt { color:var(--shell-muted); }.studio-account-card dd { margin:0; text-align:right; }
+.studio-account-preference { margin-top:16px; padding:13px 13px 12px; border:1px solid var(--shell-line); border-radius:12px; background:var(--shell-layer); }
+.studio-account-preference-label { display:flex; align-items:center; gap:7px; color:var(--shell-muted); font-size:11.5px; font-weight:800; }
+.studio-account-preference-label svg { width:14px; height:14px; }
+.studio-account-font-scale { display:flex; align-items:center; gap:10px; margin-top:10px; }
+.studio-account-font-scale input[type="range"] { flex:1; min-width:0; margin:0; accent-color:var(--shell-brand); }
+.studio-account-font-scale output { min-width:44px; text-align:right; color:var(--shell-text); font-size:12px; font-weight:850; font-variant-numeric:tabular-nums; }
+.studio-account-font-scale button { height:26px; padding:0 9px; border:1px solid var(--shell-line); border-radius:8px; background:transparent; color:var(--shell-muted); font-size:11px; font-weight:800; cursor:pointer; }
+.studio-account-font-scale button:hover { color:var(--shell-text); border-color:var(--shell-brand); }
+.studio-account-preference-hint { display:block; margin-top:8px; color:var(--shell-muted); opacity:.75; font-size:10.5px; }
 .studio-panel-overlay { position:fixed; z-index:var(--ui-z-modal); inset:0; display:flex; flex-direction:column; background:var(--shell-bg); transform:translateY(102%); visibility:hidden; transition:transform .22s ease, visibility .22s ease; }
 .studio-panel-overlay.open { transform:none; visibility:visible; }
 .studio-panel-overlay > header { height:54px; flex:0 0 54px; display:flex; align-items:center; gap:18px; padding:0 14px; border-bottom:1px solid var(--shell-line); background:var(--shell-panel); color:var(--shell-text); }
