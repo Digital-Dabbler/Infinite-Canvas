@@ -12593,10 +12593,19 @@ function handlePortDrop(drag, e){
     render();
     requestAnimationFrame(() => openPortConnectMenu(drag.fromId, drag.fromPort, e, {worldPoint:screenToWorld(e)}));
 }
-const uploadResourcePickerState = {open:false, nodeId:'', imageIndex:-1, tab:'all', scope:'all', query:'', view:'grid', sort:'recent', trigger:null};
+const uploadResourcePickerState = {open:false, nodeId:'', imageIndex:-1, tab:'all', scope:'all', query:'', view:'grid', sort:'recent', trigger:null, visibleCount:0};
 let uploadResourcePickerEl = null;
 const uploadResourceFingerprintByUrl = new Map();
 let uploadResourceFingerprintRequestKey = '';
+const UPLOAD_RESOURCE_PICKER_CHUNK = 36;
+let uploadResourcePickerItems = [];
+let uploadResourcePickerSearchTimer = null;
+let uploadResourcePreviewEl = null;
+const uploadResourceMeasuredAspectByUrl = new Map();
+const uploadResourceMeasuredSizeByUrl = new Map();
+const uploadResourceMeasuredDurationByUrl = new Map();
+let uploadResourceLayoutWidth = 0;
+let uploadResourceRelayoutTimer = null;
 function uploadResourceSourceLabel(source){
     return source === 'generated' ? tr('smart.resourceGenerated') : tr('smart.resourceImported');
 }
@@ -12666,7 +12675,7 @@ async function refreshCanvasUploadResourceFingerprints(){
             uploadResourceFingerprintByUrl.set(url, fingerprint);
             changed = true;
         });
-        if(changed && uploadResourcePickerState.open) renderUploadResourcePicker();
+        if(changed && uploadResourcePickerState.open) renderUploadResourcePicker({gridOnly:true});
     } catch(e) {
         // 指纹不可用时继续按 URL 去重，不影响资源选择。
         uploadResourceFingerprintRequestKey = '';
@@ -12700,12 +12709,12 @@ function currentCanvasUploadResourceItems(){
     (canvas?.media_catalog || []).forEach((item, index) => add(item, item.source, {id:item.source_node_id || ''}, index));
     return resources;
 }
-function filteredCanvasUploadResourceItems(){
+function filteredCanvasUploadResourceItems(baseItems){
     const state = uploadResourcePickerState;
     const keyword = String(state.query || '').trim().toLocaleLowerCase();
     const target = nodes.find(node => node.id === state.nodeId)?.images?.[state.imageIndex];
     const targetIdentity = canvasUploadResourceIdentity(target);
-    let items = currentCanvasUploadResourceItems()
+    let items = (Array.isArray(baseItems) ? baseItems : currentCanvasUploadResourceItems())
         .filter(item => state.tab === 'all' || item.source === state.tab)
         .filter(item => state.scope === 'all' || (state.scope === 'active' ? item.active : !item.active))
         .filter(item => !keyword || `${item.name} ${uploadResourceSourceLabel(item.source)}`.toLocaleLowerCase().includes(keyword));
@@ -12726,6 +12735,7 @@ function ensureUploadResourcePicker(){
     uploadResourcePickerEl.addEventListener('click', event => event.stopPropagation());
     uploadResourcePickerEl.addEventListener('wheel', event => event.stopPropagation(), {passive:true});
     shell.appendChild(uploadResourcePickerEl);
+    bindUploadResourcePickerEvents(uploadResourcePickerEl);
     return uploadResourcePickerEl;
 }
 function uploadResourcePickerEmptyCopy(){
@@ -12757,90 +12767,327 @@ function removeCanvasMediaCatalogItem(identity){
     scheduleSave();
     return true;
 }
-function renderUploadResourcePicker({focusSearch=false}={}){
+function renderUploadResourcePicker({focusSearch=false, gridOnly=false}={}){
     const picker = ensureUploadResourcePicker();
     const state = uploadResourcePickerState;
     const targetNode = nodes.find(node => node.id === state.nodeId);
     const targetKind = isSmartUploadNode(targetNode) ? uploadMediaKindForNode(targetNode) : 'image';
     const kindLabel = uploadResourceLabel(targetKind);
-    const {items, targetIdentity} = filteredCanvasUploadResourceItems();
-    const countBy = source => currentCanvasUploadResourceItems().filter(item => source === 'all' || item.source === source).length;
+    const baseItems = currentCanvasUploadResourceItems();
+    const countBy = source => baseItems.filter(item => source === 'all' || item.source === source).length;
     const tabs = [['all', tr('smart.resourceAll')], ['imported', tr('smart.resourceImported')], ['generated', tr('smart.resourceGenerated')]];
     const empty = uploadResourcePickerEmptyCopy();
-    picker.setAttribute('aria-label', trf('smart.resourcePickerLabel', {kind:kindLabel}));
-    picker.innerHTML = `<div class="upload-resource-picker-head">
-        <div class="upload-resource-tabs" role="tablist" aria-label="${escapeAttr(tr('smart.resourcePickerRange'))}">
-            ${tabs.map(([key, label]) => `<button class="upload-resource-tab ${state.tab === key ? 'active' : ''}" type="button" role="tab" data-upload-resource-tab="${key}" aria-selected="${state.tab === key}">${escapeHtml(label)}<span class="sr-only">${escapeHtml(trf('smart.resourceTabCount', {n:countBy(key)}))}</span></button>`).join('')}
+    const {items, targetIdentity} = filteredCanvasUploadResourceItems(baseItems);
+    uploadResourcePickerItems = items;
+    if(!gridOnly){
+        picker.setAttribute('aria-label', trf('smart.resourcePickerLabel', {kind:kindLabel}));
+        picker.innerHTML = `<div class="upload-resource-picker-head">
+            <div class="upload-resource-tabs" role="tablist" aria-label="${escapeAttr(tr('smart.resourcePickerRange'))}">
+                ${tabs.map(([key, label]) => `<button class="upload-resource-tab ${state.tab === key ? 'active' : ''}" type="button" role="tab" data-upload-resource-tab="${key}" aria-selected="${state.tab === key}">${escapeHtml(label)}<span class="sr-only">${escapeHtml(trf('smart.resourceTabCount', {n:countBy(key)}))}</span></button>`).join('')}
+            </div>
         </div>
-        <button class="upload-resource-upload" type="button" data-upload-resource-upload title="${escapeAttr(tr('smart.resourceUploadReplace'))}"><i data-lucide="folder-up"></i><span>${escapeHtml(tr('smart.resourceUpload'))}</span></button>
-    </div>
-    <div class="upload-resource-toolbar">
-        <label class="upload-resource-search"><i data-lucide="search"></i><input data-upload-resource-search type="search" value="${escapeAttr(state.query)}" placeholder="${escapeAttr(tr('smart.resourceSearch'))}" aria-label="${escapeAttr(tr('smart.resourceSearch'))}"></label>
-        <button class="upload-resource-tool" type="button" data-upload-resource-sort title="${escapeAttr(uploadResourceSortLabel())}" aria-label="${escapeAttr(uploadResourceSortLabel())}"><i data-lucide="${uploadResourceSortIcon()}"></i></button>
-        <button class="upload-resource-tool" type="button" data-upload-resource-scope title="${escapeAttr(uploadResourceScopeLabel())}" aria-label="${escapeAttr(uploadResourceScopeLabel())}"><i data-lucide="${state.scope === 'history' ? 'history' : state.scope === 'active' ? 'eye' : 'layers'}"></i></button>
-        <button class="upload-resource-tool ${state.view === 'grid' ? 'active' : ''}" type="button" data-upload-resource-view="grid" title="${escapeAttr(tr('smart.resourceGridView'))}" aria-label="${escapeAttr(tr('smart.resourceGridView'))}" aria-pressed="${state.view === 'grid'}"><i data-lucide="grid-2x2"></i></button>
-        <button class="upload-resource-tool ${state.view === 'list' ? 'active' : ''}" type="button" data-upload-resource-view="list" title="${escapeAttr(tr('smart.resourceListView'))}" aria-label="${escapeAttr(tr('smart.resourceListView'))}" aria-pressed="${state.view === 'list'}"><i data-lucide="list"></i></button>
-    </div>
-    <div class="upload-resource-count" aria-live="polite">${escapeHtml(trf('smart.resourceCanvasMediaCount', {n:items.length, kind:kindLabel}))}</div>
-    <div class="upload-resource-grid ${state.view === 'list' ? 'is-list' : ''}" role="listbox" aria-label="${escapeAttr(trf('smart.resourcePickerLabel', {kind:kindLabel}))}">
-        ${items.length ? items.map((item, index) => `<div class="upload-resource-item ${(item.identity === targetIdentity) ? 'selected' : ''}"><button class="upload-resource-select-item" type="button" role="option" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb">${thumbMediaHtml(imageForDisplay(item), {selectOnly:true})}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${uploadResourceSourceLabel(item.source)}</span></button>${state.scope === 'history' && !item.active ? `<button class="upload-resource-remove" type="button" data-upload-resource-remove="${index}" title="${escapeAttr(tr('smart.resourceRemoveHistory'))}" aria-label="${escapeAttr(tr('smart.resourceRemoveHistory'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>`).join('') : `<div class="upload-resource-empty"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`}
-    </div>`;
-    picker.querySelectorAll('[data-upload-resource-tab]').forEach(button => {
-        button.addEventListener('click', () => {
-            state.tab = button.dataset.uploadResourceTab || 'all';
-            renderUploadResourcePicker();
-        });
+        <div class="upload-resource-toolbar">
+            <label class="upload-resource-search"><i data-lucide="search"></i><input data-upload-resource-search type="search" value="${escapeAttr(state.query)}" placeholder="${escapeAttr(tr('smart.resourceSearch'))}" aria-label="${escapeAttr(tr('smart.resourceSearch'))}"></label>
+            <button class="upload-resource-tool" type="button" data-upload-resource-sort title="${escapeAttr(uploadResourceSortLabel())}" aria-label="${escapeAttr(uploadResourceSortLabel())}"><i data-lucide="${uploadResourceSortIcon()}"></i></button>
+            <button class="upload-resource-tool" type="button" data-upload-resource-scope title="${escapeAttr(uploadResourceScopeLabel())}" aria-label="${escapeAttr(uploadResourceScopeLabel())}"><i data-lucide="${state.scope === 'history' ? 'history' : state.scope === 'active' ? 'eye' : 'layers'}"></i></button>
+            <button class="upload-resource-tool ${state.view === 'grid' ? 'active' : ''}" type="button" data-upload-resource-view="grid" title="${escapeAttr(tr('smart.resourceGridView'))}" aria-label="${escapeAttr(tr('smart.resourceGridView'))}" aria-pressed="${state.view === 'grid'}"><i data-lucide="grid-2x2"></i></button>
+            <button class="upload-resource-tool ${state.view === 'list' ? 'active' : ''}" type="button" data-upload-resource-view="list" title="${escapeAttr(tr('smart.resourceListView'))}" aria-label="${escapeAttr(tr('smart.resourceListView'))}" aria-pressed="${state.view === 'list'}"><i data-lucide="list"></i></button>
+        </div>
+        <div class="upload-resource-count" aria-live="polite">${escapeHtml(trf('smart.resourceCanvasMediaCount', {n:items.length, kind:kindLabel}))}</div>
+        <div class="upload-resource-grid ${state.view === 'list' ? 'is-list' : ''}" role="listbox" aria-label="${escapeAttr(trf('smart.resourcePickerLabel', {kind:kindLabel}))}">${uploadResourceGridHtml(items, targetIdentity, state, empty)}</div>`;
+    } else {
+        const countEl = picker.querySelector('.upload-resource-count');
+        if(countEl) countEl.innerHTML = escapeHtml(trf('smart.resourceCanvasMediaCount', {n:items.length, kind:kindLabel}));
+        const gridEl = picker.querySelector('.upload-resource-grid');
+        if(gridEl){
+            const prevScroll = gridEl.scrollTop;
+            gridEl.innerHTML = uploadResourceGridHtml(items, targetIdentity, state, empty);
+            gridEl.scrollTop = prevScroll;
+        }
+    }
+    bindSmartPreviewImageFallbacks(picker);
+    bindUploadResourceAspectMeasure(picker);
+    refreshIcons();
+    requestAnimationFrame(() => {
+        positionUploadResourcePicker();
+        if(focusSearch) picker.querySelector('[data-upload-resource-search]')?.focus();
+        scheduleUploadResourceRelayout();
     });
-    picker.querySelector('[data-upload-resource-search]')?.addEventListener('input', event => {
-        state.query = event.target.value || '';
-        renderUploadResourcePicker({focusSearch:true});
+}
+function uploadResourceGridHtml(items, targetIdentity, state, empty){
+    const visibleCount = Math.max(UPLOAD_RESOURCE_PICKER_CHUNK, Number(state.visibleCount) || 0);
+    const visible = items.slice(0, visibleCount);
+    const remaining = items.length - visible.length;
+    let body;
+    if(!visible.length){
+        body = uploadResourceEmptyHtml(empty);
+    } else if(state.view === 'list'){
+        body = visible.map((item, index) => uploadResourceListCellHtml(item, index, targetIdentity, state)).join('');
+    } else {
+        body = uploadResourceRowsHtml(visible, targetIdentity, state);
+    }
+    return `${body}${remaining > 0 ? `<button class="upload-resource-more" type="button" data-upload-resource-more="1" title="${escapeAttr(tr('smart.resourceMoreLoad'))}"><span>${escapeHtml(trf('smart.resourceMore', {count:remaining}))}</span><i data-lucide="chevron-down"></i></button>` : ''}`;
+}
+function uploadResourceEmptyHtml(empty){
+    return `<div class="upload-resource-empty"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`;
+}
+function uploadResourceContentWidth(){
+    const picker = uploadResourcePickerEl;
+    let w = 0;
+    const gridEl = picker?.querySelector?.('.upload-resource-grid');
+    if(gridEl){
+        const cs = getComputedStyle(gridEl);
+        const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+        w = gridEl.clientWidth - pad;
+    }
+    if(w <= 0 && picker) w = picker.clientWidth - 28;
+    if(w > 0) uploadResourceLayoutWidth = w;
+    return Math.max(w > 0 ? w : (uploadResourceLayoutWidth || 560), 160);
+}
+function uploadResourceItemAspect(item){
+    const w = Number(item?.natural_w || item?.width || item?.w || 0);
+    const h = Number(item?.natural_h || item?.height || item?.h || 0);
+    if(w > 0 && h > 0) return w / h;
+    const measured = uploadResourceMeasuredAspectByUrl.get(String(item?.url || ''));
+    if(measured > 0) return measured;
+    return 4 / 3;
+}
+function uploadResourceResolution(item){
+    const w = Number(item?.natural_w || item?.width || item?.w || 0);
+    const h = Number(item?.natural_h || item?.height || item?.h || 0);
+    if(w > 0 && h > 0) return `${Math.round(w)} x ${Math.round(h)}`;
+    const size = uploadResourceMeasuredSizeByUrl.get(String(item?.url || ''));
+    if(size?.w > 0 && size?.h > 0) return `${Math.round(size.w)} x ${Math.round(size.h)}`;
+    return '';
+}
+function uploadResourceDurationLabel(seconds){
+    const value = Math.max(0, Number(seconds) || 0);
+    const h = Math.floor(value / 3600);
+    const m = Math.floor((value % 3600) / 60);
+    const s = Math.floor(value % 60);
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+function uploadResourceItemMeta(item){
+    const kind = mediaKindForItem(item) || 'image';
+    if(kind === 'video' || kind === 'audio'){
+        const url = String(item?.url || '');
+        const d = Number(item?.duration || item?.duration_sec || 0) || uploadResourceMeasuredDurationByUrl.get(url) || 0;
+        return d > 0 ? uploadResourceDurationLabel(d) : '';
+    }
+    return uploadResourceResolution(item);
+}
+function scheduleUploadResourceRelayout(force=false){
+    clearTimeout(uploadResourceRelayoutTimer);
+    uploadResourceRelayoutTimer = setTimeout(() => {
+        if(!uploadResourcePickerState.open) return;
+        if(force){ renderUploadResourcePicker({gridOnly:true}); return; }
+        const gridEl = uploadResourcePickerEl?.querySelector?.('.upload-resource-grid');
+        if(!gridEl) return;
+        const cs = getComputedStyle(gridEl);
+        const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+        const real = Math.max(gridEl.clientWidth - pad, 160);
+        if(Math.abs(real - uploadResourceLayoutWidth) > 6){
+            uploadResourceLayoutWidth = real;
+            renderUploadResourcePicker({gridOnly:true});
+        }
+    }, force ? 120 : 0);
+}
+function bindUploadResourceAspectMeasure(picker){
+    picker.querySelectorAll('.upload-resource-select-item').forEach(sel => {
+        const index = Number(sel.dataset.uploadResourceSelect);
+        if(!Number.isInteger(index)) return;
+        const item = uploadResourcePickerItems[index];
+        if(!item) return;
+        const url = String(item.url || '');
+        const kind = mediaKindForItem(item);
+        if(kind === 'video' || kind === 'audio'){
+            if(uploadResourceMeasuredDurationByUrl.has(url)) return;
+            const stored = Number(item.duration || item.duration_sec || 0);
+            if(stored > 0){ uploadResourceMeasuredDurationByUrl.set(url, stored); return; }
+            uploadResourceMeasuredDurationByUrl.set(url, 0);
+            probeMediaDuration(item.url, kind).then(d => {
+                if(d > 0){
+                    uploadResourceMeasuredDurationByUrl.set(url, d);
+                    scheduleUploadResourceRelayout(true);
+                }
+            });
+            return;
+        }
+        if(item.natural_w && item.natural_h) return;
+        if(uploadResourceMeasuredAspectByUrl.has(url)) return;
+        const img = sel.querySelector('.upload-resource-thumb img');
+        if(!img || img.dataset.aspectMeasured) return;
+        img.dataset.aspectMeasured = '1';
+        const recordAspect = () => {
+            if(img.naturalWidth > 0 && img.naturalHeight > 0){
+                uploadResourceMeasuredAspectByUrl.set(url, img.naturalWidth / img.naturalHeight);
+                uploadResourceMeasuredSizeByUrl.set(url, {w:img.naturalWidth, h:img.naturalHeight});
+                scheduleUploadResourceRelayout(true);
+            }
+        };
+        img.addEventListener('load', recordAspect, {once:true});
+        if(img.complete && img.naturalWidth > 0) recordAspect();
     });
-    picker.querySelector('[data-upload-resource-sort]')?.addEventListener('click', () => {
-        state.sort = state.sort === 'recent' ? 'name-asc' : (state.sort === 'name-asc' ? 'name-desc' : 'recent');
-        renderUploadResourcePicker();
+}
+function uploadResourceRowsHtml(visible, targetIdentity, state){
+    const targetH = 96;
+    const gap = 8;
+    const contentW = Math.max(uploadResourceContentWidth(), 160);
+    const rows = [];
+    let row = [];
+    let aspectSum = 0;
+    const flush = () => {
+        if(!row.length) return;
+        const n = row.length;
+        const rowH = Math.max(24, (contentW - gap * (n - 1)) / aspectSum);
+        const cells = row.map(entry => uploadResourceCellHtml(entry.item, entry.index, Math.round(Math.max(8, uploadResourceItemAspect(entry.item) * rowH)), Math.round(rowH), targetIdentity, state)).join('');
+        rows.push(`<div class="upload-resource-row">${cells}</div>`);
+        row = [];
+        aspectSum = 0;
+    };
+    visible.forEach((item, index) => {
+        const a = uploadResourceItemAspect(item);
+        if(row.length && (aspectSum + a) * targetH + gap * row.length > contentW) flush();
+        row.push({item, index});
+        aspectSum += a;
     });
-    picker.querySelector('[data-upload-resource-scope]')?.addEventListener('click', () => {
-        state.scope = state.scope === 'all' ? 'active' : (state.scope === 'active' ? 'history' : 'all');
-        renderUploadResourcePicker();
-    });
-    picker.querySelectorAll('[data-upload-resource-view]').forEach(button => {
-        button.addEventListener('click', () => {
-            state.view = button.dataset.uploadResourceView === 'list' ? 'list' : 'grid';
-            renderUploadResourcePicker();
-        });
-    });
-    picker.querySelector('[data-upload-resource-upload]')?.addEventListener('click', () => {
-        const {nodeId, imageIndex} = state;
-        closeUploadResourcePicker({restoreFocus:false});
-        pickMediaForSmartNode(nodeId, {replaceIndex:imageIndex});
-    });
-    picker.querySelectorAll('[data-upload-resource-select]').forEach(button => {
-        button.addEventListener('click', () => {
-            const selected = items[Number(button.dataset.uploadResourceSelect)];
+    flush();
+    return rows.join('');
+}
+function uploadResourceCellHtml(item, index, width, height, targetIdentity, state){
+    return `<div class="upload-resource-item upload-resource-justified-item ${(item.identity === targetIdentity) ? 'selected' : ''}" style="width:${width}px"><div class="upload-resource-select-item" role="option" tabindex="0" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb" style="height:${height}px;aspect-ratio:auto">${thumbMediaHtml(imageForDisplay(item), {selectOnly:true})}${uploadResourcePreviewButtonHtml(index)}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${escapeHtml(uploadResourceItemMeta(item))}</span></div>${state.scope === 'history' && !item.active ? `<button class="upload-resource-remove" type="button" data-upload-resource-remove="${index}" title="${escapeAttr(tr('smart.resourceRemoveHistory'))}" aria-label="${escapeAttr(tr('smart.resourceRemoveHistory'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>`;
+}
+function uploadResourceListCellHtml(item, index, targetIdentity, state){
+    return `<div class="upload-resource-item ${(item.identity === targetIdentity) ? 'selected' : ''}"><div class="upload-resource-select-item" role="option" tabindex="0" aria-selected="${item.identity === targetIdentity}" data-upload-resource-select="${index}" title="${escapeAttr(trf('smart.resourceReplaceWith', {name:item.name}))}"><span class="upload-resource-thumb">${thumbMediaHtml(imageForDisplay(item), {selectOnly:true})}${uploadResourcePreviewButtonHtml(index)}</span><span class="upload-resource-item-name">${escapeHtml(item.name)}</span><span class="upload-resource-item-source">${escapeHtml(uploadResourceItemMeta(item))}</span></div>${state.scope === 'history' && !item.active ? `<button class="upload-resource-remove" type="button" data-upload-resource-remove="${index}" title="${escapeAttr(tr('smart.resourceRemoveHistory'))}" aria-label="${escapeAttr(tr('smart.resourceRemoveHistory'))}"><i data-lucide="trash-2"></i></button>` : ''}</div>`;
+}
+function uploadResourcePreviewButtonHtml(index){
+    return `<button class="upload-resource-preview-btn" type="button" data-upload-resource-preview="${index}" title="${escapeAttr(tr('smart.resourcePreview'))}" aria-label="${escapeAttr(tr('smart.resourcePreview'))}"><i data-lucide="zoom-in"></i></button>`;
+}
+function ensureUploadResourcePreview(){
+    if(uploadResourcePreviewEl?.isConnected) return uploadResourcePreviewEl;
+    uploadResourcePreviewEl = document.createElement('div');
+    uploadResourcePreviewEl.className = 'upload-resource-preview';
+    uploadResourcePreviewEl.hidden = true;
+    uploadResourcePreviewEl.style.display = 'none';
+    shell.appendChild(uploadResourcePreviewEl);
+    return uploadResourcePreviewEl;
+}
+function positionUploadResourcePreview(event){
+    const el = uploadResourcePreviewEl;
+    if(!el || el.hidden || el.style.display === 'none') return;
+    const pad = 14;
+    const w = el.offsetWidth || 420;
+    const h = el.offsetHeight || 420;
+    let left = event.clientX - w - 16;
+    if(left < pad) left = event.clientX + 16;
+    left = Math.max(pad, Math.min(window.innerWidth - w - pad, left));
+    const top = Math.max(pad, Math.min(window.innerHeight - h - pad, event.clientY + 12));
+    el.style.left = `${left}px`;
+    el.style.top = `${top}px`;
+}
+function showUploadResourcePreview(event, item){
+    if(!item?.url) return;
+    const el = ensureUploadResourcePreview();
+    const kind = mediaKindForItem(item);
+    let media = el.querySelector('img,video');
+    const wantVideo = kind === 'video';
+    if(!media || (wantVideo && media.tagName.toLowerCase() !== 'video') || (!wantVideo && media.tagName.toLowerCase() !== 'img')){
+        media?.remove();
+        media = document.createElement(wantVideo ? 'video' : 'img');
+        el.appendChild(media);
+    }
+    if(wantVideo){
+        media.muted = true; media.loop = true; media.playsInline = true; media.preload = 'metadata'; media.controls = false; media.disablePictureInPicture = true;
+        media.setAttribute('disablepictureinpicture', ''); media.setAttribute('controlslist', 'nodownload noplaybackrate noremoteplayback');
+        media.src = item.url; media.play?.().catch(() => {});
+    } else {
+        media.loading = 'lazy'; media.decoding = 'async';
+        media.src = smartMediaPreviewUrl(item, 1024); media.alt = 'preview';
+    }
+    el.hidden = false; el.style.display = 'block';
+    positionUploadResourcePreview(event);
+}
+function hideUploadResourcePreview(){
+    if(!uploadResourcePreviewEl) return;
+    uploadResourcePreviewEl.style.display = 'none';
+    uploadResourcePreviewEl.hidden = true;
+    const media = uploadResourcePreviewEl.querySelector('img,video');
+    media?.pause?.(); media?.removeAttribute('src'); media?.load?.();
+}
+function resetUploadResourcePaging(){
+    uploadResourcePickerState.visibleCount = UPLOAD_RESOURCE_PICKER_CHUNK;
+}
+function bindUploadResourcePickerEvents(picker){
+    picker.addEventListener('click', event => {
+        const state = uploadResourcePickerState;
+        const tab = event.target.closest('[data-upload-resource-tab]');
+        if(tab){ resetUploadResourcePaging(); state.tab = tab.dataset.uploadResourceTab || 'all'; renderUploadResourcePicker(); return; }
+        const sort = event.target.closest('[data-upload-resource-sort]');
+        if(sort){ resetUploadResourcePaging(); state.sort = state.sort === 'recent' ? 'name-asc' : (state.sort === 'name-asc' ? 'name-desc' : 'recent'); renderUploadResourcePicker(); return; }
+        const scope = event.target.closest('[data-upload-resource-scope]');
+        if(scope){ resetUploadResourcePaging(); state.scope = state.scope === 'all' ? 'active' : (state.scope === 'active' ? 'history' : 'all'); renderUploadResourcePicker(); return; }
+        const view = event.target.closest('[data-upload-resource-view]');
+        if(view){ resetUploadResourcePaging(); state.view = view.dataset.uploadResourceView === 'list' ? 'list' : 'grid'; renderUploadResourcePicker(); return; }
+        const more = event.target.closest('[data-upload-resource-more]');
+        if(more){ state.visibleCount += UPLOAD_RESOURCE_PICKER_CHUNK; renderUploadResourcePicker({gridOnly:true}); return; }
+        if(event.target.closest('[data-upload-resource-preview]')) return;
+        const selectBtn = event.target.closest('[data-upload-resource-select]');
+        if(selectBtn){
+            const selected = uploadResourcePickerItems[Number(selectBtn.dataset.uploadResourceSelect)];
             const nodeId = state.nodeId;
             const imageIndex = state.imageIndex;
             const target = nodes.find(node => node.id === nodeId);
             if(!selected?.url || !target?.images?.[imageIndex]) return;
+            const targetKind = isSmartUploadNode(target) ? uploadMediaKindForNode(target) : 'image';
             pushUndo();
             closeUploadResourcePicker({restoreFocus:false});
             appendImagesToSmartNode([{...selected, kind:targetKind}], nodeId, {replaceIndex:imageIndex});
             toast(tr('smart.resourceReplaced'));
-        });
-    });
-    picker.querySelectorAll('[data-upload-resource-remove]').forEach(button => {
-        button.addEventListener('click', event => {
+            return;
+        }
+        const removeBtn = event.target.closest('[data-upload-resource-remove]');
+        if(removeBtn){
             event.preventDefault();
             event.stopPropagation();
-            const item = items[Number(button.dataset.uploadResourceRemove)];
+            const item = uploadResourcePickerItems[Number(removeBtn.dataset.uploadResourceRemove)];
             if(!item || item.active) return;
             if(!window.confirm(trf('smart.resourceRemoveHistoryConfirm', {name:item.name}))) return;
             if(removeCanvasMediaCatalogItem(item.identity)){
                 toast(tr('smart.resourceRemovedHistory'));
                 renderUploadResourcePicker();
             }
-        });
+        }
     });
-    picker.querySelector('.upload-resource-grid')?.addEventListener('keydown', event => {
+    picker.addEventListener('input', event => {
+        if(!event.target.matches('[data-upload-resource-search]')) return;
+        const state = uploadResourcePickerState;
+        state.query = event.target.value || '';
+        clearTimeout(uploadResourcePickerSearchTimer);
+        uploadResourcePickerSearchTimer = setTimeout(() => {
+            renderUploadResourcePicker({gridOnly:true});
+        }, 160);
+    });
+    picker.addEventListener('mouseover', event => {
+        const btn = event.target.closest('[data-upload-resource-preview]');
+        if(!btn) return;
+        const item = uploadResourcePickerItems[Number(btn.dataset.uploadResourcePreview)];
+        if(item?.url) showUploadResourcePreview(event, item);
+    });
+    picker.addEventListener('mouseout', event => {
+        const btn = event.target.closest('[data-upload-resource-preview]');
+        if(!btn) return;
+        if(!btn.contains(event.relatedTarget)) hideUploadResourcePreview();
+    });
+    picker.addEventListener('keydown', event => {
+        const state = uploadResourcePickerState;
+        const option = event.target.closest?.('[data-upload-resource-select]');
+        if(option && (event.key === 'Enter' || event.key === ' ')){
+            event.preventDefault();
+            option.click();
+            return;
+        }
         if(!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
         const buttons = [...picker.querySelectorAll('[data-upload-resource-select]')];
         const current = buttons.indexOf(document.activeElement);
@@ -12852,12 +13099,6 @@ function renderUploadResourcePicker({focusSearch=false}={}){
         event.preventDefault();
         buttons[next].focus();
     });
-    bindSmartPreviewImageFallbacks(picker);
-    refreshIcons();
-    requestAnimationFrame(() => {
-        positionUploadResourcePicker();
-        if(focusSearch) picker.querySelector('[data-upload-resource-search]')?.focus();
-    });
 }
 function positionUploadResourcePicker(){
     const state = uploadResourcePickerState;
@@ -12868,7 +13109,7 @@ function positionUploadResourcePicker(){
     state.trigger = trigger;
     const shellRect = shell.getBoundingClientRect();
     const triggerRect = trigger.getBoundingClientRect();
-    const pickerWidth = picker.offsetWidth || Math.min(416, shellRect.width - 24);
+    const pickerWidth = picker.offsetWidth || Math.min(620, shellRect.width - 24);
     const pickerHeight = picker.offsetHeight || 360;
     const margin = 12;
     const aboveTop = triggerRect.top - shellRect.top - pickerHeight - margin;
@@ -12896,6 +13137,7 @@ function openUploadResourcePicker(nodeId, imageIndex, trigger){
     state.scope = 'all';
     state.query = '';
     state.sort = 'recent';
+    state.visibleCount = UPLOAD_RESOURCE_PICKER_CHUNK;
     state.trigger = trigger || null;
     const picker = ensureUploadResourcePicker();
     picker.classList.add('open');
@@ -12910,6 +13152,8 @@ function closeUploadResourcePicker({restoreFocus=true}={}){
     state.nodeId = '';
     state.imageIndex = -1;
     state.trigger = null;
+    clearTimeout(uploadResourcePickerSearchTimer);
+    hideUploadResourcePreview();
     uploadResourcePickerEl?.classList.remove('open');
     trigger?.setAttribute?.('aria-expanded', 'false');
     if(restoreFocus && trigger?.isConnected) requestAnimationFrame(() => trigger.focus());
