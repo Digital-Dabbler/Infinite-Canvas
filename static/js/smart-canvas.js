@@ -296,6 +296,9 @@ let editDrawState = null;
 let localEditKind = 'mask';
 let localEditDrafts = {mask:null, brush:null};
 let maskTool = 'brush';
+// 遮罩叠加色：编辑遮罩时画笔/已画区域在图片上的显示色。默认透明黑（明亮图用黑、暗图用白），
+// 提升遮罩在明亮或偏白图片上的可见度。仅影响显示，不改变保存遮罩的语义（白色=编辑区域）。
+let maskOverlayColor = 'black';
 let existingMaskLoadPromise = null;
 let editTextItems = [];
 let editTextSelectedId = '';
@@ -9287,7 +9290,11 @@ function maskOverlayPreviewHtml(img, className='', w=0, h=0){
     const source = escapeAttr(displayMediaUrl(img));
     const mask = escapeAttr(displayMediaUrl(img.mask));
     const size = w && h ? `width:${w}px;height:${h}px;` : '';
-    return `<div class="${escapeAttr(className)} mask-overlay-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><img src="${mask}" draggable="false" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:.58;mix-blend-mode:screen;filter:sepia(1) saturate(6) hue-rotate(287deg)"><span class="mask-overlay-label">遮罩</span></div>`;
+    // 卡片缩略图的遮罩叠加色跟随当前叠加色（默认透明黑）：黑用 multiply+invert 显示暗色遮罩区域，白用 screen 提亮。
+    const overlayStyle = maskOverlayColor === 'black'
+        ? 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:.58;mix-blend-mode:multiply;filter:invert(1)'
+        : 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:.58;mix-blend-mode:screen';
+    return `<div class="${escapeAttr(className)} mask-overlay-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><img src="${mask}" draggable="false" style="${overlayStyle}"><span class="mask-overlay-label">遮罩</span></div>`;
 }
 function smartNodeHasLiveMedia(node){
     return Boolean(!node?.pending && (node?.images || []).some(img => img?.url));
@@ -14374,6 +14381,8 @@ function setImageEditMode(mode, userTouched=false){
     syncEditDrawingHistoryButtons();
     syncBrushToolButtons();
     syncMaskToolButtons();
+    syncMaskOverlayColorButtons();
+    refreshMaskOverlayHint();
     syncTextToolState(true);
     updatePreviewNavButtons();
     refreshIcons();
@@ -15788,6 +15797,52 @@ function syncMaskToolButtons(){
         btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 }
+function maskOverlayColorFromValue(v){ return v === 'white' ? 'white' : 'black'; }
+function maskOverlayColorCacheKey(userId){ return `mask_overlay_color:${String(userId || '').trim()}`; }
+function readMaskOverlayColorCache(){
+    try { return maskOverlayColorFromValue(localStorage.getItem(maskOverlayColorCacheKey(currentApiUserId))); }
+    catch(e) { return 'black'; }
+}
+function loadMaskOverlayColor(){ maskOverlayColor = readMaskOverlayColorCache(); }
+function setMaskOverlayColor(color){
+    const next = maskOverlayColorFromValue(color);
+    if(next === maskOverlayColor) return;
+    maskOverlayColor = next;
+    try { localStorage.setItem(maskOverlayColorCacheKey(currentApiUserId), maskOverlayColor); } catch(e) {}
+    syncMaskOverlayColorButtons();
+    refreshMaskOverlayHint();
+    repaintMaskOverlayColor();
+    // 卡片缩略图的遮罩叠加色即时跟随（预览在图上的色块已由 repaint 更新，卡片随 render 刷新）。
+    render();
+}
+function syncMaskOverlayColorButtons(){
+    document.querySelectorAll('[data-mask-color]').forEach(btn => {
+        const active = btn.dataset.maskColor === maskOverlayColor;
+        btn.classList.toggle('primary', active);
+        btn.classList.toggle('secondary', !active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+}
+function refreshMaskOverlayHint(){
+    const hint = document.getElementById('maskHintText');
+    if(hint) hint.textContent = tr(maskOverlayColor === 'black' ? 'canvas.maskHintBlack' : 'canvas.maskHintWhite');
+}
+function repaintMaskOverlayColor(){
+    if(imageEditMode !== 'mask') return;
+    const canvasEl = editDrawCanvas();
+    if(!canvasEl?.width || !canvasEl?.height) return;
+    const ctx = canvasEl.getContext('2d');
+    const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
+    const data = imageData.data;
+    const rgb = maskOverlayColor === 'black' ? 0 : 255;
+    let changed = false;
+    for(let i = 0; i < data.length; i += 4){
+        if(data[i + 3] <= 0) continue;
+        data[i] = rgb; data[i + 1] = rgb; data[i + 2] = rgb;
+        changed = true;
+    }
+    if(changed) ctx.putImageData(imageData, 0, 0);
+}
 function editDrawPoint(event){
     const canvasEl = editDrawCanvas();
     const rect = canvasEl.getBoundingClientRect();
@@ -15812,7 +15867,12 @@ function setGridCustomLinePos(index, point){
         : Math.max(0.001, Math.min(0.999, point.x / Math.max(1, canvasEl.width)));
 }
 const MASK_BRUSH_ALPHA = 115;
-const MASK_BRUSH_COLOR = `rgba(255,255,255,${MASK_BRUSH_ALPHA / 255})`;
+// 遮罩叠加色由 maskOverlayColor 决定：默认透明黑（明亮图用黑、暗图用白）。
+function maskBrushColor(){
+    return maskOverlayColor === 'black'
+        ? `rgba(0,0,0,${MASK_BRUSH_ALPHA / 255})`
+        : `rgba(255,255,255,${MASK_BRUSH_ALPHA / 255})`;
+}
 function editBrushSize(){ return Number(document.getElementById(imageEditMode === 'mask' ? 'maskBrushSize' : 'paintBrushSize')?.value || 20); }
 let lastEditBrushCursorPoint = null;
 function editBrushCursorVisible(){
@@ -15878,8 +15938,8 @@ function setupDrawStyle(ctx){
     // 橡皮擦（遮罩/批注共用）：用不透明源色 + destination-out 彻底清除像素（半透明源只能“擦淡”，
     // 残留 alpha 会被视为已画区域，保存时几乎不变）。
     const erasing = brushErasing();
-    ctx.strokeStyle = erasing ? 'rgba(255,255,255,1)' : (imageEditMode === 'mask' ? MASK_BRUSH_COLOR : brushColor());
-    ctx.fillStyle = erasing ? 'rgba(255,255,255,1)' : (imageEditMode === 'mask' ? MASK_BRUSH_COLOR : brushColor());
+    ctx.strokeStyle = erasing ? 'rgba(255,255,255,1)' : (imageEditMode === 'mask' ? maskBrushColor() : brushColor());
+    ctx.fillStyle = erasing ? 'rgba(255,255,255,1)' : (imageEditMode === 'mask' ? maskBrushColor() : brushColor());
     ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
 }
 function normalizeMaskPreviewCanvas(canvasEl=editDrawCanvas()){
@@ -15887,12 +15947,13 @@ function normalizeMaskPreviewCanvas(canvasEl=editDrawCanvas()){
     const ctx = canvasEl.getContext('2d');
     const imageData = ctx.getImageData(0, 0, canvasEl.width, canvasEl.height);
     const data = imageData.data;
+    const rgb = maskOverlayColor === 'black' ? 0 : 255;
     let changed = false;
     for(let i = 0; i < data.length; i += 4){
         if(data[i + 3] <= 0) continue;
-        data[i] = 255;
-        data[i + 1] = 255;
-        data[i + 2] = 255;
+        data[i] = rgb;
+        data[i + 1] = rgb;
+        data[i + 2] = rgb;
         if(data[i + 3] > MASK_BRUSH_ALPHA) data[i + 3] = MASK_BRUSH_ALPHA;
         changed = true;
     }
@@ -17370,11 +17431,12 @@ async function loadExistingMaskForEdit(){
             const src = octx.getImageData(0, 0, w, h);
             const ctx = canvasEl.getContext('2d');
             const out = ctx.createImageData(w, h);
-            // 把已保存的遮罩转回笔刷样式：白色（已画区域）→ 半透明白笔迹，其余 → 透明。
+            // 把已保存的遮罩转回笔刷样式：已画区域 → 半透明笔迹（颜色随叠加色，默认透明黑），其余 → 透明。
+            const rgb = maskOverlayColor === 'black' ? 0 : 255;
             for(let i = 0; i < src.data.length; i += 4){
                 const r = src.data[i], g = src.data[i + 1], b = src.data[i + 2], a = src.data[i + 3];
                 if(a > 8 && (r + g + b) / 3 > 128){
-                    out.data[i] = 255; out.data[i + 1] = 255; out.data[i + 2] = 255; out.data[i + 3] = MASK_BRUSH_ALPHA;
+                    out.data[i] = rgb; out.data[i + 1] = rgb; out.data[i + 2] = rgb; out.data[i + 3] = MASK_BRUSH_ALPHA;
                 }
             }
             ctx.putImageData(out, 0, 0);
@@ -24102,6 +24164,7 @@ window.onload = async () => {
     connectAssetLibrarySyncSocket();
     await loadConfig();
     await loadCanvasFontScale();
+    loadMaskOverlayColor();
     await loadAssetLibrary();
     await loadCanvas();
     syncApiKindToggleVisibility();

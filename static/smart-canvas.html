@@ -21,7 +21,7 @@
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1783969806"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1786550167"></script>
     <link rel="stylesheet" href="/static/css/studio-theme-tokens.css?v=2026.07.29.1787081265">
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1788007867">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1788009444">
     <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1787937077">
     <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.1787936100">
     <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.1787936100">
@@ -389,10 +389,14 @@
                     </div>
                     <label><span data-i18n="canvas.brushSize">笔刷</span> <input id="maskBrushSize" type="range" min="4" max="160" value="42"></label>
                     <span class="brush-size-hint"><kbd>[</kbd><kbd>]</kbd><span data-i18n="canvas.brushSizeHint">调整笔刷大小</span></span>
+                    <div class="mask-color-toggle" role="group" aria-label="遮罩叠加色" data-i18n-label="canvas.maskColorGroup">
+                        <button class="image-edit-btn primary mask-color-option" type="button" data-mask-color="black" onclick="setMaskOverlayColor('black')" title="黑色" data-i18n-title="canvas.maskColorBlack"><span class="mask-color-swatch mask-color-swatch-black"></span><span data-i18n="canvas.maskColorBlack">黑</span></button>
+                        <button class="image-edit-btn secondary mask-color-option" type="button" data-mask-color="white" onclick="setMaskOverlayColor('white')" title="白色" data-i18n-title="canvas.maskColorWhite"><span class="mask-color-swatch mask-color-swatch-white"></span><span data-i18n="canvas.maskColorWhite">白</span></button>
+                    </div>
                     <button id="maskUndoBtn" class="image-edit-btn secondary" type="button" onclick="undoEditDrawing()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i></button>
                     <button id="maskRedoBtn" class="image-edit-btn secondary" type="button" onclick="redoEditDrawing()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i></button>
                     <button class="image-edit-btn secondary" type="button" onclick="clearEditDrawing()"><i data-lucide="trash-2" class="w-4 h-4"></i><span data-i18n="canvas.clear">清空</span></button>
-                    <span class="image-edit-sub" data-i18n="canvas.maskHint">白色区域为要编辑的遮罩</span>
+                    <span id="maskHintText" class="image-edit-sub">黑色区域为要编辑的遮罩</span>
                 </div>
                 <div id="imageBrushTools" class="image-edit-tools">
                     <button class="image-edit-btn primary" type="button" data-brush-tool="free" onclick="setBrushTool('free')" title="自由画笔"><i data-lucide="paintbrush" class="w-4 h-4"></i></button>
@@ -598,7 +602,7 @@
         </div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1788008164"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1788009890"></script>
     <script src="/static/js/prompt-presets.js?v=2026.07.29.1786673464"></script>
     <script src="/static/js/library-shared.js?v=2026.07.29.1787258051"></script>
     <script src="/static/js/asset-library.js?v=2026.07.29.1786291936"></script>

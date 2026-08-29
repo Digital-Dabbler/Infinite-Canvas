@@ -1974,6 +1974,12 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .mask-tool-toggle .image-edit-btn i,.mask-tool-toggle .image-edit-btn svg { width:13px; height:13px; flex:0 0 13px; }
 .local-edit-status { margin-left:auto; padding:4px 8px; border-radius:999px; color:var(--muted); background:color-mix(in srgb, var(--strong) 10%, transparent); font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight:800; white-space:nowrap; }
 .theme-dark .local-edit-status { color:var(--text); background:color-mix(in srgb, var(--strong) 18%, transparent); }
+/* 遮罩叠加色切换：与遮罩工具同层级，紧凑排布 */
+.mask-color-toggle { display:inline-flex; align-items:center; gap:3px; padding:2px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+.mask-color-toggle .image-edit-btn { min-height:28px; height:28px; padding:0 8px; gap:5px; font-size:calc(10.5px * var(--canvas-font-scale, 1)); }
+.mask-color-swatch { width:12px; height:12px; flex:0 0 12px; border-radius:50%; border:1px solid rgba(148,163,184,.55); }
+.mask-color-swatch-black { background:#000; }
+.mask-color-swatch-white { background:#fff; }
 #imagePreviewTools.active { display:none; }
 #imagePreviewTools.active.panorama-tools-on { display:flex; height:auto; min-height:48px; overflow:visible; }
 .image-edit-tools label { display:flex; align-items:center; gap:7px; color:var(--muted); font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight:800; }
