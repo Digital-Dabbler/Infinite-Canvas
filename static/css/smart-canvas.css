@@ -1964,8 +1964,14 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .image-edit-tools { min-height:48px; height:auto; flex:0 0 auto; display:none; align-items:center; gap:10px; padding:8px 10px; border-radius:14px; background:var(--soft); border:1px solid var(--line); flex-wrap:wrap; overflow:hidden; }
 .image-edit-tools.active { display:flex; }
 .local-edit-mode-tools { gap:8px; }
-.local-edit-kind-toggle { display:inline-flex; align-items:center; gap:3px; padding:3px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
-.local-edit-kind-toggle .image-edit-btn { min-height:30px; }
+.local-edit-kind-toggle, .mask-tool-toggle { display:inline-flex; align-items:center; gap:3px; padding:3px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
+/* 用途：主层级，更大更醒目 */
+.local-edit-kind-toggle .image-edit-btn { min-height:40px; height:40px; padding:0 16px; font-size:calc(12px * var(--canvas-font-scale, 1)); }
+.local-edit-kind-toggle .image-edit-btn i,.local-edit-kind-toggle .image-edit-btn svg { width:16px; height:16px; flex:0 0 16px; }
+/* 遮罩工具：子层级，更紧凑 */
+.mask-tool-toggle { padding:2px; }
+.mask-tool-toggle .image-edit-btn { min-height:28px; height:28px; padding:0 9px; font-size:calc(10.5px * var(--canvas-font-scale, 1)); }
+.mask-tool-toggle .image-edit-btn i,.mask-tool-toggle .image-edit-btn svg { width:13px; height:13px; flex:0 0 13px; }
 .local-edit-status { margin-left:auto; padding:4px 8px; border-radius:999px; color:var(--muted); background:color-mix(in srgb, var(--strong) 10%, transparent); font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight:800; white-space:nowrap; }
 .theme-dark .local-edit-status { color:var(--text); background:color-mix(in srgb, var(--strong) 18%, transparent); }
 #imagePreviewTools.active { display:none; }

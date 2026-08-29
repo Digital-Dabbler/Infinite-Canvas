@@ -21,7 +21,7 @@
     <script src="/static/js/touch-mouse.js?v=2026.07.29.1783969806"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.1786550167"></script>
     <link rel="stylesheet" href="/static/css/studio-theme-tokens.css?v=2026.07.29.1787081265">
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1787936120">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.1788007867">
     <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.1787937077">
     <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.1787936100">
     <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.1787936100">
@@ -383,15 +383,20 @@
                     <span id="localEditStatus" class="local-edit-status" aria-live="polite"></span>
                 </div>
                 <div id="imageMaskTools" class="image-edit-tools">
+                    <div class="mask-tool-toggle" role="group" aria-label="遮罩工具" data-i18n-label="canvas.maskToolGroup">
+                        <button class="image-edit-btn primary" type="button" data-mask-tool="brush" onclick="setMaskTool('brush')" title="画笔" data-i18n-title="canvas.modeBrush"><i data-lucide="brush" class="w-4 h-4"></i><span data-i18n="canvas.modeBrush">画笔</span></button>
+                        <button class="image-edit-btn secondary" type="button" data-mask-tool="eraser" onclick="setMaskTool('eraser')" title="橡皮擦" data-i18n-title="canvas.maskEraser"><i data-lucide="eraser" class="w-4 h-4"></i><span data-i18n="canvas.maskEraser">橡皮擦</span></button>
+                    </div>
                     <label><span data-i18n="canvas.brushSize">笔刷</span> <input id="maskBrushSize" type="range" min="4" max="160" value="42"></label>
                     <span class="brush-size-hint"><kbd>[</kbd><kbd>]</kbd><span data-i18n="canvas.brushSizeHint">调整笔刷大小</span></span>
                     <button id="maskUndoBtn" class="image-edit-btn secondary" type="button" onclick="undoEditDrawing()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i></button>
                     <button id="maskRedoBtn" class="image-edit-btn secondary" type="button" onclick="redoEditDrawing()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i></button>
-                    <button class="image-edit-btn secondary" type="button" onclick="clearEditDrawing()"><i data-lucide="eraser" class="w-4 h-4"></i><span data-i18n="canvas.clear">清空</span></button>
+                    <button class="image-edit-btn secondary" type="button" onclick="clearEditDrawing()"><i data-lucide="trash-2" class="w-4 h-4"></i><span data-i18n="canvas.clear">清空</span></button>
                     <span class="image-edit-sub" data-i18n="canvas.maskHint">白色区域为要编辑的遮罩</span>
                 </div>
                 <div id="imageBrushTools" class="image-edit-tools">
                     <button class="image-edit-btn primary" type="button" data-brush-tool="free" onclick="setBrushTool('free')" title="自由画笔"><i data-lucide="paintbrush" class="w-4 h-4"></i></button>
+                    <button class="image-edit-btn secondary" type="button" data-brush-tool="eraser" onclick="setBrushTool('eraser')" title="橡皮擦"><i data-lucide="eraser" class="w-4 h-4"></i></button>
                     <button class="image-edit-btn secondary" type="button" data-brush-tool="rect" onclick="setBrushTool('rect')" title="矩形"><i data-lucide="square" class="w-4 h-4"></i></button>
                     <button class="image-edit-btn secondary" type="button" data-brush-tool="ellipse" onclick="setBrushTool('ellipse')" title="椭圆"><i data-lucide="circle" class="w-4 h-4"></i></button>
                     <button class="image-edit-btn secondary" type="button" data-brush-tool="label" onclick="setBrushTool('label')" title="数字标签"><i data-lucide="list-ordered" class="w-4 h-4"></i></button>
@@ -401,7 +406,7 @@
                     <span class="brush-size-hint"><kbd>[</kbd><kbd>]</kbd><span data-i18n="canvas.brushSizeHint">调整笔刷大小</span></span>
                     <button id="brushUndoBtn" class="image-edit-btn secondary" type="button" onclick="undoEditDrawing()" title="撤销"><i data-lucide="undo-2" class="w-4 h-4"></i></button>
                     <button id="brushRedoBtn" class="image-edit-btn secondary" type="button" onclick="redoEditDrawing()" title="恢复"><i data-lucide="redo-2" class="w-4 h-4"></i></button>
-                    <button class="image-edit-btn secondary" type="button" onclick="clearEditDrawing()"><i data-lucide="eraser" class="w-4 h-4"></i><span data-i18n="canvas.clear">清空</span></button>
+                    <button class="image-edit-btn secondary" type="button" onclick="clearEditDrawing()"><i data-lucide="trash-2" class="w-4 h-4"></i><span data-i18n="canvas.clear">清空</span></button>
                 </div>
                 <div id="imageResizeTools" class="image-edit-tools image-resize-tools">
                     <label><span>倍数</span> <input id="imageResizeScaleRange" type="range" min="0.05" max="1" step="0.05" value="0.5"></label>
@@ -593,7 +598,7 @@
         </div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
     </div>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.1787940560"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.1788008164"></script>
     <script src="/static/js/prompt-presets.js?v=2026.07.29.1786673464"></script>
     <script src="/static/js/library-shared.js?v=2026.07.29.1787258051"></script>
     <script src="/static/js/asset-library.js?v=2026.07.29.1786291936"></script>

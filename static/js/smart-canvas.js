@@ -295,6 +295,8 @@ let imageResizeScale = 0.5;
 let editDrawState = null;
 let localEditKind = 'mask';
 let localEditDrafts = {mask:null, brush:null};
+let maskTool = 'brush';
+let existingMaskLoadPromise = null;
 let editTextItems = [];
 let editTextSelectedId = '';
 let editTextDrag = null;
@@ -14364,8 +14366,14 @@ function setImageEditMode(mode, userTouched=false){
     if(imageEditMode === 'grid') refreshGridSplitPreview();
     else if(imageEditMode === 'crop' || imageEditMode === 'resize' || imageEditMode === 'outpaint' || prev === 'grid') clearEditDrawing(true);
     if(switchedLocalKind) restoreLocalEditDraft(imageEditMode);
+    // 从非局部编辑模式（裁剪/扩图等会清空画布）回到遮罩模式时，若已有会话草稿则恢复，
+    // 避免已画未保存的遮罩被清空后丢失。
+    else if(imageEditMode === 'mask' && localEditDrafts.mask && !editCanvasHasPixels()) restoreLocalEditDraft('mask');
+    // 首次进入遮罩模式且尚未有会话草稿时，把已保存的遮罩载入画布，支持二次编辑。
+    if(imageEditMode === 'mask' && !localEditDrafts.mask && !editCanvasHasPixels()) loadExistingMaskForEdit();
     syncEditDrawingHistoryButtons();
     syncBrushToolButtons();
+    syncMaskToolButtons();
     syncTextToolState(true);
     updatePreviewNavButtons();
     refreshIcons();
@@ -15668,6 +15676,11 @@ function editDrawSnapshot(){
 }
 function saveLocalEditDraft(kind=imageEditMode){
     if(kind !== 'mask' && kind !== 'brush') return;
+    // 已有遮罩仍在异步载入：此刻快照是空画布，跳过本次保存，等载入完成后的下次切换再存。
+    if(existingMaskLoadPromise) return;
+    // 画布为空（编辑器刚打开、或内容被清空/撤销到空）时不要落空草稿：空草稿会让
+    // “已保存的遮罩”被误认为本会话已编辑过而不再载入。保持 null，由载入逻辑接管。
+    if(!editCanvasHasPixels()){ localEditDrafts[kind] = null; return; }
     localEditDrafts[kind] = {snapshot:editDrawSnapshot(), undo:editDrawUndoStack.slice(), redo:editDrawRedoStack.slice()};
 }
 function restoreLocalEditDraft(kind=imageEditMode){
@@ -15749,7 +15762,7 @@ function resetEditDrawingHistory(){
 }
 function setBrushTool(tool){
     if(tool !== 'text') removeEditTextInlineEditor(true);
-    brushTool = ['free','rect','ellipse','label','text'].includes(tool) ? tool : 'free';
+    brushTool = ['free','rect','ellipse','label','text','eraser'].includes(tool) ? tool : 'free';
     syncBrushToolButtons();
     syncTextToolState(true);
     syncEditBrushCursorVisibility();
@@ -15761,6 +15774,19 @@ function syncBrushToolButtons(){
         btn.classList.toggle('secondary', !active);
     });
     document.getElementById('cropCanvas')?.classList.toggle('text-mode', imageEditMode === 'brush' && brushTool === 'text');
+}
+function setMaskTool(tool){
+    maskTool = tool === 'eraser' ? 'eraser' : 'brush';
+    syncMaskToolButtons();
+    syncEditBrushCursorVisibility();
+}
+function syncMaskToolButtons(){
+    document.querySelectorAll('[data-mask-tool]').forEach(btn => {
+        const active = btn.dataset.maskTool === maskTool;
+        btn.classList.toggle('primary', active);
+        btn.classList.toggle('secondary', !active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
 }
 function editDrawPoint(event){
     const canvasEl = editDrawCanvas();
@@ -15842,11 +15868,19 @@ function adjustEditBrushSize(delta){
     syncEditBrushCursorVisibility();
 }
 function brushColor(){ return document.getElementById('paintBrushColor')?.value || '#ff2d55'; }
+function brushErasing(){
+    if(imageEditMode === 'mask') return maskTool === 'eraser';
+    if(imageEditMode === 'brush') return brushTool === 'eraser';
+    return false;
+}
 function setupDrawStyle(ctx){
     ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = editBrushSize();
-    ctx.strokeStyle = imageEditMode === 'mask' ? MASK_BRUSH_COLOR : brushColor();
-    ctx.fillStyle = imageEditMode === 'mask' ? MASK_BRUSH_COLOR : brushColor();
-    ctx.globalCompositeOperation = 'source-over';
+    // 橡皮擦（遮罩/批注共用）：用不透明源色 + destination-out 彻底清除像素（半透明源只能“擦淡”，
+    // 残留 alpha 会被视为已画区域，保存时几乎不变）。
+    const erasing = brushErasing();
+    ctx.strokeStyle = erasing ? 'rgba(255,255,255,1)' : (imageEditMode === 'mask' ? MASK_BRUSH_COLOR : brushColor());
+    ctx.fillStyle = erasing ? 'rgba(255,255,255,1)' : (imageEditMode === 'mask' ? MASK_BRUSH_COLOR : brushColor());
+    ctx.globalCompositeOperation = erasing ? 'destination-out' : 'source-over';
 }
 function normalizeMaskPreviewCanvas(canvasEl=editDrawCanvas()){
     if(imageEditMode !== 'mask' || !canvasEl?.width || !canvasEl?.height) return;
@@ -15923,10 +15957,10 @@ function beginEditDraw(event){
     const ctx = canvasEl.getContext('2d');
     pushEditDrawHistory();
     if(imageEditMode === 'brush' && brushTool === 'label'){ drawNumberLabel(p); editDrawState = null; canvasEl.releasePointerCapture?.(event.pointerId); return; }
-    editDrawState = {x:p.x, y:p.y, sx:p.x, sy:p.y, pointerId:event.pointerId, snapshot:(imageEditMode === 'brush' && brushTool !== 'free') ? editDrawSnapshot() : null};
+    editDrawState = {x:p.x, y:p.y, sx:p.x, sy:p.y, pointerId:event.pointerId, snapshot:(imageEditMode === 'brush' && brushTool !== 'free' && brushTool !== 'eraser') ? editDrawSnapshot() : null};
     setupDrawStyle(ctx);
     ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + .01, p.y + .01);
-    if(imageEditMode === 'mask' || brushTool === 'free') ctx.stroke();
+    if(imageEditMode === 'mask' || brushTool === 'free' || brushTool === 'eraser') ctx.stroke();
     normalizeMaskPreviewCanvas(canvasEl);
 }
 function moveEditDraw(event){
@@ -15936,7 +15970,7 @@ function moveEditDraw(event){
     event.preventDefault(); event.stopPropagation();
     const ctx = editDrawCanvas().getContext('2d');
     const p = editDrawPoint(event);
-    if(imageEditMode === 'brush' && brushTool !== 'free'){ restoreEditDrawSnapshot(editDrawState.snapshot); drawBrushShape(ctx, {x:editDrawState.sx, y:editDrawState.sy}, p); return; }
+    if(imageEditMode === 'brush' && brushTool !== 'free' && brushTool !== 'eraser'){ restoreEditDrawSnapshot(editDrawState.snapshot); drawBrushShape(ctx, {x:editDrawState.sx, y:editDrawState.sy}, p); return; }
     const events = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [];
     if(events.length){
         events.forEach(ev => strokeFreeDrawPoint(editDrawPoint(ev)));
@@ -16920,7 +16954,7 @@ function openImageEditor(nodeId, imageIndex=0){
     gridCustomMode = false; gridCustomLines = []; gridCustomHistory = []; gridCustomDrag = null; gridCustomOrientation = 'h';
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
-    localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null};
+    localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
     const toggle = document.getElementById('gridCustomToggle');
@@ -16971,6 +17005,8 @@ function openImageEditor(nodeId, imageIndex=0){
         }
         imageEditBaseW = img.clientWidth; imageEditBaseH = img.clientHeight;
         updateZoomLabel(); syncImageResizeControls(); resizeEditDrawCanvas(); resetEditDrawingHistory(); clearEditDrawing(true); resetCropBox();
+        // 快速预览→原图切换会清空绘制层，若正处于遮罩模式则重新载入已保存的遮罩。
+        if(imageEditMode === 'mask' && !localEditDrafts.mask && !editCanvasHasPixels()) loadExistingMaskForEdit();
         if(!imageEditModeTouched) setImageEditMode('preview');
         else refreshComparePanel();
         if(!panoramaState.enabled) updatePreviewMetaHint();
@@ -17020,7 +17056,7 @@ function closeImageEditor(){
         previewVideo.style.display = 'none';
     }
     clearEditDrawing(true);
-    cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
+    cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null; gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
     previewNavState = {nodeId:'', index:0, count:0};
     videoTrimState = {source:'', start:0, end:0, mute:false, previewing:false, speed:1};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
@@ -17309,10 +17345,66 @@ async function runImageOutpaint(){
         if(runBtn && imageEditModal.classList.contains('open')) runBtn.disabled = false;
     }
 }
+async function loadExistingMaskForEdit(){
+    if(imageEditMode !== 'mask') return;
+    const editing = currentEditImage();
+    const image = editing?.image;
+    const node = editing?.node;
+    if(!node || !image?.mask?.url) return;
+    const canvasEl = editDrawCanvas();
+    if(!canvasEl?.width || !canvasEl?.height) return;
+    if(existingMaskLoadPromise) return;
+    existingMaskLoadPromise = (async () => {
+        try {
+            const maskUrl = String(image.mask.url || '');
+            const maskImg = await loadComfyMaskImage(image.mask);
+            if(!imageEditModal.classList.contains('open')) return;
+            const now = currentEditImage();
+            // 用遮罩 URL 判等，避免 imageForDisplay 每次返回新对象导致误判。
+            if(String(now?.image?.mask?.url || '') !== maskUrl || imageEditMode !== 'mask') return;
+            const w = canvasEl.width, h = canvasEl.height;
+            const off = document.createElement('canvas');
+            off.width = w; off.height = h;
+            const octx = off.getContext('2d', {willReadFrequently:true});
+            octx.drawImage(maskImg, 0, 0, w, h);
+            const src = octx.getImageData(0, 0, w, h);
+            const ctx = canvasEl.getContext('2d');
+            const out = ctx.createImageData(w, h);
+            // 把已保存的遮罩转回笔刷样式：白色（已画区域）→ 半透明白笔迹，其余 → 透明。
+            for(let i = 0; i < src.data.length; i += 4){
+                const r = src.data[i], g = src.data[i + 1], b = src.data[i + 2], a = src.data[i + 3];
+                if(a > 8 && (r + g + b) / 3 > 128){
+                    out.data[i] = 255; out.data[i + 1] = 255; out.data[i + 2] = 255; out.data[i + 3] = MASK_BRUSH_ALPHA;
+                }
+            }
+            ctx.putImageData(out, 0, 0);
+        } catch(e){
+            console.warn('载入已有遮罩失败：', e);
+        } finally {
+            existingMaskLoadPromise = null;
+        }
+    })();
+}
 async function applyImageMask(){
-    if(!cropState || !editCanvasHasPixels()) return;
+    if(!cropState) return;
+    if(existingMaskLoadPromise) await existingMaskLoadPromise;
+    if(!cropState) return;
     const {node, index, image} = currentEditImage();
     if(!node || !image) return;
+    // 遮罩已全部擦除/清空：保存空遮罩等于移除已保存的遮罩，图片恢复为普通无遮罩图片。
+    if(!editCanvasHasPixels()){
+        if(node.images?.[index]?.mask){
+            pushUndo();
+            const updated = {...node.images[index]};
+            delete updated.mask;
+            node.images[index] = updated;
+            closeImageEditor(); render(); scheduleSave();
+            toast(tr('canvas.maskRemoved'));
+        } else {
+            closeImageEditor();
+        }
+        return;
+    }
     const mask = maskCanvasFromDrawCanvas(editDrawCanvas());
     const blob = await new Promise(resolve => mask.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
