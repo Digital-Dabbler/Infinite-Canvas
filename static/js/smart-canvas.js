@@ -11207,7 +11207,8 @@ async function applyImageErase(){
         created.runStartedAt = startedAt;
         created.running = true;
         created.pending = 1;
-        connectInputNode(node.id, created.id);
+        // 擦除结果与上游节点保持独立（不建连线）：结果是独立成品图，
+        // 连线会暗示数据流依赖，实际运行已通过 runInputRefs 显式携带来源。
         selectedId = created.id;
         selectedIds = [];
         selectedImage = {nodeId:'', index:-1};
