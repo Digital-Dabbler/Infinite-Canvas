@@ -294,6 +294,8 @@ let imageEditModeTouched = false;
 let imageResizeScale = 0.5;
 let editDrawState = null;
 let localEditKind = 'mask';
+// 擦除模式：复用遮罩编辑 UI，但应用按钮为「擦除」，点击后直接运行擦除工作流（不移除/加载已保存遮罩）。
+let imageEditEraseMode = false;
 let localEditDrafts = {mask:null, brush:null};
 let maskTool = 'brush';
 // 遮罩叠加色：编辑遮罩时画笔/已画区域在图片上的显示色。默认透明黑（明亮图用黑、暗图用白），
@@ -1500,6 +1502,9 @@ function isSmartImageGenerationNode(node){
 function isSmartBackgroundRemovalNode(node){
     return Boolean(isSmartImageGenerationNode(node) && node.backgroundRemoval);
 }
+function isSmartEraseNode(node){
+    return Boolean(isSmartImageGenerationNode(node) && node.erase);
+}
 function isSmartVideoGenerationNode(node){
     return Boolean(node && node.type === 'smart-video-generation');
 }
@@ -1526,8 +1531,8 @@ function isCanvasOrganizerNode(node){
     return isWorkflowOrganizerNode(node) || isSmartNoteNode(node);
 }
 function isSmartRunnableNode(node){
-    // 上传节点只是素材入口；去背景节点是已完成的媒体结果，不能再次作为普通生成节点运行。
-    return Boolean(isSmartGenerationNode(node) && !isSmartBackgroundRemovalNode(node));
+    // 上传节点只是素材入口；去背景/擦除节点是已完成的媒体结果，不能再次作为普通生成节点运行。
+    return Boolean(isSmartGenerationNode(node) && !isSmartBackgroundRemovalNode(node) && !isSmartEraseNode(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -10127,7 +10132,7 @@ function imageTaskRecoverBodyHtml(node, task, layout){
 }
 function failedGenerationOverlayHtml(node){
     const error = String(node?.lastRunError || tr('smart.errRunFailed')).replace(/\s+/g, ' ').trim();
-    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : tr('smart.errRunFailed');
+    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : node?.erase ? tr('smart.eraseFailedTitle') : tr('smart.errRunFailed');
     return `<div class="generation-failed-overlay" role="status"><i data-lucide="circle-alert"></i><span>${escapeHtml(title)}</span><small title="${escapeAttr(error)}">${escapeHtml(error)}</small></div>`;
 }
 function smartNodeToolbarImageIndex(node){
@@ -10189,6 +10194,7 @@ function updateImageActionToolbar(){
         button.hidden = Boolean(
             (target && requiredKind && requiredKind !== target.kind)
             || (action === 'remove-background' && !canRemoveBackground)
+            || (action === 'erase' && !canRemoveBackground)
         );
         button.disabled = !target || (action === 'upscale' && !jimengImageProviderId());
     });
@@ -10656,6 +10662,14 @@ function runImageToolbarAction(action){
     }
     if(action === 'remove-background'){
         runSmartBackgroundRemoval(node, index);
+        return;
+    }
+    if(action === 'erase'){
+        // 擦除：复用遮罩编辑 UI（画笔涂抹要擦除的区域），应用按钮为「擦除」，
+        // 点击后直接运行擦除工作流，把图片与遮罩一起传给工作流中 ID 240 的 LoadImage 节点。
+        openImageEditor(node.id, index);
+        imageEditEraseMode = true;
+        setImageEditMode('mask', true);
         return;
     }
     if(action === 'preview'){
@@ -11145,6 +11159,103 @@ async function runSmartBackgroundRemoval(sourceNode, imageIndex){
         smartBackgroundRemovalRequests.delete(requestKey);
     }
 }
+const SMART_ERASE_WORKFLOW = 'system/移除-Kontext-api.json';
+const smartEraseRequests = new Set();
+function smartEraseRequestKey(node, index, item){
+    return `${node?.id || ''}:${Number(index) || 0}:${item?.url || ''}`;
+}
+async function applyImageErase(){
+    if(!cropState) return;
+    if(existingMaskLoadPromise) await existingMaskLoadPromise;
+    if(!cropState) return;
+    const {node, index, image} = currentEditImage();
+    if(!node || !image) return;
+    if(!editCanvasHasPixels()){
+        toast(tr('smart.eraseNeedMask'));
+        return;
+    }
+    const requestKey = smartEraseRequestKey(node, index, image);
+    if(smartEraseRequests.has(requestKey)) return;
+    smartEraseRequests.add(requestKey);
+    let maskUrl = '';
+    let created = null;
+    const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_ERASE_WORKFLOW, apiKind:'image'};
+    const startedAt = nowMs();
+    try {
+        const mask = maskCanvasFromDrawCanvas(editDrawCanvas());
+        const blob = await new Promise(resolve => mask.toBlob(resolve, 'image/png'));
+        if(!blob) throw new Error(tr('smart.errRunFailed'));
+        const base = (image.name || 'image').replace(/\.[^.]+$/, '');
+        maskUrl = URL.createObjectURL(blob);
+        const sourceRef = {url:image.url, name:image.name || smartImageNameFromUrl(image.url), kind:'image', nodeId:node.id, imageIndex:index};
+        const maskRef = {url:maskUrl, name:`${base}_erase_mask.png`, kind:'image'};
+        closeImageEditor();
+        pushUndo();
+        const rect = nodeRect(node);
+        created = createImageGenerationNode({x:rect.x + rect.width + 200, y:rect.y + 118}, {
+            skipUndo:true,
+            select:true,
+            deferRender:true,
+            deferSave:true,
+            settingsMemory:false
+        });
+        created.title = tr('smart.eraseRunning');
+        created.erase = {workflow:SMART_ERASE_WORKFLOW, sourceNodeId:node.id, sourceImageIndex:index, sourceUrl:image.url};
+        created.sourceNodeId = node.id;
+        created.runInputRefs = [{...sourceRef}];
+        created.runSettings = runSettings;
+        created.runStartedAt = startedAt;
+        created.running = true;
+        created.pending = 1;
+        connectInputNode(node.id, created.id);
+        selectedId = created.id;
+        selectedIds = [];
+        selectedImage = {nodeId:'', index:-1};
+        render();
+        updateComposer();
+        scheduleSave();
+        const run = {nodeId:created.id, nodeType:created.type, kind:'image', settings:runSettings, prompt:'', refs:[sourceRef]};
+        // 图片与遮罩一起传给工作流中 ID 240 的 LoadImage 节点：遮罩合成进图片 alpha 通道，
+        // LoadImage 会从 alpha 导出 MASK 输出（节点 252 等直接消费）；种子用随机值覆盖节点 250。
+        const inputName = await comfyNameForMaskedRef(sourceRef, maskRef);
+        const result = await runQueuedSmartComfyGenerate({
+            workflow_json:SMART_ERASE_WORKFLOW,
+            params:{'240':{image:inputName}, '250':{seed:Math.floor(Math.random() * 4294967295)}},
+            type:'erase',
+            client_id:smartClientId
+        });
+        const outputs = resultMediaUrls(result);
+        if(!outputs.length) throw new Error(tr('smart.errComfyEmpty'));
+        const live = liveSmartNode(created) || created;
+        live.images = outputs;
+        live.activeImageIndex = 0;
+        live.title = tr('smart.erase');
+        live.outputKind = 'image';
+        live.runFinishedAt = nowMs();
+        markSmartNodeComplete(live);
+        addSmartGenerationLog({run, outputs, runMs:nowMs() - startedAt});
+        selectedId = live.id;
+        selectedImage = {nodeId:live.id, index:0};
+        render();
+        scheduleSave();
+        toast(tr('smart.eraseDone'));
+    } catch(error){
+        const detail = String(error?.message || error || tr('smart.errRunFailed')).slice(0, 600);
+        const live = liveSmartNode(created) || created;
+        if(live){
+            live.title = tr('smart.eraseFailedTitle');
+            live.lastRunError = detail;
+            markSmartNodeFailedIfIdle(live, detail);
+            addSmartGenerationLog({run:{nodeId:live.id, nodeType:live.type, kind:'image', settings:runSettings, prompt:'', refs:[]}, runMs:nowMs() - startedAt, error:detail});
+            render();
+            scheduleSave();
+        }
+        toast(trf('smart.eraseFailed', {error:detail}).slice(0, 180));
+    } finally {
+        if(maskUrl) URL.revokeObjectURL(maskUrl);
+        smartEraseRequests.delete(requestKey);
+    }
+}
 // 智能分组顶部小菜单：整理排列 / 预览（整组左右切换）/ 宫格拼接 / 批量下载 / 解散分组。
 // 与多图节点的 smart-node-floating-menu 同款样式与定位（选中分组时浮在卡片上方）。
 function smartGroupToolbarHtml(node){
@@ -11439,7 +11550,8 @@ function render(){
         if(isCanvasOrganizerNode(node)) return {node, html:canvasOrganizerHtml(node)};
         const imgs = node.images || [];
         const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const isErase = isSmartEraseNode(node);
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -11453,7 +11565,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -11463,7 +11575,7 @@ function render(){
         // anchored to that card.
         const renderedNodeHeight = layout.height;
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr('smart.eraseHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
@@ -13522,6 +13634,7 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
 function smartConnectionNodeLabel(node){
     if(isSmartVideoGenerationNode(node)) return '视频生成';
     if(isSmartBackgroundRemovalNode(node)) return tr('smart.removeBackground');
+    if(isSmartEraseNode(node)) return tr('smart.erase');
     if(isSmartImageGenerationNode(node)) return '图片生成';
     if(isSmartUploadNode(node)) return uploadNodeLabel(uploadMediaKindForNode(node));
     if(node?.type === 'smart-prompt') return tr('smart.textNode');
@@ -14257,6 +14370,7 @@ function setImageEditMode(mode, userTouched=false){
     const isVideoPreview = editKind === 'video';
     if(isVideoPreview && mode !== 'preview') mode = 'preview';
     if(userTouched) imageEditModeTouched = true;
+    if(mode !== 'mask') imageEditEraseMode = false;
     const requestedLocalKind = mode === 'local' ? localEditKind : (mode === 'mask' || mode === 'brush' ? mode : '');
     if(requestedLocalKind) localEditKind = requestedLocalKind;
     const prev = imageEditMode;
@@ -14316,12 +14430,14 @@ function setImageEditMode(mode, userTouched=false){
     });
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
     document.getElementById('imageCropTools')?.classList.toggle('active', imageEditMode === 'crop');
-    const isLocalEdit = imageEditMode === 'mask' || imageEditMode === 'brush';
+    const isLocalEdit = (imageEditMode === 'mask' && !imageEditEraseMode) || imageEditMode === 'brush';
     document.getElementById('imageLocalEditModeTools')?.classList.toggle('active', isLocalEdit);
     document.getElementById('imageMaskTools').classList.toggle('active', imageEditMode === 'mask');
     document.getElementById('imageBrushTools').classList.toggle('active', imageEditMode === 'brush');
     const localEditStatus = document.getElementById('localEditStatus');
-    if(localEditStatus) localEditStatus.textContent = isLocalEdit ? tr(imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : 'canvas.localEditAnnotateStatus') : '';
+    if(localEditStatus) localEditStatus.textContent = imageEditEraseMode
+        ? tr('smart.eraseStatus')
+        : (isLocalEdit ? tr(imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : 'canvas.localEditAnnotateStatus') : '');
     document.getElementById('imageResizeTools')?.classList.toggle('active', imageEditMode === 'resize');
     document.getElementById('imageGridTools').classList.toggle('active', imageEditMode === 'grid');
     if(imageEditMode === 'grid' && gridOperationMode === 'join' && !canGridJoinCurrentNode()) gridOperationMode = 'split';
@@ -14347,10 +14463,11 @@ function setImageEditMode(mode, userTouched=false){
             document.getElementById('imageEditSub').textContent = '选择缩小倍数，应用会替换当前原图';
             applyBtn.innerHTML = `<i data-lucide="minimize-2" class="w-4 h-4"></i><span>应用缩放</span>`;
         } else {
-            const icon = imageEditMode === 'crop' ? 'crop' : imageEditMode === 'outpaint' ? 'expand' : imageEditMode === 'mask' ? 'brush' : imageEditMode === 'brush' ? 'paintbrush' : 'grid-3x3';
-            const labelKey = imageEditMode === 'crop' ? 'canvas.applyCrop' : imageEditMode === 'outpaint' ? 'canvas.applyOutpaint' : imageEditMode === 'mask' ? 'canvas.applyMask' : imageEditMode === 'brush' ? 'canvas.applyBrush' : 'canvas.applyGrid';
-            const titleKey = imageEditMode === 'crop' ? 'canvas.cropImage' : imageEditMode === 'outpaint' ? 'canvas.outpaintImage' : imageEditMode === 'mask' || imageEditMode === 'brush' ? 'canvas.modeLocalEdit' : 'canvas.modeGrid';
-            const subKey = imageEditMode === 'crop' ? 'canvas.cropHint' : imageEditMode === 'outpaint' ? 'canvas.outpaintHint' : imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : imageEditMode === 'brush' ? 'canvas.localEditAnnotateStatus' : 'canvas.gridHint';
+            const isErase = imageEditMode === 'mask' && imageEditEraseMode;
+            const icon = isErase ? 'eraser' : imageEditMode === 'crop' ? 'crop' : imageEditMode === 'outpaint' ? 'expand' : imageEditMode === 'mask' ? 'brush' : imageEditMode === 'brush' ? 'paintbrush' : 'grid-3x3';
+            const labelKey = isErase ? 'smart.erase' : imageEditMode === 'crop' ? 'canvas.applyCrop' : imageEditMode === 'outpaint' ? 'canvas.applyOutpaint' : imageEditMode === 'mask' ? 'canvas.applyMask' : imageEditMode === 'brush' ? 'canvas.applyBrush' : 'canvas.applyGrid';
+            const titleKey = isErase ? 'smart.erase' : imageEditMode === 'crop' ? 'canvas.cropImage' : imageEditMode === 'outpaint' ? 'canvas.outpaintImage' : imageEditMode === 'mask' || imageEditMode === 'brush' ? 'canvas.modeLocalEdit' : 'canvas.modeGrid';
+            const subKey = isErase ? 'smart.eraseHint' : imageEditMode === 'crop' ? 'canvas.cropHint' : imageEditMode === 'outpaint' ? 'canvas.outpaintHint' : imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : imageEditMode === 'brush' ? 'canvas.localEditAnnotateStatus' : 'canvas.gridHint';
             document.getElementById('imageEditTitle').textContent = tr(titleKey);
             document.getElementById('imageEditSub').textContent = tr(subKey);
             const applyLabel = imageEditMode === 'grid' && gridOperationMode === 'join' ? '输出拼接' : tr(labelKey);
@@ -14377,7 +14494,8 @@ function setImageEditMode(mode, userTouched=false){
     // 避免已画未保存的遮罩被清空后丢失。
     else if(imageEditMode === 'mask' && localEditDrafts.mask && !editCanvasHasPixels()) restoreLocalEditDraft('mask');
     // 首次进入遮罩模式且尚未有会话草稿时，把已保存的遮罩载入画布，支持二次编辑。
-    if(imageEditMode === 'mask' && !localEditDrafts.mask && !editCanvasHasPixels()) loadExistingMaskForEdit();
+    // 擦除模式使用全新涂抹，不载入已保存遮罩。
+    if(imageEditMode === 'mask' && !imageEditEraseMode && !localEditDrafts.mask && !editCanvasHasPixels()) loadExistingMaskForEdit();
     syncEditDrawingHistoryButtons();
     syncBrushToolButtons();
     syncMaskToolButtons();
@@ -15825,7 +15943,7 @@ function syncMaskOverlayColorButtons(){
 }
 function refreshMaskOverlayHint(){
     const hint = document.getElementById('maskHintText');
-    if(hint) hint.textContent = tr(maskOverlayColor === 'black' ? 'canvas.maskHintBlack' : 'canvas.maskHintWhite');
+    if(hint) hint.textContent = tr(imageEditEraseMode ? 'smart.eraseHint' : (maskOverlayColor === 'black' ? 'canvas.maskHintBlack' : 'canvas.maskHintWhite'));
 }
 function repaintMaskOverlayColor(){
     if(imageEditMode !== 'mask') return;
@@ -17015,7 +17133,7 @@ function openImageEditor(nodeId, imageIndex=0){
     gridCustomMode = false; gridCustomLines = []; gridCustomHistory = []; gridCustomDrag = null; gridCustomOrientation = 'h';
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
-    localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null;
+    localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null; imageEditEraseMode = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
     const toggle = document.getElementById('gridCustomToggle');
@@ -17067,7 +17185,7 @@ function openImageEditor(nodeId, imageIndex=0){
         imageEditBaseW = img.clientWidth; imageEditBaseH = img.clientHeight;
         updateZoomLabel(); syncImageResizeControls(); resizeEditDrawCanvas(); resetEditDrawingHistory(); clearEditDrawing(true); resetCropBox();
         // 快速预览→原图切换会清空绘制层，若正处于遮罩模式则重新载入已保存的遮罩。
-        if(imageEditMode === 'mask' && !localEditDrafts.mask && !editCanvasHasPixels()) loadExistingMaskForEdit();
+        if(imageEditMode === 'mask' && !imageEditEraseMode && !localEditDrafts.mask && !editCanvasHasPixels()) loadExistingMaskForEdit();
         if(!imageEditModeTouched) setImageEditMode('preview');
         else refreshComparePanel();
         if(!panoramaState.enabled) updatePreviewMetaHint();
@@ -17117,7 +17235,7 @@ function closeImageEditor(){
         previewVideo.style.display = 'none';
     }
     clearEditDrawing(true);
-    cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null; gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
+    cropState = null; cropDrag = null; editDrawState = null; resetEditDrawingHistory(); localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null; imageEditEraseMode = false; gridCustomDrag = null; gridJoinDrag = null; gridJoinLayout = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridOperationMode = 'split'; gridJoinGroupId = '';
     previewNavState = {nodeId:'', index:0, count:0};
     videoTrimState = {source:'', start:0, end:0, mute:false, previewing:false, speed:1};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
@@ -17660,7 +17778,7 @@ async function applyImageResize(){
 function applyImageEdit(){
     if(imageEditMode === 'preview') return;
     if(imageEditMode === 'outpaint') return applyImageOutpaint();
-    if(imageEditMode === 'mask') return applyImageMask();
+    if(imageEditMode === 'mask') return imageEditEraseMode ? applyImageErase() : applyImageMask();
     if(imageEditMode === 'brush') return applyImageBrush();
     if(imageEditMode === 'resize') return applyImageResize();
     if(imageEditMode === 'grid') return applyImageGridSplit();
