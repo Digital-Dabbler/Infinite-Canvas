@@ -15831,23 +15831,43 @@ let lastEditBrushCursorPoint = null;
 function editBrushCursorVisible(){
     return (imageEditMode === 'mask' || imageEditMode === 'brush') && !(imageEditMode === 'brush' && brushTool === 'text');
 }
+// 视口像素 → cropCanvas 局部单位（弹窗内 CSS 单位）的换算系数。
+// .image-edit-modal 会被 studio 缩放施加 CSS zoom，视口像素与弹窗内 CSS 单位不成 1:1；
+// 用画布自身 CSS 尺寸与其 getBoundingClientRect（视口像素）的比值换算，zoom=1 时恒为 1，无副作用。
+function editDrawViewportToLocalScale(){
+    const canvasEl = editDrawCanvas();
+    if(!canvasEl) return {x:1, y:1};
+    const rect = canvasEl.getBoundingClientRect();
+    const cssW = parseFloat(canvasEl.style.width);
+    const cssH = parseFloat(canvasEl.style.height);
+    if(!(cssW > 0) || !(cssH > 0) || !rect || !(rect.width > 0) || !(rect.height > 0)) return {x:1, y:1};
+    return {x:cssW / rect.width, y:cssH / rect.height};
+}
 function editBrushCursorDiameter(){
     const canvasEl = editDrawCanvas();
     if(!canvasEl || !canvasEl.width) return 0;
+    // 用画布自身 CSS 尺寸（与光标同处 cropCanvas 坐标系）换算直径：
+    // getBoundingClientRect 返回的是被外层 studio 缩放（.image-edit-modal 的 CSS zoom）
+    // 放大后的视口像素，直接使用会让圆点直径随缩放成倍偏大/偏小。
+    const cssW = parseFloat(canvasEl.style.width);
+    if(cssW > 0) return Math.max(1, editBrushSize() * (cssW / Math.max(1, canvasEl.width)));
     const rect = canvasEl.getBoundingClientRect();
     if(!rect.width) return 0;
     return Math.max(1, editBrushSize() * (rect.width / Math.max(1, canvasEl.width)));
 }
 function positionEditBrushCursor(event){
     const cursor = document.getElementById('editBrushCursor');
-    const crop = document.getElementById('cropCanvas');
-    if(!cursor || !crop) return;
+    const canvasEl = editDrawCanvas();
+    if(!cursor || !canvasEl) return;
     const diameter = editBrushCursorDiameter();
     cursor.style.width = `${diameter}px`;
     cursor.style.height = `${diameter}px`;
-    const rect = crop.getBoundingClientRect();
-    cursor.style.left = `${event.clientX - rect.left}px`;
-    cursor.style.top = `${event.clientY - rect.top}px`;
+    // 与画笔轨迹共用同一套坐标换算（视口像素 → 局部单位），任意外层 zoom/缩放下
+    // 圆点都能与落笔点精确重合；zoom=1 时换算系数为 1，行为与旧实现完全一致。
+    const scale = editDrawViewportToLocalScale();
+    const rect = canvasEl.getBoundingClientRect();
+    cursor.style.left = `${(event.clientX - rect.left) * scale.x}px`;
+    cursor.style.top = `${(event.clientY - rect.top) * scale.y}px`;
 }
 function updateEditBrushCursor(event){
     if(!editBrushCursorVisible()) return;
@@ -22747,8 +22767,11 @@ window.onmousemove = e => {
         return;
     }
     if(cropDrag && cropState){
-        const dx = e.clientX - cropDrag.sx;
-        const dy = e.clientY - cropDrag.sy;
+        // 视口像素增量换算成 cropCanvas 局部单位，避免 studio 缩放（CSS zoom）下
+        // 裁剪框/扩图手柄拖动灵敏度成倍偏差（与画笔光标同一根因）；zoom=1 时系数为 1。
+        const local = editDrawViewportToLocalScale();
+        const dx = (e.clientX - cropDrag.sx) * local.x;
+        const dy = (e.clientY - cropDrag.sy) * local.y;
         if(cropDrag.mode === 'move'){
             cropState.x = cropDrag.start.x + dx;
             cropState.y = cropDrag.start.y + dy;
