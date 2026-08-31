@@ -3,7 +3,7 @@
     "inputs": {
       "filename_prefix": "ComfyUI",
       "images": [
-        "268",
+        "251",
         0
       ]
     },
@@ -14,14 +14,34 @@
   },
   "240": {
     "inputs": {
-      "image": "clipspace-painted-masked-1787939424791.png [input]"
+      "image": "clipspace-painted-masked-1787827001442.png [input]"
     },
     "class_type": "LoadImage",
     "_meta": {
       "title": "加载图像"
     }
   },
-  "247": {
+  "243": {
+    "inputs": {
+      "anything": [
+        "259",
+        0
+      ],
+      "anything11": [
+        "252",
+        0
+      ],
+      "anything12": [
+        "244",
+        0
+      ]
+    },
+    "class_type": "Anything Everywhere",
+    "_meta": {
+      "title": "全局输入"
+    }
+  },
+  "244": {
     "inputs": {
       "vae_name": "ae.safetensors"
     },
@@ -30,7 +50,7 @@
       "title": "加载VAE"
     }
   },
-  "248": {
+  "245": {
     "inputs": {
       "unet_name": "flux1-dev-kontext_fp8_scaled.safetensors",
       "weight_dtype": "default"
@@ -40,14 +60,14 @@
       "title": "UNet加载器"
     }
   },
-  "249": {
+  "246": {
     "inputs": {
       "samples": [
-        "250",
+        "248",
         0
       ],
       "vae": [
-        "247",
+        "244",
         0
       ]
     },
@@ -56,28 +76,28 @@
       "title": "VAE解码"
     }
   },
-  "250": {
+  "248": {
     "inputs": {
-      "seed": 540401160677063,
+      "seed": 1015900750944666,
       "steps": 20,
       "cfg": 1,
       "sampler_name": "euler",
       "scheduler": "simple",
       "denoise": 1,
       "model": [
-        "261",
+        "259",
         0
       ],
       "positive": [
-        "260",
+        "258",
         0
       ],
       "negative": [
-        "255",
+        "253",
         0
       ],
       "latent_image": [
-        "260",
+        "258",
         1
       ]
     },
@@ -86,7 +106,7 @@
       "title": "K采样器"
     }
   },
-  "251": {
+  "249": {
     "inputs": {
       "width": 1024,
       "height": 1024,
@@ -101,7 +121,7 @@
         0
       ],
       "mask": [
-        "252",
+        "250",
         0
       ]
     },
@@ -110,7 +130,7 @@
       "title": "Image_调整尺寸_总"
     }
   },
-  "252": {
+  "250": {
     "inputs": {
       "expand": 0,
       "incremental_expandrate": 0,
@@ -130,16 +150,16 @@
       "title": "遮罩模糊生长"
     }
   },
-  "253": {
+  "251": {
     "inputs": {
       "upscale_method": "bilinear",
       "pad_crop_no_scale": false,
       "resized_image": [
-        "249",
+        "246",
         0
       ],
       "stitch": [
-        "251",
+        "249",
         2
       ]
     },
@@ -148,7 +168,7 @@
       "title": "Image_调整尺寸恢复"
     }
   },
-  "254": {
+  "252": {
     "inputs": {
       "clip_name1": "clip_l.safetensors",
       "clip_name2": "t5xxl_fp8_e4m3fn_scaled.safetensors",
@@ -160,10 +180,10 @@
       "title": "双CLIP加载器"
     }
   },
-  "255": {
+  "253": {
     "inputs": {
       "conditioning": [
-        "256",
+        "254",
         0
       ]
     },
@@ -172,11 +192,11 @@
       "title": "条件零化"
     }
   },
-  "256": {
+  "254": {
     "inputs": {
-      "text": "remove green part",
+      "text": "remove red part",
       "clip": [
-        "254",
+        "252",
         0
       ]
     },
@@ -185,14 +205,14 @@
       "title": "CLIP Text Encode (Positive Prompt)"
     }
   },
-  "257": {
+  "255": {
     "inputs": {
       "pixels": [
-        "262",
+        "260",
         0
       ],
       "vae": [
-        "247",
+        "244",
         0
       ]
     },
@@ -201,11 +221,11 @@
       "title": "VAE编码"
     }
   },
-  "259": {
+  "257": {
     "inputs": {
       "guidance": 2.5,
       "conditioning": [
-        "256",
+        "254",
         0
       ]
     },
@@ -214,35 +234,35 @@
       "title": "Flux引导"
     }
   },
-  "260": {
+  "258": {
     "inputs": {
       "expand": 10,
       "blur": 0,
       "mask_only": true,
       "conditioning": [
-        "259",
-        0
-      ],
-      "latent": [
         "257",
         0
       ],
+      "latent": [
+        "255",
+        0
+      ],
       "mask": [
-        "251",
+        "249",
         1
       ]
     },
     "class_type": "AILab_ReferenceLatentMask",
     "_meta": {
-      "title": "Reference Latent Mask (RMBG) 🖼️🎭"
+      "title": "Kontext 参考潜伏遮罩 (RMBG) 🎭"
     }
   },
-  "261": {
+  "259": {
     "inputs": {
-      "lora_name": "Flux.1 Kontext\\aihei_kontext_万物消除_v1.safetensors",
+      "lora_name": "Flux_Kontext\\aihei_kontext_万物消除_v1.safetensors",
       "strength_model": 1,
       "model": [
-        "248",
+        "245",
         0
       ]
     },
@@ -251,78 +271,22 @@
       "title": "LoRA加载器（仅模型）"
     }
   },
-  "262": {
+  "260": {
     "inputs": {
       "mask_opacity": 1,
-      "mask_color": [
-        "263",
-        0
-      ],
+      "mask_color": "#00ff1e",
       "image": [
-        "251",
+        "249",
         0
       ],
       "mask": [
-        "251",
+        "249",
         1
       ]
     },
     "class_type": "AILab_MaskOverlay",
     "_meta": {
       "title": "Mask Overlay (RMBG) 🖼️🎭"
-    }
-  },
-  "263": {
-    "inputs": {
-      "preset": "green",
-      "color": ""
-    },
-    "class_type": "AILab_ColorInput",
-    "_meta": {
-      "title": "Color Input (RMBG) 🎨"
-    }
-  },
-  "268": {
-    "inputs": {
-      "x": 0,
-      "y": 0,
-      "resize_source": false,
-      "destination": [
-        "240",
-        0
-      ],
-      "source": [
-        "253",
-        0
-      ],
-      "mask": [
-        "269",
-        0
-      ]
-    },
-    "class_type": "ImageCompositeMasked",
-    "_meta": {
-      "title": "合成图像（遮罩）"
-    }
-  },
-  "269": {
-    "inputs": {
-      "expand": 20,
-      "incremental_expandrate": 0,
-      "tapered_corners": true,
-      "flip_input": false,
-      "blur_radius": 4,
-      "lerp_alpha": 1,
-      "decay_factor": 1,
-      "fill_holes": false,
-      "mask": [
-        "253",
-        1
-      ]
-    },
-    "class_type": "GrowMaskWithBlur",
-    "_meta": {
-      "title": "遮罩模糊生长"
     }
   }
 }

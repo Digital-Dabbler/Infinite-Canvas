@@ -323,6 +323,29 @@
         }
       ],
       "system": false
+    },
+    {
+      "id": "personal_04d2787c99da41dfbc061e7b971b341",
+      "name": "系统管理员的资产库",
+      "type": "asset",
+      "personal": true,
+      "fixed": true,
+      "owner_type": "user",
+      "owner_id": "04d2787c99da41dfbc061e7b971b3411",
+      "created_by": "04d2787c99da41dfbc061e7b971b3411",
+      "categories": [
+        {
+          "id": "wf_73c190679757",
+          "name": "工作流",
+          "type": "workflow",
+          "items": [],
+          "owner_type": "user",
+          "owner_id": "04d2787c99da41dfbc061e7b971b3411",
+          "created_by": "04d2787c99da41dfbc061e7b971b3411",
+          "library_id": "personal_04d2787c99da41dfbc061e7b971b341"
+        }
+      ],
+      "system": false
     }
   ],
   "categories": [

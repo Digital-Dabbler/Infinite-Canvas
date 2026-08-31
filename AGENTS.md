@@ -220,6 +220,7 @@ git diff --stat
 
 - 工作区可能已有用户改动。保持其原样，不执行 `git reset --hard`、`git checkout --`、无差别格式化或 `git add .`。
 - 默认不提交 `API/.env`、`data/*.json`、`data/canvases/`、`data/conversations/`、`data/usage_audit/`、`history.json`、`global_config.json`、`assets/`、`output/`、`python/Lib/`、`python/Scripts/`、生成媒体和 HTML 缓存戳噪声。
+- 除非任务明确要求更新缓存戳，HTML 中仅 `?v=` 静态资源参数变化不得暂存或提交。若同一 HTML 文件包含功能改动，必须按 hunk 精确暂存，仅保留功能部分。
 - `data/asset_library.json` 可同时包含初始数据和用户状态，修改前判断其性质。不要为源码任务混入运行时内容。
 - 精确暂存目标文件/补丁，检查 `git diff --cached --check` 后再提交。功能提交不得混入密钥、审计、pip 产物或静态缓存戳。
 
