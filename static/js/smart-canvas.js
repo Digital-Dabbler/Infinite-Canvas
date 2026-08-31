@@ -28,6 +28,7 @@ const angleControlModal = document.getElementById('angleControlModal');
 let outpaintRunSettings = null;
 let outpaintFillColor = '#ffffff';
 const imageActionToolbar = document.getElementById('imageActionToolbar');
+const imageUpscaleMenu = document.getElementById('imageUpscaleMenu');
 const workflowGroupToolbar = document.getElementById('workflowGroupToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const photoshopInstallModal = document.getElementById('photoshopInstallModal');
@@ -1505,6 +1506,9 @@ function isSmartBackgroundRemovalNode(node){
 function isSmartEraseNode(node){
     return Boolean(isSmartImageGenerationNode(node) && node.erase);
 }
+function isSmartComfyUpscaleNode(node){
+    return Boolean(isSmartImageGenerationNode(node) && node.upscale?.engine === 'comfy');
+}
 function isSmartVideoGenerationNode(node){
     return Boolean(node && node.type === 'smart-video-generation');
 }
@@ -1531,8 +1535,8 @@ function isCanvasOrganizerNode(node){
     return isWorkflowOrganizerNode(node) || isSmartNoteNode(node);
 }
 function isSmartRunnableNode(node){
-    // 上传节点只是素材入口；去背景/擦除节点是已完成的媒体结果，不能再次作为普通生成节点运行。
-    return Boolean(isSmartGenerationNode(node) && !isSmartBackgroundRemovalNode(node) && !isSmartEraseNode(node));
+    // 上传节点只是素材入口；去背景/擦除/放大节点是已完成的媒体结果，不能再次作为普通生成节点运行。
+    return Boolean(isSmartGenerationNode(node) && !isSmartBackgroundRemovalNode(node) && !isSmartEraseNode(node) && !isSmartComfyUpscaleNode(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -2873,6 +2877,7 @@ function applyViewport(){
     requestAnimationFrame(() => {
         positionImageActionToolbar();
         positionWorkflowGroupToolbar();
+        imageUpscaleMenuClose();
         if(uploadResourcePanel && uploadResourcePanel.isOpen()) uploadResourcePanel.reposition();
         // 图片生成 composer 位于 world 内，会随视口变换自然移动；文本节点的
         // 生成面板在独立图层中，因此在每次平移/缩放后按当前节点屏幕位置同步。
@@ -10132,7 +10137,7 @@ function imageTaskRecoverBodyHtml(node, task, layout){
 }
 function failedGenerationOverlayHtml(node){
     const error = String(node?.lastRunError || tr('smart.errRunFailed')).replace(/\s+/g, ' ').trim();
-    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : node?.erase ? tr('smart.eraseFailedTitle') : tr('smart.errRunFailed');
+    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : node?.erase ? tr('smart.eraseFailedTitle') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleFailedTitle') : tr('smart.errRunFailed');
     return `<div class="generation-failed-overlay" role="status"><i data-lucide="circle-alert"></i><span>${escapeHtml(title)}</span><small title="${escapeAttr(error)}">${escapeHtml(error)}</small></div>`;
 }
 function smartNodeToolbarImageIndex(node){
@@ -10196,9 +10201,64 @@ function updateImageActionToolbar(){
             || (action === 'remove-background' && !canRemoveBackground)
             || (action === 'erase' && !canRemoveBackground)
         );
-        button.disabled = !target || (action === 'upscale' && !jimengImageProviderId());
+        button.disabled = !target || (action === 'upscale' && !upscaleModesAvailable());
     });
+    // 「放大」悬停菜单与主按钮同步：任一模式可用即可点，选项按各自能力单独置灰。
+    if(imageUpscaleMenu){
+        if(!target || target.kind !== 'image'){
+            imageUpscaleMenuClose();
+        } else {
+            imageUpscaleMenu.querySelectorAll('[data-upscale-mode]').forEach(option => {
+                option.disabled = !upscaleModeAvailable(option.dataset.upscaleMode || '');
+            });
+        }
+    }
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
+}
+// 「放大」双模式：jimeng 需要配置组内有即梦图片平台；comfy 走本地 ComfyUI 引擎，
+// 引擎下拉始终可选，后端不可达时由任务本身报错，因此这里视为可用。
+function upscaleModeAvailable(mode){
+    if(mode === 'jimeng') return Boolean(jimengImageProviderId());
+    if(mode === 'comfy') return true;
+    return false;
+}
+function upscaleModesAvailable(){
+    return upscaleModeAvailable('jimeng') || upscaleModeAvailable('comfy');
+}
+function defaultUpscaleMode(){
+    return upscaleModeAvailable('jimeng') ? 'jimeng' : 'comfy';
+}
+function positionImageUpscaleMenu(){
+    if(!imageUpscaleMenu || !imageUpscaleMenu.classList.contains('open')) return;
+    const upscaleButton = imageActionToolbar?.querySelector('[data-image-toolbar-action="upscale"]');
+    if(!upscaleButton) return;
+    const shellRect = shell.getBoundingClientRect();
+    const btnRect = upscaleButton.getBoundingClientRect();
+    const width = imageUpscaleMenu.offsetWidth || 168;
+    const height = imageUpscaleMenu.offsetHeight || 108;
+    let left = btnRect.left - shellRect.left + btnRect.width / 2 - width / 2;
+    left = Math.max(12, Math.min(shellRect.width - width - 12, left));
+    let top = btnRect.bottom - shellRect.top + 4;
+    if(top + height > shellRect.height - 12 && btnRect.top - shellRect.top - height - 10 > 12){
+        top = btnRect.top - shellRect.top - height - 10;
+    }
+    imageUpscaleMenu.style.left = `${Math.round(left)}px`;
+    imageUpscaleMenu.style.top = `${Math.round(top)}px`;
+}
+function imageUpscaleMenuOpen(){
+    if(!imageUpscaleMenu) return;
+    const target = currentMediaToolbarTarget();
+    if(!target?.kind || target.kind !== 'image') return;
+    const upscaleButton = imageActionToolbar?.querySelector('[data-image-toolbar-action="upscale"]');
+    if(!upscaleButton || upscaleButton.disabled) return;
+    imageUpscaleMenu.classList.add('open');
+    imageUpscaleMenu.setAttribute('aria-hidden', 'false');
+    positionImageUpscaleMenu();
+}
+function imageUpscaleMenuClose(){
+    if(!imageUpscaleMenu) return;
+    imageUpscaleMenu.classList.remove('open');
+    imageUpscaleMenu.setAttribute('aria-hidden', 'true');
 }
 function currentWorkflowGroupToolbarTarget(){
     const ids = selectedNodeIds();
@@ -10623,7 +10683,7 @@ window.addEventListener('keydown', event => {
         closePhotoshopInstallGuide();
     }
 });
-function runImageToolbarAction(action){
+function runImageToolbarAction(action, mode){
     const target = currentMediaToolbarTarget();
     if(!target) return;
     const {node, index, item, kind} = target;
@@ -10685,7 +10745,12 @@ function runImageToolbarAction(action){
         return;
     }
     if(action === 'upscale'){
-        runJimengUpscale(node, index);
+        // 悬停菜单里选中的模式优先；直接点主按钮时退回默认模式（有即梦走即梦，否则走 ComfyUI）。
+        if(mode === 'comfy' || (mode !== 'jimeng' && defaultUpscaleMode() === 'comfy')){
+            runSmartComfyUpscaleAction(node, index);
+        } else {
+            runJimengUpscale(node, index);
+        }
         return;
     }
     if(!['crop','outpaint','local','mask','brush','grid'].includes(action)) return;
@@ -10699,7 +10764,29 @@ imageActionToolbar?.addEventListener('click', event => {
     if(!button || button.disabled) return;
     event.preventDefault();
     event.stopPropagation();
+    imageUpscaleMenuClose();
     runImageToolbarAction(button.dataset.imageToolbarAction || '');
+});
+// 「放大」悬停菜单：悬停主按钮弹出双模式选择，移出按钮/菜单后收起。
+imageActionToolbar?.addEventListener('mouseover', event => {
+    if(event.target.closest?.('[data-image-toolbar-action="upscale"]')) imageUpscaleMenuOpen();
+});
+imageActionToolbar?.addEventListener('mouseout', event => {
+    if(event.target.closest?.('[data-image-toolbar-action="upscale"]') && !event.relatedTarget?.closest?.('#imageUpscaleMenu')){
+        imageUpscaleMenuClose();
+    }
+});
+imageUpscaleMenu?.addEventListener('mouseleave', () => imageUpscaleMenuClose());
+imageUpscaleMenu?.addEventListener('mousedown', event => event.stopPropagation());
+imageUpscaleMenu?.addEventListener('click', event => {
+    const option = event.target.closest?.('[data-upscale-mode]');
+    if(!option || option.disabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = currentMediaToolbarTarget();
+    if(!target) return;
+    imageUpscaleMenuClose();
+    runImageToolbarAction('upscale', option.dataset.upscaleMode);
 });
 const ANGLE_AZIMUTHS = [
     {zh:'正面', en:'front view', onlineZh:'主体正面直视镜头', angle:0}, {zh:'右前', en:'front-right quarter view', onlineZh:'镜头从主体右前方的四分之三视角观察', angle:45},
@@ -11113,7 +11200,8 @@ async function runSmartBackgroundRemoval(sourceNode, imageIndex){
     created.runStartedAt = nowMs();
     created.running = true;
     created.pending = 1;
-    connectInputNode(source.id, created.id);
+    // 去背景结果是独立节点：不画与源节点的连线（runInputRefs/sourceNodeId 仍保留为元数据），
+    // 选中时不打开生成面板，与「高清放大」结果节点一致。
     selectedId = created.id;
     selectedIds = [];
     selectedImage = {nodeId:'', index:-1};
@@ -11157,6 +11245,109 @@ async function runSmartBackgroundRemoval(sourceNode, imageIndex){
         toast(trf('smart.removeBackgroundFailed', {error:detail}).slice(0, 180));
     } finally {
         smartBackgroundRemovalRequests.delete(requestKey);
+    }
+}
+// ComfyUI 本地放大：使用 system/2K高清放大-Klein 9B-api.json 工作流。
+// 该工作流有两个 SaveImage 输出：162「高清放大」（主体）、199「真实皮肤增强」（叠加放大模型的增强版）。
+const SMART_COMFY_UPSCALE_WORKFLOW = 'system/2K高清放大-Klein 9B-api.json';
+const SMART_COMFY_UPSCALE_OUTPUTS = {
+    '162': () => tr('smart.comfyUpscaleOutputMain'),
+    '199': () => tr('smart.comfyUpscaleOutputEnhance')
+};
+const smartComfyUpscaleRequests = new Set();
+function smartComfyUpscaleRequestKey(node, index, item){
+    return `${node?.id || ''}:${Number(index) || 0}:${item?.url || ''}`;
+}
+function smartComfyUpscaleOutputs(result){
+    const sourceItems = Array.isArray(result?.items) ? result.items : [];
+    return resultMediaUrls(result).map((output, index) => {
+        const url = typeof output === 'string' ? output : output?.url || '';
+        if(!url) return null;
+        const source = sourceItems.find(item => String(item?.url || '') === url) || {};
+        const nameFor = SMART_COMFY_UPSCALE_OUTPUTS[String(source.node_id || '')] || (() => `Upscale ${index + 1}`);
+        return stripImageGenerationMeta(copyMediaSizeFields(source, {
+            url,
+            kind:'image',
+            name:`${nameFor()}.png`,
+            generatedResult:true
+        }));
+    }).filter(item => item?.url);
+}
+async function runSmartComfyUpscaleAction(sourceNode, imageIndex){
+    const source = liveSmartNode(sourceNode) || sourceNode;
+    const index = Number.isFinite(Number(imageIndex)) ? Number(imageIndex) : smartNodeToolbarImageIndex(source);
+    const item = imageForDisplay(source?.images?.[index]);
+    if(!source || !item?.url || mediaKindForItem(item) !== 'image'){
+        toast(tr('smart.comfyUpscaleNeedImage'));
+        return;
+    }
+    const requestKey = smartComfyUpscaleRequestKey(source, index, item);
+    if(smartComfyUpscaleRequests.has(requestKey)) return;
+    smartComfyUpscaleRequests.add(requestKey);
+    pushUndo();
+    const rect = nodeRect(source);
+    const created = createImageGenerationNode({x:rect.x + rect.width + 200, y:rect.y + 118}, {
+        skipUndo:true,
+        select:true,
+        deferRender:true,
+        deferSave:true,
+        settingsMemory:false
+    });
+    const sourceRef = {url:item.url, name:item.name || smartImageNameFromUrl(item.url), kind:'image', nodeId:source.id, imageIndex:index};
+    const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_COMFY_UPSCALE_WORKFLOW, apiKind:'image'};
+    created.title = tr('smart.comfyUpscaleRunning');
+    created.upscale = {engine:'comfy', workflow:SMART_COMFY_UPSCALE_WORKFLOW, sourceNodeId:source.id, sourceImageIndex:index, sourceUrl:item.url};
+    created.sourceNodeId = source.id;
+    created.runInputRefs = [{...sourceRef}];
+    created.runSettings = runSettings;
+    created.runStartedAt = nowMs();
+    created.running = true;
+    created.pending = 1;
+    // 放大结果是独立节点：不画与源节点的连线（runInputRefs/sourceNodeId 仍保留为元数据），
+    // 节点渲染层按「高清放大」标题展示且不打开生成面板。
+    selectedId = created.id;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    render();
+    updateComposer();
+    scheduleSave();
+    const run = {nodeId:created.id, nodeType:created.type, kind:'image', settings:runSettings, prompt:'', refs:[sourceRef]};
+    const startedAt = nowMs();
+    try {
+        const inputName = await comfyNameForRef(sourceRef);
+        const result = await runQueuedSmartComfyGenerate({
+            workflow_json:SMART_COMFY_UPSCALE_WORKFLOW,
+            params:{'157':{image:inputName}},
+            type:'upscale',
+            client_id:smartClientId
+        });
+        const outputs = smartComfyUpscaleOutputs(result);
+        if(!outputs.length) throw new Error(tr('smart.errComfyEmpty'));
+        const live = liveSmartNode(created) || created;
+        live.images = outputs;
+        live.activeImageIndex = 0;
+        live.title = tr('smart.comfyUpscaleDone');
+        live.outputKind = 'image';
+        live.runFinishedAt = nowMs();
+        markSmartNodeComplete(live);
+        addSmartGenerationLog({run, outputs, runMs:nowMs() - startedAt});
+        selectedId = live.id;
+        selectedImage = {nodeId:live.id, index:0};
+        render();
+        scheduleSave();
+        toast(tr('smart.comfyUpscaleDone'));
+    } catch(error){
+        const live = liveSmartNode(created) || created;
+        const detail = String(error?.message || error || tr('smart.errRunFailed')).slice(0, 600);
+        live.title = tr('smart.comfyUpscaleFailedTitle');
+        live.lastRunError = detail;
+        markSmartNodeFailedIfIdle(live, detail);
+        addSmartGenerationLog({run, runMs:nowMs() - startedAt, error:detail});
+        render();
+        scheduleSave();
+        toast(trf('smart.comfyUpscaleFailed', {error:detail}).slice(0, 180));
+    } finally {
+        smartComfyUpscaleRequests.delete(requestKey);
     }
 }
 const SMART_ERASE_WORKFLOW = 'system/移除-Kontext-api.json';
@@ -11552,7 +11743,7 @@ function render(){
         const imgs = node.images || [];
         const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
         const isErase = isSmartEraseNode(node);
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -11566,7 +11757,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -11576,7 +11767,7 @@ function render(){
         // anchored to that card.
         const renderedNodeHeight = layout.height;
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr('smart.eraseHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr('smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
@@ -13470,6 +13661,7 @@ function smartConnectionNodeLabel(node){
     if(isSmartVideoGenerationNode(node)) return '视频生成';
     if(isSmartBackgroundRemovalNode(node)) return tr('smart.removeBackground');
     if(isSmartEraseNode(node)) return tr('smart.erase');
+    if(isSmartComfyUpscaleNode(node)) return tr('smart.comfyUpscaleOutputMain');
     if(isSmartImageGenerationNode(node)) return '图片生成';
     if(isSmartUploadNode(node)) return uploadNodeLabel(uploadMediaKindForNode(node));
     if(node?.type === 'smart-prompt') return tr('smart.textNode');
@@ -21675,13 +21867,15 @@ function probeMediaDuration(url, kind='audio'){
 async function runSmartComfyUpscale(imageUrl, resolution){
     if(!imageUrl) throw new Error(tr('smart.errRunFailed'));
     const inputName = await comfyNameForRef({url:imageUrl, name:'smart-upscale-input.png'});
+    // 指向 2K高清放大-Klein 9B 工作流：157 是 LoadImage 入口；
+    // 181（Image_Resize_sum）把输入缩放到目标分辨率（2X/2048、4X/4096 由调用方传入）。
     return runQueuedSmartComfyGenerate({
-        workflow_json:'system/upscale.json',
+        workflow_json:SMART_COMFY_UPSCALE_WORKFLOW,
         params:{
-            "15":{image:inputName},
-            "172":{seed:Math.floor(Math.random() * 4294967295), resolution:Number(resolution || 2048)}
+            "157":{image:inputName},
+            "181":{width:Number(resolution || 2048), height:Number(resolution || 2048)}
         },
-        type:'enhance',
+        type:'upscale',
         client_id:smartClientId
     });
 }

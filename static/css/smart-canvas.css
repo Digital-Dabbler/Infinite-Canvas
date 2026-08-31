@@ -90,6 +90,16 @@ body.smart-canvas-panning iframe { pointer-events:none !important; }
 .image-action-toolbar svg { width:15px; height:15px; }
 .image-toolbar-remove-background .background-removal-mark { width:15px; height:15px; box-sizing:border-box; border:1px solid currentColor; border-radius:4px; background:conic-gradient(from 90deg, color-mix(in srgb, currentColor 34%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 34%, transparent) 0 75%, transparent 0) 0 0 / 6px 6px; }
 .image-action-divider { flex:0 0 1px; width:1px; height:18px; margin:0 3px; background:var(--line); }
+.image-upscale-menu { position:absolute; left:0; top:0; z-index:56; display:none; flex-direction:column; gap:2px; min-width:158px; padding:6px; border:1px solid var(--line); border-radius:12px; background:color-mix(in srgb, var(--panel) 94%, transparent); box-shadow:0 16px 38px var(--shadow); backdrop-filter:blur(18px); }
+.image-upscale-menu::before { content:""; position:absolute; left:0; right:0; top:-10px; height:10px; }
+.image-upscale-menu.open { display:flex; }
+.image-upscale-menu-title { padding:2px 8px 4px; color:var(--faint); font-size:calc(9.5px * var(--canvas-font-scale, 1)); line-height:1.2; font-weight:600; letter-spacing:.06em; text-transform:uppercase; }
+.upscale-mode-option { min-height:30px; padding:5px 8px; border-radius:8px; display:flex; align-items:center; gap:7px; color:var(--muted); background:transparent; border:1px solid transparent; font-size:calc(11px * var(--canvas-font-scale, 1)); line-height:1.2; font-weight:800; text-align:left; white-space:nowrap; cursor:pointer; transition:background .14s ease,color .14s ease,border-color .14s ease,transform .14s ease; }
+.upscale-mode-option svg { width:15px; height:15px; flex:0 0 auto; }
+.upscale-mode-option:hover:not(:disabled) { background:var(--soft); border-color:var(--line); color:var(--text); transform:translateY(-1px); }
+.upscale-mode-option:disabled { opacity:.34; cursor:not-allowed; }
+.upscale-mode-option:focus-visible { outline:2px solid var(--strong); outline-offset:1px; }
+body.smart-canvas-interacting .image-upscale-menu { display:none !important; }
 .smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.smart-outline-toggle { position:absolute; top:22px; z-index:56; width:96px; height:40px; padding:0 15px; border-radius:999px; background:var(--panel); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px var(--shadow); backdrop-filter:blur(16px); display:flex; align-items:center; justify-content:center; gap:8px; font-size:calc(12px * var(--canvas-font-scale, 1)); font-weight:750; white-space:nowrap; transition:transform .14s ease, border-color .14s ease; }
 .smart-log-toggle { right:130px; }
 .smart-outline-toggle { right:454px; }

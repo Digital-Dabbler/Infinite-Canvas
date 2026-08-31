@@ -143,6 +143,11 @@
             <button type="button" data-image-toolbar-action="download" title="下载"><i data-lucide="download"></i><span>下载</span></button>
             <button type="button" class="image-toolbar-delete" data-image-toolbar-action="delete" title="删除当前结果"><i data-lucide="trash-2"></i><span>删除</span></button>
         </div>
+        <div id="imageUpscaleMenu" class="image-upscale-menu" role="menu" aria-label="放大方式" aria-hidden="true">
+            <div class="image-upscale-menu-title" data-i18n="smart.upscaleMode">放大方式</div>
+            <button type="button" class="upscale-mode-option" data-upscale-mode="jimeng" role="menuitem" data-i18n="smart.upscaleModeJimeng" data-i18n-title="smart.upscaleModeJimengHint" title="使用即梦 image_upscale 超分"><i data-lucide="sparkles"></i><span>即梦</span></button>
+            <button type="button" class="upscale-mode-option" data-upscale-mode="comfy" role="menuitem" data-i18n="smart.upscaleModeComfy" data-i18n-title="smart.upscaleModeComfyHint" title="使用本地 ComfyUI 放大工作流"><i data-lucide="cpu"></i><span>ComfyUI</span></button>
+        </div>
         <div id="angleControlModal" class="angle-control-modal" role="dialog" aria-modal="true" aria-labelledby="angleControlTitle" aria-hidden="true">
             <section class="angle-control-panel">
                 <header class="angle-control-head">

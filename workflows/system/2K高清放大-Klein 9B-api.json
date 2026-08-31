@@ -1,0 +1,543 @@
+{
+  "157": {
+    "inputs": {
+      "image": "111 (1).jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "159": {
+    "inputs": {
+      "method": "mkl",
+      "strength": 1,
+      "multithread": true,
+      "image_target": [
+        "189",
+        0
+      ],
+      "image_ref": [
+        "157",
+        0
+      ]
+    },
+    "class_type": "ColorMatchV2",
+    "_meta": {
+      "title": "ColorMatchV2"
+    }
+  },
+  "162": {
+    "inputs": {
+      "filename_prefix": "高清放大",
+      "images": [
+        "159",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "163": {
+    "inputs": {
+      "upscale_model": [
+        "164",
+        0
+      ],
+      "image": [
+        "162",
+        0
+      ]
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": {
+      "title": "使用模型放大图像"
+    }
+  },
+  "164": {
+    "inputs": {
+      "model_name": "1xSkinContrast-High-SuperUltraCompact.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "加载放大模型"
+    }
+  },
+  "165": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "K采样器选择"
+    }
+  },
+  "166": {
+    "inputs": {
+      "noise": [
+        "168",
+        0
+      ],
+      "guider": [
+        "169",
+        0
+      ],
+      "sampler": [
+        "165",
+        0
+      ],
+      "sigmas": [
+        "167",
+        0
+      ],
+      "latent_image": [
+        "177",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "自定义采样器（高级）"
+    }
+  },
+  "167": {
+    "inputs": {
+      "steps": 4,
+      "width": [
+        "182",
+        0
+      ],
+      "height": [
+        "182",
+        1
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2调度器"
+    }
+  },
+  "168": {
+    "inputs": {
+      "noise_seed": 373012813779713
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "随机噪波"
+    }
+  },
+  "169": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "185",
+        0
+      ],
+      "positive": [
+        "178",
+        0
+      ],
+      "negative": [
+        "179",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG引导器"
+    }
+  },
+  "170": {
+    "inputs": {
+      "unet_name": "Flux2-Klein-9B-True-v2-fp8mixed.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "171": {
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "174": {
+    "inputs": {
+      "text": "transform the image to realistic photograph. add realistic details to the corrupted image. restore high frequence details from the corrupted image.\n8K，4K，高清，增加细节",
+      "clip": [
+        "171",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "175": {
+    "inputs": {
+      "conditioning": [
+        "174",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "条件零化"
+    }
+  },
+  "176": {
+    "inputs": {
+      "samples": [
+        "166",
+        0
+      ],
+      "vae": [
+        "180",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "177": {
+    "inputs": {
+      "width": [
+        "182",
+        0
+      ],
+      "height": [
+        "182",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "空Latent图像（Flux2）"
+    }
+  },
+  "178": {
+    "inputs": {
+      "conditioning": [
+        "174",
+        0
+      ],
+      "latent": [
+        "183",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "参考Latent"
+    }
+  },
+  "179": {
+    "inputs": {
+      "conditioning": [
+        "175",
+        0
+      ],
+      "latent": [
+        "183",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "参考Latent"
+    }
+  },
+  "180": {
+    "inputs": {
+      "vae_name": "Flux.2_full_encoder_small_decoder.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "181": {
+    "inputs": {
+      "width": 2048,
+      "height": 2048,
+      "upscale_method": "bilinear",
+      "keep_proportion": "resize",
+      "pad_color": "black",
+      "crop_position": "center",
+      "divisible_by": 16,
+      "pad_mask_remove": true,
+      "image": [
+        "157",
+        0
+      ]
+    },
+    "class_type": "Image_Resize_sum",
+    "_meta": {
+      "title": "Image_调整尺寸_总"
+    }
+  },
+  "182": {
+    "inputs": {
+      "image": [
+        "181",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "获取图像尺寸"
+    }
+  },
+  "183": {
+    "inputs": {
+      "pixels": [
+        "181",
+        0
+      ],
+      "vae": [
+        "180",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "185": {
+    "inputs": {
+      "lora_name": "Flux.2 Klein 9B\\f2k_9B_lcs_consist_20260415.safetensors",
+      "strength_model": 1,
+      "model": [
+        "170",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoRA加载器（仅模型）"
+    }
+  },
+  "188": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "lumina2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "189": {
+    "inputs": {
+      "samples": [
+        "196",
+        0
+      ],
+      "vae": [
+        "194",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "190": {
+    "inputs": {
+      "conditioning": [
+        "191",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "条件零化"
+    }
+  },
+  "191": {
+    "inputs": {
+      "text": [
+        "197",
+        0
+      ],
+      "clip": [
+        "188",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP文本编码"
+    }
+  },
+  "192": {
+    "inputs": {
+      "unet_name": "ZImageTurbo\\redcraft23INT8INT4FP8_redzit222026HD.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "193": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "192",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "采样算法（AuraFlow）"
+    }
+  },
+  "194": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "195": {
+    "inputs": {
+      "pixels": [
+        "176",
+        0
+      ],
+      "vae": [
+        "194",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "196": {
+    "inputs": {
+      "seed": 81214233832259,
+      "steps": 4,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "beta57",
+      "denoise": 0.3,
+      "model": [
+        "193",
+        0
+      ],
+      "positive": [
+        "191",
+        0
+      ],
+      "negative": [
+        "190",
+        0
+      ],
+      "latent_image": [
+        "195",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器"
+    }
+  },
+  "197": {
+    "inputs": {
+      "输入模式": "图片",
+      "提示词": "",
+      "系统提示词": "你是一位极具观察力的视觉分析专家。请先**判断**这张图片的主体类型（是人物、建筑、风景还是静物产品），然后生成一段高质量的中文提示词。\n\n请严格遵守以下逻辑：\n\n1.  **主体判定与描述（至关重要）**：\n    * **若画面是建筑/空间**：详细描述建筑风格（如哥特式、现代主义）、内部结构（如拱顶、梁柱）、材质（石材、木质、金属）及空间透视感。**严禁在描述中虚构不存在的人物。**\n    * **若画面是静物/产品**：聚焦于物体的材质光泽、纹理细节、颜色搭配及摆放形态。\n    * **若画面包含人物**：才需要描述人物的性别、服饰、发型及动作。**如果画面无人，请直接跳过此项，不要编造。**\n\n2.  **环境与光影**：\n    * 描述光源来源（自然光、人造灯光、丁达尔光束）、光影的明暗对比、色调氛围（庄重、神秘、明亮）。\n\n3.  **构图与视角**：\n    * 描述镜头语言（如对称构图、广角仰视、微距特写、景深虚化）。\n\n**输出要求**：\n* 输出一段连贯的中文自然语言，不要分点。\n* **若原图中没有人物，描述中绝不能出现“男人、女人、行人”等词汇。**\n* 字数控制在500字以内。",
+      "最多帧数": 24,
+      "最大边长": 1024,
+      "最大生成token": 1024,
+      "温度": 0.7,
+      "top_p": 0.9,
+      "top_k": 20,
+      "重复惩罚": 1,
+      "频率惩罚": 0,
+      "存在惩罚": 0,
+      "seed": 1044665808817765,
+      "输出think块": true,
+      "生成后自动卸载模型": true,
+      "qwen模型": [
+        "198",
+        0
+      ],
+      "图片": [
+        "176",
+        0
+      ]
+    },
+    "class_type": "QwenTE_ImageInfer",
+    "_meta": {
+      "title": "Qwen llama TE 图像推理"
+    }
+  },
+  "198": {
+    "inputs": {
+      "模型系列": "Qwen3.5-VL",
+      "主模型": "Q35-4B-G-UD\\Qwen3.5-4B-UD-Q4_K_XL.gguf",
+      "视觉投影mmproj": "Q35-4B-G-UD\\mmproj-Qwen3.5-4B-BF16.gguf",
+      "启用思考": false,
+      "保留历史think": false,
+      "上下文长度": 8192,
+      "GPU层数": -1,
+      "KV缓存K类型": "默认(F16)",
+      "KV缓存V类型": "默认(F16)",
+      "MoE专家上CPU": false,
+      "前N层专家上CPU": 0,
+      "Qwen3.8推理强度": "xhigh"
+    },
+    "class_type": "QwenTE_ModelLoader",
+    "_meta": {
+      "title": "Qwen llama TE 模型加载器"
+    }
+  },
+  "199": {
+    "inputs": {
+      "filename_prefix": "真实皮肤增强",
+      "images": [
+        "163",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "200": {
+    "inputs": {
+      "source": [
+        "197",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  }
+}
