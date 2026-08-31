@@ -1521,6 +1521,12 @@ function isSmartGenerationResultKind(node, kind='image'){
 function isSmartImageNode(node){
     return Boolean(isSmartUploadNode(node) || isSmartGenerationNode(node));
 }
+function isSmart3dDirectorNode(node){
+    return Boolean(node && node.type === 'smart-3d-director');
+}
+function hasSmart3dDirectorConnection(connection, sourceNodes=nodes){
+    return Boolean(connection && (sourceNodes || []).some(node => node.id === connection.from || node.id === connection.to ? isSmart3dDirectorNode(node) : false));
+}
 // 智能分组已退出运行时；旧数据会在 normalizeLegacySmartNode() 中转换成生成节点。
 function isSmartGroupNode(){
     return false;
@@ -1620,6 +1626,16 @@ function normalizeLegacySmartNode(node){
         node.activeImageIndex = count ? index : 0;
     }
     if(isSmartImageNode(node) && node.historyFor) node.isHistoryGroup = true;
+    if(isSmart3dDirectorNode(node)){
+        node.title = String(node.title || tr('smart.directorNodeTitle') || '3D导演台');
+        node.directorScene = node.directorScene && typeof node.directorScene === 'object' ? node.directorScene : {version:1, entities:[], camera:{position:[6,4,7], target:[0,1,0], fov:45}, ratio:'16:9'};
+        node.directorScene.version = 1;
+        if(!Array.isArray(node.directorScene.entities)) node.directorScene.entities = [];
+        node.directorScene.entities = node.directorScene.entities.slice(0, 30);
+        node.directorThumb = typeof node.directorThumb === 'string' && node.directorThumb.length <= 55000 ? node.directorThumb : '';
+        node.w = Math.max(220, Math.min(360, Number(node.w) || 260));
+        node.h = Math.max(190, Math.min(360, Number(node.h) || 240));
+    }
     if(node.type === 'smart-prompt'){
         node.title = node.title === 'Prompt' || !node.title ? '文本' : node.title;
         node.llmInstruction = String(node.llmInstruction || '');
@@ -1706,6 +1722,7 @@ function migrateLegacySmartCanvasNodes(rawNodes=[], rawConnections=[]){
         const targets = toIds.slice(0, 1);
         return fromIds.flatMap(from => targets.map(to => ({...connection, from, to}))).filter(connection => {
             if(!connection.from || !connection.to || connection.from === connection.to) return false;
+            if(hasSmart3dDirectorConnection(connection, migrated)) return false;
             const key = `${connection.from}|${connection.to}|${connection.kind || 'flow'}`;
             if(keys.has(key)) return false;
             keys.add(key);
@@ -2656,6 +2673,7 @@ function smartGroupImageGridLayout(node){
     return {cols, rows, visibleRows, width, height, thumb:baseThumb};
 }
 function imageLayout(images, scale=1, node=null){
+    if(isSmart3dDirectorNode(node)) return {cols:1, rows:1, width:Number(node.w) || 260, height:Number(node.h) || 240, thumb:96, single:true};
     if(node?.type === 'smart-group'){
         const groupThumbLayout = smartGroupThumbLayout(node);
         if(groupThumbLayout) return groupThumbLayout;
@@ -8849,7 +8867,7 @@ function shellPoint(event){
     return {x:event.clientX - rect.left, y:event.clientY - rect.top};
 }
 function renderConnections(){
-    const conns = (canvas?.connections || []).map((conn, index) => ({...conn, index})).filter(c => nodes.some(n => n.id === c.from) && nodes.some(n => n.id === c.to));
+    const conns = (canvas?.connections || []).map((conn, index) => ({...conn, index})).filter(c => nodes.some(n => n.id === c.from) && nodes.some(n => n.id === c.to) && !hasSmart3dDirectorConnection(c));
     const cascadeKeys = cascadeConnectionKeys();
     const activeCascadeCount = (smartCascadeRunPath?.states && Object.values(smartCascadeRunPath.states).filter(state => state && state !== 'done').length) || 0;
     const reduceMotion = activeCascadeCount > 24;
@@ -10035,6 +10053,7 @@ function smartGroupBodyHtml(node){
     </div>`;
 }
 function nodeBodyHtml(node, layout){
+    if(isSmart3dDirectorNode(node)) return `<div class="director3d-card"><div class="director3d-thumb">${node.directorThumb ? `<img src="${escapeAttr(node.directorThumb)}" alt="3D构图缩略图">` : '<i data-lucide="cuboid"></i>'}</div><p>${escapeHtml(tr('smart.directorNodeHint') || '摆放人物、道具和机位，导出构图参考图。')}</p><button type="button" class="director3d-open" data-director3d-open="${escapeAttr(node.id)}">${escapeHtml(tr('smart.directorOpen') || '打开导演台')}</button></div>`;
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
@@ -11743,7 +11762,7 @@ function render(){
         const imgs = node.images || [];
         const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
         const isErase = isSmartEraseNode(node);
-        const title = node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -11757,7 +11776,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -11768,7 +11787,7 @@ function render(){
         const renderedNodeHeight = layout.height;
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
         const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr('smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
+        const html = `<div class="image-node ${isSmart3dDirectorNode(node) ? 'director3d-node' : ''} ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
             ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartUploadNode(node) && imgs.length) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -13259,7 +13278,11 @@ function bindNodeEvents(){
             if(timerHidden) refreshRunTimerPills();
             updateComposer();
         };
-        if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => e.stopPropagation();
+        el.querySelectorAll('[data-director3d-open]').forEach(button => {
+            button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openDirector3d(button.dataset.director3dOpen || id); });
+        });
+        if(isSmart3dDirectorNode(nodeForControls)) el.ondblclick = event => { event.preventDefault(); event.stopPropagation(); openDirector3d(id); };
+        if(nodeForControls?.type !== 'smart-group' && !isSmart3dDirectorNode(nodeForControls)) el.ondblclick = e => e.stopPropagation();
         const nodeDrop = el.querySelector('.node-drop');
         nodeDrop?.addEventListener('mousedown', e => {
             if(e.button !== 0) return;
@@ -22653,6 +22676,7 @@ function createNodeFromMenu(type){
     closeCreateMenu();
     if(type === 'workflow-group') return createWorkflowOrganizerGroup(p);
     if(type === 'note') return createSmartNote(p);
+    if(type === 'director3d') return createDirector3dNode(p);
     if(type === 'image-generation') return createImageGenerationNode(p);
     if(type === 'video-generation') return createVideoGenerationNode(p);
     if(type === 'image'){
@@ -22673,6 +22697,53 @@ function createNodeFromMenu(type){
     createMenuGroupId = '';
     return created;
 }
+function createDirector3dNode(point){
+    if(!canvas) return null;
+    pushUndo();
+    const node = normalizeLegacySmartNode({id:uid('director3d'), type:'smart-3d-director', title:tr('smart.directorNodeTitle') || '3D导演台', x:Math.round(point.x - 130), y:Math.round(point.y - 120), w:260, h:240, directorScene:{version:1, entities:[], camera:{position:[6,4,7], target:[0,1,0], fov:45}, ratio:'16:9'}, directorThumb:'', created_at:Date.now()});
+    nodes.push(node); selectedId=node.id; selectedIds=[]; selectedImage={nodeId:'',index:-1};
+    render(); scheduleSave();
+    return node;
+}
+const director3dModal = document.getElementById('director3dModal');
+const director3dFrame = document.getElementById('director3dFrame');
+let activeDirector3dNodeId = '';
+function openDirector3d(nodeId){
+    const node = nodes.find(item => item.id === nodeId && isSmart3dDirectorNode(item));
+    if(!node || !director3dModal || !director3dFrame) return;
+    activeDirector3dNodeId = node.id;
+    director3dModal.classList.add('open'); director3dModal.setAttribute('aria-hidden','false');
+    director3dFrame.src = `/static/director3d.html?embed=canvas&canvas_id=${encodeURIComponent(canvasId || '')}&node_id=${encodeURIComponent(node.id)}`;
+}
+function closeDirector3d(){
+    director3dModal?.classList.remove('open'); director3dModal?.setAttribute('aria-hidden','true');
+    if(director3dFrame) director3dFrame.src = 'about:blank';
+    activeDirector3dNodeId = '';
+}
+async function insertDirector3dImage(data, name){
+    const node = nodes.find(item => item.id === activeDirector3dNodeId && isSmart3dDirectorNode(item));
+    if(!node || typeof data !== 'string' || !data.startsWith('data:image/') || data.length > 8 * 1024 * 1024) throw new Error('截图数据无效或过大');
+    const res = await fetch('/api/ai/upload-base64',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data,name:name || '3d-composition.jpg',content_type:'image/jpeg'})});
+    if(!res.ok) throw new Error(await responseErrorMessage(res,'上传截图失败'));
+    const item=(await res.json())?.files?.[0]; if(!item?.url) throw new Error('上传截图失败');
+    pushUndo(); const rect=nodeRect(node); const created=createImageNodeAt({x:rect.x+rect.width+190,y:rect.y+rect.height/2},[item],{select:true,skipUndo:true});
+    selectedId=created.id; selectedIds=[]; selectedImage={nodeId:created.id,index:0}; render(); scheduleSave(); toast('已将构图截图加入画布');
+}
+window.addEventListener('message', event => {
+    const data=event.data || {};
+    if(event.origin !== location.origin || event.source !== director3dFrame?.contentWindow || data.nodeId !== activeDirector3dNodeId || !String(data.type || '').startsWith('director3d:')) return;
+    const node=nodes.find(item => item.id===activeDirector3dNodeId && isSmart3dDirectorNode(item)); if(!node) return;
+    if(data.type==='director3d:ready') { director3dFrame.contentWindow?.postMessage({type:'director3d:load',nodeId:node.id,scene:node.directorScene},location.origin); return; }
+    if(data.type==='director3d:sync-scene'){
+        if(!data.scene || typeof data.scene!=='object' || JSON.stringify(data.scene).length>256*1024) return;
+        node.directorScene=data.scene; node.directorThumb=typeof data.thumb==='string' && data.thumb.length<=55000 ? data.thumb : node.directorThumb; render(); scheduleSave(); return;
+    }
+    if(data.type==='director3d:export-image') insertDirector3dImage(data.data,data.name).catch(error=>toast(error.message || '导出截图失败'));
+    if(data.type==='director3d:prompt' && typeof data.text==='string' && data.text.length<=3000){ pushUndo(); const created=createPromptNode(node.x+node.w+180,node.y,{skipUndo:true,select:true}); created.text=data.text; render(); scheduleSave(); toast('已创建构图提示词节点'); }
+    if(data.type==='director3d:close') closeDirector3d();
+});
+document.getElementById('rhDirector3d')?.addEventListener('click', () => createDirector3dNode(viewportCenter()));
+director3dModal?.addEventListener('click', event => { if(event.target===director3dModal) closeDirector3d(); });
 // 画布平移：鼠标中键在画布任意位置（包括节点、工作流分组内部）都固定为移动画布，
 // 避免鼠标落在分组/节点上时误触发移动分组。左键空白处拖拽的既有行为保持不变。
 const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.upload-resource-picker,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.angle-control-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';

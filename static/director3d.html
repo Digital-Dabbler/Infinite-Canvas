@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>3D 导演台</title>
+  <script src="/static/js/i18n.js"></script>
+  <script type="importmap">{"imports":{"three":"/static/vendor/js/three-0.160.0.module.js"}}</script>
+  <link rel="stylesheet" href="/static/css/director3d.css">
+</head>
+<body>
+  <main class="director-app">
+    <header><div><strong>3D 导演台</strong><small id="status">正在初始化场景…</small></div><div class="header-actions"><button data-action="camera">机位视角</button><button data-action="capture">导出到画布</button><button data-action="prompt">构图提示词</button><button data-action="close">关闭</button></div></header>
+    <section class="director-layout"><div id="stage" class="director-stage"></div><aside class="director-inspector"><h2>场景</h2><button data-action="character">添加人物</button><button data-action="box">添加方块</button><button data-action="sphere">添加球体</button><button data-action="cylinder">添加圆柱</button><hr><label>取景比例 <select id="ratio"><option value="16:9">16:9</option><option value="9:16">9:16</option><option value="1:1">1:1</option></select></label><label>FOV <input id="fov" type="range" min="20" max="90" value="45"><output id="fovValue">45°</output></label><p>拖拽旋转视角；选中对象后使用右上角移动控件。场景会自动保存。</p></aside></section>
+  </main>
+  <script type="module" src="/static/js/director3d.js"></script>
+</body></html>

@@ -91,6 +91,7 @@
             <button type="button" data-rh-action="history" aria-expanded="false"><i data-lucide="history"></i><em data-i18n="smart.railHistory">生成历史</em></button>
             <button type="button" data-rh-action="outline" aria-expanded="false"><i data-lucide="list-tree"></i><em data-i18n="smart.railOutline">画布目录</em></button>
             <button type="button" data-rh-action="clip" aria-expanded="false"><i data-lucide="scissors"></i><em data-i18n="smart.railClip">剪辑</em></button>
+            <button id="rhDirector3d" type="button"><i data-lucide="cuboid"></i><em data-i18n="smart.railDirector3d">3D导演台</em></button>
         </nav>
         <div class="rh-view-controls">
             <button id="rhMinimapToggle" type="button" title="小地图" aria-label="小地图"><i data-lucide="map"></i></button>
@@ -246,6 +247,10 @@
                 <button class="create-card" type="button" data-create-type="note">
                     <span class="create-card-icon"><i data-lucide="sticky-note"></i></span>
                     <span><div class="create-card-title" data-i18n="smart.addNote">添加便签</div><div class="create-card-sub" data-i18n="smart.addNoteSub">记录说明、状态和待办</div></span>
+                </button>
+                <button class="create-card" type="button" data-create-type="director3d">
+                    <span class="create-card-icon"><i data-lucide="cuboid"></i></span>
+                    <span><div class="create-card-title" data-i18n="smart.createDirector3d">3D导演台</div><div class="create-card-sub" data-i18n="smart.createDirector3dSub">摆放人物、道具和机位</div></span>
                 </button>
                 <button class="create-card" type="button" data-create-type="prompt">
                     <span class="create-card-icon"><i data-lucide="text-cursor-input"></i></span>
@@ -607,6 +612,9 @@
             </section>
         </div>
         <div id="mentionPreview" class="mention-preview"><img alt="preview"></div>
+        <section id="director3dModal" class="director3d-modal" aria-hidden="true">
+            <div class="director3d-dialog" role="dialog" aria-modal="true" aria-label="3D导演台"><iframe id="director3dFrame" title="3D导演台"></iframe></div>
+        </section>
     </div>
     <script src="/static/js/resource-preview-panel.js?v=2026.07.29.1788022411"></script>
     <script src="/static/js/smart-canvas.js?v=2026.07.29.1788022411"></script>

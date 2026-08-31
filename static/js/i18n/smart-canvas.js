@@ -1,6 +1,12 @@
 (function(){
     if(!window.StudioI18n) return;
     window.StudioI18n.register({
+        "smart.railDirector3d": { zh: "3D导演台", en: "3D Director" },
+        "smart.createDirector3d": { zh: "3D导演台", en: "3D Director" },
+        "smart.createDirector3dSub": { zh: "摆放人物、道具和机位", en: "Place characters, props, and cameras" },
+        "smart.directorNodeTitle": { zh: "3D导演台", en: "3D Director" },
+        "smart.directorNodeHint": { zh: "摆放人物、道具和机位，导出构图参考图。", en: "Stage characters, props, and cameras, then export a composition reference." },
+        "smart.directorOpen": { zh: "打开导演台", en: "Open director" },
         "canvas.adaptiveRatio": { zh: "适配比例", en: "Adaptive Ratio" },
         "canvas.applyCrop": { zh: "应用裁剪", en: "Apply Crop" },
         "canvas.applyMask": { zh: "保存遮罩", en: "Save Mask" },
