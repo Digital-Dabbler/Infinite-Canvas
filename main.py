@@ -309,6 +309,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
 # --- 配置区域 ---
 
 CLIENT_ID = str(uuid.uuid4())
+# 每次进程启动生成的启动令牌：前端画布页加载时记录，此后在 meta 轮询里对比；
+# 一旦变化即表示“服务重启过”，提示已开着的旧版本页面刷新。仅在内存中，重启即换。
+SERVER_BOOT_ID = str(uuid.uuid4())
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WORKFLOW_DIR = os.path.join(BASE_DIR, "workflows")
 WORKFLOW_PATH = os.path.join(WORKFLOW_DIR, "Z-Image.json")
@@ -22081,6 +22084,7 @@ async def get_canvas_meta(canvas_id: str):
         "title": canvas.get("title", "未命名画布"),
         "icon": canvas.get("icon", "layers"),
         "kind": "smart",
+        "boot_id": SERVER_BOOT_ID,
     }
 
 @app.post("/api/canvases/{canvas_id}/meta")
@@ -22191,7 +22195,7 @@ async def reset_canvas_cover(canvas_id: str):
 
 @app.get("/api/canvases/{canvas_id}")
 async def get_canvas(canvas_id: str):
-    return {"canvas": load_canvas(canvas_id)}
+    return {"canvas": load_canvas(canvas_id), "boot_id": SERVER_BOOT_ID}
 
 @app.post("/api/canvases/{canvas_id}/media-fingerprints")
 async def canvas_media_fingerprints(canvas_id: str, payload: CanvasMediaFingerprintRequest, request: Request):

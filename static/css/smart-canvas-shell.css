@@ -4,6 +4,34 @@
     position:fixed; z-index:65; top:0; left:0; right:0; height:66px; display:flex; align-items:center; justify-content:space-between;
     padding:0 18px 0 20px; pointer-events:none;
 }
+/* 服务重启提示横幅：常驻在顶栏下方，提醒已开着的旧版本页面刷新。 */
+.server-restart-banner {
+    position:fixed; top:66px; left:0; right:0; z-index:180;
+    display:flex; align-items:center; justify-content:center; gap:14px;
+    padding:10px 18px;
+    background:color-mix(in srgb,var(--panel) 96%,transparent);
+    border-bottom:1px solid var(--line);
+    box-shadow:0 14px 34px var(--shadow);
+    backdrop-filter:blur(16px);
+    color:var(--text);
+    font-size:calc(13px * var(--canvas-font-scale, 1));
+    font-weight:800;
+    transform:translateY(-120%);
+    transition:transform .22s ease;
+}
+.server-restart-banner.show { transform:translateY(0); }
+.server-restart-banner-text { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.server-restart-banner-btn {
+    flex:0 0 auto; height:34px; padding:0 16px; border:0; border-radius:10px;
+    background:var(--strong); color:var(--strong-text);
+    font-size:calc(13px * var(--canvas-font-scale, 1)); font-weight:850; cursor:pointer;
+    box-shadow:0 8px 20px var(--shadow);
+}
+.server-restart-banner-btn:hover { filter:brightness(1.06); }
+@media(max-width:800px){
+    .server-restart-banner { flex-wrap:wrap; }
+    .server-restart-banner-text { white-space:normal; text-align:center; }
+}
 .rh-header-left,.rh-header-right { display:flex; align-items:center; gap:9px; pointer-events:auto; }
 .rh-brand { height:42px; display:flex; align-items:center; gap:10px; padding:0 10px; border:0; background:transparent; color:var(--text); font-size:calc(15px * var(--canvas-font-scale, 1)); font-weight:800; }
 .rh-brand img { width:25px; height:25px; object-fit:contain; }

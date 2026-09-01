@@ -104,6 +104,8 @@
         "canvas.success": { zh: "成功", en: "Success" },
         "smart.parameter": { zh: "参数", en: "Parameter" },
         "smart.title": { zh: "智能画布", en: "Smart Canvas" },
+        "smart.serverUpdated": { zh: "服务已更新，请刷新页面以获取最新版本", en: "The service has been updated. Refresh to get the latest version." },
+        "smart.refreshNow": { zh: "立即刷新", en: "Refresh now" },
         "smart.engineGroupApi": { zh: "在线 API", en: "Online APIs" },
         "smart.engineGroupCli": { zh: "CLI", en: "CLI" },
         "smart.engineGroupLocal": { zh: "本地服务", en: "Local Services" },
