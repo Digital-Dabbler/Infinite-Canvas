@@ -8349,7 +8349,12 @@ function handleCanvasPresenceMessage(data={}){
     const editors = (data.editors || []).filter(editor => editor.client_id !== smartClientId);
     canvasPresence.set(data.node_id, editors);
     const el = world.querySelector(`.image-node[data-id="${CSS.escape(data.node_id || '')}"]`);
-    if(el){ el.classList.toggle('collaboration-editing', editors.length > 0); el.title = editors.length ? `正在编辑：${editors.map(item => item.name).join('、')}` : ''; }
+    if(el){
+        const names = editors.map(item => item.name).filter(Boolean).join('、');
+        el.classList.toggle('collaboration-editing', editors.length > 0);
+        el.dataset.collaborationEditors = names;
+        el.title = names ? `正在编辑：${names}` : '';
+    }
 }
 function sendCanvasPresence(nodeId){
     presenceNodeId = nodeId || '';
