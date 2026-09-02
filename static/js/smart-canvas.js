@@ -6880,6 +6880,14 @@ let connectionLayerRaf = 0;
 // 等保存成功后再补拉（pendingRemoteMerge）。这是所有“服务端→客户端”状态的唯一闸门。
 let canvasDirty = false;
 let pendingRemoteMerge = false;
+// 每次本地改动（scheduleSave）自增的修订号：保存开始时记录，保存完成时对比，
+// 若期间又产生了新改动则不清除 canvasDirty（其 scheduleSave 定时器会再存），
+// 避免“旧保存成功后把新改动误标为已保存”，从而被后续服务端合并用旧快照回退。
+let canvasEditRev = 0;
+// 服务端启动令牌：加载时记录，meta 轮询里对比；变化即表示服务重启过，
+// 提示“请刷新”横幅。只存内存，不落 localStorage——重启后新开的页面拿到
+// 的是新令牌，天然不发通知。
+let knownServerBootId = '';
 function mergeSmartImageLists(localImgs, remoteImgs){
     const out = [];
     const seen = new Set();
@@ -7290,7 +7298,15 @@ async function mergeReloadCanvasNow(){
         const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
         if(!res.ok) return;
         const data = await res.json();
-        if(data && data.canvas) applyMergedServerCanvas(data.canvas);
+        if(!data || !data.canvas) return;
+        // 拉取期间用户可能又产生了新的本地改动（删除/连线/移动等）：此时旧快照
+        // 绝不能覆盖内存，重新走门控，等保存成功后再补拉。这是修复“删除/移动后
+        // 立马回退”的关键二次校验（fetch 是异步的，入口处的检查不够）。
+        if(canvasDirty || dragState || selectionState){
+            pendingRemoteMerge = true;
+            return;
+        }
+        applyMergedServerCanvas(data.canvas);
     } catch(e) {}
 }
 function scheduleCanvasMergeReload(delay=200){
@@ -7316,9 +7332,46 @@ function startCanvasMetaPoll(){
             const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/meta`);
             if(!res.ok) return;
             const meta = await res.json();
+            // 服务重启检测：与画布合并共用同一条 8 秒 meta 轮询，不新增请求/定时器。
+            if(meta.boot_id){
+                if(!knownServerBootId) knownServerBootId = String(meta.boot_id);
+                else if(String(meta.boot_id) !== knownServerBootId) showServerRestartBanner();
+            }
             if(Number(meta.updated_at || 0) > Number(canvas.updated_at || 0)) mergeReloadCanvasNow();
         } catch(e) {}
     }, 8000);
+}
+function serverRestartBannerEl(){
+    return document.getElementById('serverRestartBanner');
+}
+function refreshCanvasAfterServerUpdate(){
+    // 刷新前若有未保存改动先落盘，避免点“立即刷新”丢失刚才的编辑。
+    (async () => {
+        try { if(canvasDirty) await saveCanvas(); } catch(e) {}
+        location.reload();
+    })();
+}
+function showServerRestartBanner(){
+    let el = serverRestartBannerEl();
+    if(!el){
+        el = document.createElement('div');
+        el.id = 'serverRestartBanner';
+        el.className = 'server-restart-banner';
+        el.setAttribute('role', 'alert');
+        const text = document.createElement('span');
+        text.className = 'server-restart-banner-text';
+        text.textContent = tr('smart.serverUpdated');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'server-restart-banner-btn';
+        btn.textContent = tr('smart.refreshNow');
+        btn.addEventListener('click', refreshCanvasAfterServerUpdate);
+        el.appendChild(text);
+        el.appendChild(btn);
+        document.body.appendChild(el);
+    }
+    // 常驻：一旦出现就不关闭，直到用户刷新页面拿到新版本。
+    el.classList.add('show');
 }
 function connectAssetLibrarySyncSocket(){
     if(window.parent && window.parent !== window) return;
@@ -8189,6 +8242,7 @@ async function loadCanvas(){
         if(!res.ok) return;
         const data = await res.json();
         canvas = data.canvas;
+        knownServerBootId = String(data.boot_id || '');
         canvasDirty = false;
         pendingRemoteMerge = false;
         rememberCanvasListProject(canvas.project || 'default');
@@ -8243,11 +8297,13 @@ async function loadCanvas(){
 }
 function scheduleSave(){
     canvasDirty = true;
+    canvasEditRev++;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
 }
 async function saveCanvas(){
     if(!canvasId || !canvas) return;
+    const revAtStart = canvasEditRev;
     savePromptDraftForCurrent();
     nodes.forEach(node => {
         node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
@@ -8286,12 +8342,15 @@ async function saveCanvas(){
                     if(node?.id) localUnsyncedNodeIds.delete(node.id);
                 });
             }
-            // 保存成功即视为“本地已无未保存改动”，门控放行；保存期间被请求过的
-            // 远端状态（广播/轮询在 dirty 时置位）此刻补拉，保证协作同步不倒退。
-            canvasDirty = false;
-            if(pendingRemoteMerge){
-                pendingRemoteMerge = false;
-                scheduleCanvasMergeReload(200);
+            // 保存成功：仅当保存期间没有再产生新改动时才清除 dirty；否则保持
+            // dirty（其 scheduleSave 定时器会补存），绝不在旧保存返回时把
+            // 尚未落盘的新改动误标为已保存，避免后续服务端合并用旧快照回退。
+            if(canvasEditRev === revAtStart){
+                canvasDirty = false;
+                if(pendingRemoteMerge){
+                    pendingRemoteMerge = false;
+                    scheduleCanvasMergeReload(200);
+                }
             }
         } else if(res.status === 409) {
             // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
@@ -8310,10 +8369,22 @@ async function saveCanvas(){
             } else if(data.detail?.updated_at) {
                 canvas.updated_at = data.detail.updated_at;
             }
+            // 409 说明本次改动尚未落盘：保持 dirty，稍后以合并结果重存。
+            canvasDirty = true;
             clearTimeout(saveTimer);
             saveTimer = setTimeout(saveCanvas, 300);
+        } else {
+            // 其他失败（5xx / 4xx / 网络异常）：保持 dirty 并安排重试，
+            // 避免改动在内存里却从未落盘，刷新后丢失。
+            canvasDirty = true;
+            clearTimeout(saveTimer);
+            saveTimer = setTimeout(saveCanvas, 800);
         }
-    } catch(e) {} finally {
+    } catch(e) {
+        canvasDirty = true;
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(saveCanvas, 800);
+    } finally {
         canvasSyncInFlight = false;
     }
 }
