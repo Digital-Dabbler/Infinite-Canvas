@@ -361,13 +361,19 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
                 canvas_id = str(message.get("canvas_id") or "").strip()
                 # Validate the canonical ID before retaining a subscription.
                 if canvas_id:
-                    canvas_path(canvas_id)
+                    try:
+                        load_canvas(canvas_id)
+                    except HTTPException:
+                        continue
                     manager.subscribe_canvas(websocket, canvas_id)
             elif isinstance(message, dict) and message.get("type") == "canvas_presence":
                 canvas_id = str(message.get("canvas_id") or "").strip()
                 node_id = str(message.get("node_id") or "").strip()
                 if canvas_id and node_id:
-                    canvas_path(canvas_id)
+                    try:
+                        load_canvas(canvas_id)
+                    except HTTPException:
+                        continue
                     manager.subscribe_canvas(websocket, canvas_id)
                     await manager.update_canvas_presence(canvas_id, node_id, scoped_client_id, user)
             elif isinstance(message, dict) and message.get("type") == "canvas_presence_clear":
