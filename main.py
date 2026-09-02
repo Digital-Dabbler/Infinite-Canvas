@@ -6674,10 +6674,21 @@ def apply_canvas_node_operation(canvas, payload):
         canvas["nodes"] = nodes
     elif kind == "canvas_fields":
         fields = {key: value for key, value in dict(payload.fields or {}).items()
-                  if key in {"title", "icon", "viewport", "media_catalog"}}
+                  if key in {"title", "icon", "viewport"}}
         if not fields:
             raise HTTPException(status_code=400, detail="没有可更新的画布字段")
         canvas.update(fields)
+    elif kind in {"media_catalog_add", "media_catalog_remove"}:
+        item = dict((payload.fields or {}).get("item") or {})
+        url = canvas_media_url(item)
+        if not url:
+            raise HTTPException(status_code=400, detail="媒体 URL 无效")
+        catalog = [entry for entry in (canvas.get("media_catalog") or []) if isinstance(entry, dict)]
+        if kind == "media_catalog_add" and not any(canvas_media_url(entry) == url for entry in catalog):
+            catalog.append(item)
+        elif kind == "media_catalog_remove":
+            catalog = [entry for entry in catalog if canvas_media_url(entry) != url]
+        canvas["media_catalog"] = catalog[-5000:]
     elif kind == "settings_fields":
         fields = dict(payload.fields or {})
         if not fields:

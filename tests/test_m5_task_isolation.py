@@ -289,6 +289,16 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         self.assertEqual(saved["settings"], {"engine": "api", "model": "model-a"})
         self.assertEqual([item["id"] for item in saved["logs"]], ["log-one"])
 
+    def test_media_catalog_operations_append_without_replacing(self):
+        for index in range(2):
+            canvas = main.load_canvas("canvas-bound")
+            main.apply_canvas_node_operation(canvas, main.CanvasOperationRequest(
+                operation_id=f"catalog-{index}", kind="media_catalog_add",
+                fields={"item": {"url": f"/output/{index}.png", "kind": "image"}}
+            ))
+        saved = main.load_canvas("canvas-bound")
+        self.assertEqual({item["url"] for item in saved["media_catalog"]}, {"/output/0.png", "/output/1.png"})
+
 
 class M5TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_canvas_task_is_visible_only_to_owner_or_admin(self):
