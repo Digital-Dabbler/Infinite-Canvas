@@ -8379,8 +8379,13 @@ async function saveCanvasOperations(storageCanvas, revAtStart){
         method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...operation, operation_id:uid('canvasop'), client_id:smartClientId})
     })));
     if(results.some(res => !res.ok)) throw new Error('画布操作保存失败');
-    canvasOperationBase = JSON.parse(JSON.stringify(storageCanvas));
-    if(canvasEditRev === revAtStart) canvasDirty = false;
+    // A slower older request must not replace the baseline after newer edits
+    // have already begun saving.  Leave the newer revision dirty so its own
+    // operation pass becomes the only state that can advance the baseline.
+    if(canvasEditRev === revAtStart){
+        canvasOperationBase = JSON.parse(JSON.stringify(storageCanvas));
+        canvasDirty = false;
+    }
 }
 async function saveCanvas(){
     if(!canvasId || !canvas) return;
