@@ -362,7 +362,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
                 # Validate the canonical ID before retaining a subscription.
                 if canvas_id:
                     try:
-                        load_canvas(canvas_id)
+                        require_canvas_access(load_canvas(canvas_id), user, "viewer")
                     except HTTPException:
                         continue
                     manager.subscribe_canvas(websocket, canvas_id)
@@ -371,7 +371,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
                 node_id = str(message.get("node_id") or "").strip()
                 if canvas_id and node_id:
                     try:
-                        load_canvas(canvas_id)
+                        require_canvas_access(load_canvas(canvas_id), user, "editor")
                     except HTTPException:
                         continue
                     manager.subscribe_canvas(websocket, canvas_id)
@@ -25150,10 +25150,12 @@ async def retry_asset_ai_task(task_id: str, request: Request):
     return {"task": retried, "warning": "原任务可能已产生费用，请在管理员用量记录中核对。"}
 
 @app.put("/api/canvases/{canvas_id}")
-async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
+async def update_canvas(canvas_id: str, payload: CanvasSaveRequest, request: Request):
+    user = require_authenticated(request)
     def mutate_canvas():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, user, "editor")
             current_updated_at = int(canvas.get("updated_at") or 0)
             if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
                 raise HTTPException(status_code=409, detail={
@@ -25213,7 +25215,8 @@ async def update_canvas(canvas_id: str, payload: CanvasSaveRequest):
     return {"canvas": canvas}
 
 @app.post("/api/canvases/{canvas_id}/logs/delete")
-async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest):
+async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest, request: Request):
+    user = require_authenticated(request)
     log_id = str(payload.log_id or "").strip()
     if not log_id:
         raise HTTPException(status_code=400, detail="缺少日志 ID")
@@ -25221,6 +25224,7 @@ async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest):
     def remove_log_record():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, user, "editor")
             current_updated_at = int(canvas.get("updated_at") or 0)
             if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
                 raise HTTPException(status_code=409, detail={
@@ -25291,10 +25295,12 @@ async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest):
     }
 
 @app.delete("/api/canvases/{canvas_id}")
-async def delete_canvas(canvas_id: str):
+async def delete_canvas(canvas_id: str, request: Request):
+    user = require_authenticated(request)
     def soft_delete():
         with CANVAS_LOCK:
             canvas = load_canvas_any(canvas_id)
+            require_canvas_access(canvas, user, "editor")
             if not canvas.get("deleted_at"):
                 canvas["deleted_at"] = now_ms()
                 save_canvas(canvas)
@@ -25303,10 +25309,12 @@ async def delete_canvas(canvas_id: str):
     return {"ok": True}
 
 @app.post("/api/canvases/{canvas_id}/restore")
-async def restore_canvas(canvas_id: str):
+async def restore_canvas(canvas_id: str, request: Request):
+    user = require_authenticated(request)
     def restore():
         with CANVAS_LOCK:
             canvas = load_canvas_any(canvas_id)
+            require_canvas_access(canvas, user, "editor")
             if canvas.get("deleted_at"):
                 canvas.pop("deleted_at", None)
                 save_canvas(canvas)
@@ -25316,9 +25324,12 @@ async def restore_canvas(canvas_id: str):
     return {"canvas": canvas}
 
 @app.delete("/api/canvases/{canvas_id}/purge")
-async def purge_canvas(canvas_id: str):
+async def purge_canvas(canvas_id: str, request: Request):
+    user = require_authenticated(request)
     def purge():
         with CANVAS_LOCK:
+            canvas = load_canvas_any(canvas_id)
+            require_canvas_access(canvas, user, "owner", governance=True)
             path = canvas_path(canvas_id)
             if os.path.exists(path):
                 os.remove(path)
