@@ -5794,6 +5794,14 @@ class CanvasMetaUpdate(BaseModel):
     board_x: Optional[float] = None
     board_y: Optional[float] = None
 
+class CanvasSharingUpdate(BaseModel):
+    owner_user_id: Optional[str] = None
+    editor_user_ids: Optional[List[str]] = None
+
+class CanvasOwnershipTransferRequest(BaseModel):
+    owner_user_id: str = Field(min_length=1, max_length=128)
+    keep_previous_owner_as_editor: bool = True
+
 class ProjectCreateRequest(BaseModel):
     name: str = "新项目"
 
@@ -6574,7 +6582,7 @@ def list_projects():
         out.append(rec)
     return out
 
-def new_canvas(title="智能画布", icon="sparkles", project=None, board_x=None, board_y=None):
+def new_canvas(title="智能画布", icon="sparkles", project=None, board_x=None, board_y=None, owner_user_id=""):
     timestamp = now_ms()
     canvas = {
         "id": uuid.uuid4().hex,
@@ -6582,6 +6590,10 @@ def new_canvas(title="智能画布", icon="sparkles", project=None, board_x=None
         "icon": (icon or "sparkles")[:32],
         "kind": "smart",
         "owner": "",
+        "owner_user_id": str(owner_user_id or ""),
+        "editor_user_ids": [str(owner_user_id)] if owner_user_id else [],
+        "ownership_state": "claimed" if owner_user_id else "unclaimed",
+        "sharing_version": 1,
         "color": "",
         "pinned": False,
         "cover_url": "",
@@ -6622,6 +6634,27 @@ def load_canvas_any(canvas_id):
         raise HTTPException(status_code=404, detail="画布不存在")
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+def canvas_access_role(canvas, user, governance=False):
+    user_id = str((user or {}).get("id") or "")
+    if governance and str((user or {}).get("role") or "") == "admin":
+        return "admin"
+    if user_id and user_id == str((canvas or {}).get("owner_user_id") or ""):
+        return "owner"
+    if user_id in {str(item) for item in ((canvas or {}).get("editor_user_ids") or [])}:
+        return "editor"
+    return "viewer"
+
+def require_canvas_access(canvas, user, minimum="viewer", governance=False):
+    role = canvas_access_role(canvas, user, governance)
+    allowed = {"viewer": {"viewer", "editor", "owner", "admin"}, "editor": {"editor", "owner", "admin"}, "owner": {"owner", "admin"}}
+    if role not in allowed.get(minimum, set()):
+        raise HTTPException(status_code=403, detail="此画布为只读状态。你可以复制整张画布或节点后继续编辑。")
+    return role
+
+def canvas_sharing_public(canvas, user):
+    role = canvas_access_role(canvas, user)
+    return {"role": role, "owner_user_id": str(canvas.get("owner_user_id") or ""), "editor_user_ids": list(canvas.get("editor_user_ids") or []), "ownership_state": str(canvas.get("ownership_state") or "unclaimed")}
 
 CANVAS_NODE_OPERATION_FIELDS = {
     "x", "y", "w", "h", "scale", "title", "text", "images", "activeImageIndex",
@@ -22248,8 +22281,15 @@ async def cancel_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeCan
 # --- 画布管理 ---
 
 @app.get("/api/canvases")
-async def canvases():
-    return {"canvases": list_canvases()}
+async def canvases(request: Request):
+    user = require_authenticated(request)
+    records = list_canvases()
+    for record in records:
+        try:
+            record["sharing"] = canvas_sharing_public(load_canvas(record["id"]), user)
+        except HTTPException:
+            continue
+    return {"canvases": records}
 
 @app.get("/api/projects")
 async def get_projects():
@@ -22307,14 +22347,82 @@ async def trashed_canvases():
     return {"canvases": list_deleted_canvases(), "retention_days": 30}
 
 @app.post("/api/canvases")
-async def create_canvas(payload: CanvasCreateRequest):
+async def create_canvas(payload: CanvasCreateRequest, request: Request):
+    user = require_authenticated(request)
     if str(payload.kind or "smart").strip().lower() != "smart":
         raise HTTPException(status_code=400, detail="当前仅支持智能画布。")
-    return {"canvas": new_canvas(payload.title, payload.icon, payload.project, payload.board_x, payload.board_y)}
+    return {"canvas": new_canvas(payload.title, payload.icon, payload.project, payload.board_x, payload.board_y, user.get("id"))}
+
+@app.post("/api/canvases/{canvas_id}/claim")
+async def claim_canvas(canvas_id: str, request: Request):
+    user = require_authenticated(request)
+    def claim():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            if str(canvas.get("owner_user_id") or "") or str(canvas.get("ownership_state") or "unclaimed") != "unclaimed":
+                raise HTTPException(status_code=409, detail="该画布已被认领，请刷新后查看当前权限。")
+            canvas["owner_user_id"] = user["id"]
+            canvas["editor_user_ids"] = [user["id"]]
+            canvas["ownership_state"] = "claimed"
+            canvas["sharing_version"] = 1
+            save_canvas(canvas)
+            return canvas
+    canvas = await asyncio.to_thread(claim)
+    return {"canvas": canvas_record(canvas), "sharing": canvas_sharing_public(canvas, user)}
+
+@app.post("/api/canvases/{canvas_id}/copy")
+async def copy_canvas(canvas_id: str, request: Request):
+    """Create an independent, editable copy for any authenticated viewer."""
+    user = require_authenticated(request)
+    def copy_record():
+        with CANVAS_LOCK:
+            source = load_canvas(canvas_id)
+            require_canvas_access(source, user, "viewer")
+            copied = json.loads(json.dumps(source, ensure_ascii=False))
+            copied["id"] = uuid.uuid4().hex
+            copied["title"] = f"{str(source.get('title') or '未命名画布')[:70]} 副本"
+            copied["owner_user_id"] = user["id"]
+            copied["editor_user_ids"] = [user["id"]]
+            copied["ownership_state"] = "claimed"
+            copied["sharing_version"] = 1
+            copied["operation_log"] = []
+            copied["deleted_node_ids"] = []
+            copied.pop("deleted_at", None)
+            copied["created_at"] = now_ms()
+            for node in copied.get("nodes") or []:
+                if not isinstance(node, dict): continue
+                for field in ("pending", "pendingTasks", "running", "queued", "submitting", "jimengPending"):
+                    node.pop(field, None)
+            save_canvas(copied)
+            return copied
+    copied = await asyncio.to_thread(copy_record)
+    return {"canvas": canvas_record(copied), "sharing": canvas_sharing_public(copied, user)}
+
+@app.post("/api/canvases/{canvas_id}/sharing")
+async def update_canvas_sharing(canvas_id: str, payload: CanvasSharingUpdate, request: Request, governance: bool = False):
+    user = require_authenticated(request)
+    def update():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, user, "owner", governance=governance)
+            known = {str(item.get("id") or "") for item in load_auth_users().get("users", []) if item.get("enabled", True)}
+            if payload.owner_user_id is not None:
+                owner_id = str(payload.owner_user_id).strip()
+                if owner_id not in known: raise HTTPException(status_code=400, detail="指定的所有者不存在或已停用。")
+                canvas["owner_user_id"] = owner_id; canvas["ownership_state"] = "claimed"
+            if payload.editor_user_ids is not None:
+                editors = list(dict.fromkeys(str(item).strip() for item in payload.editor_user_ids if str(item).strip() in known))
+                canvas["editor_user_ids"] = editors
+            save_canvas(canvas)
+            return canvas
+    canvas = await asyncio.to_thread(update)
+    return {"sharing": canvas_sharing_public(canvas, user)}
 
 @app.get("/api/canvases/{canvas_id}/meta")
-async def get_canvas_meta(canvas_id: str):
+async def get_canvas_meta(canvas_id: str, request: Request):
+    user = require_authenticated(request)
     canvas = load_canvas(canvas_id)
+    sharing = canvas_sharing_public(canvas, user)
     return {
         "id": canvas.get("id"),
         "updated_at": canvas.get("updated_at", 0),
@@ -22322,6 +22430,7 @@ async def get_canvas_meta(canvas_id: str):
         "icon": canvas.get("icon", "layers"),
         "kind": "smart",
         "boot_id": SERVER_BOOT_ID,
+        "sharing": sharing,
     }
 
 @app.post("/api/canvases/{canvas_id}/meta")
@@ -22431,15 +22540,18 @@ async def reset_canvas_cover(canvas_id: str):
     return {"canvas": canvas_record(canvas)}
 
 @app.get("/api/canvases/{canvas_id}")
-async def get_canvas(canvas_id: str):
-    return {"canvas": load_canvas(canvas_id), "boot_id": SERVER_BOOT_ID}
+async def get_canvas(canvas_id: str, request: Request):
+    user = require_authenticated(request)
+    canvas = load_canvas(canvas_id)
+    return {"canvas": canvas, "sharing": canvas_sharing_public(canvas, user), "boot_id": SERVER_BOOT_ID}
 
 @app.post("/api/canvases/{canvas_id}/operations")
 async def apply_canvas_operation(canvas_id: str, payload: CanvasOperationRequest, request: Request):
-    require_authenticated(request)
+    user = require_authenticated(request)
     def mutate():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, user, "editor")
             return apply_canvas_node_operation(canvas, payload)
     canvas, changed = await asyncio.to_thread(mutate)
     if changed:

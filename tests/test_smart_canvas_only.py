@@ -25,12 +25,12 @@ class SmartCanvasOnlyTests(unittest.TestCase):
 
     def test_canvas_creation_accepts_only_smart_kind(self):
         payload = main.CanvasCreateRequest(title="智能画布", kind="smart")
-        with mock.patch.object(main, "new_canvas", return_value={"id": "smart-1", "kind": "smart"}):
-            result = asyncio.run(main.create_canvas(payload))
+        with mock.patch.object(main, "new_canvas", return_value={"id": "smart-1", "kind": "smart"}), \
+             mock.patch.object(main, "require_authenticated", return_value={"id": "creator-1"}):
+            result = asyncio.run(main.create_canvas(payload, object()))
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(main.create_canvas(main.CanvasCreateRequest(title="不支持的画布", kind="unsupported"), object()))
         self.assertEqual(result["canvas"]["kind"], "smart")
-
-        with self.assertRaises(HTTPException) as caught:
-            asyncio.run(main.create_canvas(main.CanvasCreateRequest(title="不支持的画布", kind="unsupported")))
         self.assertEqual(caught.exception.status_code, 400)
 
     def test_project_workspace_opens_only_smart_canvas(self):

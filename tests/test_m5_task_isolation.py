@@ -270,6 +270,16 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         self.assertEqual(saved["operation_log"][-1]["kind"], "node_fields")
         self.assertEqual(saved["operation_log"][-1]["node_id"], "node-bound")
 
+    def test_canvas_acl_distinguishes_viewer_editor_owner_and_admin_governance(self):
+        canvas = {"owner_user_id": "owner", "editor_user_ids": ["editor"]}
+        self.assertEqual(main.canvas_access_role(canvas, {"id": "viewer", "role": "user"}), "viewer")
+        self.assertEqual(main.canvas_access_role(canvas, {"id": "editor", "role": "user"}), "editor")
+        self.assertEqual(main.canvas_access_role(canvas, {"id": "owner", "role": "user"}), "owner")
+        self.assertEqual(main.canvas_access_role(canvas, {"id": "admin", "role": "admin"}), "viewer")
+        self.assertEqual(main.canvas_access_role(canvas, {"id": "admin", "role": "admin"}, governance=True), "admin")
+        with self.assertRaises(main.HTTPException):
+            main.require_canvas_access(canvas, {"id": "viewer", "role": "user"}, "editor")
+
     def test_connection_operations_merge_independently(self):
         first = {"from": "node-bound", "to": "node-a", "kind": "flow"}
         second = {"from": "node-bound", "to": "node-b", "kind": "flow"}
