@@ -189,6 +189,13 @@ class ConnectionManager:
         entry = {"client_id":client_id, "user_id":str(user.get("id") or ""), "name":str(user.get("name") or user.get("username") or "用户"), "seen_at":now_ms()}
         self.canvas_presence.setdefault(canvas_id, {}).setdefault(node_id, {})[client_id] = entry
         await self.broadcast_canvas_presence(canvas_id, node_id)
+        async def expire(expected_seen_at):
+            await asyncio.sleep(15)
+            current = self.canvas_presence.get(canvas_id, {}).get(node_id, {}).get(client_id)
+            if current and int(current.get("seen_at") or 0) == expected_seen_at:
+                self.canvas_presence[canvas_id][node_id].pop(client_id, None)
+                await self.broadcast_canvas_presence(canvas_id, node_id)
+        asyncio.create_task(expire(entry["seen_at"]))
 
     async def clear_canvas_presence(self, client_id: str):
         for canvas_id, nodes in list(self.canvas_presence.items()):

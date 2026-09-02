@@ -7379,7 +7379,8 @@ function showServerRestartBanner(){
     el.classList.add('show');
 }
 function connectAssetLibrarySyncSocket(){
-    if(window.parent && window.parent !== window) return;
+    // The workbench normally runs inside the Studio iframe.  It must keep its
+    // own canvas-scoped socket; parent pages do not proxy canvas operations.
     const host = window.location.host;
     if(!host) return;
     const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -7389,6 +7390,7 @@ function connectAssetLibrarySyncSocket(){
     const connect = () => {
         try {
             socket = new WebSocket(`${protocol}://${host}/ws/stats?client_id=${clientId}`);
+            canvasSyncSocket = socket;
         } catch(e) {
             retryTimer = setTimeout(connect, 3000);
             return;
@@ -7399,10 +7401,12 @@ function connectAssetLibrarySyncSocket(){
                 if(data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(data);
                 if(data?.type === 'canvas_updated') handleCanvasUpdatedMessage(data);
                 if(data?.type === 'canvas_operation') handleCanvasOperationMessage(data);
+                if(data?.type === 'canvas_presence') handleCanvasPresenceMessage(data);
             } catch(e) {}
         };
         socket.onopen = () => {
             if(canvasId) socket.send(JSON.stringify({type:'canvas_subscribe', canvas_id:canvasId}));
+            if(presenceNodeId) sendCanvasPresence(presenceNodeId);
         };
         socket.onclose = () => {
             retryTimer = setTimeout(connect, 3000);
@@ -7416,6 +7420,7 @@ function connectAssetLibrarySyncSocket(){
         try { socket?.close(); } catch(e) {}
     });
     connect();
+    setInterval(() => { if(presenceNodeId) sendCanvasPresence(presenceNodeId); }, 5000);
 }
 function setAssetLibraryFromResponse(data, options={}){
     assetLibrary = data.library || assetLibrary;
@@ -8318,8 +8323,30 @@ function handleCanvasOperationMessage(data={}){
     else if(op.kind === 'node_create' && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
     else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) Object.assign(node, op.fields || {}); }
     else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
+    // Advance only the confirmed base for the remote operation.  Otherwise a
+    // later local save would mistake that remote field for a local difference
+    // and write an obsolete value back over it.
+    if(canvasOperationBase){
+        const baseNodes = canvasOperationBase.nodes || (canvasOperationBase.nodes = []);
+        const baseIndex = baseNodes.findIndex(node => node.id === id);
+        if(op.kind === 'node_delete' && baseIndex >= 0) baseNodes.splice(baseIndex, 1);
+        else if(op.kind === 'node_create' && op.node?.id && baseIndex < 0) baseNodes.push(JSON.parse(JSON.stringify(op.node)));
+        else if(op.kind === 'node_fields' && baseIndex >= 0) Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {})));
+        else if(op.kind === 'canvas_fields') Object.assign(canvasOperationBase, JSON.parse(JSON.stringify(op.fields || {})));
+    }
     canvas.updated_at = Math.max(Number(canvas.updated_at || 0), Number(data.revision || 0));
     render();
+}
+function handleCanvasPresenceMessage(data={}){
+    if(!data || data.canvas_id !== canvasId) return;
+    const editors = (data.editors || []).filter(editor => editor.client_id !== smartClientId);
+    canvasPresence.set(data.node_id, editors);
+    const el = world.querySelector(`.image-node[data-id="${CSS.escape(data.node_id || '')}"]`);
+    if(el){ el.classList.toggle('collaboration-editing', editors.length > 0); el.title = editors.length ? `正在编辑：${editors.map(item => item.name).join('、')}` : ''; }
+}
+function sendCanvasPresence(nodeId){
+    presenceNodeId = nodeId || '';
+    if(canvasSyncSocket?.readyState === WebSocket.OPEN && presenceNodeId) canvasSyncSocket.send(JSON.stringify({type:'canvas_presence', canvas_id:canvasId, node_id:presenceNodeId}));
 }
 function operationValueChanged(a,b){ return JSON.stringify(a) !== JSON.stringify(b); }
 async function saveCanvasOperations(storageCanvas, revAtStart){
@@ -13712,6 +13739,7 @@ function bindNodeEvents(){
             if(document.activeElement?.blur) document.activeElement.blur();
             let node = nodes.find(n => n.id === id);
             if(!node) return;
+            sendCanvasPresence(node.id);
             if(isWorkflowOrganizerNode(node) && e.target.closest?.('.workflow-organizer-title-label') && e.detail >= 2) return;
             if(e.altKey) node = duplicateForAltDrag(node, e.shiftKey);
             let dragIds = selectedIds.includes(node.id) ? selectedIds.slice() : [node.id];
