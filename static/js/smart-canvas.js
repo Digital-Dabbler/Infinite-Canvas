@@ -6883,6 +6883,9 @@ let pendingRemoteMerge = false;
 // 若期间又产生了新改动则不清除 canvasDirty（其 scheduleSave 定时器会再存），
 // 避免“旧保存成功后把新改动误标为已保存”，从而被后续服务端合并用旧快照回退。
 let canvasEditRev = 0;
+// Last server-confirmed snapshot used only to derive narrow node operations.
+// It is never sent back as a whole canvas.
+let canvasOperationBase = null;
 // 服务端启动令牌：加载时记录，meta 轮询里对比；变化即表示服务重启过，
 // 提示“请刷新”横幅。只存内存，不落 localStorage——重启后新开的页面拿到
 // 的是新令牌，天然不发通知。
@@ -7392,7 +7395,11 @@ function connectAssetLibrarySyncSocket(){
                 const data = JSON.parse(event.data);
                 if(data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(data);
                 if(data?.type === 'canvas_updated') handleCanvasUpdatedMessage(data);
+                if(data?.type === 'canvas_operation') handleCanvasOperationMessage(data);
             } catch(e) {}
+        };
+        socket.onopen = () => {
+            if(canvasId) socket.send(JSON.stringify({type:'canvas_subscribe', canvas_id:canvasId}));
         };
         socket.onclose = () => {
             retryTimer = setTimeout(connect, 3000);
@@ -8241,6 +8248,7 @@ async function loadCanvas(){
         if(!res.ok) return;
         const data = await res.json();
         canvas = data.canvas;
+        canvasOperationBase = JSON.parse(JSON.stringify(data.canvas || {}));
         knownServerBootId = String(data.boot_id || '');
         canvasDirty = false;
         pendingRemoteMerge = false;
@@ -8300,6 +8308,43 @@ function scheduleSave(){
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
 }
+function handleCanvasOperationMessage(data={}){
+    if(!data || data.type !== 'canvas_operation' || data.canvas_id !== canvasId || data.client_id === smartClientId) return;
+    const op = data.operation || {}, id = op.node_id;
+    if(op.kind === 'node_delete') nodes = nodes.filter(node => node.id !== id);
+    else if(op.kind === 'node_create' && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
+    else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) Object.assign(node, op.fields || {}); }
+    else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
+    canvas.updated_at = Math.max(Number(canvas.updated_at || 0), Number(data.revision || 0));
+    render();
+}
+function operationValueChanged(a,b){ return JSON.stringify(a) !== JSON.stringify(b); }
+async function saveCanvasOperations(storageCanvas, revAtStart){
+    const base = canvasOperationBase || {nodes:[]};
+    const before = new Map((base.nodes || []).map(node => [node.id, node]));
+    const after = new Map((storageCanvas.nodes || []).map(node => [node.id, node]));
+    const operations = [];
+    after.forEach((node, id) => {
+        const previous = before.get(id);
+        if(!previous) operations.push({kind:'node_create', node_id:id, node});
+        else {
+            const fields = {};
+            Object.keys(node).forEach(key => { if(key !== 'id' && operationValueChanged(node[key], previous[key])) fields[key] = node[key]; });
+            if(Object.keys(fields).length) operations.push({kind:'node_fields', node_id:id, fields});
+        }
+    });
+    before.forEach((_, id) => { if(!after.has(id)) operations.push({kind:'node_delete', node_id:id}); });
+    const canvasFields = {};
+    ['title','icon','connections','viewport','settings','logs','media_catalog'].forEach(key => { if(operationValueChanged(storageCanvas[key], base[key])) canvasFields[key] = storageCanvas[key]; });
+    if(Object.keys(canvasFields).length) operations.push({kind:'canvas_fields', fields:canvasFields});
+    if(!operations.length){ if(canvasEditRev === revAtStart) canvasDirty = false; return; }
+    const results = await Promise.all(operations.map(operation => fetch(`/api/canvases/${encodeURIComponent(canvasId)}/operations`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...operation, operation_id:uid('canvasop'), client_id:smartClientId})
+    })));
+    if(results.some(res => !res.ok)) throw new Error('画布操作保存失败');
+    canvasOperationBase = JSON.parse(JSON.stringify(storageCanvas));
+    if(canvasEditRev === revAtStart) canvasDirty = false;
+}
 async function saveCanvas(){
     if(!canvasId || !canvas) return;
     const revAtStart = canvasEditRev;
@@ -8313,6 +8358,11 @@ async function saveCanvas(){
     canvas.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
     canvas.viewport = {...viewport};
     const storageCanvas = canvasForStorage();
+    if(canvasOperationBase){
+        try { await saveCanvasOperations(storageCanvas, revAtStart); }
+        catch(e) { canvasDirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(saveCanvas, 800); }
+        return;
+    }
     canvasSyncInFlight = true;
     try {
         const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`, {
@@ -24454,6 +24504,7 @@ try {
         scheduleSmartConfigRefreshFromEvent(event.data);
         if(event.data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(event.data);
         if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
+        if(event.data?.type === 'canvas_operation') handleCanvasOperationMessage(event.data);
     };
 } catch(e) {}
 window.addEventListener('focus', () => {
@@ -24466,6 +24517,7 @@ window.addEventListener('message', event => {
     scheduleSmartConfigRefreshFromEvent(event.data);
     if(event.data?.type === 'asset_library_updated') handleAssetLibraryUpdatedMessage(event.data);
     if(event.data?.type === 'canvas_updated') handleCanvasUpdatedMessage(event.data);
+    if(event.data?.type === 'canvas_operation') handleCanvasOperationMessage(event.data);
     if(event.data?.type === 'studio-lang' && window.StudioI18n) {
         window.StudioI18n.set(event.data.lang || 'zh');
     }

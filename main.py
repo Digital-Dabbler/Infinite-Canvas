@@ -86,11 +86,13 @@ class ConnectionManager:
         self.active_connections: List[WebSocket] = []
         self.user_connections: Dict[str, WebSocket] = {}
         self.connection_clients: Dict[WebSocket, str] = {}
+        self.canvas_subscriptions: Dict[WebSocket, set] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str = None):
         await websocket.accept()
         self.active_connections.append(websocket)
         self.connection_clients[websocket] = client_id or f"anon-{id(websocket)}"
+        self.canvas_subscriptions[websocket] = set()
         if client_id:
             self.user_connections[client_id] = websocket
         print(f"WS Connected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
@@ -100,6 +102,7 @@ class ConnectionManager:
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
         self.connection_clients.pop(websocket, None)
+        self.canvas_subscriptions.pop(websocket, None)
         if client_id and self.user_connections.get(client_id) is websocket:
             del self.user_connections[client_id]
         print(f"WS Disconnected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
@@ -146,11 +149,28 @@ class ConnectionManager:
             "client_id": client_id or "",
         })
         for connection in self.active_connections[:]:
+            if canvas_id not in self.canvas_subscriptions.get(connection, set()):
+                continue
             try:
                 await connection.send_text(data)
             except Exception as e:
                 print(f"Broadcast canvas error: {e}")
                 self.active_connections.remove(connection)
+
+    def subscribe_canvas(self, websocket: WebSocket, canvas_id: str):
+        if websocket in self.active_connections and canvas_id:
+            self.canvas_subscriptions.setdefault(websocket, set()).add(canvas_id)
+
+    async def broadcast_canvas_operation(self, canvas_id: str, operation: dict, revision: int, client_id: str = ""):
+        data = json.dumps({"type": "canvas_operation", "canvas_id": canvas_id, "operation": operation, "revision": revision, "client_id": client_id or ""})
+        for connection in self.active_connections[:]:
+            if canvas_id not in self.canvas_subscriptions.get(connection, set()):
+                continue
+            try:
+                await connection.send_text(data)
+            except Exception:
+                if connection in self.active_connections:
+                    self.active_connections.remove(connection)
 
     async def broadcast_asset_library_updated(self, updated_at: int = 0):
         data = json.dumps({
@@ -300,6 +320,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_text(json.dumps({"type": "pong"}))
+                continue
+            try:
+                message = json.loads(data)
+            except Exception:
+                continue
+            if isinstance(message, dict) and message.get("type") == "canvas_subscribe":
+                canvas_id = str(message.get("canvas_id") or "").strip()
+                # Validate the canonical ID before retaining a subscription.
+                if canvas_id:
+                    canvas_path(canvas_id)
+                    manager.subscribe_canvas(websocket, canvas_id)
     except WebSocketDisconnect:
         await manager.disconnect(websocket, scoped_client_id)
     except Exception as e:
@@ -5722,6 +5753,15 @@ class CanvasSaveRequest(BaseModel):
     deleted_node_ids: List[str] = []
     media_catalog: List[Dict[str, Any]] = []
 
+class CanvasOperationRequest(BaseModel):
+    """A narrow, idempotent canvas mutation.  Never accept an entire stale board."""
+    operation_id: str = Field(min_length=1, max_length=120)
+    client_id: str = ""
+    kind: str = Field(min_length=1, max_length=40)
+    node_id: str = ""
+    fields: Dict[str, Any] = Field(default_factory=dict)
+    node: Dict[str, Any] = Field(default_factory=dict)
+
 class PhotoshopBridgeCreateRequest(BaseModel):
     canvas_id: str = ""
     node_id: str = ""
@@ -6521,6 +6561,69 @@ def load_canvas_any(canvas_id):
         raise HTTPException(status_code=404, detail="画布不存在")
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+CANVAS_NODE_OPERATION_FIELDS = {
+    "x", "y", "w", "h", "scale", "title", "text", "images", "activeImageIndex",
+    "connections", "workflowGroupId", "inputNodeIds", "items", "settings", "runSettings",
+}
+
+def apply_canvas_node_operation(canvas, payload):
+    """Apply one node-scoped operation while holding CANVAS_LOCK.
+
+    Deletion tombstones win permanently: a delayed update cannot silently
+    recreate a removed node.  The operation history also makes retries
+    idempotent without needing whole-canvas conflict merges.
+    """
+    operation_id = str(payload.operation_id or "").strip()
+    history = list(canvas.get("operation_log") or [])
+    if any(str(item.get("id") or "") == operation_id for item in history if isinstance(item, dict)):
+        return canvas, False
+    node_id = str(payload.node_id or "").strip()
+    kind = str(payload.kind or "").strip()
+    tombstones = {str(item or "").strip() for item in (canvas.get("deleted_node_ids") or []) if str(item or "").strip()}
+    nodes = list(canvas.get("nodes") or [])
+    node_index = next((index for index, item in enumerate(nodes) if str((item or {}).get("id") or "") == node_id), -1)
+    if kind == "node_delete":
+        if not node_id:
+            raise HTTPException(status_code=400, detail="缺少节点 ID")
+        tombstones.add(node_id)
+        canvas["deleted_node_ids"] = list(tombstones)[-2000:]
+        canvas["nodes"] = [item for item in nodes if str((item or {}).get("id") or "") != node_id]
+        canvas["connections"] = [item for item in (canvas.get("connections") or []) if str((item or {}).get("from") or "") != node_id and str((item or {}).get("to") or "") != node_id]
+    elif kind == "node_create":
+        node = dict(payload.node or {})
+        if not node_id or str(node.get("id") or "") != node_id:
+            raise HTTPException(status_code=400, detail="节点创建 ID 无效")
+        if node_id in tombstones:
+            raise HTTPException(status_code=409, detail="节点已删除，旧请求不能复活节点")
+        if node_index < 0:
+            nodes.append(node)
+            canvas["nodes"] = nodes
+    elif kind == "node_fields":
+        if not node_id:
+            raise HTTPException(status_code=400, detail="缺少节点 ID")
+        if node_id in tombstones:
+            raise HTTPException(status_code=409, detail="节点已删除，旧请求不能复活节点")
+        if node_index < 0:
+            raise HTTPException(status_code=404, detail="节点不存在")
+        fields = {key: value for key, value in dict(payload.fields or {}).items() if key != "id"}
+        if not fields:
+            raise HTTPException(status_code=400, detail="没有可更新的节点字段")
+        nodes[node_index] = {**nodes[node_index], **fields}
+        canvas["nodes"] = nodes
+    elif kind == "canvas_fields":
+        fields = {key: value for key, value in dict(payload.fields or {}).items()
+                  if key in {"title", "icon", "connections", "viewport", "settings", "logs", "media_catalog"}}
+        if not fields:
+            raise HTTPException(status_code=400, detail="没有可更新的画布字段")
+        canvas.update(fields)
+    else:
+        raise HTTPException(status_code=400, detail="不支持的画布操作")
+    canvas["sync_revision"] = int(canvas.get("sync_revision") or 0) + 1
+    history.append({"id": operation_id, "kind": kind, "node_id": node_id, "revision": canvas["sync_revision"], "at": now_ms()})
+    canvas["operation_log"] = history[-1000:]
+    save_canvas(canvas)
+    return canvas, True
 
 CANVAS_COLORS = {"", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink", "slate"}
 
@@ -22196,6 +22299,18 @@ async def reset_canvas_cover(canvas_id: str):
 @app.get("/api/canvases/{canvas_id}")
 async def get_canvas(canvas_id: str):
     return {"canvas": load_canvas(canvas_id), "boot_id": SERVER_BOOT_ID}
+
+@app.post("/api/canvases/{canvas_id}/operations")
+async def apply_canvas_operation(canvas_id: str, payload: CanvasOperationRequest, request: Request):
+    require_authenticated(request)
+    def mutate():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            return apply_canvas_node_operation(canvas, payload)
+    canvas, changed = await asyncio.to_thread(mutate)
+    if changed:
+        await manager.broadcast_canvas_operation(canvas_id, payload.dict(), int(canvas.get("sync_revision") or 0), payload.client_id)
+    return {"canvas_id": canvas_id, "revision": canvas.get("sync_revision", 0), "changed": changed}
 
 @app.post("/api/canvases/{canvas_id}/media-fingerprints")
 async def canvas_media_fingerprints(canvas_id: str, payload: CanvasMediaFingerprintRequest, request: Request):
