@@ -370,6 +370,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
                     canvas_path(canvas_id)
                     manager.subscribe_canvas(websocket, canvas_id)
                     await manager.update_canvas_presence(canvas_id, node_id, scoped_client_id, user)
+            elif isinstance(message, dict) and message.get("type") == "canvas_presence_clear":
+                await manager.clear_canvas_presence(scoped_client_id)
     except WebSocketDisconnect:
         await manager.disconnect(websocket, scoped_client_id)
     except Exception as e:

@@ -8360,6 +8360,10 @@ function sendCanvasPresence(nodeId){
     presenceNodeId = nodeId || '';
     if(canvasSyncSocket?.readyState === WebSocket.OPEN && presenceNodeId) canvasSyncSocket.send(JSON.stringify({type:'canvas_presence', canvas_id:canvasId, node_id:presenceNodeId}));
 }
+function clearCanvasPresence(){
+    presenceNodeId = '';
+    if(canvasSyncSocket?.readyState === WebSocket.OPEN) canvasSyncSocket.send(JSON.stringify({type:'canvas_presence_clear'}));
+}
 function operationValueChanged(a,b){ return JSON.stringify(a) !== JSON.stringify(b); }
 async function saveCanvasOperations(storageCanvas, revAtStart){
     const base = canvasOperationBase || {nodes:[]};
@@ -22970,7 +22974,7 @@ window.addEventListener('mouseup', e => {
     if(panState && (e.button === panState.button || e.buttons === 0)) finishCanvasPan();
 }, true);
 // 在窗口外松开鼠标时不会收到 mouseup，失焦时收尾避免画布一直跟随鼠标。
-window.addEventListener('blur', () => { finishCanvasPan(); });
+window.addEventListener('blur', () => { finishCanvasPan(); clearCanvasPresence(); });
 // 中键按下走捕获阶段：先于节点/分组自身的拖拽逻辑接管，保证任何位置都只平移画布。
 shell.addEventListener('mousedown', e => {
     if(e.button !== 1) return;
@@ -23014,6 +23018,7 @@ shell.addEventListener('click', e => {
 shell.onmousedown = e => {
     if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    clearCanvasPresence();
     closeCreateMenu();
     closePortConnectMenu();
     if(e.button === 0 && e.shiftKey){
