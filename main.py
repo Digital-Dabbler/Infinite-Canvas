@@ -5350,6 +5350,13 @@ def canvas_task_binding_from_payload(payload):
         "batch_index": max(0, int(getattr(payload, "batch_index", 0) or 0)),
     }
 
+def require_canvas_task_editor(payload, request):
+    binding = canvas_task_binding_from_payload(payload)
+    if binding:
+        user = require_authenticated(request)
+        require_canvas_access(load_canvas(binding["canvas_id"]), user, "editor")
+    return binding
+
 def canvas_task_output_items(task, result):
     result = result if isinstance(result, dict) else {}
     raw = result.get("media_items") or result.get("image_items") or result.get("videos") or result.get("images") or []
@@ -19864,7 +19871,7 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
 @app.post("/api/canvas-image-tasks")
 async def create_canvas_image_task(payload: OnlineImageRequest, request: Request):
     # Validate any optional canvas target before opening a billable usage event.
-    canvas_binding = canvas_task_binding_from_payload(payload)
+    canvas_binding = require_canvas_task_editor(payload, request)
     event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n, "entry": "canvas"})
     request.state.usage_event = event
     request.state.usage_async = True
@@ -21600,7 +21607,7 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
 @app.post("/api/canvas-video-tasks")
 async def create_canvas_video_task(payload: CanvasVideoRequest, request: Request):
     # Validate any optional canvas target before opening a billable usage event.
-    canvas_binding = canvas_task_binding_from_payload(payload)
+    canvas_binding = require_canvas_task_editor(payload, request)
     event = begin_usage_event(
         request,
         "video",
@@ -22182,7 +22189,7 @@ async def mark_photoshop_bridge_task_failed(task_id: str, payload: PhotoshopBrid
 
 @app.post("/api/photoshop-bridge/canvases/{canvas_id}/images")
 async def import_photoshop_image_to_canvas(canvas_id: str, payload: PhotoshopBridgeCanvasImportRequest, request: Request):
-    require_authenticated(request)
+    user = require_authenticated(request)
     item = photoshop_bridge_return_item(str(payload.url or "").strip(), str(payload.name or "").strip())
     def import_image():
         with CANVAS_LOCK:
@@ -22359,6 +22366,7 @@ async def claim_canvas(canvas_id: str, request: Request):
     def claim():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, user, "editor")
             if str(canvas.get("owner_user_id") or "") or str(canvas.get("ownership_state") or "unclaimed") != "unclaimed":
                 raise HTTPException(status_code=409, detail="该画布已被认领，请刷新后查看当前权限。")
             canvas["owner_user_id"] = user["id"]
@@ -22434,12 +22442,13 @@ async def get_canvas_meta(canvas_id: str, request: Request):
     }
 
 @app.post("/api/canvases/{canvas_id}/meta")
-async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate):
+async def update_canvas_meta(canvas_id: str, payload: CanvasMetaUpdate, request: Request):
     """更新画布的轻量元数据（标题/图标/负责人/颜色/置顶）。
     刻意不走 save_canvas（它会刷新 updated_at），以免打标签/置顶把画布顶到列表最前。"""
     def mutate_meta():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, require_authenticated(request), "editor")
             if payload.title is not None:
                 canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
             if payload.icon is not None:
@@ -22489,10 +22498,11 @@ def extract_canvas_cover_frame(video_path, target_path, frame_time=0):
     os.replace(tmp_path, target_path)
 
 @app.post("/api/canvases/{canvas_id}/cover")
-async def set_canvas_cover(canvas_id: str, payload: CanvasCoverRequest):
+async def set_canvas_cover(canvas_id: str, payload: CanvasCoverRequest, request: Request):
     def mutate_cover():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, require_authenticated(request), "editor")
             kind = str(payload.source_kind or "image").strip().lower()
             if kind not in {"image", "video"}:
                 raise HTTPException(status_code=400, detail="封面来源只支持图片或视频。")
@@ -22521,10 +22531,11 @@ async def set_canvas_cover(canvas_id: str, payload: CanvasCoverRequest):
     return {"canvas": canvas_record(canvas)}
 
 @app.delete("/api/canvases/{canvas_id}/cover")
-async def reset_canvas_cover(canvas_id: str):
+async def reset_canvas_cover(canvas_id: str, request: Request):
     def mutate_cover():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, require_authenticated(request), "editor")
             clear_canvas_cover_file(canvas_id)
             canvas["cover_url"] = ""
             canvas["cover_mode"] = "auto"
@@ -22588,10 +22599,11 @@ async def canvas_media_fingerprints(canvas_id: str, payload: CanvasMediaFingerpr
     return {"fingerprints": await asyncio.to_thread(build_fingerprints)}
 
 @app.post("/api/canvases/{canvas_id}/touch")
-async def touch_canvas(canvas_id: str):
+async def touch_canvas(canvas_id: str, request: Request):
     def touch():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, require_authenticated(request), "editor")
             save_canvas(canvas)
             return canvas
 
