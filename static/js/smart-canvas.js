@@ -2562,7 +2562,6 @@ function promptNodeSeparator(node){
 }
 function promptNodePromptItems(node){
     const text = String(node?.text || '').trim();
-    if(!text) return [];
     const rawItems = node?.promptSplitEnabled !== true
         ? [text]
         : (() => {
@@ -12159,6 +12158,9 @@ function positionTextNodePanel(nodeEl, panel=null, allowAutoPan=true){
     panel.style.right = 'auto';
     panel.style.bottom = 'auto';
 }
+function isTextNodePanelEditingTarget(element){
+    return Boolean(element?.matches?.('input, textarea, [contenteditable="true"]'));
+}
 function renderTextNodePanel(){
     if(!textNodePanelLayer) return;
     const node = selectedNode();
@@ -12173,13 +12175,14 @@ function renderTextNodePanel(){
     // 面板内部正在输入（如指令框）且面板仍属于当前选中节点时，不要重建面板 DOM：
     // 重建会失焦并打断输入法合成。只重定位；等焦点离开面板后的下一次渲染再刷新内容。
     const activePanelEl = textNodePanelLayer.querySelector('[data-text-generation-panel]');
-    const activeInsidePanel = Boolean(
+    const activeInsidePanelEditor = Boolean(
         activePanelEl
         && String(activePanelEl.dataset?.nodeId || '') === String(node.id || '')
         && document.activeElement
         && textNodePanelLayer.contains(document.activeElement)
+        && isTextNodePanelEditingTarget(document.activeElement)
     );
-    if(activeInsidePanel){
+    if(activeInsidePanelEditor){
         requestAnimationFrame(() => {
             const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
             if(nodeEl) positionTextNodePanel(nodeEl);
