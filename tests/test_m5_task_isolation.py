@@ -261,6 +261,17 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(main.load_canvas("canvas-bound")["nodes"], [])
 
+    def test_connection_operations_merge_independently(self):
+        first = {"from": "node-bound", "to": "node-a", "kind": "flow"}
+        second = {"from": "node-bound", "to": "node-b", "kind": "flow"}
+        for index, connection in enumerate((first, second)):
+            canvas = main.load_canvas("canvas-bound")
+            main.apply_canvas_node_operation(canvas, main.CanvasOperationRequest(
+                operation_id=f"connection-{index}", kind="connection_add", fields={"connection": connection}
+            ))
+        saved = main.load_canvas("canvas-bound")
+        self.assertEqual({item["to"] for item in saved["connections"]}, {"node-a", "node-b"})
+
 
 class M5TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_canvas_task_is_visible_only_to_owner_or_admin(self):

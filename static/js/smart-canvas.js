@@ -8330,6 +8330,13 @@ function handleCanvasOperationMessage(data={}){
     else if(op.kind === 'node_create' && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
     else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) Object.assign(node, op.fields || {}); }
     else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
+    else if(op.kind === 'connection_add') {
+        const connection = op.fields?.connection;
+        if(connection && !(canvas.connections || []).some(item => canvasConnectionKey(item) === canvasConnectionKey(connection))) canvas.connections = [...(canvas.connections || []), connection];
+    } else if(op.kind === 'connection_remove') {
+        const connection = op.fields?.connection;
+        if(connection) canvas.connections = (canvas.connections || []).filter(item => canvasConnectionKey(item) !== canvasConnectionKey(connection));
+    }
     // Advance only the confirmed base for the remote operation.  Otherwise a
     // later local save would mistake that remote field for a local difference
     // and write an obsolete value back over it.
@@ -8340,6 +8347,13 @@ function handleCanvasOperationMessage(data={}){
         else if(op.kind === 'node_create' && op.node?.id && baseIndex < 0) baseNodes.push(JSON.parse(JSON.stringify(op.node)));
         else if(op.kind === 'node_fields' && baseIndex >= 0) Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {})));
         else if(op.kind === 'canvas_fields') Object.assign(canvasOperationBase, JSON.parse(JSON.stringify(op.fields || {})));
+        else if(op.kind === 'connection_add') {
+            const connection = op.fields?.connection;
+            if(connection && !(canvasOperationBase.connections || []).some(item => canvasConnectionKey(item) === canvasConnectionKey(connection))) canvasOperationBase.connections = [...(canvasOperationBase.connections || []), JSON.parse(JSON.stringify(connection))];
+        } else if(op.kind === 'connection_remove') {
+            const connection = op.fields?.connection;
+            if(connection) canvasOperationBase.connections = (canvasOperationBase.connections || []).filter(item => canvasConnectionKey(item) !== canvasConnectionKey(connection));
+        }
     }
     canvas.updated_at = Math.max(Number(canvas.updated_at || 0), Number(data.revision || 0));
     render();
@@ -8365,6 +8379,7 @@ function clearCanvasPresence(){
     if(canvasSyncSocket?.readyState === WebSocket.OPEN) canvasSyncSocket.send(JSON.stringify({type:'canvas_presence_clear'}));
 }
 function operationValueChanged(a,b){ return JSON.stringify(a) !== JSON.stringify(b); }
+function canvasConnectionKey(connection={}){ return `${connection.from || ''}->${connection.to || ''}:${connection.kind || 'flow'}`; }
 async function saveCanvasOperations(storageCanvas, revAtStart){
     const base = canvasOperationBase || {nodes:[]};
     const before = new Map((base.nodes || []).map(node => [node.id, node]));
@@ -8380,8 +8395,12 @@ async function saveCanvasOperations(storageCanvas, revAtStart){
         }
     });
     before.forEach((_, id) => { if(!after.has(id)) operations.push({kind:'node_delete', node_id:id}); });
+    const oldConnections = new Map((base.connections || []).map(connection => [canvasConnectionKey(connection), connection]));
+    const newConnections = new Map((storageCanvas.connections || []).map(connection => [canvasConnectionKey(connection), connection]));
+    newConnections.forEach((connection, key) => { if(!oldConnections.has(key)) operations.push({kind:'connection_add', fields:{connection}}); });
+    oldConnections.forEach((connection, key) => { if(!newConnections.has(key)) operations.push({kind:'connection_remove', fields:{connection}}); });
     const canvasFields = {};
-    ['title','icon','connections','viewport','settings','logs','media_catalog'].forEach(key => { if(operationValueChanged(storageCanvas[key], base[key])) canvasFields[key] = storageCanvas[key]; });
+    ['title','icon','viewport','settings','logs','media_catalog'].forEach(key => { if(operationValueChanged(storageCanvas[key], base[key])) canvasFields[key] = storageCanvas[key]; });
     if(Object.keys(canvasFields).length) operations.push({kind:'canvas_fields', fields:canvasFields});
     if(!operations.length){ if(canvasEditRev === revAtStart) canvasDirty = false; return; }
     const results = await Promise.all(operations.map(operation => fetch(`/api/canvases/${encodeURIComponent(canvasId)}/operations`, {

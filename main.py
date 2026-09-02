@@ -6674,10 +6674,24 @@ def apply_canvas_node_operation(canvas, payload):
         canvas["nodes"] = nodes
     elif kind == "canvas_fields":
         fields = {key: value for key, value in dict(payload.fields or {}).items()
-                  if key in {"title", "icon", "connections", "viewport", "settings", "logs", "media_catalog"}}
+                  if key in {"title", "icon", "viewport", "settings", "logs", "media_catalog"}}
         if not fields:
             raise HTTPException(status_code=400, detail="没有可更新的画布字段")
         canvas.update(fields)
+    elif kind in {"connection_add", "connection_remove"}:
+        connection = dict((payload.fields or {}).get("connection") or {})
+        key = (str(connection.get("from") or ""), str(connection.get("to") or ""), str(connection.get("kind") or "flow"))
+        if not key[0] or not key[1]:
+            raise HTTPException(status_code=400, detail="连线无效")
+        current = list(canvas.get("connections") or [])
+        matches = lambda item: (str(item.get("from") or ""), str(item.get("to") or ""), str(item.get("kind") or "flow")) == key
+        if kind == "connection_add" and not any(matches(item) for item in current if isinstance(item, dict)):
+            if key[0] in tombstones or key[1] in tombstones:
+                raise HTTPException(status_code=409, detail="连线关联节点已删除")
+            current.append(connection)
+        elif kind == "connection_remove":
+            current = [item for item in current if not isinstance(item, dict) or not matches(item)]
+        canvas["connections"] = current
     else:
         raise HTTPException(status_code=400, detail="不支持的画布操作")
     canvas["sync_revision"] = int(canvas.get("sync_revision") or 0) + 1
