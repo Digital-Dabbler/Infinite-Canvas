@@ -134,6 +134,46 @@ assert.strictEqual(isTextNodePanelEditingTarget(null), false);
         self.assertIn("isTextNodePanelEditingTarget(document.activeElement)", render_function)
         self.assertNotIn("if(activeInsidePanel){", render_function)
 
+    def test_generation_draft_restoration_never_uses_composed_run_prompt(self):
+        functions = "\n".join(
+            extract_function(name)
+            for name in (
+                "loadPromptDraft",
+                "loadNodePromptDraftToInput",
+            )
+        )
+        script = f"""
+const assert = require('assert');
+const promptInput = {{innerHTML:'', textContent:''}};
+const promptHtmlWithMentionTokens = text => String(text || '').replaceAll('图1', '<token>图1</token>');
+const setPromptText = text => {{ promptInput.textContent = text || ''; }};
+{functions}
+
+const presetOnlyRun = {{
+    promptDraftHtml:'', promptDraftText:'',
+    runPrompt:'预设前缀\\n\\n预设后缀', runPromptRefs:[]
+}};
+loadPromptDraft(presetOnlyRun);
+assert.strictEqual(promptInput.innerHTML, '');
+loadNodePromptDraftToInput(presetOnlyRun);
+assert.strictEqual(promptInput.innerHTML, '');
+
+const authoredDraft = {{
+    promptDraftHtml:'主体内容', promptDraftText:'主体内容',
+    runPrompt:'预设前缀\\n\\n主体内容\\n\\n预设后缀', runPromptRefs:[]
+}};
+loadPromptDraft(authoredDraft);
+assert.strictEqual(promptInput.innerHTML, '主体内容');
+"""
+        run_node(script)
+        snapshot_function = SMART_CANVAS_JS[
+            SMART_CANVAS_JS.index("function snapshotRunMeta("):
+            SMART_CANVAS_JS.index("function attachRunMeta(")
+        ]
+        attach_function = extract_function("attachRunMeta")
+        self.assertIn("hasDraftText ? snapshot.promptText", snapshot_function)
+        self.assertIn("promptHtmlWithMentionTokens(meta.promptText || ''", attach_function)
+
 
 if __name__ == "__main__":
     unittest.main()

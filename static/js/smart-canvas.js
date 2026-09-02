@@ -17984,11 +17984,16 @@ function setPromptDraftForNode(node, text){
     }
 }
 function loadPromptDraft(subject){
-    if(subject?.promptDraftHtml){
+    const hasDraft = Boolean(subject) && (
+        Object.prototype.hasOwnProperty.call(subject, 'promptDraftHtml')
+        || Object.prototype.hasOwnProperty.call(subject, 'promptDraftText')
+    );
+    if(hasDraft){
         const hasToken = String(subject.promptDraftHtml || '').includes('mention-image-token');
+        const draftText = subject.promptDraftText ?? '';
         promptInput.innerHTML = hasToken
             ? subject.promptDraftHtml
-            : (promptHtmlWithMentionTokens(subject.runPrompt || subject.promptDraftText || '', subject.runPromptRefs || []) || subject.promptDraftHtml);
+            : (promptHtmlWithMentionTokens(draftText, subject.runPromptRefs || []) || subject.promptDraftHtml || '');
     } else if(typeof subject?.runPrompt === 'string'){
         const rebuilt = promptHtmlWithMentionTokens(subject.runPrompt, subject.runPromptRefs || []);
         if(rebuilt) promptInput.innerHTML = rebuilt;
@@ -18868,11 +18873,12 @@ function promptHtmlWithMentionTokens(text, refs=[]){
     return html;
 }
 function snapshotRunMeta(prompt, sourceId, displayPrompt='', refs=[], snapshot={}){
+    const hasDraftText = Object.prototype.hasOwnProperty.call(snapshot, 'promptText');
     return {
         prompt,
         displayPrompt:displayPrompt || snapshot.promptText || prompt,
         promptHtml: snapshot.promptHtml ?? '',
-        promptText: snapshot.promptText || displayPrompt || prompt,
+        promptText: hasDraftText ? snapshot.promptText : (displayPrompt || prompt),
         promptRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? ''})).filter(ref => ref.url),
         inputRefs:(refs || []).map(ref => ({url:ref.url || '', name:ref.name || '', nodeId:ref.nodeId || '', imageIndex:ref.imageIndex ?? '', kind:ref.kind || ''})).filter(ref => ref.url),
         sourceNodeId:sourceId,
@@ -18899,7 +18905,7 @@ function attachRunMeta(targetNode, meta){
     // 保存可编辑的 @-提及表单到草稿字段，方便点输出节点时还原原始可编辑形式
     if(meta.promptHtml != null){
         const htmlHasToken = String(meta.promptHtml || '').includes('mention-image-token');
-        const rebuiltHtml = htmlHasToken ? '' : promptHtmlWithMentionTokens(meta.displayPrompt || meta.promptText || '', meta.promptRefs || []);
+        const rebuiltHtml = htmlHasToken ? '' : promptHtmlWithMentionTokens(meta.promptText || '', meta.promptRefs || []);
         targetNode.promptDraftHtml = htmlHasToken ? meta.promptHtml : (rebuiltHtml || meta.promptHtml);
         targetNode.promptDraftText = meta.promptText || '';
     }
@@ -20585,11 +20591,16 @@ function syncCascadeRunButton(node=composerActionNode()){
     refreshIcons();
 }
 function loadNodePromptDraftToInput(node){
-    if(node?.promptDraftHtml) {
+    const hasDraft = Boolean(node) && (
+        Object.prototype.hasOwnProperty.call(node, 'promptDraftHtml')
+        || Object.prototype.hasOwnProperty.call(node, 'promptDraftText')
+    );
+    if(hasDraft) {
         const hasToken = String(node.promptDraftHtml || '').includes('mention-image-token');
+        const draftText = node.promptDraftText ?? '';
         promptInput.innerHTML = hasToken
             ? node.promptDraftHtml
-            : (promptHtmlWithMentionTokens(node.runPrompt || node.promptDraftText || '', node.runPromptRefs || []) || node.promptDraftHtml);
+            : (promptHtmlWithMentionTokens(draftText, node.runPromptRefs || []) || node.promptDraftHtml || '');
     } else {
         const rebuilt = promptHtmlWithMentionTokens(node?.runPrompt || '', node?.runPromptRefs || []);
         if(rebuilt) promptInput.innerHTML = rebuilt;
@@ -20848,7 +20859,7 @@ async function runCascadeStepIntoNode(sourceNode, targetNode, inputRefs, ctx=sma
     };
     if(requestNode.promptDraftHtml != null){
         meta.promptHtml = requestNode.promptDraftHtml;
-        meta.promptText = requestNode.promptDraftText || request.displayPrompt || '';
+        meta.promptText = requestNode.promptDraftText ?? '';
     }
     const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
     const runLog = smartRunSnapshot(requestNode, prompt, request.refs || [], logKind);
@@ -21354,7 +21365,13 @@ async function runGeneration(targetNode=null){
         toast(tr('smart.toastNeedPrompt'));
         return;
     }
-    const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs, {promptHtml:node.promptDraftHtml || '', promptText:node.promptDraftText || request.displayPrompt || prompt, settings:runSettings});
+    const hasDraft = Object.prototype.hasOwnProperty.call(node, 'promptDraftHtml')
+        || Object.prototype.hasOwnProperty.call(node, 'promptDraftText');
+    const meta = snapshotRunMeta(prompt, node.id, request.displayPrompt, refs, {
+        promptHtml: hasDraft ? (node.promptDraftHtml ?? '') : '',
+        ...(hasDraft ? {promptText:node.promptDraftText ?? ''} : {}),
+        settings:runSettings
+    });
     const logKind = isApiLikeEngine(runSettings.engine) && runSettings.apiKind === 'video' ? 'video' : 'image';
     const runLog = smartRunSnapshot(node, prompt, refs, logKind, runSettings);
     rememberRecentSmartSettings(runSettings, node);
