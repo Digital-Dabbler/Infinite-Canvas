@@ -6886,6 +6886,9 @@ let canvasEditRev = 0;
 // Last server-confirmed snapshot used only to derive narrow node operations.
 // It is never sent back as a whole canvas.
 let canvasOperationBase = null;
+let canvasSyncSocket = null;
+let presenceNodeId = '';
+const canvasPresence = new Map();
 // 服务端启动令牌：加载时记录，meta 轮询里对比；变化即表示服务重启过，
 // 提示“请刷新”横幅。只存内存，不落 localStorage——重启后新开的页面拿到
 // 的是新令牌，天然不发通知。

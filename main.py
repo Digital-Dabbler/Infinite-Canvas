@@ -87,6 +87,7 @@ class ConnectionManager:
         self.user_connections: Dict[str, WebSocket] = {}
         self.connection_clients: Dict[WebSocket, str] = {}
         self.canvas_subscriptions: Dict[WebSocket, set] = {}
+        self.canvas_presence: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str = None):
         await websocket.accept()
@@ -103,6 +104,7 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
         self.connection_clients.pop(websocket, None)
         self.canvas_subscriptions.pop(websocket, None)
+        await self.clear_canvas_presence(client_id or "")
         if client_id and self.user_connections.get(client_id) is websocket:
             del self.user_connections[client_id]
         print(f"WS Disconnected. Total: {len(self.active_connections)}, Online: {self.online_count()}")
@@ -171,6 +173,29 @@ class ConnectionManager:
             except Exception:
                 if connection in self.active_connections:
                     self.active_connections.remove(connection)
+
+    async def broadcast_canvas_presence(self, canvas_id: str, node_id: str):
+        now = now_ms()
+        node_presence = self.canvas_presence.get(canvas_id, {}).get(node_id, {})
+        active = [entry for entry in node_presence.values() if now - int(entry.get("seen_at") or 0) <= 15000]
+        self.canvas_presence.setdefault(canvas_id, {})[node_id] = {entry["client_id"]: entry for entry in active}
+        data = json.dumps({"type":"canvas_presence", "canvas_id":canvas_id, "node_id":node_id, "editors":active})
+        for connection in self.active_connections[:]:
+            if canvas_id in self.canvas_subscriptions.get(connection, set()):
+                try: await connection.send_text(data)
+                except Exception: pass
+
+    async def update_canvas_presence(self, canvas_id: str, node_id: str, client_id: str, user: dict):
+        entry = {"client_id":client_id, "user_id":str(user.get("id") or ""), "name":str(user.get("name") or user.get("username") or "用户"), "seen_at":now_ms()}
+        self.canvas_presence.setdefault(canvas_id, {}).setdefault(node_id, {})[client_id] = entry
+        await self.broadcast_canvas_presence(canvas_id, node_id)
+
+    async def clear_canvas_presence(self, client_id: str):
+        for canvas_id, nodes in list(self.canvas_presence.items()):
+            for node_id, entries in list(nodes.items()):
+                if client_id in entries:
+                    entries.pop(client_id, None)
+                    await self.broadcast_canvas_presence(canvas_id, node_id)
 
     async def broadcast_asset_library_updated(self, updated_at: int = 0):
         data = json.dumps({
@@ -331,6 +356,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
                 if canvas_id:
                     canvas_path(canvas_id)
                     manager.subscribe_canvas(websocket, canvas_id)
+            elif isinstance(message, dict) and message.get("type") == "canvas_presence":
+                canvas_id = str(message.get("canvas_id") or "").strip()
+                node_id = str(message.get("node_id") or "").strip()
+                if canvas_id and node_id:
+                    canvas_path(canvas_id)
+                    manager.subscribe_canvas(websocket, canvas_id)
+                    await manager.update_canvas_presence(canvas_id, node_id, scoped_client_id, user)
     except WebSocketDisconnect:
         await manager.disconnect(websocket, scoped_client_id)
     except Exception as e:
