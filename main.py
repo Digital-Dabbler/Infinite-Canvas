@@ -5479,6 +5479,20 @@ def finalize_bound_canvas_task(task_id, result=None, error=""):
     canvas_task_update(task_id, {"canvas_attach_status": "attached"})
     return canvas
 
+async def broadcast_bound_canvas_node(task_id, canvas):
+    """Publish only the task-bound node after an async task mutation."""
+    task = canvas_task_get(task_id)
+    binding = task.get("canvas_binding") if isinstance(task, dict) else {}
+    node_id = str((binding or {}).get("node_id") or "")
+    node = next((item for item in (canvas or {}).get("nodes") or [] if str(item.get("id") or "") == node_id), None)
+    if not node_id or not isinstance(node, dict):
+        return
+    await manager.broadcast_canvas_operation(
+        canvas["id"],
+        {"kind":"node_fields", "node_id":node_id, "fields":{key:value for key,value in node.items() if key != "id"}},
+        int(canvas.get("sync_revision") or canvas.get("updated_at") or 0),
+    )
+
 def reconcile_bound_canvas_tasks(canvas_id=""):
     """Restore a terminal task if a stale client save erased its canvas log.
 
@@ -19663,7 +19677,7 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
         })
         canvas = finalize_bound_canvas_task(task_id, result)
         if canvas:
-            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+            await broadcast_bound_canvas_node(task_id, canvas)
     except JimengPendingError as exc:
         if event:
             finish_usage_event(event, "queued")
@@ -19739,7 +19753,7 @@ async def run_canvas_image_task(task_id: str, payload: OnlineImageRequest, event
         })
         canvas = finalize_bound_canvas_task(task_id, error=str(detail))
         if canvas:
-            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+            await broadcast_bound_canvas_node(task_id, canvas)
     finally:
         ACTIVE_CANVAS_TASK_ID.reset(capture_token)
 
@@ -19782,7 +19796,7 @@ async def create_canvas_image_task(payload: OnlineImageRequest, request: Request
     )
     asyncio.create_task(run_canvas_image_task(task_id, payload, event, event.get("api_profile_id", "")))
     if canvas:
-        await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+        await broadcast_bound_canvas_node(task_id, canvas)
     return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"], "canvas_bound": bool(canvas)}
 
 @app.get("/api/canvas-image-tasks/{task_id}")
@@ -21425,7 +21439,7 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
         })
         canvas = finalize_bound_canvas_task(task_id, result)
         if canvas:
-            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+            await broadcast_bound_canvas_node(task_id, canvas)
     except JimengPendingError as exc:
         if event:
             finish_usage_event(event, "queued")
@@ -21475,7 +21489,7 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
         })
         canvas = finalize_bound_canvas_task(task_id, error=str(detail))
         if canvas:
-            await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+            await broadcast_bound_canvas_node(task_id, canvas)
     finally:
         ACTIVE_CANVAS_TASK_ID.reset(capture_token)
 
@@ -21528,7 +21542,7 @@ async def create_canvas_video_task(payload: CanvasVideoRequest, request: Request
     )
     asyncio.create_task(run_canvas_video_task(task_id, payload, event))
     if canvas:
-        await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()))
+        await broadcast_bound_canvas_node(task_id, canvas)
     return {"task_id": task_id, "status": "queued", "usage_event_id": event["id"], "canvas_bound": bool(canvas)}
 
 @app.get("/api/canvas-video-tasks/{task_id}")

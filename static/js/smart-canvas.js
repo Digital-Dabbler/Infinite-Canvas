@@ -7289,6 +7289,9 @@ function applyMergedServerCanvas(serverCanvas, options={}){
 }
 async function mergeReloadCanvasNow(){
     if(!canvasId) return;
+    // Operation-sync clients converge through narrow events only.  A full
+    // fetch here could reintroduce the stale snapshot rollback we removed.
+    if(canvasOperationBase) return;
     if(canvasDirty){
         // 本地还有未保存改动：服务端旧快照不得覆盖内存，等保存成功后再补拉。
         pendingRemoteMerge = true;
@@ -7321,6 +7324,10 @@ function scheduleCanvasMergeReload(delay=200){
 function handleCanvasUpdatedMessage(data={}){
     if(!data || data.type !== 'canvas_updated') return;
     if(!canvasId || data.canvas_id !== canvasId) return;
+    // Node-operation clients never turn a generic background notification
+    // into a whole-board reload. Task-specific updates must arrive as narrow
+    // operations, so an old task writer cannot roll the board backwards.
+    if(canvasOperationBase) return;
     if(data.client_id && data.client_id === smartClientId) return; // 自己发的，忽略
     if(canvasSyncInFlight) return; // 我正在保存，保存完成/409 合并会处理
     const remoteUpdatedAt = Number(data.updated_at || 0);
@@ -7342,7 +7349,7 @@ function startCanvasMetaPoll(){
                 if(!knownServerBootId) knownServerBootId = String(meta.boot_id);
                 else if(String(meta.boot_id) !== knownServerBootId) showServerRestartBanner();
             }
-            if(Number(meta.updated_at || 0) > Number(canvas.updated_at || 0)) mergeReloadCanvasNow();
+            if(!canvasOperationBase && Number(meta.updated_at || 0) > Number(canvas.updated_at || 0)) mergeReloadCanvasNow();
         } catch(e) {}
     }, 8000);
 }
