@@ -421,6 +421,8 @@ function buildCard(c){
         + (clipboardCanvasId === c.id ? ' cut' : '');
     card.dataset.canvasId = c.id;
     const cover = String(c.cover_url || '').trim();
+    const role = c.sharing?.role || 'viewer';
+    const roleLabel = c.sharing?.ownership_state === 'unclaimed' ? L('待认领','Unclaimed') : ({owner:L('所有者','Owner'),editor:L('可编辑','Can edit'),viewer:L('只读','Read only')}[role] || L('只读','Read only'));
     card.innerHTML = `
         <div class="ws-card-cover ${cover ? 'has-cover' : ''}">
             ${cover ? `<img src="${escapeAttr(cover)}" alt="" loading="lazy">` : ''}
@@ -431,6 +433,7 @@ function buildCard(c){
             <div class="ws-card-title">${escapeHtml(c.title)}</div>
             <button class="ws-card-menu" type="button" title="${L('更多','More')}" aria-label="${L('更多','More')}" aria-haspopup="menu" aria-expanded="false"><i data-lucide="more-horizontal"></i></button>
             <div class="ws-card-meta">
+                <span class="ws-card-access"><i data-lucide="${role === 'owner' ? 'crown' : role === 'editor' ? 'pencil' : c.sharing?.ownership_state === 'unclaimed' ? 'hand' : 'eye'}"></i>${escapeHtml(roleLabel)}</span>
                 <span class="ws-card-nodes">${(c.node_count != null ? c.node_count : 0)} ${L('节点','nodes')}</span>
                 <span class="ws-card-meta-dot"></span>
                 <span class="ws-card-time">${formatRelativeTime(c.updated_at || c.created_at)}</span>
@@ -610,11 +613,17 @@ function openCardMenu(canvasId, anchorBtn){
     closeCardMenu();
     const c = canvases.find(x => x.id === canvasId);
     if(!c) return;
+    const role = c.sharing?.role || 'viewer';
+    const canEdit = role === 'editor' || role === 'owner';
+    const unclaimed = c.sharing?.ownership_state === 'unclaimed';
     const pop = document.createElement('div');
     pop.className = 'ws-card-pop';
     pop.setAttribute('role', 'menu');
     pop.setAttribute('aria-label', L('画布操作','Canvas actions'));
     pop.innerHTML = `
+        ${unclaimed ? `<button class="ws-pop-item" role="menuitem" data-act="claim"><i data-lucide="hand"></i><span>${L('认领画布','Claim canvas')}</span></button>` : ''}
+        <button class="ws-pop-item" role="menuitem" data-act="copy"><i data-lucide="copy"></i><span>${L('创建我的副本','Create my copy')}</span></button>
+        ${canEdit ? '' : '<div class="ws-pop-sep"></div>'}
         <button class="ws-pop-item" role="menuitem" data-act="pin"><i data-lucide="${c.pinned ? 'pin-off' : 'pin'}" class="w-4 h-4"></i><span>${c.pinned ? L('取消置顶','Unpin') : L('置顶','Pin')}</span></button>
         <button class="ws-pop-item" role="menuitem" data-act="rename"><i data-lucide="pencil" class="w-4 h-4"></i><span>${L('重命名','Rename')}</span></button>
         <button class="ws-pop-item" role="menuitem" data-act="export"><i data-lucide="download" class="w-4 h-4"></i><span>${L('导出画布','Export canvas')}</span></button>
@@ -631,12 +640,14 @@ function openCardMenu(canvasId, anchorBtn){
     if(top + h > window.innerHeight - 12) top = r.top - h - 6;
     pop.style.left = Math.round(Math.max(12, left)) + 'px';
     pop.style.top = Math.round(Math.max(12, top)) + 'px';
-    pop.querySelector('[data-act="pin"]').onclick = () => { closeCardMenu(); setCanvasPinned(canvasId, !c.pinned); };
-    pop.querySelector('[data-act="rename"]').onclick = () => { closeCardMenu(); startCardRename(canvasId); };
+    pop.querySelector('[data-act="claim"]')?.addEventListener('click', () => { closeCardMenu(); claimCanvas(canvasId); });
+    pop.querySelector('[data-act="copy"]')?.addEventListener('click', () => { closeCardMenu(); copyCanvas(canvasId); });
+    pop.querySelector('[data-act="pin"]').onclick = () => { if(!canEdit) return copyCanvas(canvasId); closeCardMenu(); setCanvasPinned(canvasId, !c.pinned); };
+    pop.querySelector('[data-act="rename"]').onclick = () => { if(!canEdit) return copyCanvas(canvasId); closeCardMenu(); startCardRename(canvasId); };
     pop.querySelector('[data-act="export"]').onclick = () => { closeCardMenu(); exportCanvas(canvasId); };
     pop.querySelector('[data-act="export-assets"]').onclick = () => { closeCardMenu(); exportCanvasWithResources(canvasId); };
-    pop.querySelector('[data-act="cut"]').onclick = () => { closeCardMenu(); cutCanvas(canvasId); };
-    pop.querySelector('[data-act="delete"]').onclick = () => { closeCardMenu(); showCardDeleteConfirm(canvasId); };
+    pop.querySelector('[data-act="cut"]').onclick = () => { if(!canEdit) return copyCanvas(canvasId); closeCardMenu(); cutCanvas(canvasId); };
+    pop.querySelector('[data-act="delete"]').onclick = () => { if(!canEdit) return copyCanvas(canvasId); closeCardMenu(); showCardDeleteConfirm(canvasId); };
     refreshIcons();
 }
 
@@ -654,6 +665,23 @@ function showCardDeleteConfirm(canvasId){
         if(el !== card) el.classList.remove('confirming-delete');
     });
     card.classList.add('confirming-delete');
+}
+
+async function claimCanvas(id){
+    try {
+        const res = await fetch(`/api/canvases/${encodeURIComponent(id)}/claim`, {method:'POST'});
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || L('认领失败','Claim failed'));
+        await loadAll(); setStatus(L('已认领画布','Canvas claimed'));
+    } catch(e){ setStatus(e.message || L('认领失败','Claim failed')); }
+}
+async function copyCanvas(id){
+    try {
+        const res = await fetch(`/api/canvases/${encodeURIComponent(id)}/copy`, {method:'POST'});
+        const data = await res.json().catch(() => ({}));
+        if(!res.ok) throw new Error(data.detail || L('复制失败','Copy failed'));
+        if(data.canvas){ canvases.push({...data.canvas, sharing:data.sharing}); renderBoard(); openCanvas(data.canvas); }
+    } catch(e){ setStatus(e.message || L('复制失败','Copy failed')); }
 }
 
 /* ===== Export canvas (download the full canvas JSON) ===== */
