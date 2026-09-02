@@ -8330,6 +8330,9 @@ function handleCanvasOperationMessage(data={}){
     else if(op.kind === 'node_create' && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
     else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) Object.assign(node, op.fields || {}); }
     else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
+    else if(op.kind === 'settings_fields') { canvas.settings = {...(canvas.settings || {}), ...(op.fields || {})}; Object.assign(settings, op.fields || {}); }
+    else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvas.logs || []).some(item => item.id === op.fields.log.id)) canvas.logs = [op.fields.log, ...(canvas.logs || [])];
+    else if(op.kind === 'log_remove') canvas.logs = (canvas.logs || []).filter(item => item.id !== op.fields?.log_id);
     else if(op.kind === 'connection_add') {
         const connection = op.fields?.connection;
         if(connection && !(canvas.connections || []).some(item => canvasConnectionKey(item) === canvasConnectionKey(connection))) canvas.connections = [...(canvas.connections || []), connection];
@@ -8347,6 +8350,9 @@ function handleCanvasOperationMessage(data={}){
         else if(op.kind === 'node_create' && op.node?.id && baseIndex < 0) baseNodes.push(JSON.parse(JSON.stringify(op.node)));
         else if(op.kind === 'node_fields' && baseIndex >= 0) Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {})));
         else if(op.kind === 'canvas_fields') Object.assign(canvasOperationBase, JSON.parse(JSON.stringify(op.fields || {})));
+        else if(op.kind === 'settings_fields') canvasOperationBase.settings = {...(canvasOperationBase.settings || {}), ...JSON.parse(JSON.stringify(op.fields || {}))};
+        else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvasOperationBase.logs || []).some(item => item.id === op.fields.log.id)) canvasOperationBase.logs = [JSON.parse(JSON.stringify(op.fields.log)), ...(canvasOperationBase.logs || [])];
+        else if(op.kind === 'log_remove') canvasOperationBase.logs = (canvasOperationBase.logs || []).filter(item => item.id !== op.fields?.log_id);
         else if(op.kind === 'connection_add') {
             const connection = op.fields?.connection;
             if(connection && !(canvasOperationBase.connections || []).some(item => canvasConnectionKey(item) === canvasConnectionKey(connection))) canvasOperationBase.connections = [...(canvasOperationBase.connections || []), JSON.parse(JSON.stringify(connection))];
@@ -8399,8 +8405,15 @@ async function saveCanvasOperations(storageCanvas, revAtStart){
     const newConnections = new Map((storageCanvas.connections || []).map(connection => [canvasConnectionKey(connection), connection]));
     newConnections.forEach((connection, key) => { if(!oldConnections.has(key)) operations.push({kind:'connection_add', fields:{connection}}); });
     oldConnections.forEach((connection, key) => { if(!newConnections.has(key)) operations.push({kind:'connection_remove', fields:{connection}}); });
+    const settingFields = {};
+    Object.keys(storageCanvas.settings || {}).forEach(key => { if(operationValueChanged(storageCanvas.settings[key], (base.settings || {})[key])) settingFields[key] = storageCanvas.settings[key]; });
+    if(Object.keys(settingFields).length) operations.push({kind:'settings_fields', fields:settingFields});
+    const oldLogs = new Map((base.logs || []).map(entry => [entry.id, entry]));
+    const newLogs = new Map((storageCanvas.logs || []).map(entry => [entry.id, entry]));
+    newLogs.forEach((entry, id) => { if(id && !oldLogs.has(id)) operations.push({kind:'log_add', fields:{log:entry}}); });
+    oldLogs.forEach((_, id) => { if(id && !newLogs.has(id)) operations.push({kind:'log_remove', fields:{log_id:id}}); });
     const canvasFields = {};
-    ['title','icon','viewport','settings','logs','media_catalog'].forEach(key => { if(operationValueChanged(storageCanvas[key], base[key])) canvasFields[key] = storageCanvas[key]; });
+    ['title','icon','viewport','media_catalog'].forEach(key => { if(operationValueChanged(storageCanvas[key], base[key])) canvasFields[key] = storageCanvas[key]; });
     if(Object.keys(canvasFields).length) operations.push({kind:'canvas_fields', fields:canvasFields});
     if(!operations.length){ if(canvasEditRev === revAtStart) canvasDirty = false; return; }
     const results = await Promise.all(operations.map(operation => fetch(`/api/canvases/${encodeURIComponent(canvasId)}/operations`, {

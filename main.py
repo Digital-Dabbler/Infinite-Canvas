@@ -6674,10 +6674,26 @@ def apply_canvas_node_operation(canvas, payload):
         canvas["nodes"] = nodes
     elif kind == "canvas_fields":
         fields = {key: value for key, value in dict(payload.fields or {}).items()
-                  if key in {"title", "icon", "viewport", "settings", "logs", "media_catalog"}}
+                  if key in {"title", "icon", "viewport", "media_catalog"}}
         if not fields:
             raise HTTPException(status_code=400, detail="没有可更新的画布字段")
         canvas.update(fields)
+    elif kind == "settings_fields":
+        fields = dict(payload.fields or {})
+        if not fields:
+            raise HTTPException(status_code=400, detail="没有可更新的设置字段")
+        canvas["settings"] = {**dict(canvas.get("settings") or {}), **fields}
+    elif kind in {"log_add", "log_remove"}:
+        entry = dict((payload.fields or {}).get("log") or {})
+        log_id = str(entry.get("id") or (payload.fields or {}).get("log_id") or "").strip()
+        if not log_id:
+            raise HTTPException(status_code=400, detail="日志 ID 无效")
+        logs = list(canvas.get("logs") or [])
+        if kind == "log_add" and not any(str(item.get("id") or "") == log_id for item in logs if isinstance(item, dict)):
+            logs.insert(0, entry)
+        elif kind == "log_remove":
+            logs = [item for item in logs if not isinstance(item, dict) or str(item.get("id") or "") != log_id]
+        canvas["logs"] = logs[:500]
     elif kind in {"connection_add", "connection_remove"}:
         connection = dict((payload.fields or {}).get("connection") or {})
         key = (str(connection.get("from") or ""), str(connection.get("to") or ""), str(connection.get("kind") or "flow"))

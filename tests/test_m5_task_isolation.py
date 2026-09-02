@@ -272,6 +272,23 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         saved = main.load_canvas("canvas-bound")
         self.assertEqual({item["to"] for item in saved["connections"]}, {"node-a", "node-b"})
 
+    def test_setting_and_log_operations_do_not_replace_each_other(self):
+        canvas = main.load_canvas("canvas-bound")
+        main.apply_canvas_node_operation(canvas, main.CanvasOperationRequest(
+            operation_id="setting-engine", kind="settings_fields", fields={"engine": "api"}
+        ))
+        canvas = main.load_canvas("canvas-bound")
+        main.apply_canvas_node_operation(canvas, main.CanvasOperationRequest(
+            operation_id="setting-model", kind="settings_fields", fields={"model": "model-a"}
+        ))
+        canvas = main.load_canvas("canvas-bound")
+        main.apply_canvas_node_operation(canvas, main.CanvasOperationRequest(
+            operation_id="log-one", kind="log_add", fields={"log": {"id": "log-one", "createdAt": 1}}
+        ))
+        saved = main.load_canvas("canvas-bound")
+        self.assertEqual(saved["settings"], {"engine": "api", "model": "model-a"})
+        self.assertEqual([item["id"] for item in saved["logs"]], ["log-one"])
+
 
 class M5TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_canvas_task_is_visible_only_to_owner_or_admin(self):
