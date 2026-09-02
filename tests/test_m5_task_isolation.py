@@ -237,6 +237,30 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         self.assertNotIn("pendingTasks", node)
         self.assertEqual(saved["logs"][0]["local_task_id"], task["id"])
 
+    def test_node_operations_keep_latest_field_and_tombstone_wins(self):
+        canvas = main.load_canvas("canvas-bound")
+        first = main.CanvasOperationRequest(
+            operation_id="move-one", kind="node_fields", node_id="node-bound", fields={"x": 120}
+        )
+        latest = main.CanvasOperationRequest(
+            operation_id="move-two", kind="node_fields", node_id="node-bound", fields={"x": 360}
+        )
+        main.apply_canvas_node_operation(canvas, first)
+        canvas = main.load_canvas("canvas-bound")
+        main.apply_canvas_node_operation(canvas, latest)
+        self.assertEqual(main.load_canvas("canvas-bound")["nodes"][0]["x"], 360)
+
+        canvas = main.load_canvas("canvas-bound")
+        main.apply_canvas_node_operation(canvas, main.CanvasOperationRequest(
+            operation_id="delete-node", kind="node_delete", node_id="node-bound"
+        ))
+        with self.assertRaises(main.HTTPException) as caught:
+            main.apply_canvas_node_operation(main.load_canvas("canvas-bound"), main.CanvasOperationRequest(
+                operation_id="late-move", kind="node_fields", node_id="node-bound", fields={"x": 9}
+            ))
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertEqual(main.load_canvas("canvas-bound")["nodes"], [])
+
 
 class M5TaskAuthorizationTests(unittest.IsolatedAsyncioTestCase):
     async def test_canvas_task_is_visible_only_to_owner_or_admin(self):
