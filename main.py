@@ -6727,6 +6727,28 @@ def apply_canvas_node_operation(canvas, payload):
     save_canvas(canvas)
     return canvas, True
 
+def record_canvas_server_operation(canvas, kind, node_id=""):
+    """Record a mutation made by a trusted server-side integration.
+
+    These mutations do not arrive through ``CanvasOperationRequest``, but
+    connected smart-canvas clients still need the same narrow update contract.
+    Keeping a revision here also prevents an old metadata timestamp from being
+    mistaken for a newer node operation by a subscribed browser.
+    """
+    history = list(canvas.get("operation_log") or [])
+    revision = int(canvas.get("sync_revision") or 0) + 1
+    canvas["sync_revision"] = revision
+    history.append({
+        "id": f"server_{uuid.uuid4().hex}",
+        "kind": str(kind or "server"),
+        "node_id": str(node_id or ""),
+        "revision": revision,
+        "at": now_ms(),
+    })
+    canvas["operation_log"] = history[-1000:]
+    save_canvas(canvas)
+    return revision
+
 CANVAS_COLORS = {"", "red", "orange", "amber", "green", "teal", "blue", "violet", "pink", "slate"}
 
 def normalize_canvas_color(value):
@@ -22138,9 +22160,12 @@ async def import_photoshop_image_to_canvas(canvas_id: str, payload: PhotoshopBri
                 payload.export_scope,
                 payload.selection_bounds if isinstance(payload.selection_bounds, dict) else {},
             )
-            return canvas, node
-    canvas, node = await asyncio.to_thread(import_image)
-    await manager.broadcast_canvas_updated(canvas_id, int(canvas.get("updated_at") or now_ms()), PHOTOSHOP_BRIDGE_CLIENT_ID)
+            revision = record_canvas_server_operation(canvas, "node_create", node.get("id"))
+            return canvas, node, revision
+    canvas, node, revision = await asyncio.to_thread(import_image)
+    await manager.broadcast_canvas_operation(canvas_id, {
+        "kind": "node_create", "node_id": node.get("id"), "node": node,
+    }, revision, PHOTOSHOP_BRIDGE_CLIENT_ID)
     return {
         "ok": True,
         "node": node,
@@ -22170,8 +22195,10 @@ async def complete_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeC
             with CANVAS_LOCK:
                 canvas = load_canvas(task_snapshot["canvas_id"])
                 returned_node = append_photoshop_return_to_canvas(canvas, task_snapshot, item)
-                return canvas, returned_node
-        canvas, returned_node = await asyncio.to_thread(update_target_canvas)
+                kind = "node_fields" if returned_node.get("id") == task_snapshot.get("node_id") else "node_create"
+                revision = record_canvas_server_operation(canvas, kind, returned_node.get("id"))
+                return canvas, returned_node, kind, revision
+        canvas, returned_node, operation_kind, revision = await asyncio.to_thread(update_target_canvas)
     except Exception as exc:
         with PHOTOSHOP_BRIDGE_LOCK:
             tasks = load_photoshop_bridge_tasks()
@@ -22194,7 +22221,12 @@ async def complete_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeC
             "error": "",
         })
         save_photoshop_bridge_tasks(tasks)
-    await manager.broadcast_canvas_updated(canvas["id"], int(canvas.get("updated_at") or now_ms()), PHOTOSHOP_BRIDGE_CLIENT_ID)
+    operation = {"kind": operation_kind, "node_id": returned_node.get("id")}
+    if operation_kind == "node_create":
+        operation["node"] = returned_node
+    else:
+        operation["fields"] = {key: value for key, value in returned_node.items() if key != "id"}
+    await manager.broadcast_canvas_operation(canvas["id"], operation, revision, PHOTOSHOP_BRIDGE_CLIENT_ID)
     return {"task": photoshop_bridge_public_task(task), "canvas_updated_at": canvas.get("updated_at")}
 
 @app.post("/api/photoshop-bridge/tasks/{task_id}/cancel")

@@ -261,6 +261,15 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(main.load_canvas("canvas-bound")["nodes"], [])
 
+    def test_server_side_integration_operation_advances_revision_without_snapshot(self):
+        canvas = main.load_canvas("canvas-bound")
+        revision = main.record_canvas_server_operation(canvas, "node_fields", "node-bound")
+
+        saved = main.load_canvas("canvas-bound")
+        self.assertEqual(saved["sync_revision"], revision)
+        self.assertEqual(saved["operation_log"][-1]["kind"], "node_fields")
+        self.assertEqual(saved["operation_log"][-1]["node_id"], "node-bound")
+
     def test_connection_operations_merge_independently(self):
         first = {"from": "node-bound", "to": "node-a", "kind": "flow"}
         second = {"from": "node-bound", "to": "node-b", "kind": "flow"}

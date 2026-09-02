@@ -8367,6 +8367,7 @@ function handleCanvasOperationMessage(data={}){
     }
     canvas.updated_at = Math.max(Number(canvas.updated_at || 0), Number(data.revision || 0));
     render();
+    applyCanvasPresenceDecorations();
 }
 function handleCanvasPresenceMessage(data={}){
     if(!data || data.canvas_id !== canvasId) return;
@@ -8379,6 +8380,16 @@ function handleCanvasPresenceMessage(data={}){
         el.dataset.collaborationEditors = names;
         el.title = names ? `正在编辑：${names}` : '';
     }
+}
+function applyCanvasPresenceDecorations(){
+    canvasPresence.forEach((editors, nodeId) => {
+        const el = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId || '')}"]`);
+        if(!el) return;
+        const names = (editors || []).map(item => item.name).filter(Boolean).join('、');
+        el.classList.toggle('collaboration-editing', (editors || []).length > 0);
+        el.dataset.collaborationEditors = names;
+        el.title = names ? `正在编辑：${names}` : '';
+    });
 }
 function sendCanvasPresence(nodeId){
     presenceNodeId = nodeId || '';
@@ -12059,6 +12070,7 @@ function render(){
     refreshRunTimerPills();
     updateImageActionToolbar();
     updateWorkflowGroupToolbar();
+    applyCanvasPresenceDecorations();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
