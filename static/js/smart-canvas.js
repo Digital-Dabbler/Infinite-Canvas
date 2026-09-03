@@ -24009,11 +24009,19 @@ if(cascadeRunBtn) cascadeRunBtn.onclick = () => {
     }
     runSmartCascade();
 };
-document.getElementById('workflowCreateClose')?.addEventListener('click',closeWorkflowCreateDialog);
-document.getElementById('workflowCreateCancel')?.addEventListener('click',closeWorkflowCreateDialog);
-document.getElementById('workflowCreateModal')?.addEventListener('click',e=>{if(e.target.id==='workflowCreateModal')closeWorkflowCreateDialog();});
-document.getElementById('workflowCreateName')?.addEventListener('input',e=>{document.getElementById('workflowCreateCount').textContent=`${Array.from(e.target.value||'').length}/20`;});
-document.getElementById('workflowCreateConfirm')?.addEventListener('click',()=>confirmWorkflowCreate().catch(e=>toast(e.message||'创建工作流失败')));
+window.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('workflowCreateClose')?.addEventListener('click', closeWorkflowCreateDialog);
+    document.getElementById('workflowCreateCancel')?.addEventListener('click', closeWorkflowCreateDialog);
+    document.getElementById('workflowCreateModal')?.addEventListener('click', event => {
+        if(event.target.id === 'workflowCreateModal') closeWorkflowCreateDialog();
+    });
+    document.getElementById('workflowCreateName')?.addEventListener('input', event => {
+        document.getElementById('workflowCreateCount').textContent = `${Array.from(event.target.value || '').length}/20`;
+    });
+    document.getElementById('workflowCreateConfirm')?.addEventListener('click', () => {
+        confirmWorkflowCreate().catch(error => toast(error.message || '创建工作流失败'));
+    });
+});
 fileInput.onchange = () => {
     const groupPoint = pendingGroupUploadPoint;
     if(!fileInput.files?.length){

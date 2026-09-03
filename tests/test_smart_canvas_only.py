@@ -87,6 +87,16 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("media_catalog:storageCanvas.media_catalog || []", self.smart_canvas_js)
         self.assertIn("function removeCanvasMediaCatalogItem", self.smart_canvas_js)
 
+    def test_workflow_create_dialog_events_wait_for_dom_ready(self):
+        source = self.smart_canvas_js
+        binding_start = source.index("window.addEventListener('DOMContentLoaded', () => {")
+        binding_end = source.index("fileInput.onchange", binding_start)
+        bindings = source[binding_start:binding_end]
+        self.assertIn("workflowCreateClose", bindings)
+        self.assertIn("workflowCreateCancel", bindings)
+        self.assertIn("workflowCreateConfirm", bindings)
+        self.assertIn("confirmWorkflowCreate().catch", bindings)
+
     def test_comfy_workflow_sources_are_separated_with_legacy_system_names(self):
         system_name = "comfyui-workflow-multiple-angles-api.json"
         self.assertEqual(
