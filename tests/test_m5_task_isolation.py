@@ -298,6 +298,29 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(main.load_canvas("canvas-bound")["nodes"], [])
 
+    def test_director_fields_are_validated_and_restore_uses_a_new_id(self):
+        canvas = main.load_canvas("canvas-bound")
+        canvas["nodes"] = [{
+            "id": "director-old", "type": "smart-3d-director",
+            "directorScene": {"version": 1, "entities": [], "camera": {"position": [6, 4, 7], "target": [0, 1, 0], "fov": 45}, "ratio": "16:9"},
+            "directorThumb": "",
+        }]
+        main.save_canvas(canvas)
+        main.apply_canvas_node_operation(main.load_canvas("canvas-bound"), main.CanvasOperationRequest(
+            operation_id="director-delete", kind="node_delete", node_id="director-old"
+        ))
+        restored = {"id": "director-new", "type": "smart-3d-director", "directorScene": {"version": 1, "entities": [], "camera": {"position": [1, 2, 3], "target": [0, 1, 0], "fov": 50}, "ratio": "1:1"}, "directorThumb": ""}
+        main.apply_canvas_node_operation(main.load_canvas("canvas-bound"), main.CanvasOperationRequest(
+            operation_id="director-restore", kind="node_restore", node_id="director-old", node=restored
+        ))
+        saved = main.load_canvas("canvas-bound")
+        self.assertEqual(saved["nodes"][0]["id"], "director-new")
+        with self.assertRaises(main.HTTPException) as caught:
+            main.apply_canvas_node_operation(saved, main.CanvasOperationRequest(
+                operation_id="bad-director-thumb", kind="node_fields", node_id="director-new", fields={"directorThumb": "https://invalid.example/thumb.jpg"}
+            ))
+        self.assertEqual(caught.exception.status_code, 400)
+
     def test_server_side_integration_operation_advances_revision_without_snapshot(self):
         canvas = main.load_canvas("canvas-bound")
         revision = main.record_canvas_server_operation(canvas, "node_fields", "node-bound")

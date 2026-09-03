@@ -8443,7 +8443,7 @@ function handleCanvasOperationMessage(data={}){
         });
     };
     if(op.kind === 'node_delete') nodes = nodes.filter(node => node.id !== id);
-    else if(op.kind === 'node_create' && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
+    else if((op.kind === 'node_create' || op.kind === 'node_restore') && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
     else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) { clearNodeTaskFields(node); Object.assign(node, op.fields || {}); } }
     else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
     else if(op.kind === 'settings_fields') { canvas.settings = {...(canvas.settings || {}), ...(op.fields || {})}; Object.assign(settings, op.fields || {}); }
@@ -8465,7 +8465,7 @@ function handleCanvasOperationMessage(data={}){
         const baseNodes = canvasOperationBase.nodes || (canvasOperationBase.nodes = []);
         const baseIndex = baseNodes.findIndex(node => node.id === id);
         if(op.kind === 'node_delete' && baseIndex >= 0) baseNodes.splice(baseIndex, 1);
-        else if(op.kind === 'node_create' && op.node?.id && baseIndex < 0) baseNodes.push(JSON.parse(JSON.stringify(op.node)));
+        else if((op.kind === 'node_create' || op.kind === 'node_restore') && op.node?.id && baseIndex < 0) baseNodes.push(JSON.parse(JSON.stringify(op.node)));
         else if(op.kind === 'node_fields' && baseIndex >= 0) { clearNodeTaskFields(baseNodes[baseIndex]); Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {}))); }
         else if(op.kind === 'canvas_fields') Object.assign(canvasOperationBase, JSON.parse(JSON.stringify(op.fields || {})));
         else if(op.kind === 'settings_fields') canvasOperationBase.settings = {...(canvasOperationBase.settings || {}), ...JSON.parse(JSON.stringify(op.fields || {}))};
@@ -8518,14 +8518,45 @@ function clearCanvasPresence(){
 }
 function operationValueChanged(a,b){ return JSON.stringify(a) !== JSON.stringify(b); }
 function canvasConnectionKey(connection={}){ return `${connection.from || ''}->${connection.to || ''}:${connection.kind || 'flow'}`; }
+function remapRestoredNodeIds(storageCanvas, base){
+    const known = new Set((base?.nodes || []).map(node => node?.id).filter(Boolean));
+    const tombstones = new Set(base?.deleted_node_ids || []);
+    const idMap = new Map();
+    (storageCanvas.nodes || []).forEach(node => {
+        if(node?.id && !known.has(node.id) && tombstones.has(node.id)) idMap.set(node.id, uid('restored'));
+    });
+    if(!idMap.size) return idMap;
+    const remap = id => idMap.get(id) || id;
+    (storageCanvas.nodes || []).forEach(node => {
+        if(!node) return;
+        node.id = remap(node.id);
+        ['inputNodeIds','items'].forEach(field => { if(Array.isArray(node[field])) node[field] = node[field].map(remap); });
+        ['workflowGroupId','sourceNodeId','historyFor'].forEach(field => { if(node[field]) node[field] = remap(node[field]); });
+        ['manualInputRefs','runInputRefs','runPromptRefs'].forEach(field => {
+            if(Array.isArray(node[field])) node[field] = node[field].map(ref => ref && typeof ref === 'object' ? {...ref, nodeId:remap(ref.nodeId)} : ref);
+        });
+    });
+    (storageCanvas.connections || []).forEach(connection => { connection.from = remap(connection.from); connection.to = remap(connection.to); });
+    idMap.forEach((next, old) => { localDeletedNodeIds.add(old); localUnsyncedNodeIds.add(next); });
+    nodes = storageCanvas.nodes;
+    canvas.nodes = nodes;
+    canvas.connections = storageCanvas.connections;
+    selectedId = remap(selectedId);
+    selectedIds = selectedIds.map(remap);
+    if(selectedImage.nodeId) selectedImage.nodeId = remap(selectedImage.nodeId);
+    storageCanvas.deleted_node_ids = Array.from(new Set([...(storageCanvas.deleted_node_ids || []), ...idMap.keys()]));
+    return idMap;
+}
 async function saveCanvasOperations(storageCanvas, revAtStart){
     const base = canvasOperationBase || {nodes:[]};
+    const restoredIds = remapRestoredNodeIds(storageCanvas, base);
+    const restoredSources = new Map(Array.from(restoredIds, ([oldId, newId]) => [newId, oldId]));
     const before = new Map((base.nodes || []).map(node => [node.id, node]));
     const after = new Map((storageCanvas.nodes || []).map(node => [node.id, node]));
     const operations = [];
     after.forEach((node, id) => {
         const previous = before.get(id);
-        if(!previous) operations.push({kind:'node_create', node_id:id, node});
+        if(!previous) operations.push({kind:restoredSources.has(id) ? 'node_restore' : 'node_create', node_id:restoredSources.get(id) || id, node});
         else {
             const fields = {};
             Object.keys(node).forEach(key => { if(key !== 'id' && operationValueChanged(node[key], previous[key])) fields[key] = node[key]; });

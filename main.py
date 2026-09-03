@@ -6710,7 +6710,69 @@ def canvas_sharing_public(canvas, user):
 CANVAS_NODE_OPERATION_FIELDS = {
     "x", "y", "w", "h", "scale", "title", "text", "images", "activeImageIndex",
     "connections", "workflowGroupId", "inputNodeIds", "items", "settings", "runSettings",
+    "directorScene", "directorThumb",
 }
+CANVAS_NODE_OPERATION_FORBIDDEN_FIELDS = {
+    "id", "owner", "owner_user_id", "editor_user_ids", "ownership_state", "sharing_version",
+    "operation_log", "deleted_node_ids", "sync_revision",
+}
+
+def validate_director_scene(value):
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="3D 场景必须是对象")
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="3D 场景无法序列化")
+    if len(encoded) > 256 * 1024:
+        raise HTTPException(status_code=400, detail="3D 场景超过 256KB")
+    if value.get("version") != 1:
+        raise HTTPException(status_code=400, detail="不支持的 3D 场景版本")
+    entities = value.get("entities")
+    if not isinstance(entities, list) or len(entities) > 30 or not all(isinstance(item, dict) for item in entities):
+        raise HTTPException(status_code=400, detail="3D 场景实体无效")
+    camera = value.get("camera")
+    if not isinstance(camera, dict):
+        raise HTTPException(status_code=400, detail="3D 场景机位无效")
+    for key in ("position", "target"):
+        point = camera.get(key)
+        if not isinstance(point, list) or len(point) != 3 or not all(isinstance(item, (int, float)) and math.isfinite(item) for item in point):
+            raise HTTPException(status_code=400, detail="3D 场景机位坐标无效")
+    fov = camera.get("fov")
+    if not isinstance(fov, (int, float)) or not math.isfinite(fov) or not 20 <= fov <= 90:
+        raise HTTPException(status_code=400, detail="3D 场景 FOV 无效")
+    if value.get("ratio") not in {"16:9", "9:16", "1:1"}:
+        raise HTTPException(status_code=400, detail="3D 场景比例无效")
+    return value
+
+def validate_canvas_node_fields(node, fields):
+    """Reject protected or invented operation fields; validate 3D payloads server-side."""
+    allowed = CANVAS_NODE_OPERATION_FIELDS | {str(key) for key in (node or {}).keys()}
+    clean = {key: value for key, value in dict(fields or {}).items() if key != "id"}
+    unsupported = set(clean) - allowed
+    forbidden = set(clean) & CANVAS_NODE_OPERATION_FORBIDDEN_FIELDS
+    if unsupported or forbidden:
+        raise HTTPException(status_code=400, detail="包含不允许的节点字段")
+    if "directorScene" in clean:
+        if str((node or {}).get("type") or "") != "smart-3d-director":
+            raise HTTPException(status_code=400, detail="只有 3D 导演台节点可更新场景")
+        clean["directorScene"] = validate_director_scene(clean["directorScene"])
+    if "directorThumb" in clean:
+        thumb = clean["directorThumb"]
+        if str((node or {}).get("type") or "") != "smart-3d-director" or not isinstance(thumb, str) or len(thumb) > 55000 or (thumb and not re.fullmatch(r"data:image/jpeg;base64,[A-Za-z0-9+/=]+", thumb)):
+            raise HTTPException(status_code=400, detail="3D 场景缩略图无效")
+    return clean
+
+def validate_canvas_node_record(node):
+    if not isinstance(node, dict):
+        raise HTTPException(status_code=400, detail="节点无效")
+    if node.get("directorScene") is not None:
+        if str(node.get("type") or "") != "smart-3d-director":
+            raise HTTPException(status_code=400, detail="只有 3D 导演台节点可包含场景")
+        validate_canvas_node_fields(node, {"directorScene": node["directorScene"]})
+    if node.get("directorThumb") is not None:
+        validate_canvas_node_fields(node, {"directorThumb": node["directorThumb"]})
+    return node
 
 def apply_canvas_node_operation(canvas, payload):
     """Apply one node-scoped operation while holding CANVAS_LOCK.
@@ -6736,7 +6798,7 @@ def apply_canvas_node_operation(canvas, payload):
         canvas["nodes"] = [item for item in nodes if str((item or {}).get("id") or "") != node_id]
         canvas["connections"] = [item for item in (canvas.get("connections") or []) if str((item or {}).get("from") or "") != node_id and str((item or {}).get("to") or "") != node_id]
     elif kind == "node_create":
-        node = dict(payload.node or {})
+        node = validate_canvas_node_record(dict(payload.node or {}))
         if not node_id or str(node.get("id") or "") != node_id:
             raise HTTPException(status_code=400, detail="节点创建 ID 无效")
         if node_id in tombstones:
@@ -6744,6 +6806,15 @@ def apply_canvas_node_operation(canvas, payload):
         if node_index < 0:
             nodes.append(node)
             canvas["nodes"] = nodes
+    elif kind == "node_restore":
+        node = validate_canvas_node_record(dict(payload.node or {}))
+        restored_id = str(node.get("id") or "").strip()
+        if not node_id or node_id not in tombstones or not restored_id or restored_id == node_id:
+            raise HTTPException(status_code=400, detail="节点恢复请求无效")
+        if any(str((item or {}).get("id") or "") == restored_id for item in nodes):
+            raise HTTPException(status_code=409, detail="恢复节点 ID 已存在")
+        nodes.append(node)
+        canvas["nodes"] = nodes
     elif kind == "node_fields":
         if not node_id:
             raise HTTPException(status_code=400, detail="缺少节点 ID")
@@ -6751,7 +6822,7 @@ def apply_canvas_node_operation(canvas, payload):
             raise HTTPException(status_code=409, detail="节点已删除，旧请求不能复活节点")
         if node_index < 0:
             raise HTTPException(status_code=404, detail="节点不存在")
-        fields = {key: value for key, value in dict(payload.fields or {}).items() if key != "id"}
+        fields = validate_canvas_node_fields(nodes[node_index], payload.fields)
         if not fields:
             raise HTTPException(status_code=400, detail="没有可更新的节点字段")
         nodes[node_index] = {**nodes[node_index], **fields}
