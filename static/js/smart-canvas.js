@@ -8343,10 +8343,14 @@ function renderCanvasSharingControl(){
     document.getElementById('canvasSharingControl')?.remove();
     if(!canvasId || !(canvasSharing?.role === 'owner' || canvasSharing?.can_govern)) return;
     const button = document.createElement('button');
-    button.id = 'canvasSharingControl'; button.type = 'button'; button.className = 'canvas-sharing-control';
+    button.id = 'canvasSharingControl'; button.type = 'button'; button.className = 'rh-collaboration-control';
     button.setAttribute('aria-label', canvasSharing?.role === 'owner' ? '管理协作成员' : '进入治理模式'); button.innerHTML = `<i data-lucide="users"></i><span>${canvasSharing?.role === 'owner' ? '协作成员' : '治理模式'}</span>`;
     button.onclick = openCanvasSharingDrawer;
-    document.body.appendChild(button); if(window.lucide) lucide.createIcons();
+    const headerRight = document.querySelector('.rh-header-right');
+    const announcement = document.getElementById('rhAnnouncementBtn');
+    if(!headerRight) return;
+    headerRight.insertBefore(button, announcement?.parentElement === headerRight ? announcement : headerRight.firstChild);
+    if(window.lucide) lucide.createIcons();
 }
 async function openCanvasSharingDrawer(forceGovernance=false){
     document.getElementById('canvasSharingDrawer')?.remove();
