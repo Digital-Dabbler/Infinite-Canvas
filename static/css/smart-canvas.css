@@ -2306,6 +2306,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-clip-video { width:auto; max-width:100%; }
 .smart-clip-video { position:absolute; inset:0; width:100% !important; height:100% !important; max-width:none; max-height:none; object-fit:contain; }
 .smart-clip-range-control { touch-action:none; cursor:ew-resize; }
+.canvas-access-notice{position:fixed;z-index:10020;top:72px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;max-width:min(680px,calc(100vw - 28px));padding:9px 12px;border:1px solid var(--ui-warning,#d97706);border-radius:10px;background:var(--ui-surface-raised,#fff7ed);color:var(--ui-text,#3b2a12);font-size:13px;box-shadow:0 10px 26px rgba(0,0,0,.16)}.canvas-access-notice svg{width:16px;height:16px;flex:0 0 auto}.canvas-access-notice a{color:inherit;font-weight:800;text-decoration:underline}
 .image-node.collaboration-editing{box-shadow:0 0 0 2px #f59e0b,0 0 22px rgba(245,158,11,.4)}
 .image-node.collaboration-editing::after{content:attr(data-collaboration-editors) ' 正在编辑';position:absolute;z-index:30;left:8px;top:-28px;max-width:calc(100% - 16px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 8px;border:1px solid rgba(245,158,11,.7);border-radius:999px;background:#4a2906;color:#ffdf9d;font-size:11px;font-weight:800;pointer-events:none}
 /* 3D 导演台节点与独立 iframe；渲染本身保持在 director3d 页面。 */

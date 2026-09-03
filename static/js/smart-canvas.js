@@ -6886,6 +6886,7 @@ let canvasEditRev = 0;
 // Last server-confirmed snapshot used only to derive narrow node operations.
 // It is never sent back as a whole canvas.
 let canvasOperationBase = null;
+let canvasSharing = {role:'viewer', ownership_state:'unclaimed'};
 let canvasSyncSocket = null;
 let presenceNodeId = '';
 const canvasPresence = new Map();
@@ -8263,6 +8264,8 @@ async function loadCanvas(){
         if(!res.ok) return;
         const data = await res.json();
         canvas = data.canvas;
+        canvasSharing = data.sharing || canvasSharing;
+        renderCanvasAccessNotice();
         canvasOperationBase = JSON.parse(JSON.stringify(data.canvas || {}));
         knownServerBootId = String(data.boot_id || '');
         canvasDirty = false;
@@ -8322,6 +8325,18 @@ function scheduleSave(){
     canvasEditRev++;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
+}
+function renderCanvasAccessNotice(){
+    document.getElementById('canvasAccessNotice')?.remove();
+    const role = canvasSharing?.role || 'viewer';
+    if(role === 'editor' || role === 'owner') return;
+    const notice = document.createElement('div');
+    notice.id = 'canvasAccessNotice';
+    notice.className = 'canvas-access-notice';
+    const unclaimed = canvasSharing?.ownership_state === 'unclaimed';
+    notice.innerHTML = `<i data-lucide="${unclaimed ? 'hand' : 'eye'}"></i><span>${unclaimed ? '此画布尚未归属，你可以认领后编辑。' : '你正在只读查看。复制整张画布或选中节点后，可在自己的画布继续编辑。'}</span><a href="/static/canvas-list.html">返回画布列表</a>`;
+    document.body.appendChild(notice);
+    if(window.lucide) lucide.createIcons();
 }
 function handleCanvasOperationMessage(data={}){
     if(!data || data.type !== 'canvas_operation' || data.canvas_id !== canvasId || data.client_id === smartClientId) return;
