@@ -6633,6 +6633,9 @@ def load_canvas(canvas_id):
         raise HTTPException(status_code=404, detail="画布已在回收站")
     if str(canvas.get("kind") or "").strip().lower() != "smart":
         raise HTTPException(status_code=404, detail="画布不存在")
+    # Legacy boards intentionally remain company-readable but unclaimed.
+    if "sharing_version" not in canvas:
+        canvas.update({"owner_user_id": "", "editor_user_ids": [], "ownership_state": "unclaimed", "sharing_version": 1})
     return canvas
 
 def load_canvas_any(canvas_id):
@@ -22366,7 +22369,6 @@ async def claim_canvas(canvas_id: str, request: Request):
     def claim():
         with CANVAS_LOCK:
             canvas = load_canvas(canvas_id)
-            require_canvas_access(canvas, user, "editor")
             if str(canvas.get("owner_user_id") or "") or str(canvas.get("ownership_state") or "unclaimed") != "unclaimed":
                 raise HTTPException(status_code=409, detail="该画布已被认领，请刷新后查看当前权限。")
             canvas["owner_user_id"] = user["id"]
@@ -22397,10 +22399,25 @@ async def copy_canvas(canvas_id: str, request: Request):
             copied["deleted_node_ids"] = []
             copied.pop("deleted_at", None)
             copied["created_at"] = now_ms()
+            id_map = {}
             for node in copied.get("nodes") or []:
                 if not isinstance(node, dict): continue
+                old_id = str(node.get("id") or "")
+                if old_id:
+                    node["id"] = uuid.uuid4().hex
+                    id_map[old_id] = node["id"]
                 for field in ("pending", "pendingTasks", "running", "queued", "submitting", "jimengPending"):
                     node.pop(field, None)
+            for connection in copied.get("connections") or []:
+                if isinstance(connection, dict):
+                    connection["from"] = id_map.get(str(connection.get("from") or ""), connection.get("from"))
+                    connection["to"] = id_map.get(str(connection.get("to") or ""), connection.get("to"))
+            for node in copied.get("nodes") or []:
+                if not isinstance(node, dict): continue
+                for field in ("inputNodeIds", "items"):
+                    if isinstance(node.get(field), list): node[field] = [id_map.get(str(value), value) for value in node[field]]
+                for field in ("workflowGroupId", "sourceNodeId", "historyFor"):
+                    if node.get(field): node[field] = id_map.get(str(node[field]), node[field])
             save_canvas(copied)
             return copied
     copied = await asyncio.to_thread(copy_record)
@@ -22424,6 +22441,24 @@ async def update_canvas_sharing(canvas_id: str, payload: CanvasSharingUpdate, re
             save_canvas(canvas)
             return canvas
     canvas = await asyncio.to_thread(update)
+    return {"sharing": canvas_sharing_public(canvas, user)}
+
+@app.post("/api/canvases/{canvas_id}/ownership")
+async def transfer_canvas_ownership(canvas_id: str, payload: CanvasOwnershipTransferRequest, request: Request, governance: bool = False):
+    user = require_authenticated(request)
+    def transfer():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, user, "owner", governance=governance)
+            target = str(payload.owner_user_id).strip()
+            known = {str(item.get("id") or "") for item in load_auth_users().get("users", []) if item.get("enabled", True)}
+            if target not in known: raise HTTPException(status_code=400, detail="指定的所有者不存在或已停用。")
+            previous = str(canvas.get("owner_user_id") or "")
+            editors = [str(item) for item in (canvas.get("editor_user_ids") or []) if str(item) != target]
+            if previous and payload.keep_previous_owner_as_editor and previous != target: editors.append(previous)
+            canvas.update({"owner_user_id": target, "editor_user_ids": list(dict.fromkeys(editors)), "ownership_state": "claimed"})
+            save_canvas(canvas); return canvas
+    canvas = await asyncio.to_thread(transfer)
     return {"sharing": canvas_sharing_public(canvas, user)}
 
 @app.get("/api/canvases/{canvas_id}/meta")
