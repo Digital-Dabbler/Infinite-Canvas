@@ -5384,6 +5384,13 @@ def canvas_task_output_items(task, result):
         items.append(item)
     return items
 
+SERVER_MANAGED_TASK_TRANSIENT_NODE_FIELDS = (
+    # A bound server task owns only this persisted task list.  Do not clear
+    # broader node flags here: a different, client-managed task (such as an
+    # recoverable Jimeng task) may legitimately share the same node.
+    "pendingTasks",
+)
+
 def register_bound_canvas_task(task, log_run=None, log_started_at=0):
     binding = task.get("canvas_binding") if isinstance(task, dict) else {}
     if not isinstance(binding, dict) or not binding:
@@ -5419,6 +5426,10 @@ def register_bound_canvas_task(task, log_run=None, log_started_at=0):
         node.pop("runElapsedMs", None)
         node["runTimerHidden"] = False
         save_canvas(canvas)
+        # A task binding is a server-authored node mutation.  Advance the
+        # operation revision before broadcasting it so operation-stream
+        # clients do not treat this queue state as an unversioned snapshot.
+        record_canvas_server_operation(canvas, "node_fields", node_id)
         return canvas
 
 def finalize_bound_canvas_task(task_id, result=None, error=""):
@@ -5456,6 +5467,10 @@ def finalize_bound_canvas_task(task_id, result=None, error=""):
         log_run = pending_task.get("logRun") if isinstance(pending_task.get("logRun"), dict) else {}
         outputs = [] if error else canvas_task_output_items(task, result)
         if outputs:
+            # A successful result supersedes the error from any earlier run.
+            # This mirrors the client completion path and prevents a stale
+            # failure overlay from accompanying the new result.
+            node.pop("lastRunError", None)
             for output in outputs:
                 # Preserve append semantics even if different submissions finish
                 # out of order.  Older, untagged media stays in its original
@@ -5494,6 +5509,10 @@ def finalize_bound_canvas_task(task_id, result=None, error=""):
         }
         canvas["logs"] = [entry, *existing_logs][:500]
         save_canvas(canvas)
+        # The terminal mutation changes only this bound node (plus its log).
+        # Record its node operation revision before publishing the narrow
+        # update; do not fall back to a whole-canvas notification.
+        record_canvas_server_operation(canvas, "node_fields", node_id)
     canvas_task_update(task_id, {"canvas_attach_status": "attached"})
     return canvas
 
@@ -5505,9 +5524,19 @@ async def broadcast_bound_canvas_node(task_id, canvas):
     node = next((item for item in (canvas or {}).get("nodes") or [] if str(item.get("id") or "") == node_id), None)
     if not node_id or not isinstance(node, dict):
         return
+    # ``node_fields`` normally merges values, so an omitted property cannot
+    # clear a stale browser-side value.  Only trusted server task broadcasts
+    # carry this deletion list; browser-submitted operation payloads cannot
+    # request it.  This is essential when the last pending task is removed.
+    clear_fields = [field for field in SERVER_MANAGED_TASK_TRANSIENT_NODE_FIELDS if field not in node]
     await manager.broadcast_canvas_operation(
         canvas["id"],
-        {"kind":"node_fields", "node_id":node_id, "fields":{key:value for key,value in node.items() if key != "id"}},
+        {
+            "kind":"node_fields",
+            "node_id":node_id,
+            "fields":{key:value for key,value in node.items() if key != "id"},
+            "clear_fields":clear_fields,
+        },
         int(canvas.get("sync_revision") or canvas.get("updated_at") or 0),
     )
 

@@ -6,7 +6,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import sys
 
@@ -159,6 +159,7 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
     def test_bound_completion_is_idempotent_and_updates_current_canvas_node(self):
         task = main.canvas_task_create(self._task())
         main.register_bound_canvas_task(task, {"prompt": "test", "nodeType": "smart-image-generation"}, main.now_ms())
+        queued_revision = main.load_canvas("canvas-bound").get("sync_revision", 0)
         first = main.finalize_bound_canvas_task(task["id"], {"image_items": [{"url": "/output/result.png", "kind": "image"}]})
         second = main.finalize_bound_canvas_task(task["id"], {"image_items": [{"url": "/output/result.png", "kind": "image"}]})
 
@@ -172,7 +173,43 @@ class CanvasTaskAtomicCompletionTests(unittest.TestCase):
         self.assertEqual(len(saved["logs"]), 1)
         self.assertEqual(saved["logs"][0]["local_task_id"], task["id"])
         self.assertEqual(saved["logs"][0]["prompt"], "test")
+        self.assertGreater(saved.get("sync_revision", 0), queued_revision)
         self.assertNotIn("log_run", main.canvas_task_get(task["id"])["canvas_binding"])
+
+    def test_terminal_bound_broadcast_explicitly_clears_removed_task_fields(self):
+        task = main.canvas_task_create(self._task("canvas_img_clear_fields"))
+        main.register_bound_canvas_task(task, {"prompt": "test"}, main.now_ms())
+        canvas = main.finalize_bound_canvas_task(task["id"], {"images": ["/output/result.png"]})
+        async def broadcast_operation():
+            with patch.object(main.manager, "broadcast_canvas_operation", new_callable=AsyncMock) as broadcast:
+                await main.broadcast_bound_canvas_node(task["id"], canvas)
+                return broadcast.await_args.args[1]
+
+        operation = asyncio.run(broadcast_operation())
+
+        self.assertIn("pendingTasks", operation["clear_fields"])
+        self.assertEqual(operation["fields"]["pending"], 0)
+        self.assertFalse(operation["fields"]["running"])
+
+    def test_parallel_bound_task_broadcast_keeps_remaining_pending_tasks(self):
+        first = main.canvas_task_create(self._task("canvas_img_parallel_first"))
+        second = self._task("canvas_img_parallel_second")
+        second["canvas_binding"]["batch_id"] = "batch-b"
+        second = main.canvas_task_create(second)
+        main.register_bound_canvas_task(first, {"prompt": "first"}, main.now_ms())
+        main.register_bound_canvas_task(second, {"prompt": "second"}, main.now_ms())
+        canvas = main.finalize_bound_canvas_task(first["id"], {"images": ["/output/first.png"]})
+
+        async def broadcast_operation():
+            with patch.object(main.manager, "broadcast_canvas_operation", new_callable=AsyncMock) as broadcast:
+                await main.broadcast_bound_canvas_node(first["id"], canvas)
+                return broadcast.await_args.args[1]
+
+        operation = asyncio.run(broadcast_operation())
+        remaining = operation["fields"]["pendingTasks"]
+
+        self.assertEqual([item["taskId"] for item in remaining], [second["id"]])
+        self.assertNotIn("pendingTasks", operation["clear_fields"])
 
     def test_bound_completion_does_not_revive_deleted_node(self):
         task = main.canvas_task_create(self._task("canvas_img_deleted"))

@@ -8432,9 +8432,19 @@ async function openCanvasSharingDrawer(forceGovernance=false){
 function handleCanvasOperationMessage(data={}){
     if(!data || data.type !== 'canvas_operation' || data.canvas_id !== canvasId || data.client_id === smartClientId) return;
     const op = data.operation || {}, id = op.node_id;
+    // Only the trusted server task-completion broadcaster emits clear_fields.
+    // A normal node_fields operation contains values only, and its omitted
+    // keys must keep their current values to preserve per-field concurrency.
+    const clearNodeTaskFields = target => {
+        if(!target || op.kind !== 'node_fields') return;
+        const allowed = new Set(['pendingTasks']);
+        (Array.isArray(op.clear_fields) ? op.clear_fields : []).forEach(field => {
+            if(allowed.has(field)) delete target[field];
+        });
+    };
     if(op.kind === 'node_delete') nodes = nodes.filter(node => node.id !== id);
     else if(op.kind === 'node_create' && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
-    else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) Object.assign(node, op.fields || {}); }
+    else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) { clearNodeTaskFields(node); Object.assign(node, op.fields || {}); } }
     else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
     else if(op.kind === 'settings_fields') { canvas.settings = {...(canvas.settings || {}), ...(op.fields || {})}; Object.assign(settings, op.fields || {}); }
     else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvas.logs || []).some(item => item.id === op.fields.log.id)) canvas.logs = [op.fields.log, ...(canvas.logs || [])];
@@ -8456,7 +8466,7 @@ function handleCanvasOperationMessage(data={}){
         const baseIndex = baseNodes.findIndex(node => node.id === id);
         if(op.kind === 'node_delete' && baseIndex >= 0) baseNodes.splice(baseIndex, 1);
         else if(op.kind === 'node_create' && op.node?.id && baseIndex < 0) baseNodes.push(JSON.parse(JSON.stringify(op.node)));
-        else if(op.kind === 'node_fields' && baseIndex >= 0) Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {})));
+        else if(op.kind === 'node_fields' && baseIndex >= 0) { clearNodeTaskFields(baseNodes[baseIndex]); Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {}))); }
         else if(op.kind === 'canvas_fields') Object.assign(canvasOperationBase, JSON.parse(JSON.stringify(op.fields || {})));
         else if(op.kind === 'settings_fields') canvasOperationBase.settings = {...(canvasOperationBase.settings || {}), ...JSON.parse(JSON.stringify(op.fields || {}))};
         else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvasOperationBase.logs || []).some(item => item.id === op.fields.log.id)) canvasOperationBase.logs = [JSON.parse(JSON.stringify(op.fields.log)), ...(canvasOperationBase.logs || [])];
