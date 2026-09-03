@@ -22357,7 +22357,6 @@ async function runComfyEdit(node, prompt, refs, pendingNode, meta, runSettings=s
     scheduleSave();
 }
 async function comfyNameForRef(ref){
-    if(ref.comfy_name) return ref.comfy_name;
     const response = await fetch(ref.url);
     if(!response.ok) return ref.name || ref.url;
     const blob = await response.blob();
@@ -22368,10 +22367,6 @@ async function comfyNameForRef(ref){
         return r.json();
     });
     const name = data.files?.[0]?.comfy_name || ref.name || ref.url;
-    const node = ref.nodeId ? nodes.find(n => n.id === ref.nodeId) : null;
-    const image = node?.images?.find(img => img.url === ref.url) || (nodes || []).flatMap(n => n.images || []).find(img => img?.url === ref.url);
-    if(image) image.comfy_name = name;
-    ref.comfy_name = name;
     return name;
 }
 function smartPendingTasks(node){

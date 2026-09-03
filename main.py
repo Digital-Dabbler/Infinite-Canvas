@@ -755,6 +755,15 @@ load_env_file()
 
 COMFYUI_INSTANCES = [s.strip() for s in os.getenv("COMFYUI_INSTANCES", "127.0.0.1:8188").split(",") if s.strip()]
 COMFYUI_ADDRESS = COMFYUI_INSTANCES[0]
+# ComfyUI's input directory is a staging area, not an asset library. Never use
+# browser-provided names there: names such as image.png could otherwise be
+# reused by a later request (or an already-persisted canvas `comfy_name`).
+COMFY_STAGING_SUBDIR = "infinite-canvas"
+COMFY_STAGING_RETENTION_DAYS = max(1, int(os.getenv("COMFY_STAGING_RETENTION_DAYS", "14") or 14))
+COMFY_STAGING_MAX_BYTES = max(0, int(os.getenv("COMFY_STAGING_MAX_BYTES", str(10 * 1024 * 1024 * 1024)) or 0))
+# Optional, comma-separated absolute ComfyUI input directories. They are only
+# used for pruning our own subdirectory; absent configuration means no deletion.
+COMFYUI_INPUT_DIRS = [p.strip() for p in os.getenv("COMFYUI_INPUT_DIRS", "").split(",") if p.strip()]
 
 AI_BASE_URL = os.getenv("COMFLY_BASE_URL", "https://ai.comfly.chat").rstrip("/")
 AI_API_KEY = os.getenv("COMFLY_API_KEY", "")
@@ -17217,8 +17226,85 @@ def download_output(request: Request, url: str, name: str = "", inline: bool = F
 
     return StreamingResponse(stream_remote(), media_type=content_type, headers=headers, status_code=upstream.status_code)
 
+def comfy_staging_upload_target(filename: str) -> Tuple[str, str]:
+    """Return a unique, ComfyUI-relative destination for one submitted file."""
+    suffix = os.path.splitext(os.path.basename(str(filename or "")))[1].lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,10}", suffix or ""):
+        suffix = ".png"
+    month = datetime.datetime.now().strftime("%Y-%m")
+    subfolder = f"{COMFY_STAGING_SUBDIR}/{month}"
+    return subfolder, f"{uuid.uuid4().hex}{suffix}"
+
+def comfy_staging_relative_name(subfolder: str, name: str) -> str:
+    clean_subfolder = str(subfolder or "").replace("\\", "/").strip("/")
+    clean_name = os.path.basename(str(name or "").replace("\\", "/"))
+    if not clean_name or clean_name in {".", ".."}:
+        raise HTTPException(status_code=502, detail="ComfyUI 上传未返回有效文件名")
+    return f"{clean_subfolder}/{clean_name}" if clean_subfolder else clean_name
+
+def upload_comfy_input_bytes(address: str, image_name: str, content: bytes, content_type: str):
+    """Upload a known relative input path without collapsing its subfolder."""
+    relative = str(image_name or "").replace("\\", "/").strip("/")
+    if not relative or ".." in relative.split("/"):
+        raise ValueError("ComfyUI 输入文件名不合法")
+    subfolder, _, basename = relative.rpartition("/")
+    response = requests.post(
+        f"http://{address}/upload/image",
+        files={"image": (basename or relative, content, content_type or "application/octet-stream")},
+        data={"type": "input", "subfolder": subfolder, "overwrite": "true"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    return response.json()
+
+def clean_comfy_staging_inputs(now: Optional[float] = None) -> Dict[str, int]:
+    """Prune only configured ComfyUI staging directories, never user input files."""
+    result = {"files": 0, "bytes": 0, "skipped": 0}
+    if not COMFYUI_INPUT_DIRS:
+        return result
+    current = float(now if now is not None else time.time())
+    cutoff = current - COMFY_STAGING_RETENTION_DAYS * 86400
+    entries = []
+    for input_dir in COMFYUI_INPUT_DIRS:
+        root = os.path.abspath(input_dir)
+        staging_root = os.path.abspath(os.path.join(root, COMFY_STAGING_SUBDIR))
+        if os.path.commonpath([root, staging_root]) != root or not os.path.isdir(staging_root):
+            result["skipped"] += 1
+            continue
+        for folder, _, names in os.walk(staging_root):
+            for name in names:
+                path = os.path.abspath(os.path.join(folder, name))
+                if os.path.commonpath([staging_root, path]) != staging_root:
+                    continue
+                try:
+                    stat = os.stat(path)
+                    entries.append((stat.st_mtime, path, stat.st_size))
+                except OSError:
+                    result["skipped"] += 1
+    total = sum(item[2] for item in entries)
+    for modified, path, size in sorted(entries):
+        if modified >= cutoff and (not COMFY_STAGING_MAX_BYTES or total <= COMFY_STAGING_MAX_BYTES):
+            continue
+        try:
+            os.remove(path)
+            result["files"] += 1
+            result["bytes"] += size
+            total -= size
+        except OSError:
+            result["skipped"] += 1
+    return result
+
+def require_comfy_upscale_input(req: GenerateRequest):
+    if normalized_workflow_name(req.workflow_json) != "system/2K高清放大-Klein 9B-api.json":
+        return
+    image_name = str((req.params.get("157") or {}).get("image") or "").replace("\\", "/")
+    prefix = f"{COMFY_STAGING_SUBDIR}/"
+    if not image_name.startswith(prefix) or ".." in image_name.split("/"):
+        raise HTTPException(status_code=400, detail="本地放大缺少本次提交的图片输入，请重新选择图片后重试。")
+
 @app.post("/api/upload")
-async def upload_image(files: List[UploadFile] = File(...)):
+async def upload_image(request: Request, files: List[UploadFile] = File(...)):
+    require_authenticated(request)
     uploaded_files = []
     files_content = []
     for file in files:
@@ -17226,23 +17312,27 @@ async def upload_image(files: List[UploadFile] = File(...)):
         files_content.append((file, content))
 
     for file, content in files_content:
+        subfolder, staging_name = comfy_staging_upload_target(file.filename)
         success_count = 0
         last_result = None
         for addr in COMFYUI_INSTANCES:
             try:
-                files_data = {'image': (file.filename, content, file.content_type)}
-                response = requests.post(f"http://{addr}/upload/image", files=files_data, timeout=5)
-                if response.status_code == 200:
-                    last_result = response.json()
-                    success_count += 1
+                last_result = upload_comfy_input_bytes(
+                    addr,
+                    f"{subfolder}/{staging_name}",
+                    content,
+                    file.content_type or "application/octet-stream",
+                )
+                success_count += 1
             except Exception as e:
                 print(f"Upload error for {addr}: {e}")
 
         if success_count > 0 and last_result:
-            uploaded_files.append({"comfy_name": last_result.get("name", file.filename)})
+            actual_subfolder = str(last_result.get("subfolder") or subfolder)
+            uploaded_files.append({"comfy_name": comfy_staging_relative_name(actual_subfolder, last_result.get("name") or staging_name)})
         else:
             raise HTTPException(status_code=500, detail="Failed to upload to any backend")
-
+    clean_comfy_staging_inputs()
     return {"files": uploaded_files}
 
 @app.post("/api/ai/upload")
@@ -26438,6 +26528,7 @@ async def ms_generate(req: MsGenerateRequest, request: Request):
 @app.post("/api/generate")
 def generate(req: GenerateRequest, request: Request = None, notification_user_id: str = ""):
     req.workflow_json = normalized_workflow_name(req.workflow_json)
+    require_comfy_upscale_input(req)
     if request is not None:
         request.state.usage_event = begin_usage_event(request, "image", "comfyui", req.workflow_json, {"workflow": req.workflow_json, "width": req.width, "height": req.height, "entry": "generate"})
         notification_user_id = str(require_authenticated(request).get("id") or "")
@@ -26494,10 +26585,25 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
 
                 if image_content:
                     try:
-                        files = {'image': (image_name, image_content, image_type)}
-                        requests.post(f"http://{target_backend}/upload/image", files=files, timeout=10)
+                        upload_comfy_input_bytes(target_backend, image_name, image_content, image_type)
                     except Exception as e:
                         print(f"Sync upload failed: {e}")
+            # A prompt must never rely on a same-named file that happened to be
+            # present on another worker. Confirm that this selected worker can
+            # read the exact input before its workflow is submitted.
+            try:
+                verified = requests.get(
+                    f"http://{target_backend}/view?filename={urllib.parse.quote(image_name)}&type=input",
+                    stream=True,
+                    timeout=1,
+                )
+                verified.close()
+                if verified.status_code != 200:
+                    raise RuntimeError(f"ComfyUI 输入未同步到执行后端：{image_name}")
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(f"无法验证 ComfyUI 输入：{image_name}（{exc}）") from exc
         timings["input_sync_ms"] = round((time.perf_counter() - input_sync_started) * 1000)
 
         workflow_name = normalized_workflow_name(req.workflow_json)
@@ -26556,7 +26662,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                     for image_name in required_images:
                         source = requests.get(f"http://{initial_backend}/view?filename={urllib.parse.quote(image_name)}&type=input", timeout=5)
                         if source.status_code == 200:
-                            requests.post(f"http://{backend}/upload/image", files={"image": (image_name, source.content, source.headers.get("Content-Type", "image/png"))}, timeout=10).raise_for_status()
+                            upload_comfy_input_bytes(backend, image_name, source.content, source.headers.get("Content-Type", "image/png"))
                     fallback_input_sync_ms = round((time.perf_counter() - fallback_sync_started) * 1000)
                 post_req = urllib.request.Request(f"http://{backend}/prompt", data=data)
                 prompt_id = json.loads(urllib.request.urlopen(post_req, timeout=10).read())['prompt_id']
@@ -26629,7 +26735,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                     for image_name in required_images:
                         source = requests.get(f"http://{source_backend}/view?filename={urllib.parse.quote(image_name)}&type=input", timeout=5)
                         if source.status_code == 200:
-                            requests.post(f"http://{backend}/upload/image", files={"image": (image_name, source.content, source.headers.get("Content-Type", "image/png"))}, timeout=10).raise_for_status()
+                            upload_comfy_input_bytes(backend, image_name, source.content, source.headers.get("Content-Type", "image/png"))
                     fallback_input_sync_ms = round((time.perf_counter() - fallback_sync_started) * 1000)
                     post_req = urllib.request.Request(f"http://{backend}/prompt", data=data)
                     retry_prompt_id = json.loads(urllib.request.urlopen(post_req, timeout=10).read())["prompt_id"]

@@ -1,5 +1,8 @@
 import asyncio
+import os
 import sys
+import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -136,6 +139,52 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("mask_url:ref.mask?.url || ''", self.smart_canvas_js)
         self.assertIn("String(ref.role || '').toLowerCase() !== 'mask'", self.smart_canvas_js)
         self.assertIn("['image','mask','video','audio']", self.smart_canvas_js)
+
+    def test_comfy_upload_names_are_unique_and_upscale_requires_staged_input(self):
+        first_folder, first_name = main.comfy_staging_upload_target("image.png")
+        second_folder, second_name = main.comfy_staging_upload_target("image.png")
+        self.assertTrue(first_folder.startswith("infinite-canvas/"))
+        self.assertEqual(first_folder, second_folder)
+        self.assertNotEqual(first_name, second_name)
+        self.assertEqual(main.comfy_staging_relative_name(first_folder, first_name), f"{first_folder}/{first_name}")
+        valid = main.GenerateRequest(
+            workflow_json="system/2K高清放大-Klein 9B-api.json",
+            params={"157": {"image": f"{first_folder}/{first_name}"}},
+        )
+        main.require_comfy_upscale_input(valid)
+        with self.assertRaises(HTTPException) as caught:
+            main.require_comfy_upscale_input(main.GenerateRequest(
+                workflow_json="system/2K高清放大-Klein 9B-api.json",
+                params={"157": {"image": "image.png"}},
+            ))
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertNotIn("if(ref.comfy_name) return ref.comfy_name;", self.smart_canvas_js)
+
+    def test_comfy_input_sync_preserves_the_staging_subfolder(self):
+        response = mock.Mock()
+        response.json.return_value = {"name": "abc.png", "subfolder": "infinite-canvas/2026-09"}
+        with mock.patch.object(main.requests, "post", return_value=response) as post:
+            main.upload_comfy_input_bytes("worker:8188", "infinite-canvas/2026-09/abc.png", b"image", "image/png")
+        self.assertEqual(post.call_args.kwargs["files"]["image"][0], "abc.png")
+        self.assertEqual(post.call_args.kwargs["data"], {"type": "input", "subfolder": "infinite-canvas/2026-09", "overwrite": "true"})
+
+    def test_comfy_staging_cleanup_never_touches_manual_input(self):
+        now = time.time()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            staging = Path(temp_dir) / "infinite-canvas" / "2026-08"
+            staging.mkdir(parents=True)
+            old_file = staging / "old.png"
+            old_file.write_bytes(b"old")
+            os.utime(old_file, (now - 20 * 86400, now - 20 * 86400))
+            manual = Path(temp_dir) / "manual-input.png"
+            manual.write_bytes(b"keep")
+            with mock.patch.object(main, "COMFYUI_INPUT_DIRS", [temp_dir]), \
+                 mock.patch.object(main, "COMFY_STAGING_RETENTION_DAYS", 14), \
+                 mock.patch.object(main, "COMFY_STAGING_MAX_BYTES", 0):
+                result = main.clean_comfy_staging_inputs(now)
+            self.assertEqual(result["files"], 1)
+            self.assertFalse(old_file.exists())
+            self.assertTrue(manual.exists())
 
     def test_comfy_custom_workflow_without_prompt_field_does_not_require_prompt(self):
         # 未映射提示词字段的自定义工作流不应强制要求提示词，也不应显示“需要提示词”的占位提示。
