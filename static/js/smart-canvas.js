@@ -8266,6 +8266,7 @@ async function loadCanvas(){
         canvas = data.canvas;
         canvasSharing = data.sharing || canvasSharing;
         renderCanvasAccessNotice();
+        renderCanvasSharingControl();
         canvasOperationBase = JSON.parse(JSON.stringify(data.canvas || {}));
         knownServerBootId = String(data.boot_id || '');
         canvasDirty = false;
@@ -8336,6 +8337,40 @@ function renderCanvasAccessNotice(){
     const unclaimed = canvasSharing?.ownership_state === 'unclaimed';
     notice.innerHTML = `<i data-lucide="${unclaimed ? 'hand' : 'eye'}"></i><span>${unclaimed ? '此画布尚未归属，你可以认领后编辑。' : '你正在只读查看。复制整张画布或选中节点后，可在自己的画布继续编辑。'}</span><a href="/static/canvas-list.html">返回画布列表</a>`;
     document.body.appendChild(notice);
+    if(window.lucide) lucide.createIcons();
+}
+function renderCanvasSharingControl(){
+    document.getElementById('canvasSharingControl')?.remove();
+    if(!canvasId || !(canvasSharing?.role === 'owner' || canvasSharing?.can_govern)) return;
+    const button = document.createElement('button');
+    button.id = 'canvasSharingControl'; button.type = 'button'; button.className = 'canvas-sharing-control';
+    button.setAttribute('aria-label', canvasSharing?.role === 'owner' ? '管理协作成员' : '进入治理模式'); button.innerHTML = `<i data-lucide="users"></i><span>${canvasSharing?.role === 'owner' ? '协作成员' : '治理模式'}</span>`;
+    button.onclick = openCanvasSharingDrawer;
+    document.body.appendChild(button); if(window.lucide) lucide.createIcons();
+}
+async function openCanvasSharingDrawer(){
+    document.getElementById('canvasSharingDrawer')?.remove();
+    const governance = canvasSharing?.role !== 'owner' && canvasSharing?.can_govern;
+    const suffix = governance ? '?governance=true' : '';
+    const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/sharing/members${suffix}`);
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok){ toast(data.detail || '无权管理协作成员'); return; }
+    const sharing = data.sharing || canvasSharing, people = data.people || [];
+    const nameFor = id => { const p = people.find(item => item.id === id); return p?.name || p?.username || id; };
+    const drawer = document.createElement('aside'); drawer.id = 'canvasSharingDrawer'; drawer.className = 'canvas-sharing-drawer';
+    drawer.innerHTML = `<div class="canvas-sharing-head"><strong>协作成员</strong><button type="button" aria-label="关闭">×</button></div><p>所有已登录员工均可查看和复制；只有受邀成员可以编辑。</p><label>编辑者（每行一个用户名或 ID）<textarea>${(sharing.editor_user_ids || []).map(nameFor).join('\n')}</textarea></label><label>转移所有权<select><option value="">不转移</option>${people.filter(p => p.id !== sharing.owner_user_id).map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name || p.username || p.id)}</option>`).join('')}</select></label><label class="canvas-sharing-check"><input type="checkbox" checked> 保留原所有者为编辑者</label><div class="canvas-sharing-actions"><button type="button" data-save>保存成员</button></div>`;
+    document.body.appendChild(drawer); drawer.querySelector('.canvas-sharing-head button').onclick = () => drawer.remove();
+    drawer.querySelector('[data-save]').onclick = async () => {
+        const text = drawer.querySelector('textarea').value.split(/\n+/).map(x => x.trim()).filter(Boolean);
+        const ids = text.map(value => people.find(p => p.id === value || p.username === value || p.name === value)?.id).filter(Boolean);
+        let response = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/sharing${suffix}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({editor_user_ids:ids})});
+        if(!response.ok){ toast('保存编辑者失败'); return; }
+        const target = drawer.querySelector('select').value;
+        if(target && !confirm(`确认将所有权转移给 ${nameFor(target)}？`)) return;
+        if(target) response = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/ownership${suffix}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({owner_user_id:target,keep_previous_owner_as_editor:drawer.querySelector('input[type="checkbox"]').checked})});
+        if(!response.ok){ toast('转移所有权失败'); return; }
+        toast('协作成员已保存'); drawer.remove(); await loadCanvas();
+    };
     if(window.lucide) lucide.createIcons();
 }
 function handleCanvasOperationMessage(data={}){

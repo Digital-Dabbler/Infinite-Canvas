@@ -6664,7 +6664,7 @@ def require_canvas_access(canvas, user, minimum="viewer", governance=False):
 
 def canvas_sharing_public(canvas, user):
     role = canvas_access_role(canvas, user)
-    return {"role": role, "owner_user_id": str(canvas.get("owner_user_id") or ""), "editor_user_ids": list(canvas.get("editor_user_ids") or []), "ownership_state": str(canvas.get("ownership_state") or "unclaimed")}
+    return {"role": role, "can_govern": str((user or {}).get("role") or "") == "admin", "owner_user_id": str(canvas.get("owner_user_id") or ""), "editor_user_ids": list(canvas.get("editor_user_ids") or []), "ownership_state": str(canvas.get("ownership_state") or "unclaimed")}
 
 CANVAS_NODE_OPERATION_FIELDS = {
     "x", "y", "w", "h", "scale", "title", "text", "images", "activeImageIndex",
@@ -22460,6 +22460,14 @@ async def transfer_canvas_ownership(canvas_id: str, payload: CanvasOwnershipTran
             save_canvas(canvas); return canvas
     canvas = await asyncio.to_thread(transfer)
     return {"sharing": canvas_sharing_public(canvas, user)}
+
+@app.get("/api/canvases/{canvas_id}/sharing/members")
+async def canvas_sharing_members(canvas_id: str, request: Request, governance: bool = False):
+    user = require_authenticated(request)
+    canvas = load_canvas(canvas_id)
+    require_canvas_access(canvas, user, "owner", governance=governance)
+    people = [public_user(item) for item in load_auth_users().get("users", []) if item.get("enabled", True)]
+    return {"sharing": canvas_sharing_public(canvas, user), "people": people, "governance": bool(governance and user.get("role") == "admin")}
 
 @app.get("/api/canvases/{canvas_id}/meta")
 async def get_canvas_meta(canvas_id: str, request: Request):
