@@ -423,6 +423,12 @@ ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 PROMPT_LIBRARY_DIR = os.path.join(ASSETS_DIR, "prompt_library")
 PROMPT_LIBRARY_PUBLIC_DIR = os.path.join(PROMPT_LIBRARY_DIR, "public")
+# Published prompt cards are project content, rather than per-machine runtime
+# state. Keep the manifest and copied covers under static/ so Git can carry
+# them between development machines. Personal drafts stay in
+# data/prompt_libraries.json.
+PROMPT_LIBRARY_PUBLISHED_PATH = os.path.join(STATIC_DIR, "data", "prompt-library-published.json")
+PROMPT_LIBRARY_PUBLISHED_COVER_DIR = os.path.join(STATIC_DIR, "images", "prompt-library", "published")
 LIBRARY_FAVORITES_PATH = os.path.join(DATA_DIR, "library_favorites.json")
 LIBRARY_FAVORITES_LOCK = Lock()
 ASSET_TRASH_PATH = os.path.join(DATA_DIR, "asset_trash.json")
@@ -11790,6 +11796,47 @@ def normalize_prompt_library_item(item):
     normalized.update(asset_owner_fields(item))
     return normalized
 
+
+def load_versioned_published_prompts():
+    """Read the Git-tracked public prompt catalog without falling back to runtime data."""
+    try:
+        with open(PROMPT_LIBRARY_PUBLISHED_PATH, "r", encoding="utf-8") as handle:
+            raw_items = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        raw_items = []
+    if not isinstance(raw_items, list):
+        return []
+    items = []
+    seen_ids = set()
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            continue
+        item = normalize_prompt_library_item({**raw_item, "published": True})
+        item_id = item.get("id") or ""
+        if not item_id or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        items.append(item)
+    return items
+
+
+def save_versioned_published_prompts(items):
+    """Persist only publishable snapshots into the tracked prompt package."""
+    cleaned = []
+    seen_ids = set()
+    for raw_item in items if isinstance(items, list) else []:
+        if not isinstance(raw_item, dict):
+            continue
+        item = normalize_prompt_library_item({**raw_item, "published": True})
+        item_id = item.get("id") or ""
+        if not item_id or item_id in seen_ids or not item.get("source_prompt_id"):
+            continue
+        seen_ids.add(item_id)
+        cleaned.append(item)
+    with CANVAS_LOCK:
+        _write_json_atomic(PROMPT_LIBRARY_PUBLISHED_PATH, cleaned)
+    return cleaned
+
 def seed_system_prompt_library():
     return {
         "id": "system",
@@ -11938,18 +11985,24 @@ def prompt_public_cover_copy(url, snapshot_id):
     source = output_file_from_url(url)
     if not source or not os.path.isfile(source) or not content_type_for_path(source).startswith("image/"):
         return ""
-    os.makedirs(PROMPT_LIBRARY_PUBLIC_DIR, exist_ok=True)
+    os.makedirs(PROMPT_LIBRARY_PUBLISHED_COVER_DIR, exist_ok=True)
     ext = os.path.splitext(source)[1].lower() or ".png"
-    target = os.path.join(PROMPT_LIBRARY_PUBLIC_DIR, f"{snapshot_id}_cover{ext}")
+    target = os.path.join(PROMPT_LIBRARY_PUBLISHED_COVER_DIR, f"{snapshot_id}_cover{ext}")
     shutil.copy2(source, target)
-    return workflow_relative_url(target)
+    return f"/static/images/prompt-library/published/{urllib.parse.quote(os.path.basename(target))}"
 
 def remove_prompt_public_cover(record):
-    path = output_file_from_url(str((record or {}).get("cover_url") or ""))
-    if not path:
+    """Remove only the versioned cover copied for a withdrawn publication."""
+    url = str((record or {}).get("cover_url") or "").split("?", 1)[0]
+    prefix = "/static/images/prompt-library/published/"
+    if not url.startswith(prefix):
         return
+    filename = os.path.basename(urllib.parse.unquote(url[len(prefix):]))
+    if not filename:
+        return
+    path = os.path.abspath(os.path.join(PROMPT_LIBRARY_PUBLISHED_COVER_DIR, filename))
     try:
-        is_public_cover = os.path.commonpath([os.path.abspath(path), os.path.abspath(PROMPT_LIBRARY_PUBLIC_DIR)]) == os.path.abspath(PROMPT_LIBRARY_PUBLIC_DIR)
+        is_public_cover = os.path.commonpath([path, os.path.abspath(PROMPT_LIBRARY_PUBLISHED_COVER_DIR)]) == os.path.abspath(PROMPT_LIBRARY_PUBLISHED_COVER_DIR)
     except ValueError:
         is_public_cover = False
     if is_public_cover and os.path.isfile(path):
@@ -11960,10 +12013,21 @@ def remove_prompt_public_cover(record):
 
 def public_prompt_libraries(data=None):
     data = normalize_prompt_libraries(data or load_prompt_libraries())
+    published = []
+    seen_published_ids = set()
+    # Historical runtime snapshots remain available locally. New snapshots are
+    # read from the tracked package first so a pulled Git revision wins over a
+    # stale runtime copy with the same ID.
+    for raw_item in [*load_versioned_published_prompts(), *(data.get("published") or [])]:
+        item_id = str((raw_item or {}).get("id") or "")
+        if not item_id or item_id in seen_published_ids:
+            continue
+        seen_published_ids.add(item_id)
+        published.append(raw_item)
     return {
         "active_library_id": data.get("active_library_id") or (data.get("libraries") or [{}])[0].get("id") or "system",
         "libraries": data.get("libraries") or [],
-        "published": data.get("published") or [],
+        "published": published,
         "updated_at": data.get("updated_at") or now_ms(),
     }
 
@@ -23613,13 +23677,14 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
         raise HTTPException(status_code=404, detail="提示词不存在")
     if source.get("owner_type") != "user" or str(source.get("owner_id") or "") != user_id:
         raise HTTPException(status_code=403, detail="只能发布自己的个人提示词")
-    existing = next((item for item in data.get("published") or []
+    versioned_published = load_versioned_published_prompts()
+    existing = next((item for item in versioned_published
                      if item.get("source_prompt_id") == item_id and str(item.get("owner_id") or "") == user_id), None)
     if not payload.published:
         if existing:
-            data["published"] = [item for item in data.get("published") or [] if item is not existing]
+            save_versioned_published_prompts([item for item in versioned_published if item.get("id") != existing.get("id")])
             remove_prompt_public_cover(existing)
-            data = save_prompt_libraries(data)
+            data = load_prompt_libraries()
         return {"library": public_prompt_libraries_for_user(data, user), "published": False}
     if existing:
         return {"library": public_prompt_libraries_for_user(data, user), "snapshot": existing, "published": True}
@@ -23672,8 +23737,8 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
         "created_at": now_ms(),
         "updated_at": now_ms(),
     })
-    data.setdefault("published", []).append(snapshot)
-    data = save_prompt_libraries(data)
+    save_versioned_published_prompts([*versioned_published, snapshot])
+    data = load_prompt_libraries()
     return {"library": public_prompt_libraries_for_user(data, user), "snapshot": snapshot, "published": True}
 
 @app.delete("/api/prompt-libraries/published/{snapshot_id}")
@@ -23681,13 +23746,14 @@ async def withdraw_prompt_library_snapshot(snapshot_id: str, request: Request):
     user = require_authenticated(request)
     data = load_prompt_libraries()
     user_id = str(user.get("id") or "")
-    snapshot = next((item for item in data.get("published") or []
+    versioned_published = load_versioned_published_prompts()
+    snapshot = next((item for item in versioned_published
                      if item.get("id") == snapshot_id and (asset_is_admin(user) or str(item.get("owner_id") or "") == user_id)), None)
     if not snapshot:
         raise HTTPException(status_code=404, detail="已发布提示词不存在")
-    data["published"] = [item for item in data.get("published") or [] if item is not snapshot]
+    save_versioned_published_prompts([item for item in versioned_published if item.get("id") != snapshot_id])
     remove_prompt_public_cover(snapshot)
-    data = save_prompt_libraries(data)
+    data = load_prompt_libraries()
     return {"library": public_prompt_libraries_for_user(data, user), "withdrawn": True}
 
 @app.delete("/api/prompt-libraries/items/{item_id}")

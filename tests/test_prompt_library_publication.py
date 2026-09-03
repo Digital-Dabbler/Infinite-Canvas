@@ -17,6 +17,8 @@ class PromptLibraryPublicationTests(unittest.TestCase):
         self.prompt_path = os.path.join(self.temp_dir.name, "prompt_libraries.json")
         self.trash_path = os.path.join(self.temp_dir.name, "asset_trash.json")
         self.public_dir = os.path.join(self.temp_dir.name, "public")
+        self.versioned_path = os.path.join(self.temp_dir.name, "prompt-library-published.json")
+        self.versioned_cover_dir = os.path.join(self.temp_dir.name, "published-covers")
         self.users = {
             "users": [
                 {"id": "alice", "username": "Alice"},
@@ -26,6 +28,8 @@ class PromptLibraryPublicationTests(unittest.TestCase):
         self.patchers = [
             patch.object(main, "PROMPT_LIBRARY_PATH", self.prompt_path),
             patch.object(main, "PROMPT_LIBRARY_PUBLIC_DIR", self.public_dir),
+            patch.object(main, "PROMPT_LIBRARY_PUBLISHED_PATH", self.versioned_path),
+            patch.object(main, "PROMPT_LIBRARY_PUBLISHED_COVER_DIR", self.versioned_cover_dir),
             patch.object(main, "ASSET_TRASH_PATH", self.trash_path),
             patch.object(main, "load_auth_users", return_value=self.users),
             patch.object(main, "cancel_queued_asset_tasks_for_target"),
@@ -115,6 +119,31 @@ class PromptLibraryPublicationTests(unittest.TestCase):
         self.assertTrue(withdrawn["withdrawn"])
         bob_view = main.public_prompt_libraries_for_user(main.load_prompt_libraries(), self.bob)
         self.assertNotIn(snapshot["id"], {item["id"] for item in bob_view["inspiration"]})
+
+    def test_published_snapshot_is_stored_in_the_versioned_catalog_not_runtime_data(self):
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            result = asyncio.run(main.publish_prompt_library_item(
+                "alice_prompt", main.PromptLibraryPublishRequest(published=True), object()
+            ))
+
+        self.assertTrue(os.path.isfile(self.versioned_path))
+        versioned = main.load_versioned_published_prompts()
+        self.assertEqual([item["id"] for item in versioned], [result["snapshot"]["id"]])
+        self.assertEqual(main.load_prompt_libraries()["published"], [])
+
+    def test_published_cover_is_copied_to_the_versioned_static_directory(self):
+        source = os.path.join(self.temp_dir.name, "cover.png")
+        with open(source, "wb") as handle:
+            handle.write(b"png")
+        with patch.object(main, "output_file_from_url", return_value=source), \
+             patch.object(main, "content_type_for_path", return_value="image/png"):
+            url = main.prompt_public_cover_copy("/assets/uploads/cover.png", "published_example")
+
+        self.assertEqual(url, "/static/images/prompt-library/published/published_example_cover.png")
+        cover_path = os.path.join(self.versioned_cover_dir, "published_example_cover.png")
+        self.assertTrue(os.path.isfile(cover_path))
+        main.remove_prompt_public_cover({"cover_url": url})
+        self.assertFalse(os.path.exists(cover_path))
 
     def test_admin_my_publications_excludes_other_users_snapshots(self):
         with patch.object(main, "require_authenticated", return_value=self.alice):
