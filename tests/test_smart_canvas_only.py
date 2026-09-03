@@ -4,6 +4,7 @@ import sys
 import tempfile
 import time
 import unittest
+from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from unittest import mock
 
@@ -177,6 +178,16 @@ class SmartCanvasOnlyTests(unittest.TestCase):
             main.upload_comfy_input_bytes("worker:8188", "infinite-canvas/2026-09/abc.png", b"image", "image/png")
         self.assertEqual(post.call_args.kwargs["files"]["image"][0], "abc.png")
         self.assertEqual(post.call_args.kwargs["data"], {"type": "input", "subfolder": "infinite-canvas/2026-09", "overwrite": "true"})
+
+    def test_comfy_input_view_uses_separate_filename_and_subfolder(self):
+        url = main.comfy_input_view_url("worker:8188", "infinite-canvas/2026-09/abc.png")
+        self.assertEqual(urlparse(url).path, "/view")
+        self.assertEqual(parse_qs(urlparse(url).query), {
+            "filename": ["abc.png"],
+            "subfolder": ["infinite-canvas/2026-09"],
+            "type": ["input"],
+        })
+        self.assertEqual(main.comfy_input_path_parts("plain.png"), ("plain.png", ""))
 
     def test_comfy_staging_cleanup_never_touches_manual_input(self):
         now = time.time()

@@ -6109,7 +6109,7 @@ def check_images_exist(backend_addr, images):
     if not images: return True
     for img in images:
         try:
-            url = f"http://{backend_addr}/view?filename={urllib.parse.quote(img)}&type=input"
+            url = comfy_input_view_url(backend_addr, img)
             r = requests.get(url, stream=True, timeout=0.5)
             r.close()
             if r.status_code != 200: return False
@@ -17242,15 +17242,25 @@ def comfy_staging_relative_name(subfolder: str, name: str) -> str:
         raise HTTPException(status_code=502, detail="ComfyUI 上传未返回有效文件名")
     return f"{clean_subfolder}/{clean_name}" if clean_subfolder else clean_name
 
-def upload_comfy_input_bytes(address: str, image_name: str, content: bytes, content_type: str):
-    """Upload a known relative input path without collapsing its subfolder."""
+def comfy_input_path_parts(image_name: str) -> Tuple[str, str]:
+    """Split a ComfyUI input reference into the API's filename/subfolder fields."""
     relative = str(image_name or "").replace("\\", "/").strip("/")
     if not relative or ".." in relative.split("/"):
         raise ValueError("ComfyUI 输入文件名不合法")
     subfolder, _, basename = relative.rpartition("/")
+    return basename or relative, subfolder
+
+def comfy_input_view_url(address: str, image_name: str) -> str:
+    filename, subfolder = comfy_input_path_parts(image_name)
+    query = urllib.parse.urlencode({"filename": filename, "subfolder": subfolder, "type": "input"})
+    return f"http://{address}/view?{query}"
+
+def upload_comfy_input_bytes(address: str, image_name: str, content: bytes, content_type: str):
+    """Upload a known relative input path without collapsing its subfolder."""
+    basename, subfolder = comfy_input_path_parts(image_name)
     response = requests.post(
         f"http://{address}/upload/image",
-        files={"image": (basename or relative, content, content_type or "application/octet-stream")},
+        files={"image": (basename, content, content_type or "application/octet-stream")},
         data={"type": "input", "subfolder": subfolder, "overwrite": "true"},
         timeout=10,
     )
@@ -26561,7 +26571,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
         for image_name in required_images:
             need_sync = False
             try:
-                check_url = f"http://{target_backend}/view?filename={urllib.parse.quote(image_name)}&type=input"
+                check_url = comfy_input_view_url(target_backend, image_name)
                 resp = requests.get(check_url, stream=True, timeout=0.5)
                 resp.close()
                 if resp.status_code != 200:
@@ -26575,7 +26585,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                 for addr in COMFYUI_INSTANCES:
                     if addr == target_backend: continue
                     try:
-                        src_url = f"http://{addr}/view?filename={urllib.parse.quote(image_name)}&type=input"
+                        src_url = comfy_input_view_url(addr, image_name)
                         r = requests.get(src_url, timeout=5)
                         if r.status_code == 200:
                             image_content = r.content
@@ -26593,7 +26603,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
             # read the exact input before its workflow is submitted.
             try:
                 verified = requests.get(
-                    f"http://{target_backend}/view?filename={urllib.parse.quote(image_name)}&type=input",
+                    comfy_input_view_url(target_backend, image_name),
                     stream=True,
                     timeout=1,
                 )
@@ -26660,7 +26670,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                 if backend != initial_backend:
                     fallback_sync_started = time.perf_counter()
                     for image_name in required_images:
-                        source = requests.get(f"http://{initial_backend}/view?filename={urllib.parse.quote(image_name)}&type=input", timeout=5)
+                        source = requests.get(comfy_input_view_url(initial_backend, image_name), timeout=5)
                         if source.status_code == 200:
                             upload_comfy_input_bytes(backend, image_name, source.content, source.headers.get("Content-Type", "image/png"))
                     fallback_input_sync_ms = round((time.perf_counter() - fallback_sync_started) * 1000)
@@ -26733,7 +26743,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
                 try:
                     fallback_sync_started = time.perf_counter()
                     for image_name in required_images:
-                        source = requests.get(f"http://{source_backend}/view?filename={urllib.parse.quote(image_name)}&type=input", timeout=5)
+                        source = requests.get(comfy_input_view_url(source_backend, image_name), timeout=5)
                         if source.status_code == 200:
                             upload_comfy_input_bytes(backend, image_name, source.content, source.headers.get("Content-Type", "image/png"))
                     fallback_input_sync_ms = round((time.perf_counter() - fallback_sync_started) * 1000)
