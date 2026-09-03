@@ -177,23 +177,26 @@ class ConnectionManager:
     async def broadcast_canvas_presence(self, canvas_id: str, node_id: str):
         now = now_ms()
         node_presence = self.canvas_presence.get(canvas_id, {}).get(node_id, {})
-        active = [entry for entry in node_presence.values() if now - int(entry.get("seen_at") or 0) <= 15000]
-        self.canvas_presence.setdefault(canvas_id, {})[node_id] = {entry["client_id"]: entry for entry in active}
-        data = json.dumps({"type":"canvas_presence", "canvas_id":canvas_id, "node_id":node_id, "editors":active})
+        active = [(connection_id, entry) for connection_id, entry in node_presence.items() if now - int(entry.get("seen_at") or 0) <= 15000]
+        self.canvas_presence.setdefault(canvas_id, {})[node_id] = dict(active)
+        data = json.dumps({"type":"canvas_presence", "canvas_id":canvas_id, "node_id":node_id, "editors":[entry for _, entry in active]})
         for connection in self.active_connections[:]:
             if canvas_id in self.canvas_subscriptions.get(connection, set()):
                 try: await connection.send_text(data)
                 except Exception: pass
 
-    async def update_canvas_presence(self, canvas_id: str, node_id: str, client_id: str, user: dict):
-        entry = {"client_id":client_id, "user_id":str(user.get("id") or ""), "name":str(user.get("name") or user.get("username") or "用户"), "seen_at":now_ms()}
-        self.canvas_presence.setdefault(canvas_id, {}).setdefault(node_id, {})[client_id] = entry
+    async def update_canvas_presence(self, canvas_id: str, node_id: str, connection_id: str, user: dict, client_id: str = ""):
+        # Keep the server-scoped connection ID private to presence bookkeeping.
+        # The browser receives its original client ID, so it can reliably ignore
+        # its own tab even before the current-user profile has finished loading.
+        entry = {"client_id":client_id or connection_id, "user_id":str(user.get("id") or ""), "name":str(user.get("name") or user.get("username") or "用户"), "seen_at":now_ms()}
+        self.canvas_presence.setdefault(canvas_id, {}).setdefault(node_id, {})[connection_id] = entry
         await self.broadcast_canvas_presence(canvas_id, node_id)
         async def expire(expected_seen_at):
             await asyncio.sleep(15)
-            current = self.canvas_presence.get(canvas_id, {}).get(node_id, {}).get(client_id)
+            current = self.canvas_presence.get(canvas_id, {}).get(node_id, {}).get(connection_id)
             if current and int(current.get("seen_at") or 0) == expected_seen_at:
-                self.canvas_presence[canvas_id][node_id].pop(client_id, None)
+                self.canvas_presence[canvas_id][node_id].pop(connection_id, None)
                 await self.broadcast_canvas_presence(canvas_id, node_id)
         asyncio.create_task(expire(entry["seen_at"]))
 
@@ -375,7 +378,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str = None):
                     except HTTPException:
                         continue
                     manager.subscribe_canvas(websocket, canvas_id)
-                    await manager.update_canvas_presence(canvas_id, node_id, scoped_client_id, user)
+                    await manager.update_canvas_presence(canvas_id, node_id, scoped_client_id, user, str(client_id or ""))
             elif isinstance(message, dict) and message.get("type") == "canvas_presence_clear":
                 await manager.clear_canvas_presence(scoped_client_id)
     except WebSocketDisconnect:

@@ -8477,7 +8477,7 @@ function handleCanvasOperationMessage(data={}){
 }
 function handleCanvasPresenceMessage(data={}){
     if(!data || data.canvas_id !== canvasId) return;
-    const editors = (data.editors || []).filter(editor => editor.client_id !== smartClientId);
+    const editors = (data.editors || []).filter(editor => editor.client_id !== smartClientId && editor.user_id !== currentApiUserId);
     canvasPresence.set(data.node_id, editors);
     const el = world.querySelector(`.image-node[data-id="${CSS.escape(data.node_id || '')}"]`);
     if(el){
@@ -8491,8 +8491,9 @@ function applyCanvasPresenceDecorations(){
     canvasPresence.forEach((editors, nodeId) => {
         const el = world.querySelector(`.image-node[data-id="${CSS.escape(nodeId || '')}"]`);
         if(!el) return;
-        const names = (editors || []).map(item => item.name).filter(Boolean).join('、');
-        el.classList.toggle('collaboration-editing', (editors || []).length > 0);
+        const others = (editors || []).filter(editor => editor.client_id !== smartClientId && editor.user_id !== currentApiUserId);
+        const names = others.map(item => item.name).filter(Boolean).join('、');
+        el.classList.toggle('collaboration-editing', others.length > 0);
         el.dataset.collaborationEditors = names;
         el.title = names ? `正在编辑：${names}` : '';
     });
