@@ -8596,6 +8596,11 @@ async function saveCanvasOperations(storageCanvas, revAtStart){
             error.code = 'canvas_corrupted';
             throw error;
         }
+        if(results.some(isPermanentCanvasSaveResponse)){
+            const error = new Error('画布操作被服务器拒绝');
+            error.code = 'canvas_operation_rejected';
+            throw error;
+        }
         throw new Error('画布操作保存失败');
     }
     // A slower older request must not replace the baseline after newer edits
@@ -8611,13 +8616,22 @@ async function isCanvasCorruptionResponse(response){
     try { return (await response.clone().json())?.detail?.code === 'canvas_corrupted'; }
     catch(e) { return false; }
 }
-function stopCanvasSaveForCorruption(){
+function isPermanentCanvasSaveResponse(response){
+    return [400, 401, 403, 404, 422].includes(Number(response?.status));
+}
+function stopCanvasSave(message){
     if(canvasSaveBlockedByCorruption) return;
     canvasSaveBlockedByCorruption = true;
     canvasDirty = true;
     clearTimeout(saveTimer);
     saveTimer = null;
-    toast(tr('smart.canvasCorrupted', '画布数据损坏，已停止自动保存；请联系管理员恢复备份。'));
+    toast(message);
+}
+function stopCanvasSaveForCorruption(){
+    stopCanvasSave(tr('smart.canvasCorrupted', '画布数据损坏，已停止自动保存；请联系管理员恢复备份。'));
+}
+function stopCanvasSaveForPermanentFailure(){
+    stopCanvasSave(tr('smart.canvasSaveRejected', '画布保存被服务器拒绝，已停止自动保存。请刷新页面后重试。'));
 }
 async function saveCanvas(){
     if(!canvasId || !canvas || canvasSaveBlockedByCorruption) return;
@@ -8636,6 +8650,7 @@ async function saveCanvas(){
         try { await saveCanvasOperations(storageCanvas, revAtStart); }
         catch(e) {
             if(e?.code === 'canvas_corrupted') stopCanvasSaveForCorruption();
+            else if(e?.code === 'canvas_operation_rejected') stopCanvasSaveForPermanentFailure();
             else { canvasDirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(saveCanvas, 800); }
         }
         return;
@@ -8680,6 +8695,8 @@ async function saveCanvas(){
             }
         } else if(await isCanvasCorruptionResponse(res)) {
             stopCanvasSaveForCorruption();
+        } else if(isPermanentCanvasSaveResponse(res)) {
+            stopCanvasSaveForPermanentFailure();
         } else if(res.status === 409) {
             // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
             // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。

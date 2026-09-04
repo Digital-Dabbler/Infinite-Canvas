@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import tempfile
 import unittest
@@ -40,6 +41,19 @@ class CanvasPersistenceSafetyTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.status_code, 409)
         self.assertEqual(caught.exception.detail["code"], "canvas_corrupted")
+
+    def test_successful_canvas_operations_are_quiet_but_failures_remain_visible(self):
+        def access_record(status):
+            record = logging.LogRecord(
+                "uvicorn.access", logging.INFO, __file__, 1,
+                '%s - "%s %s HTTP/%s" %s', (), None,
+            )
+            record.args = ("127.0.0.1:1", "POST", "/api/canvases/a/operations", "1.1", str(status))
+            return record
+
+        access_filter = main.QuietAccessLogFilter()
+        self.assertFalse(access_filter.filter(access_record(200)))
+        self.assertTrue(access_filter.filter(access_record(403)))
 
 
 if __name__ == "__main__":

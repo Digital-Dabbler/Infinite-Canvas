@@ -157,6 +157,7 @@
         "smart.retryMediaSuccess": { zh: "图片已重新加载", en: "Image reloaded" },
         "smart.retryMediaFailed": { zh: "图片暂时仍不可加载，请稍后重试", en: "Image is still unavailable. Try again later." },
         "smart.canvasCorrupted": { zh: "画布数据损坏，已停止自动保存；请联系管理员恢复备份。", en: "Canvas data is corrupted. Auto-save has stopped; ask an administrator to restore a backup." },
+        "smart.canvasSaveRejected": { zh: "画布保存被服务器拒绝，已停止自动保存。请刷新页面后重试。", en: "The server rejected the canvas save. Auto-save has stopped; refresh the page and try again." },
         "smart.retryMediaNoReference": { zh: "未找到可更新的图片记录，请刷新画布后重试", en: "No image record was found. Refresh the canvas and try again." },
         "smart.tplAll": { zh: "全部", en: "All" },
         "smart.tplCatView": { zh: "视角", en: "View" },

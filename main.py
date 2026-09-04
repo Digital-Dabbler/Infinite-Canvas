@@ -59,7 +59,11 @@ class QuietAccessLogFilter(logging.Filter):
         if len(args) >= 3:
             path = str(args[2]).split("?", 1)[0]
             status = int(args[4]) if len(args) >= 5 and str(args[4]).isdigit() else 0
-            quiet_dynamic = any(path.startswith(prefix) and path.endswith("/meta") for prefix in QUIET_ACCESS_PREFIXES)
+            quiet_dynamic = any(
+                path.startswith(prefix) and path.endswith(suffix)
+                for prefix in QUIET_ACCESS_PREFIXES
+                for suffix in ("/meta", "/operations")
+            )
             if (path in QUIET_ACCESS_PATHS or quiet_dynamic) and status < 400:
                 return False
         message = record.getMessage()
