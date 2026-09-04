@@ -6575,8 +6575,22 @@ def canvas_path(canvas_id):
 def save_canvas(canvas):
     with CANVAS_LOCK:
         canvas["updated_at"] = max(now_ms(), int(canvas.get("updated_at") or 0) + 1)
-        with open(canvas_path(canvas["id"]), 'w', encoding='utf-8') as f:
-            json.dump(canvas, f, ensure_ascii=False, indent=2)
+        target_path = canvas_path(canvas["id"])
+        temp_path = f"{target_path}.{uuid.uuid4().hex}.tmp"
+        try:
+            # A restart during serialization must leave the last complete
+            # snapshot available to operation replay and task recovery.
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(canvas, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, target_path)
+        finally:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
 
 # ===== 项目（按项目分类管理画布）=====
 PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
@@ -6680,8 +6694,14 @@ def load_canvas(canvas_id):
     path = canvas_path(canvas_id)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="画布不存在")
-    with open(path, 'r', encoding='utf-8') as f:
-        canvas = json.load(f)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            canvas = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=409, detail={
+            "code": "canvas_corrupted",
+            "message": "画布数据损坏，已停止自动保存，请联系管理员恢复备份",
+        })
     if canvas.get("deleted_at"):
         raise HTTPException(status_code=404, detail="画布已在回收站")
     if str(canvas.get("kind") or "").strip().lower() != "smart":
@@ -6695,8 +6715,14 @@ def load_canvas_any(canvas_id):
     path = canvas_path(canvas_id)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="画布不存在")
-    with open(path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise HTTPException(status_code=409, detail={
+            "code": "canvas_corrupted",
+            "message": "画布数据损坏，已停止自动保存，请联系管理员恢复备份",
+        })
 
 def canvas_access_role(canvas, user, governance=False):
     user_id = str((user or {}).get("id") or "")

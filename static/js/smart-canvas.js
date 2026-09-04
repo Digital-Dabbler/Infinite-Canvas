@@ -6878,6 +6878,9 @@ let connectionLayerRaf = 0;
 // 本地是否有未保存改动：有则任何服务端状态（广播/轮询/主动合并）都不得覆盖内存，
 // 等保存成功后再补拉（pendingRemoteMerge）。这是所有“服务端→客户端”状态的唯一闸门。
 let canvasDirty = false;
+// A malformed server snapshot cannot be fixed by retrying the same operation.
+// Preserve local state, but stop the 800ms retry loop until recovery is done.
+let canvasSaveBlockedByCorruption = false;
 let pendingRemoteMerge = false;
 // 每次本地改动（scheduleSave）自增的修订号：保存开始时记录，保存完成时对比，
 // 若期间又产生了新改动则不清除 canvasDirty（其 scheduleSave 定时器会再存），
@@ -8324,6 +8327,7 @@ async function loadCanvas(){
 function scheduleSave(){
     canvasDirty = true;
     canvasEditRev++;
+    if(canvasSaveBlockedByCorruption) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCanvas, 450);
 }
@@ -8586,7 +8590,14 @@ async function saveCanvasOperations(storageCanvas, revAtStart){
     const results = await Promise.all(operations.map(operation => fetch(`/api/canvases/${encodeURIComponent(canvasId)}/operations`, {
         method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({...operation, operation_id:uid('canvasop'), client_id:smartClientId})
     })));
-    if(results.some(res => !res.ok)) throw new Error('画布操作保存失败');
+    if(results.some(res => !res.ok)){
+        if((await Promise.all(results.map(isCanvasCorruptionResponse))).some(Boolean)){
+            const error = new Error('画布数据损坏');
+            error.code = 'canvas_corrupted';
+            throw error;
+        }
+        throw new Error('画布操作保存失败');
+    }
     // A slower older request must not replace the baseline after newer edits
     // have already begun saving.  Leave the newer revision dirty so its own
     // operation pass becomes the only state that can advance the baseline.
@@ -8595,8 +8606,21 @@ async function saveCanvasOperations(storageCanvas, revAtStart){
         canvasDirty = false;
     }
 }
+async function isCanvasCorruptionResponse(response){
+    if(!response || response.status !== 409) return false;
+    try { return (await response.clone().json())?.detail?.code === 'canvas_corrupted'; }
+    catch(e) { return false; }
+}
+function stopCanvasSaveForCorruption(){
+    if(canvasSaveBlockedByCorruption) return;
+    canvasSaveBlockedByCorruption = true;
+    canvasDirty = true;
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    toast(tr('smart.canvasCorrupted', '画布数据损坏，已停止自动保存；请联系管理员恢复备份。'));
+}
 async function saveCanvas(){
-    if(!canvasId || !canvas) return;
+    if(!canvasId || !canvas || canvasSaveBlockedByCorruption) return;
     const revAtStart = canvasEditRev;
     savePromptDraftForCurrent();
     nodes.forEach(node => {
@@ -8610,7 +8634,10 @@ async function saveCanvas(){
     const storageCanvas = canvasForStorage();
     if(canvasOperationBase){
         try { await saveCanvasOperations(storageCanvas, revAtStart); }
-        catch(e) { canvasDirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(saveCanvas, 800); }
+        catch(e) {
+            if(e?.code === 'canvas_corrupted') stopCanvasSaveForCorruption();
+            else { canvasDirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(saveCanvas, 800); }
+        }
         return;
     }
     canvasSyncInFlight = true;
@@ -8651,6 +8678,8 @@ async function saveCanvas(){
                     scheduleCanvasMergeReload(200);
                 }
             }
+        } else if(await isCanvasCorruptionResponse(res)) {
+            stopCanvasSaveForCorruption();
         } else if(res.status === 409) {
             // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
             // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。
