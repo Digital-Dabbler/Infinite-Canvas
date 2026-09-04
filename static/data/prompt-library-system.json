@@ -405,7 +405,7 @@
     "suffix": "clear foreground midground background separation, elegant visual rhythm",
     "positive": "intentional cinematic composition, strong focal hierarchy, balanced negative space",
     "negative": "clear foreground midground background separation, elegant visual rhythm",
-    "cover_url": "/static/images/prompt-library/other_composition.webp"
+    "cover_url": "/static/images/prompt-library/other_composition.webp?v=20260904-art-direction"
   },
   {
     "id": "other_camera",
@@ -417,7 +417,7 @@
     "suffix": "dynamic perspective, motivated depth, narrative visual tension",
     "positive": "purposeful camera language, expressive lens choice, cinematic framing",
     "negative": "dynamic perspective, motivated depth, narrative visual tension",
-    "cover_url": "/static/images/prompt-library/other_camera.webp"
+    "cover_url": "/static/images/prompt-library/other_camera.webp?v=20260904-art-direction"
   },
   {
     "id": "other_quality",
@@ -429,6 +429,6 @@
     "suffix": "clean high-end finish, coherent detail, professional final polish",
     "positive": "high material fidelity, nuanced surface texture, refined lighting interaction",
     "negative": "clean high-end finish, coherent detail, professional final polish",
-    "cover_url": "/static/images/prompt-library/other_quality.webp"
+    "cover_url": "/static/images/prompt-library/other_quality.webp?v=20260904-art-direction"
   }
 ]
