@@ -437,6 +437,12 @@ WORKFLOW_TRASH_PATH = os.path.join(DATA_DIR, "workflow_trash.json")
 WORKFLOW_LIBRARY_DIR = os.path.join(ASSETS_DIR, "workflow_library")
 WORKFLOW_LIBRARY_PRIVATE_DIR = os.path.join(WORKFLOW_LIBRARY_DIR, "private")
 WORKFLOW_LIBRARY_PUBLIC_DIR = os.path.join(WORKFLOW_LIBRARY_DIR, "public")
+# Published workflow packages are project content. Keep their manifest,
+# archives, and covers under static/ so Git can synchronize them across
+# development machines. Personal workflows remain local runtime state.
+WORKFLOW_LIBRARY_PUBLISHED_PATH = os.path.join(STATIC_DIR, "data", "workflow-library-published.json")
+WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR = os.path.join(STATIC_DIR, "workflow-library", "published")
+WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR = os.path.join(STATIC_DIR, "images", "workflow-library", "published")
 ASSET_AI_SETTINGS_PATH = os.path.join(DATA_DIR, "asset_ai_settings.json")
 ASSET_AI_TASKS_PATH = os.path.join(DATA_DIR, "asset_ai_tasks.json")
 LOCAL_ASSET_OWNERSHIP_PATH = os.path.join(DATA_DIR, "local_asset_ownership.json")
@@ -12242,10 +12248,33 @@ def workflow_relative_url(path):
     return f"/assets/{urllib.parse.quote(rel, safe='/')}"
 
 def workflow_file_path(url):
-    return output_file_from_url(url) if str(url or "").startswith("/assets/") else None
+    url = str(url or "").split("?", 1)[0]
+    if url.startswith("/assets/"):
+        return output_file_from_url(url)
+    static_prefixes = (
+        ("/static/workflow-library/published/", WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR),
+        ("/static/images/workflow-library/published/", WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR),
+    )
+    for prefix, root in static_prefixes:
+        if not url.startswith(prefix):
+            continue
+        filename = os.path.basename(urllib.parse.unquote(url[len(prefix):]))
+        path = os.path.abspath(os.path.join(root, filename))
+        try:
+            if os.path.commonpath([path, os.path.abspath(root)]) == os.path.abspath(root) and os.path.isfile(path):
+                return path
+        except ValueError:
+            pass
+    return None
 
 def workflow_archive_copy(raw, workflow_id, public=False):
-    target_dir = WORKFLOW_LIBRARY_PUBLIC_DIR if public else WORKFLOW_LIBRARY_PRIVATE_DIR
+    if public:
+        os.makedirs(WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR, exist_ok=True)
+        target = os.path.join(WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR, f"{workflow_id}.zip")
+        with open(target, "wb") as handle:
+            handle.write(raw)
+        return f"/static/workflow-library/published/{urllib.parse.quote(os.path.basename(target))}"
+    target_dir = WORKFLOW_LIBRARY_PRIVATE_DIR
     os.makedirs(target_dir, exist_ok=True)
     target = os.path.join(target_dir, f"{workflow_id}.zip")
     with open(target, "wb") as handle:
@@ -12253,10 +12282,19 @@ def workflow_archive_copy(raw, workflow_id, public=False):
     return workflow_relative_url(target)
 
 def workflow_cover_copy(url, workflow_id, public=False):
-    source = output_file_from_url(url)
+    url = str(url or "")
+    if public and url.startswith("/static/images/workflow-library/published/"):
+        return url
+    source = workflow_file_path(url) if url.startswith("/static/") else output_file_from_url(url)
     if not source or not os.path.isfile(source) or not content_type_for_path(source).startswith("image/"):
         return ""
-    target_dir = WORKFLOW_LIBRARY_PUBLIC_DIR if public else WORKFLOW_LIBRARY_PRIVATE_DIR
+    if public:
+        os.makedirs(WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR, exist_ok=True)
+        ext = os.path.splitext(source)[1].lower() or ".png"
+        target = os.path.join(WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR, f"{workflow_id}_cover{ext}")
+        shutil.copy2(source, target)
+        return f"/static/images/workflow-library/published/{urllib.parse.quote(os.path.basename(target))}"
+    target_dir = WORKFLOW_LIBRARY_PRIVATE_DIR
     os.makedirs(target_dir, exist_ok=True)
     ext = os.path.splitext(source)[1].lower() or ".png"
     target = os.path.join(target_dir, f"{workflow_id}_cover{ext}")
@@ -12271,6 +12309,64 @@ def remove_workflow_files(record):
                 os.remove(path)
             except OSError:
                 pass
+
+def normalize_versioned_published_workflows(raw_items):
+    items = []
+    seen_ids = set()
+    for raw_item in raw_items if isinstance(raw_items, list) else []:
+        if not isinstance(raw_item, dict):
+            continue
+        item_id = re.sub(r"[^A-Za-z0-9_-]+", "_", str(raw_item.get("id") or ""))[:60]
+        archive_url = str(raw_item.get("archive_url") or "")
+        if (not item_id or item_id in seen_ids
+                or not str(raw_item.get("source_workflow_id") or "")
+                or not archive_url.startswith("/static/workflow-library/published/")):
+            continue
+        seen_ids.add(item_id)
+        items.append({
+            "id": item_id,
+            "name": sanitize_asset_name(raw_item.get("name") or "未命名工作流", "未命名工作流")[:20],
+            "owner_id": str(raw_item.get("owner_id") or ""),
+            "owner_name": str(raw_item.get("owner_name") or ""),
+            "source_workflow_id": str(raw_item.get("source_workflow_id") or ""),
+            "archive_url": archive_url[:500],
+            "cover_url": str(raw_item.get("cover_url") or "")[:500],
+            "node_count": max(0, int(raw_item.get("node_count") or 0)),
+            "connection_count": max(0, int(raw_item.get("connection_count") or 0)),
+            "resource_count": max(0, int(raw_item.get("resource_count") or 0)),
+            "created_at": int(raw_item.get("created_at") or 0),
+            "updated_at": int(raw_item.get("updated_at") or 0),
+            "published_at": int(raw_item.get("published_at") or 0),
+        })
+    return items
+
+def load_versioned_published_workflows():
+    """Read Git-tracked published workflow snapshots without runtime fallback."""
+    try:
+        with open(WORKFLOW_LIBRARY_PUBLISHED_PATH, "r", encoding="utf-8") as handle:
+            raw_items = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        raw_items = []
+    return normalize_versioned_published_workflows(raw_items)
+
+def save_versioned_published_workflows(items):
+    """Persist publishable workflow snapshots into the tracked package."""
+    cleaned = normalize_versioned_published_workflows(items)
+    with CANVAS_LOCK:
+        _write_json_atomic(WORKFLOW_LIBRARY_PUBLISHED_PATH, cleaned)
+    return cleaned
+
+def published_workflow_snapshots(data):
+    """Prefer the tracked catalog when an old local record has the same ID."""
+    snapshots = []
+    seen_ids = set()
+    for item in [*load_versioned_published_workflows(), *((data or {}).get("published") or [])]:
+        item_id = str((item or {}).get("id") or "")
+        if not item_id or item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
+        snapshots.append(item)
+    return snapshots
 
 def cleanup_expired_workflow_trash():
     trash = load_workflow_trash()
@@ -12288,11 +12384,12 @@ def cleanup_expired_workflow_trash():
 def workflow_public_view(data, user):
     uid = str((user or {}).get("id") or "")
     cleanup_expired_workflow_trash()
+    published = published_workflow_snapshots(data)
     return {
         "viewer": {"user_id": uid, "is_admin": asset_is_admin(user)},
         "workflows": [item for item in data.get("workflows") or [] if str(item.get("owner_id") or "") == uid],
-        "published": [item for item in data.get("published") or [] if str(item.get("owner_id") or "") == uid],
-        "inspiration": list(data.get("published") or []),
+        "published": [item for item in published if str(item.get("owner_id") or "") == uid],
+        "inspiration": published,
     }
 
 def clear_legacy_asset_library_workflows():
@@ -23114,12 +23211,12 @@ async def publish_workflow_library_item(workflow_id: str, payload: WorkflowLibra
     source = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
     if not source:
         raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
-    existing = next((item for item in data.get("published") or [] if item.get("source_workflow_id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
+    versioned_published = load_versioned_published_workflows()
+    existing = next((item for item in versioned_published if item.get("source_workflow_id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
     if not payload.published:
         if existing:
-            data["published"] = [item for item in data.get("published") or [] if item is not existing]
+            save_versioned_published_workflows([item for item in versioned_published if item.get("id") != existing.get("id")])
             remove_workflow_files(existing)
-            save_workflow_library(data)
         return {"library": workflow_public_view(data, user), "published": False}
     if existing:
         return {"library": workflow_public_view(data, user), "snapshot": existing, "published": True}
@@ -23134,8 +23231,7 @@ async def publish_workflow_library_item(workflow_id: str, payload: WorkflowLibra
         "archive_url": snapshot_archive,
         "cover_url": workflow_cover_copy(source.get("cover_url") or "", snapshot_id, public=True),
         "published_at": now_ms(), "created_at": now_ms()}
-    data.setdefault("published", []).append(snapshot)
-    save_workflow_library(data)
+    save_versioned_published_workflows([*versioned_published, snapshot])
     return {"library": workflow_public_view(data, user), "snapshot": snapshot, "published": True}
 
 @app.delete("/api/workflow-library/{workflow_id}")
@@ -23180,12 +23276,13 @@ async def withdraw_workflow_library_snapshot(snapshot_id: str, request: Request)
     user = require_authenticated(request)
     data = load_workflow_library()
     uid = str(user.get("id") or "")
-    snapshot = next((item for item in data.get("published") or [] if item.get("id") == snapshot_id and str(item.get("owner_id") or "") == uid), None)
+    versioned_published = load_versioned_published_workflows()
+    snapshot = next((item for item in versioned_published
+                     if item.get("id") == snapshot_id and (asset_is_admin(user) or str(item.get("owner_id") or "") == uid)), None)
     if not snapshot:
         raise HTTPException(status_code=404, detail="\u5df2\u53d1\u5e03\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
-    data["published"] = [item for item in data.get("published") or [] if item is not snapshot]
+    save_versioned_published_workflows([item for item in versioned_published if item.get("id") != snapshot_id])
     remove_workflow_files(snapshot)
-    save_workflow_library(data)
     return {"library": workflow_public_view(data, user), "withdrawn": True}
 
 @app.get("/api/workflow-library/{workflow_id}/package")
@@ -23194,7 +23291,7 @@ async def download_workflow_library_package(workflow_id: str, request: Request):
     data = load_workflow_library()
     uid = str(user.get("id") or "")
     record = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
-    record = record or next((item for item in data.get("published") or [] if item.get("id") == workflow_id), None)
+    record = record or next((item for item in published_workflow_snapshots(data) if item.get("id") == workflow_id), None)
     if not record:
         raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
     archive = workflow_file_path(record.get("archive_url") or "")
@@ -23331,7 +23428,7 @@ async def apply_workflow_library_item(workflow_id: str, request: Request):
     data = load_workflow_library()
     uid = str(user.get("id") or "")
     record = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
-    record = record or next((item for item in data.get("published") or [] if item.get("id") == workflow_id), None)
+    record = record or next((item for item in published_workflow_snapshots(data) if item.get("id") == workflow_id), None)
     if not record:
         raise HTTPException(status_code=404, detail="\\u5de5\\u4f5c\\u6d41\\u4e0d\\u5b58\\u5728")
     archive = workflow_file_path(record.get("archive_url") or "")

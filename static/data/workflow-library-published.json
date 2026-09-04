@@ -1,0 +1,32 @@
+[
+  {
+    "id": "published_c3e06d05885c4f",
+    "name": "绘画风格反推",
+    "owner_id": "44cd4a316277481b9dfc9124293fc0a8",
+    "owner_name": "系统管理员",
+    "node_count": 2,
+    "connection_count": 1,
+    "resource_count": 1,
+    "created_at": 1788420036923,
+    "updated_at": 1788420017718,
+    "source_workflow_id": "workflow_d10c9a2f548e4b",
+    "archive_url": "/static/workflow-library/published/published_c3e06d05885c4f.zip",
+    "cover_url": "/static/images/workflow-library/published/published_c3e06d05885c4f_cover.png",
+    "published_at": 1788420036923
+  },
+  {
+    "id": "published_64e09f5f7b8b49",
+    "name": "提示词反推",
+    "owner_id": "44cd4a316277481b9dfc9124293fc0a8",
+    "owner_name": "系统管理员",
+    "node_count": 2,
+    "connection_count": 1,
+    "resource_count": 1,
+    "created_at": 1788493933610,
+    "updated_at": 1788493927980,
+    "source_workflow_id": "workflow_256a80bd6f8348",
+    "archive_url": "/static/workflow-library/published/published_64e09f5f7b8b49.zip",
+    "cover_url": "/static/images/workflow-library/published/published_64e09f5f7b8b49_cover.png",
+    "published_at": 1788493933610
+  }
+]
