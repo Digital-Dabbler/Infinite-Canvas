@@ -6713,10 +6713,45 @@ def canvas_sharing_public(canvas, user):
     role = canvas_access_role(canvas, user)
     return {"role": role, "can_govern": str((user or {}).get("role") or "") == "admin", "owner_user_id": str(canvas.get("owner_user_id") or ""), "editor_user_ids": list(canvas.get("editor_user_ids") or []), "ownership_state": str(canvas.get("ownership_state") or "unclaimed")}
 
+# All fields a smart-canvas node legitimately persists.  A ``node_fields``
+# operation may carry any of these regardless of whether the stored node already
+# has the key: clients add transient run-state and typed settings dynamically,
+# and rejecting such a field used to drop the *whole* operation (text, position,
+# result images, title) that shared the same op, so edits silently vanished on
+# refresh.  The forbidden set below still blocks identity/sharing/audit fields.
 CANVAS_NODE_OPERATION_FIELDS = {
+    # geometry / content
     "x", "y", "w", "h", "scale", "title", "text", "images", "activeImageIndex",
     "connections", "workflowGroupId", "inputNodeIds", "items", "settings", "runSettings",
-    "directorScene", "directorThumb",
+    "directorScene", "directorThumb", "type", "color", "fontSize", "description", "name",
+    "url", "mediaKind", "natural_w", "natural_h",
+    # media tools / task binding metadata
+    "backgroundRemoval", "erase", "upscale", "outpaintFrame", "sourceNodeId",
+    "runInputRefs", "outputKind", "lastRunError", "pendingUpload", "photoshopImport",
+    "generatedOutputs", "outputText", "angleControl", "cameraFixed", "fitImage",
+    "imageComparisons",
+    # run / task lifecycle state
+    "running", "pending", "pendingTasks", "queued", "submitting", "jimengPending",
+    "runStartedAt", "runFinishedAt", "runElapsedMs", "runTimerHidden", "runAt",
+    # prompt / LLM
+    "promptPresets", "promptSeparator", "promptSplitEnabled", "promptSplitPreviewHeight",
+    "promptPresetTextModelVersion", "textOutputSemanticsV1", "inputOrder",
+    "llmEnabled", "llmProvider", "llmModel", "llmMsModel", "llmSystemEnabled",
+    "llmSystemPrompt", "llmInstruction", "llmInputHeight", "llmOutputHeight",
+    "manualInputRefs", "runPromptRefs", "runPrompt", "runModelPrompt", "promptDraftHtml",
+    "promptDraftText", "promptDraftTouched", "enhancePrompt", "showSystem", "userInput",
+    # provider / model / platform settings
+    "apiProvider", "comfyParams", "comfyWorkflow", "model", "msgenModel", "msLoraEnabled",
+    "msLoraId", "msCustomModel", "msCustomSize", "msCustomRatio", "msCustomWidth",
+    "msCustomHeight", "msCustomRatioWidth", "msCustomRatioHeight", "msWidth", "msHeight",
+    "msResolution", "msRatio", "resolution", "ratio", "aspectRatio", "quality", "duration",
+    "height", "width", "customWidth", "customHeight", "customSize", "customRatio",
+    "customRatioWidth", "customRatioHeight", "instanceType", "webappId", "workflowId",
+    "rhAppInfo", "rhConfigKey", "rhMode", "rhModel", "rhParams", "rhPayment",
+    "rhRandomActive", "rhRandomValues", "rhWorkflowInfo", "watermark", "editModel",
+    "editUpscale", "editUpscaleRes", "enableUpsample", "enhanceUpscale", "enhanceUpscaleRes",
+    "generateAudio", "multimodal", "useFrameRoles", "settingsMemoryContextKey",
+    "settingsMemoryManaged",
 }
 CANVAS_NODE_OPERATION_FORBIDDEN_FIELDS = {
     "id", "owner", "owner_user_id", "editor_user_ids", "ownership_state", "sharing_version",

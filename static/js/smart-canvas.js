@@ -8608,77 +8608,26 @@ async function saveCanvas(){
     canvas.settings = settingsForStorage(canvasDefaultSmartSettings || initialSmartSettings);
     canvas.viewport = {...viewport};
     const storageCanvas = canvasForStorage();
-    if(canvasOperationBase){
-        try { await saveCanvasOperations(storageCanvas, revAtStart); }
-        catch(e) { canvasDirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(saveCanvas, 800); }
-        return;
-    }
+    // Node-operation sync only.  Never fall back to a whole-canvas overwrite:
+    // if the operation base is still missing (e.g. a canvas mid-initialisation),
+    // seed it from a fresh snapshot so local edits still travel as narrow,
+    // validated node operations instead of racing an old full-snapshot PUT that
+    // could roll the board backwards.
     canvasSyncInFlight = true;
     try {
-        const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`, {
-            method:'PUT',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({
-                title:storageCanvas.title || tr('smart.title'),
-                icon:storageCanvas.icon || 'sparkles',
-                nodes:storageCanvas.nodes || [],
-                connections:storageCanvas.connections || [],
-                viewport:storageCanvas.viewport || {x:0,y:0,scale:1},
-                logs:storageCanvas.logs || [],
-                settings:storageCanvas.settings,
-                deleted_node_ids:storageCanvas.deleted_node_ids || [],
-                media_catalog:storageCanvas.media_catalog || [],
-                base_updated_at:storageCanvas.updated_at || canvas.updated_at || 0,
-                client_id:smartClientId
-            })
-        });
-        if(res.ok){
-            const data = await res.json();
-            if(data.canvas){
-                if(data.canvas.updated_at) canvas.updated_at = data.canvas.updated_at;
-                syncTombstonesFromServer(data.canvas);
-                (data.canvas.nodes || []).forEach(node => {
-                    if(node?.id) localUnsyncedNodeIds.delete(node.id);
-                });
+        if(!canvasOperationBase){
+            const baseline = await loadCanvasOperationBaseline();
+            if(!baseline){
+                canvasDirty = true;
+                clearTimeout(saveTimer);
+                saveTimer = setTimeout(saveCanvas, 800);
+                return;
             }
-            // 保存成功：仅当保存期间没有再产生新改动时才清除 dirty；否则保持
-            // dirty（其 scheduleSave 定时器会补存），绝不在旧保存返回时把
-            // 尚未落盘的新改动误标为已保存，避免后续服务端合并用旧快照回退。
-            if(canvasEditRev === revAtStart){
-                canvasDirty = false;
-                if(pendingRemoteMerge){
-                    pendingRemoteMerge = false;
-                    scheduleCanvasMergeReload(200);
-                }
-            }
-        } else if(res.status === 409) {
-            // 冲突：别人先保存了。合并对方的状态（节点 id 合并、图片取并集，谁都不丢），
-            // 然后用对方最新的 updated_at 作为基底重存，把合并结果落盘——而不是直接覆盖对方。
-            // 本地此时正带着自己的未保存编辑在保存，合并以本地为准（preferLocal）：
-            // 对方新增的节点/连线/图片仍并集，但共享节点的布局/文本不被旧快照覆盖。
-            const data = await res.json().catch(() => ({}));
-            const serverCanvas = data.detail?.canvas;
-            if(serverCanvas){
-                applyMergedServerCanvas(serverCanvas, {preferLocal:true});
-                nodes.forEach(node => {
-                    node.images = (node.images || []).map(img => mediaItemForStorage(stripImageGenerationMeta(img)));
-                    if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
-                });
-                canvas.nodes = nodes;
-            } else if(data.detail?.updated_at) {
-                canvas.updated_at = data.detail.updated_at;
-            }
-            // 409 说明本次改动尚未落盘：保持 dirty，稍后以合并结果重存。
-            canvasDirty = true;
-            clearTimeout(saveTimer);
-            saveTimer = setTimeout(saveCanvas, 300);
-        } else {
-            // 其他失败（5xx / 4xx / 网络异常）：保持 dirty 并安排重试，
-            // 避免改动在内存里却从未落盘，刷新后丢失。
-            canvasDirty = true;
-            clearTimeout(saveTimer);
-            saveTimer = setTimeout(saveCanvas, 800);
+            canvasOperationBase = baseline;
+            pendingRemoteMerge = false;
+            syncTombstonesFromServer(baseline);
         }
+        await saveCanvasOperations(storageCanvas, revAtStart);
     } catch(e) {
         canvasDirty = true;
         clearTimeout(saveTimer);
@@ -8686,6 +8635,15 @@ async function saveCanvas(){
     } finally {
         canvasSyncInFlight = false;
     }
+}
+async function loadCanvasOperationBaseline(){
+    if(!canvasId) return null;
+    try {
+        const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
+        if(!res.ok) return null;
+        const data = await res.json();
+        return data?.canvas ? JSON.parse(JSON.stringify(data.canvas)) : null;
+    } catch(e) { return null; }
 }
 function imageMetaFromNode(node){
     return {};

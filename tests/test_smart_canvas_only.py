@@ -85,7 +85,10 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         payload = main.CanvasSaveRequest(media_catalog=[{"url": "/output/previous-image.png"}])
         self.assertEqual(payload.media_catalog[0]["url"], "/output/previous-image.png")
         self.assertIn("function mergeCanvasMediaCatalog", self.smart_canvas_js)
-        self.assertIn("media_catalog:storageCanvas.media_catalog || []", self.smart_canvas_js)
+        # Node-operation sync persists the media catalog as narrow item ops, never
+        # a whole-canvas snapshot overwrite.
+        self.assertIn("kind:'media_catalog_add'", self.smart_canvas_js)
+        self.assertIn("kind:'media_catalog_remove'", self.smart_canvas_js)
         self.assertIn("function removeCanvasMediaCatalogItem", self.smart_canvas_js)
 
     def test_workflow_create_dialog_events_wait_for_dom_ready(self):
