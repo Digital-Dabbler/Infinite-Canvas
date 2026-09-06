@@ -6,7 +6,7 @@
 
 Infinite Canvas 是一个局域网、多用户、本地优先的 AI 创作工作台。单个 FastAPI 服务同时提供认证、权限、智能画布、素材与项目持久化、媒体代理、生成队列、WebSocket、用量治理，以及多种本地或云端 AI 后端适配。
 
-当前产品只保留**智能画布**。普通画布已移除，不得恢复 `canvas.html`、`canvas.js`、`canvas.css`，也不得为新能力维护普通画布兼容分支。
+当前产品只保留**智能画布**。不支持普通画布（`canvas.html`、`canvas.js`、`canvas.css`），不得为新能力恢复或维护普通画布兼容分支。
 
 最重要的服务端隔离链路是：
 
@@ -178,9 +178,9 @@ macOS 使用 `./mac-安装依赖.sh` 与 `./mac-启动服务.sh`。不要混用�
 
 ### 画布持久化与兼容
 
-- 画布保存在 `data/canvases/*.json`，当前只接受 `kind: "smart"`；不再读取、列出或恢复普通画布。
+- 画布保存在 `data/canvases/*.json`（`{id}.json`），只接受 `kind: "smart"`。目录中的 `.tmp`、`.corrupt-*` 等非规范文件会被归档到 `data/canvases/.recovery/`，不参与列表、恢复或媒体索引。
 - 新节点字段必须提供默认值，确保旧智能画布可加载、保存、刷新和再次加载。结构更新同时搜索归一化、撤销、复制粘贴、删除、导入导出与保存代码。
-- 普通内容改动必须通过画布操作流持久化并广播；`canvas_updated` 仅限兼容、元数据或明确的受控恢复信号，不能作为节点、连线、设置、日志、媒体或任务状态的日常整图同步手段。素材变化继续广播 `asset_library_updated`。不要仅修改内存状态。
+- 普通内容改动必须通过画布操作流持久化并广播；改动以细粒度、可校验、幂等的操作形式提交，绝不回写整张画布快照。素材变化继续广播 `asset_library_updated`。不要仅修改内存状态。
 - 用户可撤销的结构/内容变化先 `pushUndo()`；批量内部操作遵循 `undoSuppressed`，完成后 `render()` 与 `scheduleSave()`。
 
 ### 协作同步与授权不变量
@@ -188,20 +188,20 @@ macOS 使用 `./mac-安装依赖.sh` 与 `./mac-启动服务.sh`。不要混用�
 智能画布已彻底采用“节点操作同步 + 服务端授权”模型。修改画布、任务、实时频道或其调用方前，先阅读 [节点操作同步设计](docs/superpowers/specs/2026-09-02-smart-canvas-node-operation-sync-design.md) 与 [公司内分享与协作授权设计](docs/superpowers/specs/2026-09-03-smart-canvas-sharing-acl-design.md)。以下规则是强制边界：
 
 - `canvas_id` 是内容、操作日志、WebSocket 订阅、presence、生成任务、任务恢复与副本的唯一隔离范围；一个画布的事件不得触发其他画布的读取、保存、渲染、任务或状态写入。
-- 日常实时同步只提交和应用细粒度、可校验、幂等的操作（节点字段、连线、设置、日志、媒体和任务绑定）。初次加载、导入导出与明确的灾难恢复可读取完整快照；实时消息、定时轮询、冲突回程和任务完成回调不得拉取或回写整张画布，更不得以旧快照覆盖当前状态。
+- 日常实时同步只提交和应用细粒度、可校验、幂等的操作（节点字段、连线、设置、日志、媒体和任务绑定）。初次加载、导入导出与明确的灾难恢复可读取完整快照；此后任务完成回调、实时消息等一律通过绑定节点的窄操作收敛，不得拉取或回写整张画布，更不得以旧快照覆盖当前状态。
 - 同一节点不同字段可并行保存；同一字段以服务端收到的最后一个有效操作为准并广播确认值。删除墓碑优先，迟到的更新、生成回调或旧请求都不能复活节点；撤销必须生成明确的新恢复操作，而非清除墓碑后依赖旧请求回放。
-- 生成的提交、进度、完成、失败、取消和计时必须用 `canvas_id + node_id + task_id` 作用于绑定节点；一个节点可有多个并行任务。不得用前端冷却、旧预览或整图状态推断任务完成。
+- 生成的提交、进度、完成、失败、取消和计时必须用 `canvas_id + node_id + task_id` 作用于绑定节点；一个节点可有多个并行任务。不得用前端冷却、旧预览或节点状态推断任务完成。
 - 公司内登录用户默认可查看和复制；只有编辑者可写入、生成或发送编辑 presence；只有所有者可管理协作者和所有权。管理员只在显式治理模式使用替代权限，且不会因此成为画布所有者或编辑者。所有 HTTP、WebSocket、Photoshop 与任务恢复写路径均须复用统一画布访问校验。
 - Presence 是非持久化提示：只广播同一画布内、具有编辑权的会话；界面只展示其他用户，不能把当前用户或其其他浏览器标签标为“正在编辑”。
 - 复制必须生成独立的画布、节点/连线 ID、操作日志、墓碑、任务与协作名单；可复制素材引用，但源和副本绝不共享写入、实时频道或任务状态。
 
-涉及上述边界时，至少验证不同画布隔离、双标签页不同节点并行、同字段冲突、删除后迟到请求、并行生成、权限变化与 presence；不得以旧“整图快照保存 + 冲突后整图合并”模型衡量或实现新改动。
+涉及上述边界时，至少验证不同画布隔离、双标签页不同节点并行、同字段冲突、删除后迟到请求、并行生成、权限变化与 presence。所有改动都以“节点操作同步 + 服务端授权”的边界为准。
 
 ### 节点与生成架构
 
 - `smart-image-upload` 是上传入口；`smart-image-generation` 与 `smart-video-generation` 是可运行节点；`smart-prompt`、`smart-loop`、`smart-workflow-group`、`smart-note` 有各自持久化职责。
 - 旧 `smart-image`、`smart-container`、无 type 节点只在载入时通过 `normalizeLegacySmartNode()` / `migrateLegacySmartCanvasNodes()` 迁移；不要再创建它们。
-- `smart-group` 已退出产品能力；`smart-workflow-group` 仅为组织框，成员关系写在成员节点 `workflowGroupId`，不参与生成拓扑。
+- `smart-group` 不是当前产品能力；`smart-workflow-group` 仅为组织框，成员关系写在成员节点 `workflowGroupId`，不参与生成拓扑。
 - 多结果生成节点使用 `images[]` 和 `activeImageIndex`，呈现主媒体、翻页与缩略图，不重新生成普通网格。删除当前结果走 `deleteNode()` 的统一清理逻辑；删到最后一项才删除节点、连线和历史关联。
 - 生成输入可来自连线、手动引用、prompt mention、循环上下文和运行快照。修改规则时同步检查 `runInputRefs`、`runPromptRefs`、`manualInputRefs`、`blockedInputRefs`、`workflowInputImagesFor()` 与 `buildPromptRequest()`。
 - 每次生成必须仅使用当前认证用户所属配置组的 provider/model/capability。前端过滤只是体验层，服务端仍要验证 provider 和 model 属于该配置组。

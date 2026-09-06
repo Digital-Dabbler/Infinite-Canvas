@@ -315,6 +315,10 @@ async def startup_event():
     except Exception as exc:
         print(f"恢复画布任务状态失败: {exc}")
     try:
+        await asyncio.to_thread(archive_orphan_canvas_files)
+    except Exception as exc:
+        print(f"整理画布目录残留文件失败: {exc}")
+    try:
         ensure_all_user_asset_spaces()
         recover_asset_ai_tasks_after_restart()
         await asyncio.to_thread(cleanup_expired_asset_trash)
@@ -6566,11 +6570,49 @@ def canvas_path(canvas_id):
         raise HTTPException(status_code=400, detail="无效的画布 ID")
     return os.path.join(CANVAS_DIR, f"{cleaned}.json")
 
+CANVAS_STORAGE_FILE_RE = re.compile(r"^[A-Za-z0-9_-]+\.json$")
+
+def is_canvas_storage_file(filename):
+    """True only for canonical ``{id}.json`` canvas files.
+
+    Recovery/backup artifacts (``*.json.*.tmp``, ``*.corrupt-*.json``,
+    ``*.corrupt-before-recovery-*.json``) must never be treated as live canvases,
+    otherwise a duplicate/partial file shows up as a second canvas or a corrupt
+    entry in listings.
+    """
+    return bool(CANVAS_STORAGE_FILE_RE.match(str(filename or "")))
+
+def archive_orphan_canvas_files():
+    """Move stray temp/recovery artifacts out of the live canvas dir.
+
+    Atomic canvas writes only leave a ``*.json.*.tmp`` when the process is killed
+    between the temp write and the rename; truncated/older recovery copies are
+    kept alongside.  Archiving them into ``data/canvases/.recovery/`` keeps
+    listings and trash cleanup from treating them as real canvases while
+    preserving the bytes (never deleted) for manual review.
+    """
+    archive_dir = os.path.join(CANVAS_DIR, ".recovery")
+    with CANVAS_LOCK:
+        for filename in os.listdir(CANVAS_DIR):
+            if is_canvas_storage_file(filename):
+                continue
+            src = os.path.join(CANVAS_DIR, filename)
+            if not os.path.isfile(src):
+                continue
+            try:
+                os.makedirs(archive_dir, exist_ok=True)
+                dest = os.path.join(archive_dir, filename)
+                if not os.path.exists(dest):
+                    os.replace(src, dest)
+            except OSError:
+                continue
+
 def save_canvas(canvas):
     with CANVAS_LOCK:
         canvas["updated_at"] = max(now_ms(), int(canvas.get("updated_at") or 0) + 1)
-        with open(canvas_path(canvas["id"]), 'w', encoding='utf-8') as f:
-            json.dump(canvas, f, ensure_ascii=False, indent=2)
+        # Atomic write (temp file + os.replace) so a crash/kill mid-write never
+        # truncates the canvas JSON and leaves a corrupt file behind.
+        _write_json_atomic(canvas_path(canvas["id"]), canvas)
 
 # ===== 项目（按项目分类管理画布）=====
 PROJECTS_PATH = os.path.join(DATA_DIR, "projects.json")
@@ -6713,46 +6755,13 @@ def canvas_sharing_public(canvas, user):
     role = canvas_access_role(canvas, user)
     return {"role": role, "can_govern": str((user or {}).get("role") or "") == "admin", "owner_user_id": str(canvas.get("owner_user_id") or ""), "editor_user_ids": list(canvas.get("editor_user_ids") or []), "ownership_state": str(canvas.get("ownership_state") or "unclaimed")}
 
-# All fields a smart-canvas node legitimately persists.  A ``node_fields``
-# operation may carry any of these regardless of whether the stored node already
-# has the key: clients add transient run-state and typed settings dynamically,
-# and rejecting such a field used to drop the *whole* operation (text, position,
-# result images, title) that shared the same op, so edits silently vanished on
-# refresh.  The forbidden set below still blocks identity/sharing/audit fields.
-CANVAS_NODE_OPERATION_FIELDS = {
-    # geometry / content
-    "x", "y", "w", "h", "scale", "title", "text", "images", "activeImageIndex",
-    "connections", "workflowGroupId", "inputNodeIds", "items", "settings", "runSettings",
-    "directorScene", "directorThumb", "type", "color", "fontSize", "description", "name",
-    "url", "mediaKind", "natural_w", "natural_h",
-    # media tools / task binding metadata
-    "backgroundRemoval", "erase", "upscale", "outpaintFrame", "sourceNodeId",
-    "runInputRefs", "outputKind", "lastRunError", "pendingUpload", "photoshopImport",
-    "generatedOutputs", "outputText", "angleControl", "cameraFixed", "fitImage",
-    "imageComparisons",
-    # run / task lifecycle state
-    "running", "pending", "pendingTasks", "queued", "submitting", "jimengPending",
-    "runStartedAt", "runFinishedAt", "runElapsedMs", "runTimerHidden", "runAt",
-    # prompt / LLM
-    "promptPresets", "promptSeparator", "promptSplitEnabled", "promptSplitPreviewHeight",
-    "promptPresetTextModelVersion", "textOutputSemanticsV1", "inputOrder",
-    "llmEnabled", "llmProvider", "llmModel", "llmMsModel", "llmSystemEnabled",
-    "llmSystemPrompt", "llmInstruction", "llmInputHeight", "llmOutputHeight",
-    "manualInputRefs", "runPromptRefs", "runPrompt", "runModelPrompt", "promptDraftHtml",
-    "promptDraftText", "promptDraftTouched", "enhancePrompt", "showSystem", "userInput",
-    # provider / model / platform settings
-    "apiProvider", "comfyParams", "comfyWorkflow", "model", "msgenModel", "msLoraEnabled",
-    "msLoraId", "msCustomModel", "msCustomSize", "msCustomRatio", "msCustomWidth",
-    "msCustomHeight", "msCustomRatioWidth", "msCustomRatioHeight", "msWidth", "msHeight",
-    "msResolution", "msRatio", "resolution", "ratio", "aspectRatio", "quality", "duration",
-    "height", "width", "customWidth", "customHeight", "customSize", "customRatio",
-    "customRatioWidth", "customRatioHeight", "instanceType", "webappId", "workflowId",
-    "rhAppInfo", "rhConfigKey", "rhMode", "rhModel", "rhParams", "rhPayment",
-    "rhRandomActive", "rhRandomValues", "rhWorkflowInfo", "watermark", "editModel",
-    "editUpscale", "editUpscaleRes", "enableUpsample", "enhanceUpscale", "enhanceUpscaleRes",
-    "generateAudio", "multimodal", "useFrameRoles", "settingsMemoryContextKey",
-    "settingsMemoryManaged",
-}
+# Smart-canvas nodes are owned by the client, which adds typed run-state and
+# settings fields dynamically.  A strict allow-list is therefore passive and
+# brittle: any new field rejects the *whole* node_fields operation (text,
+# position, result images, title) that shares it, silently dropping edits on
+# refresh (and node_create already accepts any field, so a per-field allow-list
+# was never an effective security boundary).  We instead hard-block only the
+# reserved identity / sharing / audit fields (blacklist) and accept the rest.
 CANVAS_NODE_OPERATION_FORBIDDEN_FIELDS = {
     "id", "owner", "owner_user_id", "editor_user_ids", "ownership_state", "sharing_version",
     "operation_log", "deleted_node_ids", "sync_revision",
@@ -6787,12 +6796,16 @@ def validate_director_scene(value):
     return value
 
 def validate_canvas_node_fields(node, fields):
-    """Reject protected or invented operation fields; validate 3D payloads server-side."""
-    allowed = CANVAS_NODE_OPERATION_FIELDS | {str(key) for key in (node or {}).keys()}
+    """Reject reserved identity/sharing/audit fields; accept all other node fields.
+
+    The client owns the node schema, so we do not maintain a per-field
+    allow-list: a blacklist of protected fields is the security boundary, and
+    everything else (including dynamically-added run-state and typed settings)
+    is a valid node update.
+    """
     clean = {key: value for key, value in dict(fields or {}).items() if key != "id"}
-    unsupported = set(clean) - allowed
     forbidden = set(clean) & CANVAS_NODE_OPERATION_FORBIDDEN_FIELDS
-    if unsupported or forbidden:
+    if forbidden:
         raise HTTPException(status_code=400, detail="包含不允许的节点字段")
     if "directorScene" in clean:
         if str((node or {}).get("type") or "") != "smart-3d-director":
@@ -7099,7 +7112,7 @@ def cleanup_expired_canvas_trash():
     cutoff = now_ms() - CANVAS_TRASH_RETENTION_MS
     with CANVAS_LOCK:
         for filename in os.listdir(CANVAS_DIR):
-            if not filename.endswith(".json"):
+            if not is_canvas_storage_file(filename):
                 continue
             path = os.path.join(CANVAS_DIR, filename)
             try:
@@ -7118,7 +7131,7 @@ def iter_canvas_records(include_deleted=False):
     cleanup_expired_canvas_trash()
     records = []
     for filename in os.listdir(CANVAS_DIR):
-        if not filename.endswith(".json"):
+        if not is_canvas_storage_file(filename):
             continue
         try:
             path = os.path.join(CANVAS_DIR, filename)
@@ -7279,7 +7292,7 @@ def canvas_assets_index():
         changed = False
         filenames = sorted(
             filename for filename in os.listdir(CANVAS_DIR)
-            if filename.endswith(".json")
+            if is_canvas_storage_file(filename)
         )
         for filename in filenames:
             path = os.path.join(CANVAS_DIR, filename)
@@ -22639,7 +22652,7 @@ async def delete_project(project_id: str):
     moved = 0
     with CANVAS_LOCK:
         for filename in os.listdir(CANVAS_DIR):
-            if not filename.endswith(".json"):
+            if not is_canvas_storage_file(filename):
                 continue
             path = os.path.join(CANVAS_DIR, filename)
             try:
@@ -25495,71 +25508,6 @@ async def retry_asset_ai_task(task_id: str, request: Request):
     }], config)
     retried = update_asset_ai_task(tasks[0]["id"], retry_of=task_id) or tasks[0]
     return {"task": retried, "warning": "原任务可能已产生费用，请在管理员用量记录中核对。"}
-
-@app.put("/api/canvases/{canvas_id}")
-async def update_canvas(canvas_id: str, payload: CanvasSaveRequest, request: Request):
-    user = require_authenticated(request)
-    def mutate_canvas():
-        with CANVAS_LOCK:
-            canvas = load_canvas(canvas_id)
-            require_canvas_access(canvas, user, "editor")
-            current_updated_at = int(canvas.get("updated_at") or 0)
-            if payload.base_updated_at and current_updated_at and int(payload.base_updated_at) < current_updated_at:
-                raise HTTPException(status_code=409, detail={
-                    "message": "画布已被其他页面更新，已拒绝旧版本覆盖。",
-                    "canvas": canvas,
-                    "updated_at": current_updated_at,
-                })
-            canvas["title"] = (payload.title or canvas.get("title") or "未命名画布")[:80]
-            canvas["icon"] = (payload.icon or canvas.get("icon") or "layers")[:32]
-            canvas["kind"] = "smart"
-            old_deleted = {str(item or "").strip() for item in (canvas.get("deleted_node_ids") or []) if str(item or "").strip()}
-            new_deleted = {str(item or "").strip() for item in (payload.deleted_node_ids or []) if str(item or "").strip()}
-            deleted_node_ids = list(old_deleted | new_deleted)[-2000:]
-            # 墓碑只增不减会让“撤销恢复”的节点被永久误杀：本次 payload 中实际存在的
-            # 节点视为存活，把它们的 id 从墓碑里移除，让复活在所有客户端收敛。
-            incoming_ids = {
-                str((node or {}).get("id") or "").strip()
-                for node in (payload.nodes or [])
-                if isinstance(node, dict) and str((node or {}).get("id") or "").strip()
-            }
-            if incoming_ids:
-                deleted_node_ids = [item for item in deleted_node_ids if item not in incoming_ids]
-            deleted_set = set(deleted_node_ids)
-            canvas["deleted_node_ids"] = deleted_node_ids
-            incoming_nodes = [
-                node for node in (payload.nodes or [])
-                if not str((node or {}).get("id") or "").strip() or str((node or {}).get("id") or "").strip() not in deleted_set
-            ]
-            canvas["nodes"] = drop_terminal_server_managed_pending_tasks(incoming_nodes)
-            canvas["connections"] = [
-                conn for conn in (payload.connections or [])
-                if str((conn or {}).get("from") or "").strip() not in deleted_set
-                and str((conn or {}).get("to") or "").strip() not in deleted_set
-            ]
-            canvas["viewport"] = payload.viewport
-            canvas["logs"] = merge_canvas_logs(canvas.get("logs") or [], payload.logs or [])
-            canvas["settings"] = payload.settings or {}
-            existing_catalog = [item for item in (canvas.get("media_catalog") or []) if isinstance(item, dict) and canvas_media_url(item)]
-            incoming_catalog = [item for item in (payload.media_catalog or []) if isinstance(item, dict) and canvas_media_url(item)]
-            catalog_seen = set()
-            merged_catalog = []
-            for item in [*existing_catalog, *incoming_catalog]:
-                url = canvas_media_url(item)
-                if url in catalog_seen:
-                    continue
-                catalog_seen.add(url)
-                merged_catalog.append(item)
-            canvas["media_catalog"] = merged_catalog[-5000:]
-            ensure_canvas_cover(canvas)
-            save_canvas(canvas)
-            return canvas
-
-    canvas = await asyncio.to_thread(mutate_canvas)
-    await asyncio.to_thread(reconcile_bound_canvas_tasks, canvas_id)
-    canvas = await asyncio.to_thread(load_canvas, canvas_id)
-    await manager.broadcast_canvas_updated(canvas_id, int(canvas.get("updated_at") or now_ms()), payload.client_id)
-    return {"canvas": canvas}
 
 @app.post("/api/canvases/{canvas_id}/logs/delete")
 async def delete_canvas_log(canvas_id: str, payload: DeleteCanvasLogRequest, request: Request):

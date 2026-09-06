@@ -6875,10 +6875,9 @@ let canvasSyncInFlight = false;
 let canvasSyncTimer = null;
 let canvasMetaPollTimer = null;
 let connectionLayerRaf = 0;
-// 本地是否有未保存改动：有则任何服务端状态（广播/轮询/主动合并）都不得覆盖内存，
-// 等保存成功后再补拉（pendingRemoteMerge）。这是所有“服务端→客户端”状态的唯一闸门。
+// 本地是否有未保存改动：有则任何服务端操作都不得覆盖内存，等保存成功后再收敛。
+// 这是所有“服务端→客户端”状态的唯一闸门。
 let canvasDirty = false;
-let pendingRemoteMerge = false;
 // 每次本地改动（scheduleSave）自增的修订号：保存开始时记录，保存完成时对比，
 // 若期间又产生了新改动则不清除 canvasDirty（其 scheduleSave 定时器会再存），
 // 避免“旧保存成功后把新改动误标为已保存”，从而被后续服务端合并用旧快照回退。
@@ -6894,62 +6893,6 @@ const canvasPresence = new Map();
 // 提示“请刷新”横幅。只存内存，不落 localStorage——重启后新开的页面拿到
 // 的是新令牌，天然不发通知。
 let knownServerBootId = '';
-function mergeSmartImageLists(localImgs, remoteImgs){
-    const out = [];
-    const seen = new Set();
-    (localImgs || []).forEach(img => {
-        const key = mediaOutputIdentity(img);
-        if(key && seen.has(key)) return;
-        if(key) seen.add(key);
-        out.push(img);
-    });
-    (remoteImgs || []).forEach(img => {
-        const key = mediaOutputIdentity(img);
-        if(!key || seen.has(key)) return;
-        seen.add(key);
-        out.push(img);
-    });
-    return out;
-}
-function smartTaskMergeKey(task){
-    return String(task?.taskId || '');
-}
-function smartServerManagedTasks(node){
-    return smartPendingTasks(node).filter(task => task.serverManaged === true);
-}
-function mergeServerManagedNode(local, remote, images){
-    // The server is the sole terminal writer for these tasks.  Carrying a
-    // stale local record back into a save would revive an already-finished
-    // spinner, so remote server-managed records always win.
-    const remoteTasks = smartPendingTasks(remote);
-    const remoteIds = new Set(remoteTasks.map(smartTaskMergeKey));
-    const localUnmanaged = smartPendingTasks(local).filter(task => task.serverManaged !== true && !remoteIds.has(smartTaskMergeKey(task)));
-    const pendingTasks = [...remoteTasks, ...localUnmanaged];
-    const merged = {...remote, images};
-    if(pendingTasks.length){
-        merged.pendingTasks = pendingTasks;
-        merged.pending = pendingTasks.length;
-        merged.running = false;
-        return merged;
-    }
-    return smartNodeHasDisplayResult(merged) ? completeSmartNodeWithImages(merged, images) : merged;
-}
-function smartCanvasLogKey(entry){
-    const taskId = String(entry?.local_task_id || '');
-    return taskId ? `task:${taskId}` : `log:${String(entry?.id || '')}`;
-}
-function mergeSmartCanvasLogs(localLogs, remoteLogs){
-    const out = [];
-    const seen = new Set();
-    [...(remoteLogs || []), ...(localLogs || [])].forEach(entry => {
-        if(!entry || typeof entry !== 'object') return;
-        const key = smartCanvasLogKey(entry);
-        if(!key || key === 'log:' || seen.has(key)) return;
-        seen.add(key);
-        out.push(entry);
-    });
-    return out.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0)).slice(0, 500);
-}
 function smartNodeInFlight(node){
     if(smartNodeHasCompletedResult(node)) return false;
     return Boolean(node && (node.submitting || node.running || node.pending || node.queued || node.jimengPending || smartPendingTasks(node).length));
@@ -7156,11 +7099,6 @@ function recoverStuckLoopOutputsFromLogs(){
     });
     return changed;
 }
-function completeSmartNodeWithImages(node, images){
-    const copy = {...node, images};
-    if(smartNodeHasDisplayResult(copy)) markSmartNodeComplete(copy);
-    return copy;
-}
 function syncRunButtonState(node=composerActionNode()){
     if(!runBtn) return;
     // API 图片和视频任务提交后都由服务端队列独立运行，同一节点可继续追加任务。
@@ -7183,70 +7121,6 @@ function smartNodeAllowsConcurrentSubmit(node){
     if(isSmartVideoGenerationNode(node)) return apiKind === 'video' && isApiLikeEngine(engine);
     return apiKind !== 'video' && (isApiLikeEngine(engine) || (engine === 'runninghub' && Boolean(runningHubSelectedModel(runSettings))));
 }
-function mergeSmartNode(local, remote, preferLocal=false){
-    const images = mergeSmartImageLists(local.images, remote.images);
-    if(smartServerManagedTasks(local).length || smartServerManagedTasks(remote).length){
-        return mergeServerManagedNode(local, remote, images);
-    }
-    const localDone = smartNodeHasCompletedResult(local);
-    const remoteDone = smartNodeHasCompletedResult(remote);
-    const localBusy = smartNodeInFlight(local);
-    const remoteBusy = smartNodeInFlight(remote);
-    if(localDone && remoteBusy && !remoteDone) return completeSmartNodeWithImages(local, images);
-    if(remoteDone && localBusy && !localDone){
-        // 本地这轮运行比服务端记录的完成时间更晚 → 本地是新一轮生成，
-        // 绝不能被服务端上一轮的旧完成态冲掉（否则新任务状态会消失）。
-        // runStartedAt 缺失时回退为“以服务端完成态为准”（与旧行为一致）。
-        if(Number(local.runStartedAt || 0) > Number(remote.runFinishedAt || 0)){
-            return completeSmartNodeWithImages(local, images);
-        }
-        return completeSmartNodeWithImages(remote, images);
-    }
-    if(localDone && remoteDone){
-        const localFinished = Number(local.runFinishedAt || 0);
-        const remoteFinished = Number(remote.runFinishedAt || 0);
-        return completeSmartNodeWithImages(remoteFinished >= localFinished ? remote : local, images);
-    }
-    // 本地正在生成/排队的节点完全以本地为准，只把对方可能多出来的图并进来，绝不被对方旧状态冲掉
-    if(smartNodeInFlight(local)){
-        return {...local, images};
-    }
-    // 否则以对方（最新保存方）的布局/标题/设置为基底，但图片取并集——双方生成结果都不丢。
-    // 409 冲突合并（本地正带着自己的编辑在保存）时反转为以本地为准，避免刚做的编辑被旧快照覆盖。
-    const merged = preferLocal ? {...local, images} : {...remote, images};
-    return smartNodeHasDisplayResult(merged) && (merged.pending || merged.queued || smartPendingTasks(merged).length)
-        ? completeSmartNodeWithImages(merged, images)
-        : merged;
-}
-function mergeSmartNodeLists(localNodes, remoteNodes, preferLocal=false){
-    const localById = new Map((localNodes || []).map(n => [n.id, n]));
-    const remoteById = new Map((remoteNodes || []).map(n => [n.id, n]));
-    const order = [];
-    const seen = new Set();
-    (localNodes || []).forEach(n => { if(!seen.has(n.id)){ seen.add(n.id); order.push(n.id); } });
-    (remoteNodes || []).forEach(n => { if(!seen.has(n.id)){ seen.add(n.id); order.push(n.id); } });
-    return order.map(id => {
-        if(localDeletedNodeIds.has(id)) return null;
-        const local = localById.get(id);
-        const remote = remoteById.get(id);
-        if(local && !remote && localUnsyncedNodeIds.has(id)) return local;
-        if(local && !remote) return local;     // 仅本地存在：保留（我新建的节点；对方删了也宁可复活也不丢结果）
-        if(remote && !local) return remote;     // 仅对方存在：加入对方新建的节点
-        return mergeSmartNode(local, remote, preferLocal);
-    }).filter(Boolean);
-}
-function mergeSmartConnections(localConns, remoteConns, nodeIds){
-    const out = [];
-    const seen = new Set();
-    [...(localConns || []), ...(remoteConns || [])].forEach(c => {
-        if(!c || !nodeIds.has(c.from) || !nodeIds.has(c.to)) return;
-        const key = `${c.from}->${c.to}:${c.kind || 'flow'}`;
-        if(seen.has(key)) return;
-        seen.add(key);
-        out.push(c);
-    });
-    return out;
-}
 // 服务端墓碑 ↔ 存活节点双向收敛：
 // - 服务端 deleted_node_ids 并入本地墓碑（保留删除意图，防止合并复活已删节点）；
 // - 服务端 nodes 里实际存在的 id 从本地墓碑移除（服务端有它=它活着，
@@ -7262,81 +7136,15 @@ function syncTombstonesFromServer(serverCanvas){
         if(value) localDeletedNodeIds.delete(value);
     });
 }
-function applyMergedServerCanvas(serverCanvas, options={}){
-    if(!serverCanvas || !canvas) return false;
-    syncTombstonesFromServer(serverCanvas);
-    const remoteNodes = (Array.isArray(serverCanvas.nodes) ? serverCanvas.nodes : []).map(normalizeLegacySmartNode).filter(Boolean);
-    const mergedNodes = mergeSmartNodeLists(nodes, remoteNodes, options.preferLocal === true);
-    const nodeIds = new Set(mergedNodes.map(n => n.id));
-    nodes = mergedNodes;
-    canvas.logs = mergeSmartCanvasLogs(canvas.logs, serverCanvas.logs);
-    mergeCanvasMediaCatalog(serverCanvas.media_catalog || []);
-    cleanupWorkflowOrganizerMemberships();
-    canvas.connections = mergeSmartConnections(canvas.connections, serverCanvas.connections, nodeIds);
-    const cleanedState = clearCompletedNodeBusyStates();
-    const recoveredLoopOutputs = recoverStuckLoopOutputsFromLogs();
-    canvas.updated_at = Number(serverCanvas.updated_at || canvas.updated_at || 0);
-    if(canvas.title !== serverCanvas.title && serverCanvas.title){
-        canvas.title = serverCanvas.title;
-        const titleEl = document.getElementById('smartTitle');
-        if(titleEl) titleEl.textContent = canvas.title;
-    }
-    render();
-    if(typeof scheduleConnectionLayerRefresh === 'function') scheduleConnectionLayerRefresh();
-    if(cleanedState || recoveredLoopOutputs) scheduleSave();
-    resumeSmartPendingTasks();
-    resumeJimengPendingNodes();
-    return true;
-}
-async function mergeReloadCanvasNow(){
-    if(!canvasId) return;
-    // Operation-sync clients converge through narrow events only.  A full
-    // fetch here could reintroduce the stale snapshot rollback we removed.
-    if(canvasOperationBase) return;
-    if(canvasDirty){
-        // 本地还有未保存改动：服务端旧快照不得覆盖内存，等保存成功后再补拉。
-        pendingRemoteMerge = true;
-        return;
-    }
-    if(dragState || selectionState){
-        // 用户正在拖拽/框选，稍后再合并，别打断操作
-        scheduleCanvasMergeReload(600);
-        return;
-    }
-    try {
-        const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}`);
-        if(!res.ok) return;
-        const data = await res.json();
-        if(!data || !data.canvas) return;
-        // 拉取期间用户可能又产生了新的本地改动（删除/连线/移动等）：此时旧快照
-        // 绝不能覆盖内存，重新走门控，等保存成功后再补拉。这是修复“删除/移动后
-        // 立马回退”的关键二次校验（fetch 是异步的，入口处的检查不够）。
-        if(canvasDirty || dragState || selectionState){
-            pendingRemoteMerge = true;
-            return;
-        }
-        applyMergedServerCanvas(data.canvas);
-    } catch(e) {}
-}
-function scheduleCanvasMergeReload(delay=200){
-    clearTimeout(canvasSyncTimer);
-    canvasSyncTimer = setTimeout(() => { mergeReloadCanvasNow(); }, delay);
-}
 function handleCanvasUpdatedMessage(data={}){
-    if(!data || data.type !== 'canvas_updated') return;
-    if(!canvasId || data.canvas_id !== canvasId) return;
-    // Node-operation clients never turn a generic background notification
-    // into a whole-board reload. Task-specific updates must arrive as narrow
-    // operations, so an old task writer cannot roll the board backwards.
-    if(canvasOperationBase) return;
-    if(data.client_id && data.client_id === smartClientId) return; // 自己发的，忽略
-    if(canvasSyncInFlight) return; // 我正在保存，保存完成/409 合并会处理
-    const remoteUpdatedAt = Number(data.updated_at || 0);
-    if(remoteUpdatedAt && remoteUpdatedAt <= Number(canvas?.updated_at || 0)) return;
-    scheduleCanvasMergeReload(200);
+    // Smart-canvas sync is operation-based.  Task/content changes arrive as
+    // narrow `canvas_operation` messages; `canvas_updated` is a generic
+    // compatibility notification that operation-sync clients ignore.
+    return;
 }
 function startCanvasMetaPoll(){
-    // WS / iframe 转发不可靠时的兜底：定期看服务器 updated_at 是否变新，变新就合并拉取
+    // 兜底：定期检查服务器 boot_id，用于检测服务重启。内容/任务同步始终走窄操作，
+    // 不再通过轮询服务器 updated_at 或拉取整图来收敛。
     if(canvasMetaPollTimer) return;
     canvasMetaPollTimer = setInterval(async () => {
         if(!canvasId || !canvas) return;
@@ -7345,12 +7153,10 @@ function startCanvasMetaPoll(){
             const res = await fetch(`/api/canvases/${encodeURIComponent(canvasId)}/meta`);
             if(!res.ok) return;
             const meta = await res.json();
-            // 服务重启检测：与画布合并共用同一条 8 秒 meta 轮询，不新增请求/定时器。
             if(meta.boot_id){
                 if(!knownServerBootId) knownServerBootId = String(meta.boot_id);
                 else if(String(meta.boot_id) !== knownServerBootId) showServerRestartBanner();
             }
-            if(!canvasOperationBase && Number(meta.updated_at || 0) > Number(canvas.updated_at || 0)) mergeReloadCanvasNow();
         } catch(e) {}
     }, 8000);
 }
@@ -8270,7 +8076,6 @@ async function loadCanvas(){
         canvasOperationBase = JSON.parse(JSON.stringify(data.canvas || {}));
         knownServerBootId = String(data.boot_id || '');
         canvasDirty = false;
-        pendingRemoteMerge = false;
         rememberCanvasListProject(canvas.project || 'default');
         canvasUsesConnections = Object.prototype.hasOwnProperty.call(canvas || {}, 'connections');
         document.title = canvas.title || tr('canvas.smartCanvas');
@@ -8624,7 +8429,6 @@ async function saveCanvas(){
                 return;
             }
             canvasOperationBase = baseline;
-            pendingRemoteMerge = false;
             syncTombstonesFromServer(baseline);
         }
         await saveCanvasOperations(storageCanvas, revAtStart);
@@ -21740,7 +21544,7 @@ async function runGeneration(targetNode=null){
             if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
             clearPromptInputForNode(node, {preserveDraft:true});
             if(taskResult.canvasBound){
-                await mergeReloadCanvasNow();
+                // 服务端通过窄操作广播绑定节点状态；客户端无需整图拉取/合并。
                 return;
             }
             await resumeSmartPendingNode(pendingNode, {run:runLog, runLogStart, taskIds});
@@ -21786,7 +21590,6 @@ async function runGeneration(targetNode=null){
             // 服务端已接管任务后立即释放 composer，用户可继续填写并提交下一项。
             clearPromptInputForNode(node, {preserveDraft:true});
             if(outImages.canvasBound){
-                await mergeReloadCanvasNow();
                 if(sourceVisualState) restoreSourceVisualState(node, sourceVisualState);
                 scheduleSave();
                 return;
