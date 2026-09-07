@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -28,6 +29,11 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.asset_library = self.data / "asset_library.json"
         self.history.write_text("[]", encoding="utf-8")
         self.global_config.write_text("{}", encoding="utf-8")
+        # The route consumes ``request`` only through require_authenticated();
+        # exercise a real authenticated editor who owns the test canvases so the
+        # deletion/cleanup logic (not the auth boundary) is what the tests assert.
+        self.user_id = "test-editor"
+        self.request = SimpleNamespace(state=SimpleNamespace())
         self.patches = [
             patch.object(main, "ASSETS_DIR", str(self.assets)),
             patch.object(main, "OUTPUT_OUTPUT_DIR", str(self.generated)),
@@ -39,6 +45,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
             patch.object(main, "HISTORY_FILE", str(self.history)),
             patch.object(main, "GLOBAL_CONFIG_FILE", str(self.global_config)),
             patch.object(main, "ASSET_LIBRARY_PATH", str(self.asset_library)),
+            patch.object(main, "require_authenticated", return_value={"id": self.user_id}),
         ]
         for item in self.patches:
             item.start()
@@ -51,7 +58,11 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
     def write_canvas(self, canvas_id, logs, nodes=None, updated_at=0):
         value = {
             "id": canvas_id,
+            "kind": "smart",
             "title": "test",
+            "owner_user_id": self.user_id,
+            "editor_user_ids": [],
+            "sharing_version": 1,
             "logs": logs,
             "nodes": nodes or [],
             "connections": [],
@@ -59,6 +70,9 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
             "updated_at": updated_at,
         }
         (self.canvases / f"{canvas_id}.json").write_text(json.dumps(value), encoding="utf-8")
+
+    async def delete_log(self, canvas_id, payload):
+        return await main.delete_canvas_log(canvas_id, payload, self.request)
 
     def generated_file(self, name="result.png", content=b"image"):
         path = self.generated / name
@@ -97,7 +111,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         path, url = self.generated_file()
         self.write_canvas("record_only", [{"id": "log-1", "outputs": [url]}])
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "record_only",
             main.DeleteCanvasLogRequest(log_id="log-1", delete_unreferenced_media=False),
         )
@@ -114,7 +128,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
             nodes=[{"id": "node-1", "generatedOutputs": [url]}],
         )
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "referenced",
             main.DeleteCanvasLogRequest(log_id="log-1", delete_unreferenced_media=True),
         )
@@ -145,7 +159,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         stored["connections"] = [{"id": "edge", "from": "prompt", "to": "result"}]
         (self.canvases / "remove_node.json").write_text(json.dumps(stored), encoding="utf-8")
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "remove_node",
             main.DeleteCanvasLogRequest(
                 log_id="log-1",
@@ -187,7 +201,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         stored["connections"] = [{"id": "edge", "from": "generator", "to": "output"}]
         (self.canvases / "classic_output.json").write_text(json.dumps(stored), encoding="utf-8")
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "classic_output",
             main.DeleteCanvasLogRequest(
                 log_id="log-1",
@@ -227,7 +241,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
             }],
         )
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "multi_result",
             main.DeleteCanvasLogRequest(
                 log_id="log-1",
@@ -262,7 +276,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
             }],
         )
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "reference_only",
             main.DeleteCanvasLogRequest(
                 log_id="log-1",
@@ -287,7 +301,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         preview.write_bytes(b"preview")
         self.write_canvas("unreferenced", [{"id": "log-1", "outputs": [url]}])
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "unreferenced",
             main.DeleteCanvasLogRequest(log_id="log-1", delete_unreferenced_media=True),
         )
@@ -305,7 +319,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         )
         self.write_canvas("history_only", [{"id": "log-1", "outputs": [url]}])
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "history_only",
             main.DeleteCanvasLogRequest(log_id="log-1", delete_unreferenced_media=True),
         )
@@ -319,7 +333,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         (self.canvases / "being-written.json").write_text("{", encoding="utf-8")
         self.write_canvas("unreadable_owner", [{"id": "log-1", "outputs": [url]}])
 
-        result = await main.delete_canvas_log(
+        result = await self.delete_log(
             "unreadable_owner",
             main.DeleteCanvasLogRequest(log_id="log-1", delete_unreferenced_media=True),
         )
@@ -332,7 +346,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.write_canvas("stale", [{"id": "log-1", "outputs": [url]}], updated_at=200)
 
         with self.assertRaises(main.HTTPException) as caught:
-            await main.delete_canvas_log(
+            await self.delete_log(
                 "stale",
                 main.DeleteCanvasLogRequest(
                     log_id="log-1",
@@ -351,7 +365,7 @@ class CanvasLogCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.write_canvas("monotonic", [{"id": "log-1", "outputs": [url]}], updated_at=200)
 
         with patch.object(main, "now_ms", return_value=200):
-            result = await main.delete_canvas_log(
+            result = await self.delete_log(
                 "monotonic",
                 main.DeleteCanvasLogRequest(log_id="log-1", base_updated_at=200),
             )
