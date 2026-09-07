@@ -8237,6 +8237,7 @@ async function openCanvasSharingDrawer(forceGovernance=false){
 function handleCanvasOperationMessage(data={}){
     if(!data || data.type !== 'canvas_operation' || data.canvas_id !== canvasId || data.client_id === smartClientId) return;
     const op = data.operation || {}, id = op.node_id;
+    let logListChanged = false;
     // Only the trusted server task-completion broadcaster emits clear_fields.
     // A normal node_fields operation contains values only, and its omitted
     // keys must keep their current values to preserve per-field concurrency.
@@ -8252,8 +8253,8 @@ function handleCanvasOperationMessage(data={}){
     else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) { clearNodeTaskFields(node); Object.assign(node, op.fields || {}); } }
     else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
     else if(op.kind === 'settings_fields') { canvas.settings = {...(canvas.settings || {}), ...(op.fields || {})}; Object.assign(settings, op.fields || {}); }
-    else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvas.logs || []).some(item => item.id === op.fields.log.id)) canvas.logs = [op.fields.log, ...(canvas.logs || [])];
-    else if(op.kind === 'log_remove') canvas.logs = (canvas.logs || []).filter(item => item.id !== op.fields?.log_id);
+    else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvas.logs || []).some(item => item.id === op.fields.log.id)) { canvas.logs = [op.fields.log, ...(canvas.logs || [])]; logListChanged = true; }
+    else if(op.kind === 'log_remove') { canvas.logs = (canvas.logs || []).filter(item => item.id !== op.fields?.log_id); logListChanged = true; }
     else if(op.kind === 'media_catalog_add' && op.fields?.item?.url && !(canvas.media_catalog || []).some(item => item.url === op.fields.item.url)) canvas.media_catalog = [...(canvas.media_catalog || []), op.fields.item];
     else if(op.kind === 'media_catalog_remove') canvas.media_catalog = (canvas.media_catalog || []).filter(item => item.url !== op.fields?.item?.url);
     else if(op.kind === 'connection_add') {
@@ -8288,6 +8289,7 @@ function handleCanvasOperationMessage(data={}){
     }
     canvas.updated_at = Math.max(Number(canvas.updated_at || 0), Number(data.revision || 0));
     render();
+    if(logListChanged && smartLogModal?.classList.contains('open')) renderSmartCanvasLog();
     applyCanvasPresenceDecorations();
 }
 function handleCanvasPresenceMessage(data={}){
@@ -9746,6 +9748,10 @@ function addSmartGenerationLog({run, outputs=[], runMs=0, error=''}) {
         model:smartRunTaskLabel(run),
         request:smartRunRequestMeta(run),
         prompt:run?.prompt || '',
+        // Keep the full run snapshot only for runs that produced media output,
+        // so the preview panel can reproduce that exact image later. Text/LLM
+        // runs (no media) don't need it and would otherwise bloat the log.
+        runSettings:(outputItems.length && run?.settings) ? settingsForStorage(run.settings) : undefined,
         outputs:outputItems,
         refs:run?.refs || [],
         runMs:Number(runMs || 0),
@@ -15166,8 +15172,8 @@ async function setSmartCanvasCover(node, index, item, kind){
         toast(error.message || '设置封面失败');
     }
 }
-function previewGenerationSourceLabel(node){
-    const source = node?.runSettings || {};
+function previewGenerationSourceLabel(node, settings=null){
+    const source = settings || node?.runSettings || {};
     const engine = String(source.engine || '').toLowerCase();
     if(!Object.keys(source).length) return tr('smart.previewUnknownSource');
     if(engine === 'comfy'){
@@ -15197,6 +15203,40 @@ function previewGenerationSourceLabel(node){
     const model = isVideo ? source.videoModel : source.model;
     return [provider?.name || providerId || (engine ? engine.toUpperCase() : ''), model].filter(Boolean).join(' · ') || tr('smart.previewUnknownSource');
 }
+// A generation node accumulates results across runs (and the node's runPrompt /
+// runSettings reflect only the LAST run). To preview or reproduce a specific
+// output image we must recover the run that actually produced it. Every run also
+// writes a generation-history log whose outputs list the image URLs it created,
+// so we match the previewed image back to its originating log entry.
+function generationLogForImage(node, image){
+    if(!node || !image) return null;
+    const url = String(image?.url || '');
+    if(!url || !canvas?.logs) return null;
+    for(let i = 0; i < canvas.logs.length; i++){
+        const log = canvas.logs[i];
+        if(!log || String(log.nodeId || '') !== node.id) continue;
+        const outputs = Array.isArray(log.outputs) ? log.outputs : [];
+        if(outputs.some(item => String(typeof item === 'string' ? item : (item?.url || item?.path || item?.src || '')) === url)) return log;
+    }
+    return null;
+}
+// Resolve the prompt/settings/input-refs that were actually used to generate the
+// given output image, falling back to the node's last-run state only when the
+// image has no matching generation-history entry (legacy data or uploads).
+function generationRunValuesFor(node, image){
+    const log = generationLogForImage(node, image);
+    const logSettings = (log?.runSettings && typeof log.runSettings === 'object' && Object.keys(log.runSettings).length) ? log.runSettings : null;
+    const logPrompt = String(log?.prompt || '').trim();
+    const logRefs = (Array.isArray(log?.refs) ? log.refs : []).filter(ref => ref?.url);
+    const nodeSettings = (node?.runSettings && typeof node.runSettings === 'object' && Object.keys(node.runSettings).length) ? node.runSettings : null;
+    const nodeRefs = Array.isArray(node?.runInputRefs) ? node.runInputRefs.filter(ref => ref?.url) : [];
+    return {
+        log,
+        prompt: logPrompt || String(node?.runPrompt || node?.promptDraftText || '').trim(),
+        settings: logSettings || nodeSettings,
+        refs: logRefs.length ? logRefs : nodeRefs
+    };
+}
 function updatePreviewGenerationPanel(){
     const panel = document.getElementById('previewGenerationPanel');
     const sourceEl = document.getElementById('previewGenerationSource');
@@ -15208,12 +15248,16 @@ function updatePreviewGenerationPanel(){
     const show = imageEditMode === 'preview' && Boolean(node);
     panel.style.display = show ? 'grid' : 'none';
     if(!show) return;
-    const prompt = String(node.runPrompt || node.promptDraftText || '').trim();
-    sourceEl.textContent = previewGenerationSourceLabel(node);
+    // Show the run parameters that actually produced the previewed image, not
+    // the node's last-run state (which is stale once a node holds images from
+    // more than one generation).
+    const runValues = generationRunValuesFor(node, editing.image);
+    const prompt = runValues.prompt;
+    sourceEl.textContent = previewGenerationSourceLabel(node, runValues.settings);
     sourceEl.title = sourceEl.textContent;
     promptEl.textContent = prompt || tr('smart.previewEmptyPrompt');
     promptEl.classList.toggle('is-empty', !prompt);
-    reproduceBtn.disabled = !node.runSettings || !Object.keys(node.runSettings).length;
+    reproduceBtn.disabled = !runValues.settings || !Object.keys(runValues.settings).length;
     reproduceBtn.title = reproduceBtn.disabled ? tr('smart.previewCannotReproduce') : tr('smart.previewReproduce');
 }
 function previewWorkflowPlacement(width, height){
@@ -15239,14 +15283,18 @@ function previewWorkflowPlacement(width, height){
 function reproducePreviewWorkflow(){
     const editing = currentEditImage();
     const sourceNode = editing.node;
-    if(!sourceNode?.runSettings || !Object.keys(sourceNode.runSettings).length){
+    // Reproduce the run that actually produced the previewed image (matched via
+    // its generation-history entry), not the last run recorded on the node.
+    const runValues = generationRunValuesFor(sourceNode, editing.image);
+    if(!runValues.settings || !Object.keys(runValues.settings).length){
         toast(tr('smart.previewCannotReproduce'));
         return;
     }
-    const refs = (Array.isArray(sourceNode.runInputRefs) ? sourceNode.runInputRefs : [])
+    const refs = runValues.refs
         .filter(ref => ref?.url)
         .filter((ref, index, list) => list.findIndex(item => item.url === ref.url) === index);
-    const prompt = String(sourceNode.runPrompt || sourceNode.promptDraftText || '').trim();
+    const prompt = runValues.prompt;
+    const settings = cloneSmartSettings(runValues.settings);
     const inputCount = Math.max(1, refs.length);
     const workflowHeight = Math.max(260, inputCount * 190);
     const origin = previewWorkflowPlacement(960, workflowHeight);
@@ -15278,12 +15326,12 @@ function reproducePreviewWorkflow(){
         localUnsyncedNodeIds.add(promptNode.id);
         created.push(promptNode);
     }
-    const kind = String(sourceNode.runSettings.apiKind || sourceNode.outputKind || '').toLowerCase() === 'video' ? 'video' : 'image';
+    const kind = String(settings.apiKind || sourceNode.outputKind || '').toLowerCase() === 'video' ? 'video' : 'image';
     const generationNode = {
         id:uid(kind === 'video' ? 'video' : 'generate'),
         type:kind === 'video' ? 'smart-video-generation' : 'smart-image-generation',
         x:Math.round(origin.x + 690), y:Math.round(origin.y), title:kind === 'video' ? '视频生成' : '图片生成',
-        images:[], activeImageIndex:0, runSettings:cloneSmartSettings(sourceNode.runSettings),
+        images:[], activeImageIndex:0, runSettings:settings,
         runPrompt:prompt, promptDraftText:prompt, promptDraftHtml:escapeHtml(prompt),
         inputNodeIds:[...inputNodes.map(node => node.id), ...(promptNode ? [promptNode.id] : [])],
         created_at:Date.now(), scale:MEDIA_NODE_DEFAULT_SCALE
@@ -15371,7 +15419,7 @@ function refreshComparePanel(){
             toggle.title = tr('smart.compareEmpty');
         }
         if(panoramaToggle) panoramaToggle.style.display = 'none';
-        updatePreviewMetaHint(editing.node?.runPrompt ? `${tr('smart.runPromptPrefix')}${editing.node.runPrompt.slice(0, 60)}` : '');
+        updatePreviewMetaHint(editing.node && generationRunValuesFor(editing.node, editing.image).prompt ? `${tr('smart.runPromptPrefix')}${generationRunValuesFor(editing.node, editing.image).prompt.slice(0, 60)}` : '');
         return;
     }
     if(currentVideo){
@@ -15429,7 +15477,7 @@ function refreshComparePanel(){
         if(compareLayer) compareLayer.style.display = 'none';
         if(compareHandle) compareHandle.style.display = 'none';
         thumbsEl.style.display = 'none';
-        updatePreviewMetaHint(editing.node?.runPrompt ? `${tr('smart.runPromptPrefix')}${editing.node.runPrompt.slice(0, 60)}` : '');
+        updatePreviewMetaHint(editing.node && generationRunValuesFor(editing.node, editing.image).prompt ? `${tr('smart.runPromptPrefix')}${generationRunValuesFor(editing.node, editing.image).prompt.slice(0, 60)}` : '');
         return;
     }
     const sliderActive = previewCompareOn && previewCompareIndex >= 0 && previewCompareIndex < sources.length;

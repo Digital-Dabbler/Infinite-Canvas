@@ -5524,7 +5524,8 @@ def finalize_bound_canvas_task(task_id, result=None, error=""):
             "status": "failed" if error else "success", "platform": task.get("provider_id") or "",
             "nodeId": node_id, "nodeType": log_run.get("nodeType") or node.get("type") or "smart-image-generation",
             "model": task.get("model") or "", "request": {"provider_id": task.get("provider_id") or "", "model": task.get("model") or ""},
-            "prompt": log_run.get("prompt") or "", "outputs": outputs,
+            "prompt": log_run.get("prompt") or "", "runSettings": log_run.get("settings") or None,
+            "outputs": outputs,
             "refs": log_run.get("refs") or [], "runMs": max(0, now_ms() - int(pending_task.get("logStartedAt") or now_ms())),
             "error": str(error or ""), "local_task_id": task_id,
         }
@@ -5545,6 +5546,22 @@ async def broadcast_bound_canvas_node(task_id, canvas):
     node = next((item for item in (canvas or {}).get("nodes") or [] if str(item.get("id") or "") == node_id), None)
     if not node_id or not isinstance(node, dict):
         return
+    # A finished server-managed task appends its generation-history row to the
+    # canvas file, but only ``node_fields`` was ever broadcast. Publish the log
+    # row too so a live canvas's 生成日志 panel reflects the completed run without
+    # a full reload. The client de-duplicates by log id, so re-broadcasting an
+    # already-seen row (e.g. after reconcile) is harmless.
+    log_entry = next(
+        (item for item in ((canvas or {}).get("logs") or [])
+         if isinstance(item, dict) and str(item.get("local_task_id") or "") == str(task_id)),
+        None,
+    )
+    if isinstance(log_entry, dict) and log_entry.get("id"):
+        await manager.broadcast_canvas_operation(
+            canvas["id"],
+            {"kind": "log_add", "fields": {"log": log_entry}},
+            int(canvas.get("sync_revision") or canvas.get("updated_at") or 0),
+        )
     # ``node_fields`` normally merges values, so an omitted property cannot
     # clear a stale browser-side value.  Only trusted server task broadcasts
     # carry this deletion list; browser-submitted operation payloads cannot
