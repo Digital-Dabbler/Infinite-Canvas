@@ -5,13 +5,20 @@
   <title>Infinite Canvas · 登录</title>
   <script>
     (function(){
-      try {
-        var theme = localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark';
-        if(theme === 'dark') document.documentElement.classList.add('theme-dark','studio-theme-dark');
-      } catch(e) {}
+      function readTheme(){ try { return localStorage.getItem('studio_theme') || localStorage.getItem('canvas_theme') || 'dark'; } catch(e) { return 'dark'; } }
+      function applyTheme(theme){ var dark = theme === 'dark'; document.documentElement.classList.toggle('theme-dark', dark); document.documentElement.classList.toggle('studio-theme-dark', dark); }
+      applyTheme(readTheme());
+      window.addEventListener('storage', function(e){ if(e.key === 'studio_theme' || e.key === 'canvas_theme') applyTheme(readTheme()); });
+      window.addEventListener('message', function(e){ if(e.data && e.data.type === 'studio-theme') applyTheme(e.data.theme); });
     })();
   </script>
-  <script src="/static/js/theme.js?v=2026.07.29.1787079861"></script>
+  <style>
+    /* Login page is the pre-auth entry point; keep it self-contained so it never depends on
+       auth-gated static assets. Theme tokens are inlined here (light + dark), mirroring
+       static/css/studio-theme-tokens.css. */
+    :root{color-scheme:light;--ui-bg-canvas:#f5f7fa;--ui-grid:rgba(92,107,128,.14);--ui-surface:#ffffff;--ui-surface-raised:rgba(255,255,255,.94);--ui-surface-sunken:#eef2f6;--ui-text:#151a22;--ui-text-muted:#667085;--ui-text-faint:#98a2b3;--ui-text-disabled:#98a2b3;--ui-icon:var(--ui-text-muted);--ui-border:#d8dee8;--ui-border-strong:#b7c1ce;--ui-hover:#e7ecf3;--ui-active:#dce5ef;--ui-selected:rgba(22,138,85,.12);--ui-focus-ring:#168a55;--ui-focus-ring-shadow:rgba(22,138,85,.28);--ui-brand:#19a863;--ui-on-brand:#07110b;--ui-action-primary:#1b2532;--ui-on-action-primary:#ffffff;--ui-success:#047857;--ui-success-subtle:rgba(4,120,87,.12);--ui-warning:#a16207;--ui-warning-subtle:rgba(161,98,7,.12);--ui-danger:#b42318;--ui-danger-subtle:rgba(180,35,24,.12);--ui-data-secondary:#b5479b;--ui-swatch-outline:rgba(15,23,42,.46);--ui-swatch-shadow:rgba(15,23,42,.16);--ui-shadow:rgba(15,23,42,.12);--ui-shadow-floating:0 12px 30px rgba(15,23,42,.16);--ui-overlay-scrim:rgba(15,23,42,.48);--ui-radius-sm:8px;--ui-radius-md:12px;--ui-radius-lg:16px;--ui-z-popover:90;--ui-z-modal:100}
+    html.theme-dark,html.studio-theme-dark,body.theme-dark,body.studio-theme-dark{color-scheme:dark;--ui-bg-canvas:#080b10;--ui-grid:rgba(130,146,169,.14);--ui-surface:#141923;--ui-surface-raised:rgba(20,25,35,.94);--ui-surface-sunken:#1c2330;--ui-text:#f4f7fb;--ui-text-muted:#98a4b7;--ui-text-faint:#667286;--ui-text-disabled:#667286;--ui-icon:var(--ui-text-muted);--ui-border:#2a3444;--ui-border-strong:#3b4658;--ui-hover:#222b39;--ui-active:#2a3647;--ui-selected:rgba(101,243,164,.14);--ui-focus-ring:#65f3a4;--ui-focus-ring-shadow:rgba(101,243,164,.30);--ui-brand:#65f3a4;--ui-on-brand:#07110b;--ui-action-primary:#65f3a4;--ui-on-action-primary:#07110b;--ui-success:#65f3a4;--ui-success-subtle:rgba(101,243,164,.16);--ui-warning:#f6c768;--ui-warning-subtle:rgba(246,199,104,.16);--ui-danger:#ff8e8e;--ui-danger-subtle:rgba(255,142,142,.16);--ui-data-secondary:#f272c8;--ui-swatch-outline:rgba(255,255,255,.74);--ui-swatch-shadow:rgba(0,0,0,.32);--ui-shadow:rgba(0,0,0,.30);--ui-shadow-floating:0 12px 30px rgba(0,0,0,.38);--ui-overlay-scrim:rgba(2,6,23,.62)}
+  </style>
   <style>
     *{box-sizing:border-box}
     body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;background:radial-gradient(circle at 18% 12%,color-mix(in srgb,var(--ui-brand) 7%,transparent),transparent 32%),var(--ui-bg-canvas);color:var(--ui-text);font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif}
@@ -24,7 +31,6 @@
     button{margin-top:4px;width:100%;min-height:44px;padding:11px;border:0;border-radius:10px;background:var(--ui-brand);color:var(--ui-on-brand);font-weight:750;cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}.link{background:transparent;color:var(--ui-text-muted);margin-top:8px}.form-actions{display:flex;justify-content:space-between;gap:8px;margin-top:2px;padding-top:10px;border-top:1px solid var(--ui-border)}.form-actions .link{width:auto;margin:0;padding:6px 0;text-align:left;font-size:13px;font-weight:600}.form-actions .link:last-child{text-align:right}
     #message{display:none;margin-top:14px;color:var(--ui-danger)}#message:not(:empty){display:block;padding:9px 10px;border:1px solid var(--ui-border-strong);border-radius:10px;background:var(--ui-surface-sunken);font-size:12px;font-weight:650}.hint,.reset-note{padding:10px 12px;border:1px solid var(--ui-border);border-radius:10px;background:var(--ui-surface-sunken);font-size:12px;color:var(--ui-text-muted)}.hint{margin-top:14px}.reset-note{margin:0}
   </style>
-  <link rel="stylesheet" href="/static/css/studio-theme-tokens.css?v=2026.07.29.1787081265">
 </head>
 <body><main class="card">
   <h1>Infinite Canvas</h1><p id="subtitle">请登录后使用公司局域网创作服务</p>

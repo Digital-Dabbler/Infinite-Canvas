@@ -2097,9 +2097,8 @@ AUTH_PUBLIC_PATHS = {
     "/api/auth/register", "/api/auth/login", "/api/auth/reset-password",
     "/api/departments",
     "/static/login.html", "/favicon.ico",
-    # 登录页是未登录时的唯一入口，必须能加载自己的主题/静态依赖，
-    # 否则这些变量全部未定义，登录表单会失去样式（输入框/按钮不可见）。
-    "/static/css/studio-theme-tokens.css", "/static/js/theme.js",
+    # 登录页是未登录时的唯一入口，并已做成自包含（内联主题 token 与主题脚本），
+    # 因此不再依赖任何受鉴权保护的静态资源，白名单保持最小。
 }
 PASSWORD_RESET_ATTEMPTS = {}
 PASSWORD_RESET_WINDOW_SECONDS = 15 * 60
