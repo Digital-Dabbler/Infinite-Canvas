@@ -2817,6 +2817,11 @@ async def auth_middleware(request: Request, call_next):
     if event and not getattr(request.state, "usage_async", False):
         finish_usage_event(event, "succeeded" if response.status_code < 400 else "failed", "" if response.status_code < 400 else f"HTTP {response.status_code}")
         response.headers["X-Usage-Event-Id"] = event["id"]
+    # 静态 HTML 由 StaticFiles 直接提供时没有 Cache-Control，浏览器可能按启发式缓存
+    # 续用旧文档（例如面板 iframe），导致改版后仍加载旧 ?v= 资源。强制每次重新校验，
+    # 仍保留 ETag/Last-Modified 条件请求，命中则返回 304 不重复下载。
+    if path.startswith("/static/") and path.endswith(".html") and response is not None:
+        response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
 # --- Pydantic 模型 ---

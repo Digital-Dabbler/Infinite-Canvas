@@ -121,6 +121,16 @@
         return frame;
     }
     function showPanelFrame(name){
+        // API 设置是配置/排障页面，承载最新前后端逻辑；每次打开都强制重建 iframe，
+        // 避免浏览器或 panelFrames 复用旧文档导致看不到新版本。
+        // 素材库与管理台仍复用已有 iframe，保留各自的滚动位置与状态。
+        if(name === 'api-settings'){
+            const cached = panelFrames.get(name);
+            if(cached){
+                cached.remove();
+                panelFrames.delete(name);
+            }
+        }
         const frame = panelFrameFor(name);
         panelFrames.forEach((item, key) => item.classList.toggle('active', key === name));
         activePanelName = name;
