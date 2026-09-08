@@ -9467,20 +9467,37 @@ def jimeng_login_text():
             parts.append(value)
     return "\n".join(parts).strip()
 
+JIMENG_LOGIN_DEVICE_KEYS = ("verification_uri", "verification_uri_complete", "user_code", "device_code", "poll_interval", "expires_at")
+
+def jimeng_login_device_fields(text):
+    """Parse `key: value` device-flow lines from `dreamina login` output.
+
+    v1.4.2+ prints OAuth Device Flow material instead of a QR image. Keep only
+    the fields the CLI actually emits so the front end can render a usable
+    authorization link (no webpage URL is ever mistaken for a QR image).
+    """
+    fields = {}
+    for line in str(text or "").splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = str(key or "").strip()
+        value = str(value or "").strip()
+        if key in JIMENG_LOGIN_DEVICE_KEYS and value and key not in fields:
+            fields[key] = value
+    return fields
+
 def jimeng_login_qr_from_text(text):
+    # 新版 CLI 已不输出二维码图片；此函数仅兼容旧版数据型输出
+    # （data:image / dreamina://），绝不把普通网页地址当成二维码图片返回。
     text = str(text or "")
     candidates = []
-    patterns = [
-        r"(https?://[^\s\"'<>]+)",
-        r"(dreamina://[^\s\"'<>]+)",
-        r"(data:image/[^\s\"'<>]+)",
-    ]
-    for pattern in patterns:
+    for pattern in (r"(dreamina://[^\s\"'<>]+)", r"(data:image/[^\s\"'<>]+)"):
         candidates.extend(re.findall(pattern, text))
     for value in candidates:
-        if "login" in value.lower() or "qr" in value.lower() or value.startswith(("data:image", "dreamina://")):
+        if value.startswith(("data:image", "dreamina://")):
             return value
-    return candidates[0] if candidates else ""
+    return ""
 
 async def jimeng_login_reader(proc):
     async def read_stream(stream, key):
@@ -18887,6 +18904,13 @@ async def jimeng_credit(request: Request):
 
 @app.post("/api/jimeng/logout")
 async def jimeng_logout():
+    old_proc = JIMENG_LOGIN_SESSION.get("proc")
+    if old_proc and getattr(old_proc, "returncode", None) is None:
+        try:
+            old_proc.terminate()
+        except Exception:
+            pass
+        JIMENG_LOGIN_SESSION["proc"] = None
     raw = await run_jimeng_cli(["logout"], timeout=30)
     return {"success": True, "raw": raw}
 
@@ -18901,8 +18925,10 @@ async def jimeng_login_start():
     exe = jimeng_cli_executable()
     if not exe:
         raise HTTPException(status_code=400, detail="未找到 dreamina CLI")
-    JIMENG_LOGIN_SESSION.update({"proc": None, "stdout": "", "stderr": "", "started_at": time.time()})
-    args = ["login", "--headless"]
+    JIMENG_LOGIN_SESSION.update({"proc": None, "stdout": "", "stderr": "", "started_at": time.time(), "flow": "device"})
+    # v1.4.2+ 默认 `login`：打印 OAuth Device Flow 材料后由 CLI 自身驻留轮询
+    # checklogin，浏览器授权完成即写回本地登录态并退出，因此无需自行拼 checklogin。
+    args = ["login"]
     command = jimeng_command(args, exe)
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -18918,8 +18944,8 @@ async def jimeng_login_start():
     await asyncio.sleep(2)
     text = jimeng_login_text()
     if proc.returncode not in (None, 0) and ("unknown" in text.lower() or "no such option" in text.lower()):
-        # 旧版 CLI 可能没有 --headless，退回 debug 输出。
-        JIMENG_LOGIN_SESSION.update({"proc": None, "stdout": "", "stderr": "", "started_at": time.time()})
+        # 旧版 CLI 不支持设备流等待，退回 debug 输出（可能含 data:image 二维码）。
+        JIMENG_LOGIN_SESSION.update({"proc": None, "stdout": "", "stderr": "", "started_at": time.time(), "flow": "legacy"})
         proc = await asyncio.create_subprocess_exec(
             *jimeng_command(["login", "--debug"], exe),
             cwd=BASE_DIR,
@@ -18930,11 +18956,30 @@ async def jimeng_login_start():
         asyncio.create_task(jimeng_login_reader(proc))
         await asyncio.sleep(2)
         text = jimeng_login_text()
+    device = jimeng_login_device_fields(text)
+    running = proc is not None and getattr(proc, "returncode", None) is None
+    logged_in = False
+    credit_raw = None
+    if not running:
+        # CLI 已退出：可能是本机已有有效登录态（login 直接复用后退出），
+        # 用 user_credit 确认，避免前端再等一轮轮询。
+        try:
+            credit_raw = await run_jimeng_cli(["user_credit"], timeout=20)
+            logged_in = True
+            JIMENG_LOGIN_SESSION["flow"] = ""
+            JIMENG_LOGIN_SESSION["proc"] = None
+        except HTTPException:
+            logged_in = False
     return {
         "success": True,
-        "running": JIMENG_LOGIN_SESSION.get("proc") is not None and JIMENG_LOGIN_SESSION["proc"].returncode is None,
+        "running": running,
+        "waiting": running or bool(device.get("device_code")),
+        "logged_in": logged_in,
         "text": text,
         "qr_url": jimeng_login_qr_from_text(text),
+        "device": device,
+        "raw": credit_raw,
+        "message": "",
         "started_at": JIMENG_LOGIN_SESSION.get("started_at") or 0,
     }
 
@@ -18946,19 +18991,43 @@ async def jimeng_login_status(request: Request):
     running = proc is not None and getattr(proc, "returncode", None) is None
     logged_in = False
     credit_raw = None
-    if not running:
-        try:
-            credit_raw = await run_jimeng_cli(["user_credit"], timeout=20)
-            logged_in = True
-        except HTTPException:
-            logged_in = False
+    message = ""
+    if running:
+        # CLI 仍驻留等待授权（device flow 由 CLI 自身 checklogin 完成）。
+        device = jimeng_login_device_fields(text)
+        return {
+            "success": True,
+            "running": True,
+            "waiting": True,
+            "logged_in": False,
+            "text": text,
+            "qr_url": jimeng_login_qr_from_text(text),
+            "device": device,
+            "raw": None,
+            "message": "",
+        }
+    try:
+        credit_raw = await run_jimeng_cli(["user_credit"], timeout=20)
+        logged_in = True
+    except HTTPException as exc:
+        logged_in = False
+        message = str(getattr(exc, "detail", "") or "")
+    # 设备流已退出：保留最后一段文本作为失败原因（如“登录已过期”）。
+    if not logged_in and JIMENG_LOGIN_SESSION.get("flow") in ("device", "legacy"):
+        tail = str(text or "").strip()
+        if tail and ("过期" in tail or "登录" in tail or "失败" in tail or "error" in tail.lower()):
+            message = tail.splitlines()[-1].strip() or message
+        JIMENG_LOGIN_SESSION["flow"] = ""
     return {
         "success": True,
         "running": running,
+        "waiting": False,
         "logged_in": logged_in,
         "text": text,
         "qr_url": jimeng_login_qr_from_text(text),
+        "device": jimeng_login_device_fields(text),
         "raw": credit_raw,
+        "message": message,
     }
 
 @app.post("/api/jimeng/help")

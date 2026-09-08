@@ -207,6 +207,17 @@
         "api.tagLlmModels": { zh: "LLM模型", en: "LLM Models" },
         "api.tagSeedance": { zh: "Seedance", en: "Seedance" },
         "api.tagAliyunBinding": { zh: "需绑定阿里云", en: "Requires Aliyun binding" },
-        "api.tagGptImage2": { zh: "GPT image 2模型", en: "GPT image 2 Models" }
+        "api.tagGptImage2": { zh: "GPT image 2模型", en: "GPT image 2 Models" },
+        "api.jimengLoginBtn": { zh: "登录", en: "Sign In" },
+        "api.jimengLoggedIn": { zh: "已登录", en: "Signed In" },
+        "api.jimengNotLoggedIn": { zh: "未登录", en: "Not Signed In" },
+        "api.jimengWaiting": { zh: "等待授权…", en: "Waiting for authorization…" },
+        "api.jimengStartFailed": { zh: "启动登录失败", en: "Failed to start sign-in" },
+        "api.jimengAuthFailed": { zh: "授权未完成", en: "Authorization incomplete" },
+        "api.jimengPollFailed": { zh: "登录检测失败", en: "Failed to check sign-in status" },
+        "api.jimengOpenAuth": { zh: "打开授权页面", en: "Open Authorization Page" },
+        "api.jimengUserCode": { zh: "授权码", en: "User Code" },
+        "api.jimengAuthStep": { zh: "授权页会在新标签页打开。完成浏览器授权后，本页面将自动检测并完成登录。", en: "The authorization page opens in a new tab. After you approve in the browser, this page automatically detects and completes the sign-in." },
+        "api.jimengQrAlt": { zh: "即梦登录二维码", en: "Jimeng sign-in QR code" }
     });
 })();

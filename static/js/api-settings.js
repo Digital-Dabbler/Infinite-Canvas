@@ -2743,15 +2743,34 @@ function setJimengStatus(text, ok=null){
     jimengCliStatus.classList.toggle('ok', ok === true);
     jimengCliStatus.classList.toggle('bad', ok === false);
 }
+function jimengAuthLinkValue(data){
+    // 新版 CLI（v1.4.2+）为 OAuth Device Flow：prefer 完整授权链接，其次用户码引导页。
+    const device = data?.device || {};
+    return device.verification_uri_complete || device.verification_uri || '';
+}
 function renderJimengLoginBox(data){
     if(!jimengLoginBox) return;
     const text = data?.text || '';
     const qrUrl = data?.qr_url || '';
-    const qrHtml = qrUrl && qrUrl.startsWith('http')
-        ? `<img class="jimeng-qr-img" src="${escapeHtml(qrUrl)}" alt="即梦登录二维码">`
-        : '';
+    const authUrl = jimengAuthLinkValue(data);
+    const userCode = String(data?.device?.user_code || '').trim();
+    let body = '';
+    if(authUrl){
+        const openLabel = tr('api.jimengOpenAuth') || '打开授权页面';
+        const hint = tr('api.jimengAuthStep') || '在浏览器中打开授权页面并确认，页面会自动检测登录结果。';
+        body = `
+            <div class="jimeng-auth-card">
+                <a class="action-btn primary-btn jimeng-auth-open" href="${escapeAttr(authUrl)}" target="_blank" rel="noopener noreferrer"><i data-lucide="external-link" class="w-3.5 h-3.5"></i><span>${escapeHtml(openLabel)}</span></a>
+                ${userCode ? `<div class="jimeng-auth-code"><span>${escapeHtml(tr('api.jimengUserCode') || '授权码')}</span><code>${escapeHtml(userCode)}</code></div>` : ''}
+                <div class="jimeng-auth-hint">${escapeHtml(hint)}</div>
+            </div>`;
+    } else if(qrUrl && (qrUrl.startsWith('data:image') || qrUrl.startsWith('dreamina://') || /\.(png|jpe?g|webp|gif)(\?|$)/i.test(qrUrl))){
+        body = `<img class="jimeng-qr-img" src="${escapeHtml(qrUrl)}" alt="${escapeHtml(tr('api.jimengQrAlt') || '即梦登录二维码')}">`;
+    }
+    const hasText = text && !authUrl;
     jimengLoginBox.hidden = false;
-    jimengLoginBox.innerHTML = `${qrHtml}<pre>${escapeHtml(text || '等待 CLI 输出登录二维码...')}</pre>`;
+    jimengLoginBox.innerHTML = `${body}${hasText ? `<pre>${escapeHtml(text || '')}</pre>` : ''}`;
+    refreshIcons();
 }
 let jimengLoginTimer = null;
 async function refreshJimengStatus(showCredit=true){
@@ -2771,20 +2790,43 @@ async function refreshJimengStatus(showCredit=true){
     }
 }
 async function startJimengLogin(){
-    setJimengStatus('等待扫码...');
+    setJimengStatus(tr('api.jimengWaiting') || '等待授权…');
     if(jimengCredit) jimengCredit.textContent = '';
+    // 尽量同步弹开新窗口：授权页是浏览器页面，不是二维码图片。
+    let popup = null;
+    try { popup = window.open('', '_blank'); } catch(e) {}
     try {
         const data = await fetch('/api/jimeng/login/start', {method:'POST'}).then(async r => {
             const json = await r.json();
-            if(!r.ok) throw new Error(json.detail || '启动登录失败');
+            if(!r.ok) throw new Error(json.detail || (tr('api.jimengStartFailed') || '启动登录失败'));
             return json;
         });
         renderJimengLoginBox(data);
+        if(data.logged_in){
+            try { if(popup) popup.close(); } catch(_) {}
+            clearInterval(jimengLoginTimer);
+            setJimengStatus(tr('api.jimengLoggedIn') || '已登录', true);
+            if(jimengCredit) jimengCredit.textContent = jimengCreditText(data.raw);
+            return;
+        }
+        const authUrl = jimengAuthLinkValue(data);
+        if(authUrl){
+            if(popup && popup.location){ popup.location.href = authUrl; }
+            else { window.open(authUrl, '_blank', 'noopener'); }
+        } else {
+            try { if(popup) popup.close(); } catch(_) {}
+        }
         clearInterval(jimengLoginTimer);
         jimengLoginTimer = setInterval(pollJimengLogin, 2500);
-        refreshIcons();
+        if(!data.waiting && !data.running && (data.message || (!authUrl && !data.qr_url))){
+            setJimengStatus(tr('api.jimengNotLoggedIn') || '未登录', false);
+            if(jimengLoginBox && data.message){
+                jimengLoginBox.innerHTML = `<pre>${escapeHtml(data.message)}</pre>`;
+            }
+        }
     } catch(e){
-        setJimengStatus('登录失败', false);
+        try { if(popup) popup.close(); } catch(_) {}
+        setJimengStatus(tr('api.jimengStartFailed') || '登录失败', false);
         if(jimengLoginBox){
             jimengLoginBox.hidden = false;
             jimengLoginBox.innerHTML = `<pre>${escapeHtml(e.message || String(e))}</pre>`;
@@ -2797,16 +2839,21 @@ async function pollJimengLogin(){
         renderJimengLoginBox(data);
         if(data.logged_in){
             clearInterval(jimengLoginTimer);
-            setJimengStatus('已登录', true);
+            setJimengStatus(tr('api.jimengLoggedIn') || '已登录', true);
             if(jimengCredit) jimengCredit.textContent = jimengCreditText(data.raw);
-        } else if(data.running){
-            setJimengStatus('等待扫码...');
+        } else if(data.waiting || data.running){
+            setJimengStatus(tr('api.jimengWaiting') || '等待授权…');
         } else {
-            setJimengStatus('未登录', false);
+            // 设备流已结束但未登录：停止轮询并给出原因（如授权过期）。
+            clearInterval(jimengLoginTimer);
+            setJimengStatus(data.message ? (tr('api.jimengAuthFailed') || '授权未完成') : (tr('api.jimengNotLoggedIn') || '未登录'), false);
+            if(jimengLoginBox && data.message){
+                jimengLoginBox.innerHTML = `<pre>${escapeHtml(data.message)}</pre>`;
+            }
         }
     } catch(e){
         clearInterval(jimengLoginTimer);
-        setJimengStatus('登录检测失败', false);
+        setJimengStatus(tr('api.jimengPollFailed') || '登录检测失败', false);
     }
 }
 async function refreshJimengCredit(){
