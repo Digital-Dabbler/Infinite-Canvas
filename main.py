@@ -2820,7 +2820,11 @@ async def auth_middleware(request: Request, call_next):
     # 静态 HTML 由 StaticFiles 直接提供时没有 Cache-Control，浏览器可能按启发式缓存
     # 续用旧文档（例如面板 iframe），导致改版后仍加载旧 ?v= 资源。强制每次重新校验，
     # 仍保留 ETag/Last-Modified 条件请求，命中则返回 304 不重复下载。
-    if path.startswith("/static/") and path.endswith(".html") and response is not None:
+    # i18n 词条同理：其 URL 版本由 i18n.js 用页面/加载器版本拼成，词条文件自身更新
+    # 不会改变 ?v=，若无 no-cache 会被浏览器当作可启发式缓存的资源继续用旧词条。
+    is_html = path.startswith("/static/") and path.endswith(".html")
+    is_i18n_dict = path.startswith("/static/js/i18n/") and path.endswith(".js")
+    if (is_html or is_i18n_dict) and response is not None:
         response.headers.setdefault("Cache-Control", "no-cache")
     return response
 
