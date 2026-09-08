@@ -306,7 +306,10 @@ let existingMaskLoadPromise = null;
 let editTextItems = [];
 let editTextSelectedId = '';
 let editTextDrag = null;
+let editTextResize = null;
 let editTextDirty = false;
+// 点 × 删除文字后短暂抑制「下一次点击即新建文字」：避免删除时误触发的第二次点击（双击）在原位置凭空生成一条新文字。
+let editTextSuppressCreateAt = 0;
 let editTextInlineEditor = null;
 let editDrawUndoStack = [];
 let editDrawRedoStack = [];
@@ -14288,6 +14291,140 @@ function measureEditTextItem(item, ctx=editTextContext()){
     const pad = Math.max(4, Math.round(size * 0.18));
     return {x:item.x - width / 2 - pad, y:item.y - (ascent + descent) / 2 - pad, w:width + pad * 2, h:ascent + descent + pad * 2, textW:width, textH:ascent + descent, pad};
 }
+// 批注文字可缩放/删除：字号区间与画布上出现的选中控制（缩放手柄、删除 ×）共用一套几何与命中逻辑。
+// 控制点画在「文本像素画布」上只是编辑提示，导出成图时由 paintEditTextItemsTo() 只画文字本体、不画控制点。
+function editTextSizeClamp(value){
+    return Math.max(10, Math.min(120, Math.round(Number(value) || 10)));
+}
+function editTextCornersOf(box){
+    return {
+        nw:{x:box.x, y:box.y},
+        ne:{x:box.x + box.w, y:box.y},
+        sw:{x:box.x, y:box.y + box.h},
+        se:{x:box.x + box.w, y:box.y + box.h}
+    };
+}
+function editTextOppositeCorner(corner){
+    return ({nw:'se', ne:'sw', sw:'ne', se:'nw'})[corner] || 'nw';
+}
+function editTextUiScale(){
+    const canvasEl = editTextCanvas();
+    const rect = canvasEl?.getBoundingClientRect?.();
+    const sx = canvasEl && rect?.width ? canvasEl.width / Math.max(1, rect.width) : 1;
+    const sy = canvasEl && rect?.height ? canvasEl.height / Math.max(1, rect.height) : 1;
+    return {x:sx, y:sy, k:(sx + sy) / 2 || 1, rect:rect || null};
+}
+function editTextSelectionGeometry(item){
+    const ctx = editTextContext();
+    if(!item || !ctx) return null;
+    const box = measureEditTextItem(item, ctx);
+    const k = editTextUiScale().k;
+    const hr = Math.max(4, Math.round(7.5 * k));
+    const hit = Math.max(8, Math.round(11 * k));
+    const offset = Math.max(hr + 6, Math.round(17 * k));
+    // 删除 × 默认悬在选中框右上角外；贴图边缘放不下时往内/往下收，尽量保证可点。
+    const canvasEl = editTextCanvas();
+    const maxX = (canvasEl?.width || Number.MAX_SAFE_INTEGER) - hr;
+    const maxY = (canvasEl?.height || Number.MAX_SAFE_INTEGER) - hr;
+    let badgeX = box.x + box.w;
+    let badgeY = box.y - offset;
+    if(badgeY - hr < 0) badgeY = box.y + box.h + offset;
+    badgeX = Math.max(hr, Math.min(badgeX, maxX));
+    badgeY = Math.max(hr, Math.min(badgeY, maxY));
+    return {
+        box,
+        corners:editTextCornersOf(box),
+        hr,
+        hit,
+        k,
+        badge:{x:badgeX, y:badgeY}
+    };
+}
+function editTextControlHit(point){
+    const item = selectedEditTextItem();
+    const geom = item ? editTextSelectionGeometry(item) : null;
+    if(!geom || !point) return null;
+    for(const key of ['nw', 'ne', 'sw', 'se']){
+        const c = geom.corners[key];
+        if(Math.hypot(point.x - c.x, point.y - c.y) <= geom.hit) return {type:'resize', corner:key};
+    }
+    const b = geom.badge;
+    if(Math.hypot(point.x - b.x, point.y - b.y) <= geom.hit) return {type:'delete'};
+    return null;
+}
+function deleteSelectedEditTextItem(){
+    const item = selectedEditTextItem();
+    if(!item) return false;
+    removeEditTextInlineEditor(true);
+    if(editTextInlineEditor) return false;
+    beginTextEditChange();
+    editTextItems = editTextItems.filter(x => x.id !== item.id);
+    editTextSelectedId = '';
+    editTextDrag = null;
+    editTextResize = null;
+    editTextDirty = false;
+    editTextSuppressCreateAt = Date.now() + 450;
+    renderEditTextCanvas();
+    syncTextToolState(true);
+    return true;
+}
+function beginEditTextResize(event, canvasEl, corner){
+    const item = selectedEditTextItem();
+    const geom = item ? editTextSelectionGeometry(item) : null;
+    if(!item || !geom || !canvasEl) return;
+    const grab = geom.corners[corner];
+    const anchor = geom.corners[editTextOppositeCorner(corner)];
+    const dx = grab.x - anchor.x;
+    const dy = grab.y - anchor.y;
+    editTextSelectedId = item.id;
+    editTextResize = {
+        id:item.id,
+        corner,
+        anchorX:anchor.x,
+        anchorY:anchor.y,
+        diagX:dx,
+        diagY:dy,
+        diagLen2:dx * dx + dy * dy,
+        startSize:Number(item.size) || 28,
+        sx:event.clientX,
+        sy:event.clientY,
+        pointerId:event.pointerId,
+        moved:false,
+        hasHistory:false
+    };
+    canvasEl.setPointerCapture?.(event.pointerId);
+    canvasEl.style.cursor = 'nwse-resize';
+    renderEditTextCanvas();
+    syncTextToolState(true);
+}
+function moveEditTextResize(event){
+    const resize = editTextResize;
+    if(!resize) return;
+    event.preventDefault(); event.stopPropagation();
+    const item = editTextItems.find(x => x.id === resize.id);
+    if(!item) return;
+    const dx = event.clientX - resize.sx;
+    const dy = event.clientY - resize.sy;
+    if(!resize.moved && Math.abs(dx) + Math.abs(dy) < 2) return;
+    resize.moved = true;
+    if(!resize.hasHistory){
+        beginTextEditChange();
+        resize.hasHistory = true;
+    }
+    const p = editTextPoint(event);
+    // 沿被抓角点到对角（固定锚点）的方向投影：文字围绕锚点等比缩放。
+    const denom = resize.diagLen2 || 1;
+    const vx = p.x - resize.anchorX;
+    const vy = p.y - resize.anchorY;
+    let factor = (vx * resize.diagX + vy * resize.diagY) / denom;
+    factor = Math.max(0.15, factor);
+    const nextSize = editTextSizeClamp(resize.startSize * factor);
+    const scaled = nextSize / Math.max(1, resize.startSize);
+    item.size = nextSize;
+    item.x = resize.anchorX + resize.diagX * scaled / 2;
+    item.y = resize.anchorY + resize.diagY * scaled / 2;
+    renderEditTextCanvas();
+}
 function hitEditTextItem(point){
     const ctx = editTextContext();
     if(!ctx) return null;
@@ -14322,10 +14459,34 @@ function renderEditTextCanvas(){
             ctx.strokeStyle = 'rgba(15,23,42,.72)';
             ctx.strokeRect(box.x, box.y, box.w, box.h);
             ctx.setLineDash([]);
-            ctx.fillStyle = 'rgba(15,23,42,.92)';
-            ctx.beginPath();
-            ctx.arc(item.x + box.w / 2 - box.pad, item.y - box.h / 2 + box.pad, 3.5, 0, Math.PI * 2);
-            ctx.fill();
+            // 选中控制：四角缩放手柄 + 上方删除 ×（仅编辑提示，导出成图时不会带上）。
+            const sel = editTextSelectionGeometry(item);
+            if(sel){
+                ctx.fillStyle = '#ffffff';
+                ctx.strokeStyle = 'rgba(15,23,42,.9)';
+                ctx.lineWidth = Math.max(1.2, 1.4 * sel.k);
+                ['nw', 'ne', 'sw', 'se'].forEach(key => {
+                    const c = sel.corners[key];
+                    ctx.beginPath();
+                    ctx.arc(c.x, c.y, sel.hr, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.stroke();
+                });
+                const b = sel.badge;
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, sel.hr, 0, Math.PI * 2);
+                ctx.fillStyle = '#ef4444';
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(255,255,255,.95)';
+                ctx.lineWidth = Math.max(1.6, 2 * sel.k);
+                const inset = Math.max(2, sel.hr * 0.42);
+                ctx.beginPath();
+                ctx.moveTo(b.x - inset, b.y - inset);
+                ctx.lineTo(b.x + inset, b.y + inset);
+                ctx.moveTo(b.x + inset, b.y - inset);
+                ctx.lineTo(b.x - inset, b.y + inset);
+                ctx.stroke();
+            }
         }
         ctx.restore();
     });
@@ -14333,7 +14494,10 @@ function renderEditTextCanvas(){
 }
 function syncTextToolState(force=false){
     const cropCanvasEl = document.getElementById('cropCanvas');
-    cropCanvasEl?.classList.toggle('text-mode', imageEditMode === 'brush' && brushTool === 'text');
+    const textTool = imageEditMode === 'brush' && brushTool === 'text';
+    cropCanvasEl?.classList.toggle('text-mode', textTool);
+    const hint = document.getElementById('annotateTextToolHint');
+    if(hint) hint.style.display = textTool ? '' : 'none';
 }
 function syncSelectedEditTextStyleFromBrush(){
     if(imageEditMode !== 'brush' || brushTool !== 'text' || editTextInlineEditor) return;
@@ -14358,12 +14522,30 @@ function setSelectedEditTextItem(id){
     renderEditTextCanvas();
     syncTextToolState(true);
 }
+// 把批注文字画到给定 2D 上下文（导出成图用）：只画文字本体，绝不包含选中虚线框/手柄/删除 × 等编辑提示。
+function paintEditTextItemsTo(ctx){
+    if(!ctx) return;
+    editTextItems.forEach(item => {
+        if(!item?.text) return;
+        ctx.save();
+        ctx.font = textItemFont(item);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = item.color || brushColor();
+        ctx.strokeStyle = 'rgba(255,255,255,.92)';
+        ctx.lineWidth = Math.max(2, (Number(item.size) || 28) / 8);
+        ctx.strokeText(String(item.text || ''), item.x, item.y);
+        ctx.fillText(String(item.text || ''), item.x, item.y);
+        ctx.restore();
+    });
+}
 function confirmSelectedEditTextItem(){
     const selected = selectedEditTextItem();
     if(!selected) return false;
     if(!String(selected.text || '').trim()) editTextItems = editTextItems.filter(item => item.id !== selected.id);
     editTextSelectedId = '';
     editTextDrag = null;
+    editTextResize = null;
     editTextDirty = false;
     renderEditTextCanvas();
     syncTextToolState(true);
@@ -14473,6 +14655,18 @@ function beginEditText(event){
     removeEditTextInlineEditor(true);
     const canvasEl = editTextCanvas();
     const point = editTextPoint(event);
+    // 选中文字的删除 × 与四角缩放手柄优先于「移动/新建」处理。
+    const control = editTextControlHit(point);
+    if(control){
+        if(control.type === 'delete'){
+            deleteSelectedEditTextItem();
+            return;
+        }
+        if(control.type === 'resize'){
+            beginEditTextResize(event, canvasEl, control.corner);
+            return;
+        }
+    }
     const hit = hitEditTextItem(point);
     if(hit){
         editTextSelectedId = hit.id;
@@ -14487,6 +14681,10 @@ function beginEditText(event){
         confirmSelectedEditTextItem();
         return;
     }
+    if(Date.now() < editTextSuppressCreateAt){
+        editTextSuppressCreateAt = 0;
+        return;
+    }
     beginTextEditChange();
     const item = createEditTextItem(defaultEditTextText(), point, {color:brushColor(), size:editTextSizeFromBrush()});
     editTextItems.push(item);
@@ -14498,10 +14696,23 @@ function beginEditText(event){
 function updateEditTextCursor(event){
     const canvasEl = editTextCanvas();
     if(!canvasEl || imageEditMode !== 'brush' || brushTool !== 'text') return;
-    const hit = hitEditTextItem(editTextPoint(event));
-    canvasEl.style.cursor = hit ? 'move' : 'text';
+    if(editTextDrag || editTextResize){
+        canvasEl.style.cursor = editTextDrag ? 'grabbing' : 'nwse-resize';
+        return;
+    }
+    const point = editTextPoint(event);
+    const control = editTextControlHit(point);
+    if(control){
+        canvasEl.style.cursor = control.type === 'delete' ? 'pointer' : 'nwse-resize';
+        return;
+    }
+    canvasEl.style.cursor = hitEditTextItem(point) ? 'move' : 'text';
 }
 function moveEditText(event){
+    if(editTextResize){
+        moveEditTextResize(event);
+        return;
+    }
     if(!editTextDrag){
         updateEditTextCursor(event);
         return;
@@ -14526,8 +14737,11 @@ function moveEditText(event){
     renderEditTextCanvas();
 }
 function endEditText(event){
-    if(editTextDrag && event?.pointerId != null) editTextCanvas()?.releasePointerCapture?.(event.pointerId);
+    const canvasEl = editTextCanvas();
+    const pid = event?.pointerId;
+    if(pid != null && (editTextDrag || editTextResize)) canvasEl?.releasePointerCapture?.(pid);
     editTextDrag = null;
+    editTextResize = null;
     editTextDirty = false;
     renderEditTextCanvas();
     syncTextToolState(true);
@@ -16105,6 +16319,7 @@ function clearEditDrawing(silent=false){
     editTextItems = [];
     editTextSelectedId = '';
     editTextDrag = null;
+    editTextResize = null;
     editTextDirty = false;
     brushLabelCounter = 1;
     syncTextToolState(true);
@@ -16118,6 +16333,7 @@ function resetEditDrawingHistory(){
     editTextItems = [];
     editTextSelectedId = '';
     editTextDrag = null;
+    editTextResize = null;
     editTextDirty = false;
     renderEditTextCanvas();
     syncTextToolState(true);
@@ -17391,7 +17607,7 @@ function openImageEditor(nodeId, imageIndex=0){
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     localEditKind = 'mask'; localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null; imageEditEraseMode = false;
     cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
-    editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextDirty = false;
+    editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextResize = null; editTextDirty = false;
     const toggle = document.getElementById('gridCustomToggle');
     if(toggle){ toggle.classList.add('secondary'); toggle.classList.remove('primary'); }
     syncGridCustomControls();
@@ -17880,7 +18096,7 @@ async function applyImageBrush(){
     const canvasEl = document.createElement('canvas');
     canvasEl.width = img.naturalWidth; canvasEl.height = img.naturalHeight;
     const ctx = canvasEl.getContext('2d');
-    ctx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height); ctx.drawImage(editDrawCanvas(), 0, 0); ctx.drawImage(editTextCanvas(), 0, 0);
+    ctx.drawImage(img, 0, 0, canvasEl.width, canvasEl.height); ctx.drawImage(editDrawCanvas(), 0, 0); paintEditTextItemsTo(ctx);
     const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_paint.png`) : null;
@@ -23728,6 +23944,18 @@ window.addEventListener('keydown', e => {
             return;
         }
     }
+    // 图片编辑器打开时，Delete/Backspace 只作用于编辑器内：优先删除选中的批注文字；
+    // 编辑器内一律不触发底层画布节点的删除（否则会误删正在编辑的图片所在节点）。
+    if(imageEditModal.classList.contains('open') && (e.key === 'Delete' || e.key === 'Backspace') && !isEditableTarget(e.target)){
+        if(imageEditMode === 'brush' && deleteSelectedEditTextItem()){
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+    }
     if(!e.ctrlKey && !e.metaKey && !e.altKey && !isEditableTarget(e.target)){
         if(key === 'z'){
             if(e.repeat) return;
@@ -24456,7 +24684,10 @@ document.getElementById('editTextCanvas')?.addEventListener('pointerleave', endE
 document.getElementById('editTextCanvas')?.addEventListener('dblclick', event => {
     if(imageEditMode !== 'brush' || brushTool !== 'text') return;
     event.preventDefault(); event.stopPropagation();
-    const hit = hitEditTextItem(editTextPoint(event));
+    const point = editTextPoint(event);
+    // 双击缩放手柄/删除 × 是拖拽或删除操作，不应打开文字编辑。
+    if(editTextControlHit(point)) return;
+    const hit = hitEditTextItem(point);
     if(hit){
         setSelectedEditTextItem(hit.id);
         beginEditTextInline(hit);
