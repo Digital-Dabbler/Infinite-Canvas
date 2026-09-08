@@ -2807,6 +2807,7 @@ async function startJimengLogin(){
             clearInterval(jimengLoginTimer);
             setJimengStatus(tr('api.jimengLoggedIn') || '已登录', true);
             if(jimengCredit) jimengCredit.textContent = jimengCreditText(data.raw);
+            if(jimengLoginBox) jimengLoginBox.hidden = true;
             return;
         }
         const authUrl = jimengAuthLinkValue(data);
@@ -2841,6 +2842,7 @@ async function pollJimengLogin(){
             clearInterval(jimengLoginTimer);
             setJimengStatus(tr('api.jimengLoggedIn') || '已登录', true);
             if(jimengCredit) jimengCredit.textContent = jimengCreditText(data.raw);
+            if(jimengLoginBox) jimengLoginBox.hidden = true;
         } else if(data.waiting || data.running){
             setJimengStatus(tr('api.jimengWaiting') || '等待授权…');
         } else {
