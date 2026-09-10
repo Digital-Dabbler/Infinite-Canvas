@@ -117,7 +117,7 @@
   },
   "102": {
     "inputs": {
-      "lora_name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+      "lora_name": "Qwen-Image-Lightning\\Qwen-Image-2512-Lightning-4steps-V1.0-bf16.safetensors",
       "strength_model": 1,
       "model": [
         "109",
@@ -215,7 +215,7 @@
   },
   "109": {
     "inputs": {
-      "lora_name": "qwen-image-edit-2511-multiple-angles-lora.safetensors",
+      "lora_name": "Qwen-Image-Edit\\2511\\qwen-image-edit-2511-multiple-angles-lora.safetensors",
       "strength_model": 1,
       "model": [
         "108",
