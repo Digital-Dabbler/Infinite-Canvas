@@ -20,6 +20,9 @@ history.json
 .agents/
 skills-lock.json
 
+# 本地视觉工具产物（截图、裁剪、对比图），只服务本机排查，不进入版本库
+.dsh-vision-router/
+
 # Packages installed into the bundled Python runtime on this machine
 python/Lib/
 python/Scripts/
