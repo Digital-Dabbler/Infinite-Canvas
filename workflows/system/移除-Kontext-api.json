@@ -239,7 +239,7 @@
   },
   "261": {
     "inputs": {
-      "lora_name": "Flux.1 Kontext\\aihei_kontext_万物消除_v1.safetensors",
+      "lora_name": "Flux_Kontext\\aihei_kontext_万物消除_v1.safetensors",
       "strength_model": 1,
       "model": [
         "248",
