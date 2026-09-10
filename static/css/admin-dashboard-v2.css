@@ -62,9 +62,67 @@
 .usage-error pre{margin:0;color:var(--ui-danger);font:500 11px/1.6 DXMono,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
 .usage-error button{position:absolute;right:8px;top:8px;min-height:32px;padding:5px 8px}
 .detail-empty{padding:18px;border:1px dashed var(--line);color:var(--muted);text-align:center}
+.usage-scope-bar{
+  position:relative;display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap;
+  margin:0 0 22px;padding:14px 16px;border:1px solid var(--line);border-left:3px solid var(--purple);
+  background:var(--ui-surface-raised);backdrop-filter:blur(18px);box-shadow:0 12px 34px var(--ui-shadow);
+}
+.scope-field{display:grid;gap:6px}
+.scope-label{color:var(--muted);font:600 10px/1 DXMono,monospace;letter-spacing:.1em;text-transform:uppercase}
+.scope-presets{display:flex;border:1px solid var(--line);overflow:hidden}
+.scope-presets button{
+  min-height:38px;padding:6px 13px;border:0;border-left:1px solid var(--line);
+  background:transparent;color:var(--muted);font:650 11px/1 DXMono,monospace;white-space:nowrap;
+}
+.scope-presets button:first-child{border-left:0}
+.scope-presets button:hover{color:var(--text)}
+.scope-presets button.active{background:var(--purple);color:var(--ui-on-action-primary)}
+.scope-presets .scope-custom{min-width:118px;color:var(--text)}
+.scope-presets .scope-custom.active{background:rgba(168,121,255,.15);box-shadow:inset 0 0 0 1px var(--purple)}
+.usage-scope-bar select{min-width:132px;color:var(--text)}
+.scope-toggle,.scope-plain{
+  min-height:38px;padding:6px 14px;border:1px solid var(--line);background:transparent;
+  color:var(--muted);font:650 11px/1 DXMono,monospace;
+}
+.scope-toggle:hover,.scope-plain:hover{color:var(--text);border-color:var(--line-strong)}
+.scope-toggle[aria-pressed="true"]{border-color:var(--purple);background:rgba(168,121,255,.15);color:var(--text)}
+.scope-echo{
+  flex:1 0 100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:2px;
+  padding-top:10px;border-top:1px dashed var(--line);color:var(--muted);font:500 11px/1.6 DXMono,monospace;
+}
+.scope-echo b{color:var(--text);font-weight:650}
+.scope-echo small{margin-left:auto;color:var(--faint)}
+.scope-back{min-height:30px;padding:4px 10px;border:1px solid var(--purple);background:transparent;color:var(--text);font:600 10px/1 DXMono,monospace}
+.scope-popover{
+  position:absolute;z-index:var(--ui-z-popover);top:calc(100% - 6px);left:16px;width:min(430px,calc(100% - 32px));
+  padding:16px;border:1px solid var(--purple);background:var(--ui-surface);box-shadow:var(--ui-shadow-floating);
+}
+.scope-popover[hidden]{display:none}
+.scope-popover h4{margin:0 0 12px;color:var(--muted);font:650 10px/1 DXMono,monospace;letter-spacing:.12em;text-transform:uppercase}
+.scope-poprow{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.scope-poprow label{display:grid;gap:6px;color:var(--muted);font:600 10px/1 DXMono,monospace}
+.scope-poprow input{min-height:36px;padding:6px 9px;border:1px solid var(--line);background:var(--ui-surface-sunken);color:var(--text);font:500 12px/1 DXMono,monospace}
+.scope-quick{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}
+.scope-quick button{min-height:30px;padding:4px 10px;border:1px solid var(--line);background:var(--ui-surface-sunken);color:var(--muted);font:600 10px/1 DXMono,monospace}
+.scope-quick button:hover{color:var(--text);border-color:var(--line-strong)}
+.scope-hint{margin-top:11px;color:var(--muted);font:500 10px/1.6 DXMono,monospace}
+.scope-error{margin-top:8px;color:var(--ui-danger);font:600 11px/1.5 DXMono,monospace}
+.scope-error[hidden]{display:none}
+.scope-popactions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.scope-apply{min-height:38px;padding:6px 16px;border:0;background:var(--purple);color:var(--ui-on-action-primary);font:700 11px/1 DXMono,monospace}
+.scope-apply:disabled{opacity:.45;cursor:not-allowed}
+.scope-delta{margin-top:6px;color:var(--muted);font:500 10px/1.5 DXMono,monospace}
+.scope-delta[hidden]{display:none}
+.legend .dot-compare{width:14px;height:0;border-top:2px dashed var(--pink);border-radius:0;box-shadow:none;background:none}
 @media(max-width:760px){
   .admin-workspaces{top:4px;overflow:auto}.admin-workspaces button{min-width:120px}
   .admin-overview-tools{align-items:stretch;flex-direction:column}.admin-overview-tools select{width:100%}
   .usage-detail{grid-template-columns:1fr}.bulk-toolbar>*{width:100%}
+  .usage-scope-bar{align-items:stretch;flex-direction:column;gap:10px}
+  .scope-presets{overflow:auto}
+  .scope-echo{align-items:flex-start;flex-direction:column}
+  .scope-echo small{margin-left:0}
+  .scope-popover{left:8px;width:calc(100% - 16px)}
+  .scope-poprow{grid-template-columns:1fr}
   .balance-account{grid-template-columns:1fr;gap:8px}.balance-value,.balance-meta{text-align:left}
 }

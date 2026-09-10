@@ -160,9 +160,10 @@
     var target = document.querySelector('#departmentComparison');
     if (!target || activeWorkspace !== 'overview') return;
     updateRange();
+    var scopeWindow = effectiveWindow();
     var params = new URLSearchParams({
-      start_at: rangeState.start_at,
-      end_at: addMinutes(rangeState.end_at, 1)
+      start_at: scopeWindow.start_at,
+      end_at: addMinutes(scopeWindow.end_at, 1)
     });
     try {
       var data = await get('/api/admin/usage/departments?' + params);
@@ -184,7 +185,7 @@
             '%"></i><i class="llm" style="width:' + width(row.llm) + '%"></i></div><small>图 ' + row.image + ' · 视 ' +
             row.video + ' · LLM ' + row.llm + '</small></td></tr>';
         }).join('') + '</tbody></table>';
-      document.querySelector('#departmentCompareRange').textContent = rangeState.start_at.replace('T', ' ') + ' — ' + rangeState.end_at.replace('T', ' ');
+      document.querySelector('#departmentCompareRange').textContent = scopeWindow.start_at.replace('T', ' ') + ' — ' + scopeWindow.end_at.replace('T', ' ');
     } catch (error) {
       target.className = 'detail-empty bad';
       target.textContent = error.message || '部门对比读取失败';
@@ -394,7 +395,242 @@
     });
   }
 
+  function shortScopeValue(value) {
+    return String(value || '').slice(5).replace('T', ' ');
+  }
+
+  function scopeQuickRanges() {
+    var now = new Date();
+    var today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    var startOfWeek = new Date(today.getTime() - ((today.getDay() + 6) % 7) * 86400000);
+    var startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    var startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return [
+      ['最近1小时', new Date(now.getTime() - 3600000), now],
+      ['最近24小时', new Date(now.getTime() - 86400000), now],
+      ['今天', today, now],
+      ['昨天', new Date(today.getTime() - 86400000), new Date(today.getTime() - 60000)],
+      ['本周', startOfWeek, now],
+      ['本月', startOfMonth, now],
+      ['上月', startOfLastMonth, new Date(startOfMonth.getTime() - 60000)]
+    ];
+  }
+
+  function scopeSummaryValue(summary, key) {
+    summary = summary || {};
+    if (key === 'total') return +summary.total || 0;
+    return (+summary.failed || 0) + (+summary.timed_out || 0) + (+summary.cancelled || 0);
+  }
+
+  function scopeDeltaSuffix(current, previous) {
+    if (!previous) return '';
+    var delta = current - previous;
+    if (!delta) return '　＝ 持平';
+    return '　' + (delta > 0 ? '▲' : '▼') + ' ' + (Math.round(Math.abs(delta) / previous * 1000) / 10) + '%';
+  }
+
+  function renderScopeComparison() {
+    var cards = document.querySelector('.cards');
+    if (!cards) return;
+    [['total', '#metricTotal', '总调用'], ['failed', '#metricFailed', '失败']].forEach(function (entry) {
+      var metric = cards.querySelector(entry[1]);
+      var card = metric?.closest('.card');
+      if (!card) return;
+      var host = card.querySelector('[data-scope-delta="' + entry[0] + '"]');
+      if (!host) {
+        host = document.createElement('div');
+        host.className = 'scope-delta';
+        host.setAttribute('data-scope-delta', entry[0]);
+        card.appendChild(host);
+      }
+      var text = '';
+      if (rangeState.compare) {
+        var current = scopeSummaryValue(usageAnalytics?.summary, entry[0]);
+        text = usagePrevious
+          ? entry[2] + '：上一周期 ' + scopeSummaryValue(usagePrevious.summary, entry[0]).toLocaleString() + ' 条' +
+            scopeDeltaSuffix(current, scopeSummaryValue(usagePrevious.summary, entry[0]))
+          : entry[2] + '：对比区间无数据';
+      }
+      host.textContent = text;
+      host.hidden = !text;
+    });
+  }
+
+  function updateScopeHint() {
+    var hint = document.querySelector('#scopeHint');
+    var error = document.querySelector('#scopeError');
+    var start = document.querySelector('#customStart')?.value || '';
+    var end = document.querySelector('#customEnd')?.value || '';
+    if (!hint) return;
+    var message = validateUsageRange(start, end);
+    var minutes = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000);
+    var spanText = isFinite(minutes) && minutes > 0
+      ? '当前跨度 ' + (minutes >= 1440 ? Math.round(minutes / 1440) + ' 天 ' : '') +
+        (minutes % 1440 >= 60 ? Math.round((minutes % 1440) / 60) + ' 小时 ' : '') + (minutes % 60) + ' 分'
+      : '请选择开始与结束时间';
+    hint.textContent = spanText + '　下限 1 小时，上限 ' + Math.round(scopeMaxMinutes() / 1440) + ' 天（受审计保留期限制）';
+    if (error) {
+      error.textContent = message;
+      error.hidden = !message;
+    }
+    var apply = document.querySelector('#customApply');
+    if (apply) apply.disabled = !!message;
+  }
+
+  function closeScopePopover() {
+    var popover = document.querySelector('#scopePopover');
+    var toggle = document.querySelector('#customRangeToggle');
+    if (popover) popover.hidden = true;
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleScopePopover() {
+    var popover = document.querySelector('#scopePopover');
+    var toggle = document.querySelector('#customRangeToggle');
+    if (!popover) return;
+    var open = popover.hidden;
+    popover.hidden = !open;
+    if (toggle) toggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      var startInput = popover.querySelector('#customStart');
+      if (startInput) {
+        startInput.value = rangeState.custom_start || rangeState.start_at;
+        popover.querySelector('#customEnd').value = rangeState.custom_end || rangeState.end_at;
+        updateScopeHint();
+        startInput.focus();
+      }
+    }
+  }
+
+  function scopeEchoHtml() {
+    var html = '当前区间 <b>' + esc(usageScopeLabel()) + '</b> · 共 ' + esc(usageSpanLabel()) + ' · ' + esc(usageBucketLabel());
+    if (rangeState.compare) {
+      var previous = usagePreviousWindow();
+      html += ' · 对比区间 ' + esc(previous.start_at.replace('T', ' ')) + ' ～ ' + esc(previous.end_at.replace('T', ' '));
+    }
+    if (chartState.start_at) {
+      html += ' · <button type="button" class="scope-back" id="scopeDrillBack">已下钻，返回上一级</button>';
+    }
+    html += '<small>审计保留 ' + scopeRetentionDays() + ' 天 · 可查最早 ' + esc(scopeEarliestMinute().replace('T', ' ')) + '</small>';
+    return html;
+  }
+
+  function syncScopeBar() {
+    var bar = document.querySelector('#usageScopeBar');
+    if (!bar) return;
+    bar.querySelectorAll('[data-time-preset]').forEach(function (button) {
+      var active = rangeState.mode === 'preset' && button.dataset.timePreset === rangeState.key;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    var custom = bar.querySelector('#customRangeToggle');
+    if (custom) {
+      custom.classList.toggle('active', rangeState.mode === 'custom');
+      custom.textContent = rangeState.mode === 'custom'
+        ? '自定义 ' + shortScopeValue(rangeState.custom_start) + ' ～ ' + shortScopeValue(rangeState.custom_end)
+        : '自定义…';
+    }
+    var granularity = bar.querySelector('#scopeGranularity');
+    if (granularity) granularity.value = rangeState.granularity;
+    var compare = bar.querySelector('#scopeCompare');
+    if (compare) {
+      compare.classList.toggle('active', !!rangeState.compare);
+      compare.setAttribute('aria-pressed', String(!!rangeState.compare));
+    }
+    var echo = bar.querySelector('#scopeEcho');
+    if (echo) echo.innerHTML = scopeEchoHtml();
+    var back = document.querySelector('#scopeDrillBack');
+    if (back) back.onclick = function () { exitUsageDrill(); };
+    var legend = document.querySelector('#legendCompare');
+    if (legend) legend.hidden = !rangeState.compare;
+    var startInput = bar.querySelector('#customStart');
+    var endInput = bar.querySelector('#customEnd');
+    if (startInput && document.activeElement !== startInput) startInput.value = rangeState.custom_start || rangeState.start_at;
+    if (endInput && document.activeElement !== endInput) endInput.value = rangeState.custom_end || rangeState.end_at;
+    updateScopeHint();
+  }
+
+  function installTimeScopeBar() {
+    if (document.querySelector('#usageScopeBar')) return;
+    var bar = document.createElement('section');
+    bar.className = 'usage-scope-bar';
+    bar.id = 'usageScopeBar';
+    bar.innerHTML =
+      '<div class="scope-field"><span class="scope-label">时间范围</span><div class="scope-presets" role="group" aria-label="时间范围预设" id="scopePresets"></div></div>' +
+      '<div class="scope-field"><span class="scope-label">聚合粒度</span><select id="scopeGranularity" aria-label="聚合粒度"></select></div>' +
+      '<div class="scope-field"><span class="scope-label">&nbsp;</span><button type="button" id="scopeCompare" class="scope-toggle" aria-pressed="false">对比上一周期</button></div>' +
+      '<div class="scope-field"><span class="scope-label">&nbsp;</span><button type="button" id="scopeRefresh" class="scope-plain">刷新</button></div>' +
+      '<div class="scope-echo" id="scopeEcho"></div>' +
+      '<div class="scope-popover" id="scopePopover" hidden><h4>自定义时间范围</h4>' +
+      '<div class="scope-poprow"><label>开始<input type="datetime-local" id="customStart"></label><label>结束<input type="datetime-local" id="customEnd"></label></div>' +
+      '<div class="scope-quick" id="scopeQuick"></div><div class="scope-hint" id="scopeHint"></div><div class="scope-error" id="scopeError" hidden></div>' +
+      '<div class="scope-popactions"><button type="button" id="customCancel" class="scope-plain">取消</button><button type="button" id="customApply" class="scope-apply">应用</button></div></div>';
+    document.querySelector('nav.admin-workspaces').after(bar);
+
+    var presets = bar.querySelector('#scopePresets');
+    usagePresetList().forEach(function (preset) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('data-time-preset', preset.key);
+      button.textContent = preset.label;
+      button.onclick = function () { closeScopePopover(); selectUsagePreset(preset.key); };
+      presets.appendChild(button);
+    });
+    var custom = document.createElement('button');
+    custom.type = 'button';
+    custom.id = 'customRangeToggle';
+    custom.className = 'scope-custom';
+    custom.setAttribute('aria-expanded', 'false');
+    custom.textContent = '自定义…';
+    custom.onclick = toggleScopePopover;
+    presets.appendChild(custom);
+
+    var granularity = bar.querySelector('#scopeGranularity');
+    usageGranularityList().forEach(function (option) {
+      var node = document.createElement('option');
+      node.value = option.value;
+      node.textContent = option.value === 'auto' ? '自动' : option.label;
+      granularity.appendChild(node);
+    });
+    granularity.onchange = function () { setUsageGranularity(granularity.value); };
+
+    bar.querySelector('#scopeCompare').onclick = function () { toggleUsageCompare(); };
+    bar.querySelector('#scopeRefresh').onclick = function () { refreshUsageViews(); };
+
+    var quick = bar.querySelector('#scopeQuick');
+    scopeQuickRanges().forEach(function (entry) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = entry[0];
+      button.onclick = function () {
+        bar.querySelector('#customStart').value = localTimeValue(entry[1]);
+        bar.querySelector('#customEnd').value = localTimeValue(entry[2]);
+        updateScopeHint();
+      };
+      quick.appendChild(button);
+    });
+
+    var startInput = bar.querySelector('#customStart');
+    var endInput = bar.querySelector('#customEnd');
+    startInput.oninput = updateScopeHint;
+    endInput.oninput = updateScopeHint;
+    bar.querySelector('#customCancel').onclick = closeScopePopover;
+    bar.querySelector('#customApply').onclick = async function () {
+      var error = await applyUsageCustomRange(startInput.value, endInput.value);
+      if (error) {
+        var errorNode = bar.querySelector('#scopeError');
+        errorNode.textContent = error;
+        errorNode.hidden = false;
+        return;
+      }
+      closeScopePopover();
+    };
+    window.renderUsageScopeBar = syncScopeBar;
+    syncScopeBar();
+  }
+
   installWorkspaceNavigation();
+  installTimeScopeBar();
   installOverviewPanels();
   installUserControls();
 
@@ -410,8 +646,9 @@
     if (analyticsPromise) return analyticsPromise;
     analyticsPromise = (async function () {
       updateRange();
+      var scopeWindow = effectiveWindow();
       var params = new URLSearchParams({
-        start_at: rangeState.start_at, end_at: addMinutes(rangeState.end_at, 1),
+        start_at: scopeWindow.start_at, end_at: addMinutes(scopeWindow.end_at, 1),
         bucket_minutes: rangeState.bucket, user_limit: 10, model_limit: 6, dimension_limit: 10
       });
       var selected = document.querySelector('#modelUsageUser')?.value || '';
@@ -422,10 +659,23 @@
       if (profile) params.set('api_profile_id', profile);
       if (billing) params.set('billing_scope', billing);
       if (department) params.set('department_id', department);
-      usageAnalytics = await get('/api/admin/usage/analytics?' + params);
+      var previousParams = null;
+      if (rangeState.compare) {
+        var previousWindow = usagePreviousWindow();
+        previousParams = new URLSearchParams(params);
+        previousParams.set('start_at', previousWindow.start_at);
+        previousParams.set('end_at', addMinutes(previousWindow.end_at, 1));
+      }
+      var analyticsResults = await Promise.all([
+        get('/api/admin/usage/analytics?' + params),
+        previousParams ? get('/api/admin/usage/analytics?' + previousParams) : Promise.resolve(null)
+      ]);
+      usageAnalytics = analyticsResults[0];
+      setUsagePrevious(analyticsResults[1]);
       analyticsRows = usageAnalytics.summary?.total ? [{}] : [];
       if (activeWorkspace === 'overview') {
         renderDashboard();
+        renderScopeComparison();
         renderServiceHealth();
         loadDepartmentComparison();
       }
