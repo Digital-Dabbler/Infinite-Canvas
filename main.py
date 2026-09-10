@@ -2440,21 +2440,50 @@ def usage_audit_paths(retention_days=None):
             continue
     return sorted(paths)
 
-def usage_events():
-    latest = {}
-    for path in usage_audit_paths():
+USAGE_EVENTS_CACHE = {"key": None, "events": []}
+
+def usage_events_cache_key(paths, retention_days):
+    """用审计文件的身份与时间戳构成缓存键，任何追加都会使键变化。"""
+    stamps = []
+    for path in paths:
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        item = json.loads(line)
-                    except Exception:
-                        continue
-                    if isinstance(item, dict) and item.get("id"):
-                        latest[item["id"]] = item
-        except Exception:
+            stat = os.stat(path)
+        except OSError:
             continue
-    return list(latest.values())
+        stamps.append((path, stat.st_size, stat.st_mtime_ns))
+    return (int(retention_days), tuple(stamps))
+
+def usage_events(retention_days=None):
+    """返回去重后的用量事件。
+
+    管理台一次加载会打多个用量接口，配额与告警检查也会在生成入口读取本函数；
+    每次重解析整个审计库既慢又会阻塞事件循环，因此按审计文件状态缓存结果。
+    解析必须与 append_usage_event 共用 USAGE_AUDIT_LOCK：否则解析期间落入的
+    追加会让键与内容不一致，之后命中缓存会读到缺行数据。
+    """
+    retention = retention_days or load_usage_policy()["retention_days"]
+    paths = usage_audit_paths(retention)
+    key = usage_events_cache_key(paths, retention)
+    with USAGE_AUDIT_LOCK:
+        if USAGE_EVENTS_CACHE["key"] == key:
+            return list(USAGE_EVENTS_CACHE["events"])
+        latest = {}
+        for path in paths:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            item = json.loads(line)
+                        except Exception:
+                            continue
+                        if isinstance(item, dict) and item.get("id"):
+                            latest[item["id"]] = item
+            except Exception:
+                continue
+        events = list(latest.values())
+        USAGE_EVENTS_CACHE["key"] = key
+        USAGE_EVENTS_CACHE["events"] = events
+        return list(events)
 
 def append_usage_event(event):
     os.makedirs(USAGE_AUDIT_DIR, exist_ok=True)
@@ -4964,8 +4993,13 @@ async def admin_usage_analytics(request: Request):
             created = datetime.datetime.fromtimestamp(float(item.get("created_at") or 0))
         except (TypeError, ValueError, OSError):
             continue
-        minute = created.minute - (created.minute % bucket_minutes)
-        bucket_at = created.replace(minute=minute, second=0, microsecond=0).isoformat(timespec="minutes")
+        # 按「当日已过分钟数」对齐：只对分钟取模会让 360/1440 分钟档保留小时位，
+        # 同一天被拆成多个桶（半年区间会画出数千个点而不是约 180 个）。
+        minute_of_day = created.hour * 60 + created.minute
+        aligned = minute_of_day - (minute_of_day % bucket_minutes)
+        bucket_at = created.replace(
+            hour=aligned // 60, minute=aligned % 60, second=0, microsecond=0
+        ).isoformat(timespec="minutes")
         bucket = buckets.setdefault(bucket_at, {"at": bucket_at, "succeeded": 0, "failed": 0, "queued": 0})
         status = str(item.get("status") or "")
         bucket_status = (
