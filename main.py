@@ -2974,6 +2974,36 @@ def fetch_update_notes_with_fallback(preferred_source: str, version: str, timeou
             }
     return best_notes, notes_by_source
 
+STATIC_STAMP_CACHE = {}
+
+def static_asset_stamp(path: str) -> str:
+    """按内容摘要生成静态资源缓存戳。
+
+    这里不能用文件 mtime：检出、复制、解压或仅仅 touch 都会改变 mtime，
+    启动时 sync_static_html_versions() 就会把所有引用它的 HTML 重写一遍，
+    于是源码里长期挂着十几个「已修改但其实没改」的页面。
+    内容摘要只在字节真的变化时才变，缓存失效语义反而更准确。
+    摘要按 (大小, mtime_ns) 记忆，避免每次请求重复读取大文件。
+    """
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return ""
+    key = (stat.st_size, stat.st_mtime_ns)
+    cached = STATIC_STAMP_CACHE.get(path)
+    if cached and cached[0] == key:
+        return cached[1]
+    try:
+        with open(path, "rb") as handle:
+            payload = handle.read()
+    except OSError:
+        return ""
+    # 行尾差异（LF / CRLF）不影响 JS/CSS 语义，但 git 检出与编辑器保存会引入它；
+    # 统一按 LF 计算摘要，避免把「换行符变了」当成内容变化而重写所有引用页。
+    digest = hashlib.sha1(payload.replace(b"\r\n", b"\n")).hexdigest()[:10]
+    STATIC_STAMP_CACHE[path] = (key, digest)
+    return digest
+
 def versioned_static_html(html: str) -> str:
     version = current_app_version()
     if not version:
@@ -2988,7 +3018,9 @@ def versioned_static_html(html: str) -> str:
             path = os.path.abspath(os.path.join(STATIC_DIR, rel))
             static_root = os.path.abspath(STATIC_DIR)
             if path.startswith(static_root + os.sep) and os.path.isfile(path):
-                cache_version = f"{safe_version}.{int(os.path.getmtime(path))}"
+                stamp = static_asset_stamp(path)
+                if stamp:
+                    cache_version = f"{safe_version}.{stamp}"
         except Exception:
             pass
         return f"{match.group('prefix')}{url}?v={cache_version}"
