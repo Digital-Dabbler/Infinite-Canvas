@@ -56,6 +56,22 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("clearPromptInputForNode(node, {preserveDraft:true});", run_body)
         self.assertIn("await runGeneration(node);", source)
 
+    def test_node_field_deletion_travels_as_clear_fields(self):
+        source = self.smart_canvas_js
+        # A narrow node operation only carries present, changed values, so a field
+        # the client really deleted (for example the last reference image) must be
+        # declared explicitly — otherwise the server keeps the stale value and the
+        # next node broadcast resurrects it in the composer.
+        self.assertIn("const clearFields = nodeFieldDeletions(node, previous);", source)
+        self.assertIn("operations.push({kind:'node_fields', node_id:id, fields, clear_fields:clearFields})", source)
+        self.assertIn("function nodeFieldDeletions(node, previous){", source)
+        deletion_start = source.index("const clearNodeFields = target => {")
+        deletion_end = source.index("};", deletion_start)
+        deletion_body = source[deletion_start:deletion_end]
+        self.assertIn("!CANVAS_OPERATION_RESERVED_NODE_FIELDS.has(key)", deletion_body)
+        self.assertIn("delete target[key];", deletion_body)
+        self.assertNotIn("allowed.has(field)", deletion_body)
+
     def test_generation_settings_memory_is_canvas_scoped_and_context_isolated(self):
         source = self.smart_canvas_js
         self.assertIn("const SMART_GENERATION_SETTINGS_MEMORY_VERSION = 1;", source)

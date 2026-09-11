@@ -5638,9 +5638,11 @@ async def broadcast_bound_canvas_node(task_id, canvas):
             int(canvas.get("sync_revision") or canvas.get("updated_at") or 0),
         )
     # ``node_fields`` normally merges values, so an omitted property cannot
-    # clear a stale browser-side value.  Only trusted server task broadcasts
-    # carry this deletion list; browser-submitted operation payloads cannot
-    # request it.  This is essential when the last pending task is removed.
+    # clear a stale browser-side value.  Trusted server broadcasts carry this
+    # deletion list for their own transient fields; browser operations may also
+    # carry ``clear_fields`` for fields they really deleted (validated against
+    # the reserved-field blacklist).  This is essential when the last pending
+    # task is removed.
     clear_fields = [field for field in SERVER_MANAGED_TASK_TRANSIENT_NODE_FIELDS if field not in node]
     await manager.broadcast_canvas_operation(
         canvas["id"],
@@ -5981,6 +5983,11 @@ class CanvasOperationRequest(BaseModel):
     kind: str = Field(min_length=1, max_length=40)
     node_id: str = ""
     fields: Dict[str, Any] = Field(default_factory=dict)
+    # A narrow operation merges values, so an omitted key cannot express "remove
+    # this field".  ``clear_fields`` carries the client-side deletions (for
+    # example removing the last reference image) so the server drops them
+    # instead of keeping a stale value that a later node broadcast resurrects.
+    clear_fields: List[str] = Field(default_factory=list)
     node: Dict[str, Any] = Field(default_factory=dict)
 
 class PhotoshopBridgeCreateRequest(BaseModel):
@@ -6911,6 +6918,39 @@ def validate_canvas_node_fields(node, fields):
             raise HTTPException(status_code=400, detail="3D 场景缩略图无效")
     return clean
 
+CANVAS_NODE_CLEAR_FIELD_LIMIT = 96
+
+def validate_canvas_node_clear_fields(fields):
+    """Validate node-field deletions requested by a browser operation.
+
+    ``node_fields`` merges values, so a key the client omitted keeps its stored
+    value.  The smart canvas really deletes node fields though (removing the
+    last reference image, clearing the previous run's reference snapshot,
+    resetting a run error or a stale media box).  Without an explicit deletion
+    list those removals never reach the server: the stored value survives and
+    the next server-authored node broadcast (a bound task completion) writes it
+    back into the browser, resurrecting a reference image the user removed.
+    Reserved identity/sharing/audit fields stay undeletable.
+    """
+    cleaned: List[str] = []
+    seen = set()
+    for raw in list(fields or []):
+        key = str(raw or "").strip()
+        if not key or key in seen:
+            continue
+        if key in CANVAS_NODE_OPERATION_FORBIDDEN_FIELDS:
+            raise HTTPException(status_code=400, detail="包含不允许删除的节点字段")
+        seen.add(key)
+        cleaned.append(key)
+        if len(cleaned) >= CANVAS_NODE_CLEAR_FIELD_LIMIT:
+            break
+    return cleaned
+
+def canvas_operation_clear_fields(payload):
+    if isinstance(payload, dict):
+        return payload.get("clear_fields") or []
+    return getattr(payload, "clear_fields", None) or []
+
 def validate_canvas_node_record(node):
     if not isinstance(node, dict):
         raise HTTPException(status_code=400, detail="节点无效")
@@ -6971,9 +7011,13 @@ def apply_canvas_node_operation(canvas, payload):
         if node_index < 0:
             raise HTTPException(status_code=404, detail="节点不存在")
         fields = validate_canvas_node_fields(nodes[node_index], payload.fields)
-        if not fields:
+        clear_fields = validate_canvas_node_clear_fields(canvas_operation_clear_fields(payload))
+        if not fields and not clear_fields:
             raise HTTPException(status_code=400, detail="没有可更新的节点字段")
-        nodes[node_index] = {**nodes[node_index], **fields}
+        updated = {**nodes[node_index], **fields}
+        for field in clear_fields:
+            updated.pop(field, None)
+        nodes[node_index] = updated
         canvas["nodes"] = nodes
     elif kind == "canvas_fields":
         fields = {key: value for key, value in dict(payload.fields or {}).items()

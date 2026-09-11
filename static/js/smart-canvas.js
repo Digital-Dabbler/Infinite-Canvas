@@ -8241,19 +8241,21 @@ function handleCanvasOperationMessage(data={}){
     if(!data || data.type !== 'canvas_operation' || data.canvas_id !== canvasId || data.client_id === smartClientId) return;
     const op = data.operation || {}, id = op.node_id;
     let logListChanged = false;
-    // Only the trusted server task-completion broadcaster emits clear_fields.
-    // A normal node_fields operation contains values only, and its omitted
-    // keys must keep their current values to preserve per-field concurrency.
-    const clearNodeTaskFields = target => {
+    // ``node_fields`` merges values, so deleted fields travel in ``clear_fields``
+    // (both from the trusted task-completion broadcaster and from a browser that
+    // really deleted a field).  Apply the same deletion locally and to the
+    // confirmed baseline, otherwise the next local save would treat the value as
+    // an unchanged field and never remove it server-side.
+    const clearNodeFields = target => {
         if(!target || op.kind !== 'node_fields') return;
-        const allowed = new Set(['pendingTasks']);
         (Array.isArray(op.clear_fields) ? op.clear_fields : []).forEach(field => {
-            if(allowed.has(field)) delete target[field];
+            const key = String(field || '');
+            if(key && !CANVAS_OPERATION_RESERVED_NODE_FIELDS.has(key)) delete target[key];
         });
     };
     if(op.kind === 'node_delete') nodes = nodes.filter(node => node.id !== id);
     else if((op.kind === 'node_create' || op.kind === 'node_restore') && op.node?.id && !nodes.some(node => node.id === op.node.id)) nodes.push(op.node);
-    else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) { clearNodeTaskFields(node); Object.assign(node, op.fields || {}); } }
+    else if(op.kind === 'node_fields') { const node = nodes.find(item => item.id === id); if(node) { clearNodeFields(node); Object.assign(node, op.fields || {}); } }
     else if(op.kind === 'canvas_fields') Object.assign(canvas, op.fields || {});
     else if(op.kind === 'settings_fields') { canvas.settings = {...(canvas.settings || {}), ...(op.fields || {})}; Object.assign(settings, op.fields || {}); }
     else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvas.logs || []).some(item => item.id === op.fields.log.id)) { canvas.logs = [op.fields.log, ...(canvas.logs || [])]; logListChanged = true; }
@@ -8275,7 +8277,7 @@ function handleCanvasOperationMessage(data={}){
         const baseIndex = baseNodes.findIndex(node => node.id === id);
         if(op.kind === 'node_delete' && baseIndex >= 0) baseNodes.splice(baseIndex, 1);
         else if((op.kind === 'node_create' || op.kind === 'node_restore') && op.node?.id && baseIndex < 0) baseNodes.push(JSON.parse(JSON.stringify(op.node)));
-        else if(op.kind === 'node_fields' && baseIndex >= 0) { clearNodeTaskFields(baseNodes[baseIndex]); Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {}))); }
+        else if(op.kind === 'node_fields' && baseIndex >= 0) { clearNodeFields(baseNodes[baseIndex]); Object.assign(baseNodes[baseIndex], JSON.parse(JSON.stringify(op.fields || {}))); }
         else if(op.kind === 'canvas_fields') Object.assign(canvasOperationBase, JSON.parse(JSON.stringify(op.fields || {})));
         else if(op.kind === 'settings_fields') canvasOperationBase.settings = {...(canvasOperationBase.settings || {}), ...JSON.parse(JSON.stringify(op.fields || {}))};
         else if(op.kind === 'log_add' && op.fields?.log?.id && !(canvasOperationBase.logs || []).some(item => item.id === op.fields.log.id)) canvasOperationBase.logs = [JSON.parse(JSON.stringify(op.fields.log)), ...(canvasOperationBase.logs || [])];
@@ -8327,6 +8329,21 @@ function clearCanvasPresence(){
     if(canvasSyncSocket?.readyState === WebSocket.OPEN) canvasSyncSocket.send(JSON.stringify({type:'canvas_presence_clear'}));
 }
 function operationValueChanged(a,b){ return JSON.stringify(a) !== JSON.stringify(b); }
+// 窄节点操作只发送「有值且变化」的字段，省略的键在服务端保持原值——这是并发按字段合并的前提。
+// 但画布确实会真正删除节点字段（删掉最后一个参考图、清空上次运行的参考图快照、重置失败标记或
+// 旧媒体尺寸盒）。这类删除必须显式声明，否则服务端仍保留旧值，随后由服务端发起的节点广播
+// （例如绑定任务完成时的 node_fields）会把它写回浏览器，让用户删掉的参考图"复活"。
+const CANVAS_OPERATION_RESERVED_NODE_FIELDS = new Set(['id','owner','owner_user_id','editor_user_ids','ownership_state','sharing_version','operation_log','deleted_node_ids','sync_revision']);
+// serializableSmartNode()/clearSmartNodeTransientRunState() 在落盘前会规范化这些瞬时任务字段，
+// 所以它们"在存储节点里缺失"并不代表用户删除了内容。绑定任务的服务端状态由服务端自己收口
+// （完成任务时通过 clear_fields 广播 pendingTasks），浏览器不能用删除清单去动它。
+const CANVAS_OPERATION_TRANSIENT_NODE_FIELDS = new Set(['pendingTasks','submitting','jimengPending','_runMetaTargetId','_dom']);
+function nodeFieldDeletions(node, previous){
+    if(!node || !previous) return [];
+    return Object.keys(previous).filter(key => !(key in node)
+        && !CANVAS_OPERATION_RESERVED_NODE_FIELDS.has(key)
+        && !CANVAS_OPERATION_TRANSIENT_NODE_FIELDS.has(key));
+}
 function canvasConnectionKey(connection={}){ return `${connection.from || ''}->${connection.to || ''}:${connection.kind || 'flow'}`; }
 function remapRestoredNodeIds(storageCanvas, base){
     const known = new Set((base?.nodes || []).map(node => node?.id).filter(Boolean));
@@ -8370,7 +8387,8 @@ async function saveCanvasOperations(storageCanvas, revAtStart){
         else {
             const fields = {};
             Object.keys(node).forEach(key => { if(key !== 'id' && operationValueChanged(node[key], previous[key])) fields[key] = node[key]; });
-            if(Object.keys(fields).length) operations.push({kind:'node_fields', node_id:id, fields});
+            const clearFields = nodeFieldDeletions(node, previous);
+            if(Object.keys(fields).length || clearFields.length) operations.push({kind:'node_fields', node_id:id, fields, clear_fields:clearFields});
         }
     });
     before.forEach((_, id) => { if(!after.has(id)) operations.push({kind:'node_delete', node_id:id}); });
