@@ -15392,6 +15392,50 @@ async def runninghub_model_definition(provider, model):
     endpoint = runninghub_endpoint_alias_for_model(requested) or endpoint
     return {"name_en": requested, "endpoint": endpoint or RUNNINGHUB_DEFAULT_IMAGE_MODELS[0], "output_type": classify_upstream_model(requested), "params": []}
 
+# Composer 与请求序列化共用同一组“自适应/不指定”取值。RunningHub 的标准模型
+# 接口只接受注册表里列出的具体比例（直接发送 aspectRatio="auto" 会返回 1007），
+# 但完全不发送该字段时，图生图模型会沿用输入图比例，因此“自适应”只能表达为
+# 不指定；见 runninghub_adaptive_ratio_fields()。
+RUNNINGHUB_ADAPTIVE_RATIO_VALUES = frozenset({"", "empty", "auto", "adaptive", "source", "keep_ratio"})
+RUNNINGHUB_RATIO_FIELD_KEYS = frozenset({"aspectratio", "aspect_ratio", "ratio"})
+
+def runninghub_adaptive_ratio_fields(fields):
+    """给“未声明自适应取值”的图生图能力补一个 Auto 比例选项。
+
+    上游注册表里 gpt-image-2.5 这类新模型只声明具体比例（如 15 个档位、
+    defaultValue 16:9），没有 gpt-image-2.0 的 empty 或 nano-banana 的 auto，
+    面板因此无法表达“不指定比例”。而省略 aspectRatio 时上游会沿用输入图比例，
+    这正是图生图用户要的行为，所以在能力层补一个 Auto 取值。
+
+    只在图生图/编辑能力（存在 IMAGE 输入字段）上补：文生图没有输入图可沿用，
+    省略该字段只会落回上游默认档，补出来的 Auto 名不副实。上游一旦自己声明
+    empty/auto/adaptive，本补丁自动失效，统一捕捉路径接管。
+    """
+    items = [field for field in fields or [] if isinstance(field, dict)]
+    has_image_input = any(str(field.get("type") or "").strip().upper() == "IMAGE" for field in items)
+    if not has_image_input:
+        return list(fields or [])
+    result = []
+    for field in fields or []:
+        if not isinstance(field, dict):
+            result.append(field)
+            continue
+        key = str(field.get("key") or "").strip().lower()
+        options = [option for option in field.get("options") or [] if isinstance(option, dict)]
+        declared = {str(option.get("value") or "").strip().lower() for option in options}
+        if (
+            key in RUNNINGHUB_RATIO_FIELD_KEYS
+            and options
+            and field.get("required") is not True
+            and not (declared & RUNNINGHUB_ADAPTIVE_RATIO_VALUES)
+        ):
+            patched = dict(field)
+            patched["options"] = [{"value": "auto", "label": "自适应"}, *options]
+            result.append(patched)
+            continue
+        result.append(field)
+    return result
+
 def public_runninghub_model_capabilities(model_def):
     fields = []
     for raw in model_def.get("params") or []:
@@ -15428,11 +15472,14 @@ def public_runninghub_model_capabilities(model_def):
         if options:
             item["options"] = options
         fields.append(item)
+    output_type = str(model_def.get("output_type") or "").strip().lower()
+    if output_type == "image":
+        fields = runninghub_adaptive_ratio_fields(fields)
     return {
         "provider": "runninghub",
         "model": runninghub_model_id(model_def),
         "display_name": runninghub_model_display_name(model_def),
-        "output_type": str(model_def.get("output_type") or "").strip().lower(),
+        "output_type": output_type,
         "fields": fields,
         "discovered": bool(fields),
         "source": "provider-schema",
