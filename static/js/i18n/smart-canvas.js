@@ -645,8 +645,8 @@
         "smart.shortcutMiddlePan": { zh: "任意位置按住拖动画布", en: "Hold anywhere and drag to pan the canvas" },
         "smart.shortcutZoom": { zh: "缩放画布或预览图片", en: "Zoom canvas or preview image" },
         "smart.shortcutDelete": { zh: "删除选中节点", en: "Delete selected nodes" }
-        ,"smart.shortcutRun": { zh: "运行当前节点", en: "Run the current node" }
-        ,"smart.shortcutRunNoNode": { zh: "先选中要运行的图片或视频生成节点", en: "Select an image or video generation node to run first" }
+        ,"smart.shortcutRun": { zh: "运行当前节点（生成图片/视频/文本）", en: "Run the current node (image/video/text)" }
+        ,"smart.shortcutRunNoNode": { zh: "先选中要运行的图片、视频或文本生成节点", en: "Select an image, video, or text generation node to run first" }
         ,"smart.workflowGroup": { zh: "工作流分组", en: "Workflow group" }
         ,"smart.workflowGroupSub": { zh: "仅整理节点，不参与生成", en: "Organize nodes without affecting generation" }
         ,"smart.addNote": { zh: "添加便签", en: "Add note" }

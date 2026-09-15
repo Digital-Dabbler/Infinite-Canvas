@@ -127,10 +127,18 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("nodes.find(node => node.id === boundNodeId)", resolve_body)
         self.assertIn("activeComposerNode()", resolve_body)
         self.assertIn("selectedNode()", resolve_body)
+        # 文本节点的“生成”表单跟随选区展示，必须优先按选区解析，不能用运行按钮的绑定覆盖它。
+        self.assertLess(
+            resolve_body.index("if(selected?.type === 'smart-prompt') return selected;"),
+            resolve_body.index("runBtn?.dataset?.nodeId"),
+        )
 
         run_start = source.index("function runCurrentSmartNodeFromShortcut(){")
         run_end = source.index("runBtn.onclick = () => {", run_start)
         run_body = source[run_start:run_end]
+        # 文本节点：等价于点击节点里的“生成”。
+        self.assertIn("if(node?.type === 'smart-prompt'){", run_body)
+        self.assertIn("runPromptLLMNode(node.id)", run_body)
         self.assertIn("if(!isSmartRunnableNode(node)){", run_body)
         self.assertIn("toast(tr('smart.shortcutRunNoNode'));", run_body)
         self.assertIn("if(runBtn?.disabled){", run_body)
@@ -143,12 +151,15 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("e.preventDefault();", binding_body)
         self.assertIn("runCurrentSmartNodeFromShortcut();", binding_body)
 
-        # 提示词框内输入后可直接运行；其他输入框和图片编辑器内不触发。
+        # Composer 与文本节点“生成”表单内可直接运行；图片编辑器和其他输入框内不触发；
+        # “生成要求”文本框自己绑定 Ctrl+Enter，必须排除以免同一次按键重复提交。
         blocked_start = source.index("function smartRunShortcutBlocked(target){")
         blocked_end = source.index("function runCurrentSmartNodeFromShortcut(){", blocked_start)
         blocked_body = source[blocked_start:blocked_end]
         self.assertIn("imageEditModal?.classList?.contains('open')", blocked_body)
-        self.assertIn("el?.closest?.('#promptInput')", blocked_body)
+        self.assertIn("el.closest('#composer, .text-node-generation-panel')", blocked_body)
+        self.assertIn("el.closest('.prompt-node-control, .text-node-input-card')", blocked_body)
+        self.assertIn("return Boolean(el.closest('.text-node-requirement'));", blocked_body)
         self.assertIn("isEditableTarget(el)", blocked_body)
 
     def test_run_shortcut_is_documented_in_the_shortcut_panel(self):

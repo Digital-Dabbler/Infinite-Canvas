@@ -23988,7 +23988,8 @@ window.addEventListener('keydown', e => {
             return;
         }
     }
-    // Shift+Ctrl/Cmd+Enter：立即运行当前节点，等价于点击 Composer 的“运行”按钮。
+    // Shift+Ctrl/Cmd+Enter：立即运行当前节点（图片/视频生成节点走 Composer 的“运行”，
+    // 文本节点走节点里的“生成”）。
     if((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'enter'){
         // 输入法组合中的回车交给输入法处理，避免候选词还没落字就提交生成。
         if(e.isComposing) return;
@@ -24091,24 +24092,42 @@ if(promptResize){
     });
 }
 // Shift+Ctrl/Cmd+Enter 的运行快捷键。
-// 作用对象与 Composer 的“运行”按钮完全一致：运行按钮绑定的那个节点（即画布上选中的可运行节点），
-// 而不是按下快捷键瞬间可能已经变化的选区，避免把任务提交到另一个节点。
+// 图片/视频节点：作用对象与 Composer 的“运行”按钮完全一致，即运行按钮绑定的那个节点
+// （画布上选中的可运行节点），而不是按下快捷键瞬间可能已经变化的选区，避免任务提交到别的节点。
+// 文本节点：等价于点击节点里的“生成”按钮。
 function smartRunShortcutNode(){
+    // 文本节点的“生成”表单只跟随当前选中节点展示，按选区解析即可。
+    const selected = selectedNode();
+    if(selected?.type === 'smart-prompt') return selected;
     const boundNodeId = String(runBtn?.dataset?.nodeId || '');
     const boundNode = boundNodeId ? nodes.find(node => node.id === boundNodeId) : null;
-    return boundNode || activeComposerNode() || selectedNode();
+    return boundNode || activeComposerNode() || selected;
 }
 function smartRunShortcutBlocked(target){
     // 图片编辑器等模态界面里 Enter 有自己的语义，不能顺手触发画布生成。
     if(imageEditModal?.classList?.contains('open')) return true;
     const el = target || document.activeElement;
-    // 在 Composer 提示词框里输入后直接按快捷键运行是主要用法，这里必须放行；
+    if(!el?.closest) return false;
+    // Composer（图片/视频生成）和文本节点“生成”表单都是当前节点的生成入口，
+    // 在它们内部按快捷键等同于点击“运行”/“生成”（包括焦点停在平台、模型下拉框上的情况）。
+    const insideGenerationForm = Boolean(el.closest('#composer, .text-node-generation-panel'));
+    const insideTextNodeControl = Boolean(el.closest('.prompt-node-control, .text-node-input-card'));
+    if(insideGenerationForm || insideTextNodeControl){
+        // “生成要求”文本框自己已绑定 Ctrl+Enter 触发生成，交给它处理，避免同一次按键重复提交。
+        return Boolean(el.closest('.text-node-requirement'));
+    }
     // 其他输入框（重命名、便签、素材弹窗等）里的 Enter 不做生成。
-    if(el?.closest?.('#promptInput')) return false;
     return isEditableTarget(el);
 }
 function runCurrentSmartNodeFromShortcut(){
     const node = smartRunShortcutNode();
+    // 文本节点：等价于点击节点里的“生成”（runPromptLLMNode 自身按 node.running 去重）。
+    if(node?.type === 'smart-prompt'){
+        Promise.resolve(runPromptLLMNode(node.id)).catch(error => {
+            toast(String(error?.message || tr('smart.promptLlmFailed')).slice(0, 160));
+        });
+        return;
+    }
     if(!isSmartRunnableNode(node)){
         toast(tr('smart.shortcutRunNoNode'));
         return;
