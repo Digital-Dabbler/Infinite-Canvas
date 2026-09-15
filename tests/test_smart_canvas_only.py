@@ -117,6 +117,51 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn("workflowCreateConfirm", bindings)
         self.assertIn("confirmWorkflowCreate().catch", bindings)
 
+    def test_run_shortcut_runs_the_current_composer_node(self):
+        source = self.smart_canvas_js
+        # 快捷键必须复用 Composer“运行”按钮绑定的节点，而不是瞬时选区。
+        resolve_start = source.index("function smartRunShortcutNode(){")
+        resolve_end = source.index("function smartRunShortcutBlocked(", resolve_start)
+        resolve_body = source[resolve_start:resolve_end]
+        self.assertIn("String(runBtn?.dataset?.nodeId || '')", resolve_body)
+        self.assertIn("nodes.find(node => node.id === boundNodeId)", resolve_body)
+        self.assertIn("activeComposerNode()", resolve_body)
+        self.assertIn("selectedNode()", resolve_body)
+
+        run_start = source.index("function runCurrentSmartNodeFromShortcut(){")
+        run_end = source.index("runBtn.onclick = () => {", run_start)
+        run_body = source[run_start:run_end]
+        self.assertIn("if(!isSmartRunnableNode(node)){", run_body)
+        self.assertIn("toast(tr('smart.shortcutRunNoNode'));", run_body)
+        self.assertIn("if(runBtn?.disabled){", run_body)
+        self.assertIn("runGeneration(node)", run_body)
+
+        binding = source.index("(e.ctrlKey || e.metaKey) && e.shiftKey && key === 'enter'")
+        binding_body = source[binding:binding + 400]
+        self.assertIn("if(e.isComposing) return;", binding_body)
+        self.assertIn("if(smartRunShortcutBlocked(e.target)) return;", binding_body)
+        self.assertIn("e.preventDefault();", binding_body)
+        self.assertIn("runCurrentSmartNodeFromShortcut();", binding_body)
+
+        # 提示词框内输入后可直接运行；其他输入框和图片编辑器内不触发。
+        blocked_start = source.index("function smartRunShortcutBlocked(target){")
+        blocked_end = source.index("function runCurrentSmartNodeFromShortcut(){", blocked_start)
+        blocked_body = source[blocked_start:blocked_end]
+        self.assertIn("imageEditModal?.classList?.contains('open')", blocked_body)
+        self.assertIn("el?.closest?.('#promptInput')", blocked_body)
+        self.assertIn("isEditableTarget(el)", blocked_body)
+
+    def test_run_shortcut_is_documented_in_the_shortcut_panel(self):
+        html = (self.root / "static" / "smart-canvas.html").read_text(encoding="utf-8")
+        i18n = (self.root / "static" / "js" / "i18n" / "smart-canvas.js").read_text(encoding="utf-8")
+        self.assertIn('data-i18n="smart.shortcutRun"', html)
+        self.assertIn('<kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Enter</kbd>', html)
+        for key in ("smart.shortcutRun", "smart.shortcutRunNoNode"):
+            lines = [line for line in i18n.splitlines() if f'"{key}":' in line]
+            self.assertEqual(len(lines), 1, f"{key} must be defined exactly once")
+            self.assertIn("{ zh:", lines[0])
+            self.assertIn(", en:", lines[0])
+
     def test_comfy_workflow_sources_are_separated_with_legacy_system_names(self):
         system_name = "comfyui-workflow-multiple-angles-api.json"
         self.assertEqual(

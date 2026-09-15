@@ -23988,6 +23988,15 @@ window.addEventListener('keydown', e => {
             return;
         }
     }
+    // Shift+Ctrl/Cmd+Enter：立即运行当前节点，等价于点击 Composer 的“运行”按钮。
+    if((e.ctrlKey || e.metaKey) && e.shiftKey && key === 'enter'){
+        // 输入法组合中的回车交给输入法处理，避免候选词还没落字就提交生成。
+        if(e.isComposing) return;
+        if(smartRunShortcutBlocked(e.target)) return;
+        e.preventDefault();
+        runCurrentSmartNodeFromShortcut();
+        return;
+    }
     if((e.ctrlKey || e.metaKey) && key === 'c' && !isEditableTarget(e.target)){
         const selectionText = window.getSelection?.().toString() || '';
         if(selectionText) return;
@@ -24079,6 +24088,39 @@ if(promptResize){
             startY: e.clientY,
             startH: Number(settings.promptH) || promptInput.offsetHeight || 124
         };
+    });
+}
+// Shift+Ctrl/Cmd+Enter 的运行快捷键。
+// 作用对象与 Composer 的“运行”按钮完全一致：运行按钮绑定的那个节点（即画布上选中的可运行节点），
+// 而不是按下快捷键瞬间可能已经变化的选区，避免把任务提交到另一个节点。
+function smartRunShortcutNode(){
+    const boundNodeId = String(runBtn?.dataset?.nodeId || '');
+    const boundNode = boundNodeId ? nodes.find(node => node.id === boundNodeId) : null;
+    return boundNode || activeComposerNode() || selectedNode();
+}
+function smartRunShortcutBlocked(target){
+    // 图片编辑器等模态界面里 Enter 有自己的语义，不能顺手触发画布生成。
+    if(imageEditModal?.classList?.contains('open')) return true;
+    const el = target || document.activeElement;
+    // 在 Composer 提示词框里输入后直接按快捷键运行是主要用法，这里必须放行；
+    // 其他输入框（重命名、便签、素材弹窗等）里的 Enter 不做生成。
+    if(el?.closest?.('#promptInput')) return false;
+    return isEditableTarget(el);
+}
+function runCurrentSmartNodeFromShortcut(){
+    const node = smartRunShortcutNode();
+    if(!isSmartRunnableNode(node)){
+        toast(tr('smart.shortcutRunNoNode'));
+        return;
+    }
+    if(runBtn?.disabled){
+        // 与点击置灰按钮一致：不提交任务，只说明原因（正在运行、循环占用或缺少视频模型）。
+        const reason = String(runBtn.title || '').trim();
+        if(reason) toast(reason);
+        return;
+    }
+    Promise.resolve(runGeneration(node)).catch(error => {
+        toast(String(error?.message || tr('smart.errRunFailed')).slice(0, 160));
     });
 }
 runBtn.onclick = () => {
