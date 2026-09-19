@@ -82,6 +82,23 @@
             <div id="boardStatus" class="ws-status"></div>
         </main>
     </div>
+    <div id="projectDeleteModal" class="ws-modal" role="dialog" aria-modal="true" aria-labelledby="projectDeleteTitle" aria-hidden="true">
+        <div class="ws-modal-card" role="document">
+            <div class="ws-modal-head">
+                <span class="ws-modal-icon"><i data-lucide="trash-2"></i></span>
+                <div class="ws-modal-heading">
+                    <div id="projectDeleteTitle" class="ws-modal-title"></div>
+                    <div id="projectDeleteSubtitle" class="ws-modal-subtitle"></div>
+                </div>
+            </div>
+            <div id="projectDeleteBody" class="ws-modal-body"></div>
+            <div class="ws-modal-actions">
+                <button id="projectDeleteWithCanvases" class="ws-modal-btn danger" type="button"></button>
+                <button id="projectDeleteKeep" class="ws-modal-btn" type="button"></button>
+                <button id="projectDeleteCancel" class="ws-modal-btn ghost" type="button"></button>
+            </div>
+        </div>
+    </div>
     <script src="/static/js/canvas-list.js?v=2026.07.29.873a432ea7"></script>
 </body>
 </html>

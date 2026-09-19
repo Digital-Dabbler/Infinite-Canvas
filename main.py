@@ -22893,8 +22893,17 @@ async def update_project(project_id: str, payload: ProjectUpdateRequest):
     return {"project": project_record(target)}
 
 @app.delete("/api/projects/{project_id}")
-async def delete_project(project_id: str):
-    """删除项目：默认项目不可删除；其余项目删除后，其下画布回归默认项目（不删画布）。"""
+async def delete_project(project_id: str, request: Request, with_canvases: bool = False):
+    """删除项目：默认项目不可删除；其余项目删除时，由 ``with_canvases`` 决定画布归宿。
+
+    - ``with_canvases=false``（默认，保持旧行为）：只删项目，画布迁回默认项目。
+    - ``with_canvases=true``：把项目下当前用户有编辑权的画布一并移入回收站
+      （30 天内可从回收站恢复）；没有编辑权的画布只迁回默认项目，不做跨用户删除。
+
+    项目被删除后不能有画布继续指向它：否则从回收站恢复时该画布不属于任何已有
+    项目，列表和看板都看不到它。因此两条分支都会把 ``project`` 改回默认项目。
+    """
+    user = require_authenticated(request)
     if project_id == DEFAULT_PROJECT_ID:
         raise HTTPException(status_code=400, detail="默认项目不可删除")
     projects = ensure_default_project()
@@ -22902,8 +22911,9 @@ async def delete_project(project_id: str):
         raise HTTPException(status_code=404, detail="项目不存在")
     projects = [p for p in projects if p.get("id") != project_id]
     save_projects(projects)
-    # 把该项目下的画布迁回默认项目
     moved = 0
+    trashed = 0
+    skipped = 0
     with CANVAS_LOCK:
         for filename in os.listdir(CANVAS_DIR):
             if not is_canvas_storage_file(filename):
@@ -22914,12 +22924,23 @@ async def delete_project(project_id: str):
                     data = json.load(f)
             except Exception:
                 continue
-            if str(data.get("project") or "") == project_id:
-                data["project"] = DEFAULT_PROJECT_ID
-                with open(path, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+            if not isinstance(data, dict):
+                continue
+            if str(data.get("project") or "") != project_id:
+                continue
+            data["project"] = DEFAULT_PROJECT_ID
+            if with_canvases:
+                if canvas_access_role(data, user) in {"owner", "editor"}:
+                    if not data.get("deleted_at"):
+                        data["deleted_at"] = now_ms()
+                        trashed += 1
+                else:
+                    skipped += 1
+            else:
                 moved += 1
-    return {"ok": True, "moved": moved}
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+    return {"ok": True, "moved": moved, "trashed": trashed, "skipped": skipped}
 
 @app.get("/api/canvases/trash")
 async def trashed_canvases():

@@ -53,14 +53,7 @@ html[data-studio-scale="off"].studio-scale-managed .workspace {
 .theme-dark .ws-proj-act.del:hover { color:#fca5a5; background:rgba(220,38,38,.22); }
 .ws-project-row.active .ws-proj-act.del:hover { color:#fecaca; background:rgba(248,113,113,.22); }
 
-/* delete-confirm inline */
-.ws-project-confirm { display:flex; flex-direction:column; gap:7px; padding:10px; margin:2px 0; border-radius:8px; background:var(--strong); box-shadow:0 10px 24px var(--shadow); }
-.ws-project-confirm-title { color:var(--strong-text); font-size:11px; font-weight:800; line-height:1.4; }
-.ws-project-confirm-actions { display:flex; gap:6px; }
-.ws-confirm-btn,.ws-cancel-btn { flex:1; height:26px; border-radius:999px; font-size:11px; font-weight:800; cursor:pointer; border:none; }
-.ws-confirm-btn { background:#dc2626; color:#fff; }
-.ws-confirm-btn:hover { background:#b91c1c; }
-.ws-cancel-btn { background:var(--soft); color:var(--text); border:1px solid var(--line); }
+/* 删除项目的确认改由居中模态（.ws-modal）承担，侧边栏不再有内联确认框。 */
 
 .ws-side-foot { padding:10px 12px; border-top:1px solid var(--line); background:linear-gradient(180deg, transparent, rgba(100,116,139,.04)); }
 .ws-trash-entry { width:100%; display:flex; align-items:center; gap:9px; min-height:40px; padding:8px 10px; border-radius:8px; color:var(--muted); background:transparent; border:1px solid transparent; cursor:pointer; transition:all .14s var(--ease); font-size:13px; font-weight:750; }
@@ -530,6 +523,35 @@ html[data-studio-scale="off"].studio-scale-managed .ws-paste-btn span {
     outline-color:var(--ws-brand);
 }
 
+/* ===== Project delete dialog ===== */
+/* 删除项目是有后果的选择（画布是一起删还是保留），所以用居中模态把两条路径写清楚，
+   而不是侧边栏里一个只够放“删除/取消”的内联确认框。 */
+.ws-modal { position:fixed; inset:0; z-index:400; display:none; align-items:center; justify-content:center; padding:20px; background:var(--ui-overlay-scrim, rgba(15,23,42,.55)); backdrop-filter:blur(3px); }
+.ws-modal.active { display:flex; }
+.ws-modal-card { width:100%; max-width:440px; max-height:calc(100dvh - 40px); overflow-y:auto; display:flex; flex-direction:column; gap:14px; padding:18px; border-radius:14px; background:var(--card-solid); border:1px solid var(--line-2); box-shadow:0 24px 60px var(--shadow-strong, rgba(0,0,0,.32)); animation:wsModalIn .16s var(--ease); }
+@keyframes wsModalIn { from { opacity:0; transform:translateY(8px) scale(.98); } to { opacity:1; transform:none; } }
+.ws-modal-head { display:flex; align-items:flex-start; gap:11px; }
+.ws-modal-icon { flex:0 0 auto; width:34px; height:34px; border-radius:9px; display:flex; align-items:center; justify-content:center; color:var(--danger, #b42318); background:var(--danger-soft, rgba(180,35,24,.12)); }
+.ws-modal-icon svg { width:18px; height:18px; }
+.ws-modal-heading { min-width:0; display:flex; flex-direction:column; gap:3px; }
+.ws-modal-title { font-size:14px; font-weight:800; color:var(--text); line-height:1.35; word-break:break-word; }
+.ws-modal-subtitle { font-size:11px; font-weight:650; color:var(--muted); line-height:1.4; }
+.ws-modal-body { font-size:12px; font-weight:600; color:var(--muted); line-height:1.6; }
+.ws-modal-body p { margin:0 0 8px; }
+.ws-modal-body p:last-child { margin-bottom:0; }
+.ws-modal-list { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:7px; }
+.ws-modal-list li { padding:9px 10px; border-radius:9px; background:var(--soft); border:1px solid var(--line); color:var(--muted); }
+.ws-modal-list strong { display:block; margin-bottom:2px; color:var(--text); font-size:12px; font-weight:800; }
+.ws-modal-actions { display:flex; flex-direction:column; gap:7px; }
+.ws-modal-btn { width:100%; min-height:38px; padding:9px 12px; border-radius:9px; font-size:12px; font-weight:800; cursor:pointer; border:1px solid var(--line); background:var(--soft); color:var(--text); transition:all .14s var(--ease); }
+.ws-modal-btn:hover { border-color:var(--line-2); background:var(--soft-2); }
+.ws-modal-btn.danger { background:var(--danger, #b42318); border-color:var(--danger, #b42318); color:#fff; }
+.ws-modal-btn.danger:hover { filter:brightness(1.1); }
+.ws-modal-btn.ghost { background:transparent; border-color:transparent; color:var(--muted); }
+.ws-modal-btn.ghost:hover { background:var(--soft); color:var(--text); }
+.ws-modal-btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
 @media (prefers-reduced-motion:reduce) {
     .ws-sidebar,.ws-sidebar-backdrop,.ws-new-canvas-tile,.ws-card,.ws-search-wrap { transition:none !important; }
+    .ws-modal-card { animation:none; }
 }

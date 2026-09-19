@@ -84,6 +84,13 @@ const studioSettingsBtn = document.getElementById('studioSettingsBtn');
 const mobileProjectToggle = document.getElementById('mobileProjectToggle');
 const mobileSidebarClose = document.getElementById('mobileSidebarClose');
 const mobileSidebarBackdrop = document.getElementById('mobileSidebarBackdrop');
+const projectDeleteModal = document.getElementById('projectDeleteModal');
+const projectDeleteTitle = document.getElementById('projectDeleteTitle');
+const projectDeleteSubtitle = document.getElementById('projectDeleteSubtitle');
+const projectDeleteBody = document.getElementById('projectDeleteBody');
+const projectDeleteWithCanvasesBtn = document.getElementById('projectDeleteWithCanvases');
+const projectDeleteKeepBtn = document.getElementById('projectDeleteKeep');
+const projectDeleteCancelBtn = document.getElementById('projectDeleteCancel');
 
 /* ===== State ===== */
 let projects = [];
@@ -238,20 +245,6 @@ function projectCanvasCount(pid){
 function renderProjects(){
     projectListEl.innerHTML = '';
     projects.forEach(p => {
-        if(pendingDeleteProjectId === p.id){
-            const box = document.createElement('div');
-            box.className = 'ws-project-confirm';
-            box.innerHTML = `
-                <div class="ws-project-confirm-title">${L('删除项目','Delete project')}「${escapeHtml(p.name)}」？${L('其画布将移回默认项目。','Canvases move back to Default.')}</div>
-                <div class="ws-project-confirm-actions">
-                    <button class="ws-confirm-btn" type="button">${L('删除','Delete')}</button>
-                    <button class="ws-cancel-btn" type="button">${L('取消','Cancel')}</button>
-                </div>`;
-            box.querySelector('.ws-confirm-btn').onclick = () => deleteProject(p.id);
-            box.querySelector('.ws-cancel-btn').onclick = () => { pendingDeleteProjectId = null; renderProjects(); };
-            projectListEl.appendChild(box);
-            return;
-        }
         const row = document.createElement('div');
         row.className = 'ws-project-row' + (p.id === currentProjectId ? ' active' : '');
         row.dataset.projectId = p.id;
@@ -272,7 +265,7 @@ function renderProjects(){
         const renameBtn = row.querySelector('.ws-proj-act.rename');
         if(renameBtn) renameBtn.onclick = e => { e.stopPropagation(); startProjectRename(p.id, row); };
         const delBtn = row.querySelector('.ws-proj-act.del');
-        if(delBtn) delBtn.onclick = e => { e.stopPropagation(); pendingDeleteProjectId = p.id; renderProjects(); };
+        if(delBtn) delBtn.onclick = e => { e.stopPropagation(); openProjectDeleteDialog(p.id); };
         projectListEl.appendChild(row);
     });
     refreshIcons();
@@ -361,19 +354,83 @@ async function renameProject(pid, name){
         if(!res.ok) throw new Error('rename project failed');
     } catch(e){ console.error(e); setStatus(L('重命名失败','Rename failed')); loadAll(); }
 }
-async function deleteProject(pid){
+/* ===== Delete project (modal asks what happens to its canvases) ===== */
+function projectTrashableCount(pid){
+    // The server only trashes canvases this user may edit; mirror that here so the
+    // dialog never promises more than the DELETE request will actually do.
+    return canvasesInProject(pid).filter(c => ['owner', 'editor'].includes(c.sharing?.role)).length;
+}
+
+function paintProjectDeleteDialog(){
+    const pid = pendingDeleteProjectId;
+    const p = projects.find(x => x.id === pid);
+    if(!p) return;
+    const total = canvasesInProject(pid).length;
+    const removable = projectTrashableCount(pid);
+    const blocked = total - removable;
+    projectDeleteTitle.textContent = L(`删除项目「${p.name}」？`, `Delete project "${p.name}"?`);
+    projectDeleteSubtitle.textContent = total
+        ? L(`该项目下有 ${total} 张画布`, `${total} canvas${total === 1 ? '' : 'es'} in this project`)
+        : '';
+    // The body already states "no canvases"; a second identical line reads as a bug.
+    projectDeleteSubtitle.style.display = total ? '' : 'none';
+    projectDeleteBody.innerHTML = total
+        ? `<p>${L('请选择如何处理项目下的画布：','Choose what happens to the canvases in this project:')}</p>
+           <ul class="ws-modal-list">
+               <li><strong>${L('一起删除（移入回收站）','Delete together (move to Trash)')}</strong>${L('画布与项目一起删除，30 天内可从回收站恢复。','Canvases are deleted with the project and stay recoverable in Trash for 30 days.')}</li>
+               <li><strong>${L('仅删除项目','Delete the project only')}</strong>${L('画布保留，并移回默认项目。','Canvases are kept and moved back to the Default project.')}</li>
+           </ul>
+           ${blocked ? `<p>${L(`其中 ${blocked} 张你只有查看权限，只会移回默认项目。`, `${blocked} of them are read-only for you and will only be moved to Default.`)}</p>` : ''}`
+        : `<p>${L('该项目下没有画布，删除后不可恢复。','This project has no canvases. Deleting it cannot be undone.')}</p>`;
+    projectDeleteWithCanvasesBtn.style.display = removable ? '' : 'none';
+    projectDeleteWithCanvasesBtn.textContent = L(`删除项目并移入回收站（${removable} 张画布）`, `Delete project and Trash ${removable} canvas${removable === 1 ? '' : 'es'}`);
+    projectDeleteKeepBtn.textContent = total
+        ? L('仅删除项目（画布移回默认项目）', 'Delete project only (keep canvases)')
+        : L('删除项目', 'Delete project');
+    // With no canvases there is no safe path left, so the only action is destructive.
+    projectDeleteKeepBtn.classList.toggle('danger', !total);
+    projectDeleteCancelBtn.textContent = L('取消', 'Cancel');
+}
+
+function openProjectDeleteDialog(pid){
+    if(!projects.find(x => x.id === pid)) return;
+    pendingDeleteProjectId = pid;
+    paintProjectDeleteDialog();
+    projectDeleteModal.classList.add('active');
+    projectDeleteModal.setAttribute('aria-hidden', 'false');
+    refreshIcons();
+    projectDeleteCancelBtn.focus();
+}
+
+function closeProjectDeleteDialog(){
     pendingDeleteProjectId = null;
+    projectDeleteModal.classList.remove('active');
+    projectDeleteModal.setAttribute('aria-hidden', 'true');
+}
+
+async function confirmDeleteProject(withCanvases){
+    const pid = pendingDeleteProjectId;
+    if(!pid) return;
+    closeProjectDeleteDialog();
     try {
-        const res = await fetch(`/api/projects/${encodeURIComponent(pid)}`, { method: 'DELETE' });
+        const url = `/api/projects/${encodeURIComponent(pid)}${withCanvases ? '?with_canvases=true' : ''}`;
+        const res = await fetch(url, { method: 'DELETE' });
         if(!res.ok) throw new Error('delete project failed');
-        // canvases of deleted project move back to default
-        canvases.forEach(c => { if((c.project || 'default') === pid) c.project = 'default'; });
-        projects = projects.filter(p => p.id !== pid);
+        const data = await res.json().catch(() => ({}));
         if(currentProjectId === pid) currentProjectId = 'default';
         rememberProjectId(currentProjectId);
-        renderProjects();
-        renderBoard();
-    } catch(e){ console.error(e); setStatus(L('删除项目失败','Delete project failed')); loadAll(); }
+        await loadAll();   // re-read projects/canvases/trash so counts and cards are exact
+        if(!withCanvases) return;
+        const trashed = Number(data.trashed || 0);
+        const skipped = Number(data.skipped || 0);
+        setStatus(skipped
+            ? L(`${trashed} 张画布已移入回收站，${skipped} 张无编辑权限已保留在默认项目`, `${trashed} canvas(es) moved to Trash; ${skipped} kept in Default without edit permission`)
+            : L(`${trashed} 张画布已移入回收站`, `${trashed} canvas(es) moved to Trash`));
+    } catch(e){
+        console.error(e);
+        setStatus(L('删除项目失败','Delete project failed'));
+        loadAll();
+    }
 }
 
 /* ===== Board rendering ===== */
@@ -1106,6 +1163,11 @@ newProjectInput.addEventListener('keydown', e => {
     if(e.key === 'Escape'){ e.preventDefault(); closeNewProject(); }
 });
 
+projectDeleteWithCanvasesBtn.addEventListener('click', () => confirmDeleteProject(true));
+projectDeleteKeepBtn.addEventListener('click', () => confirmDeleteProject(false));
+projectDeleteCancelBtn.addEventListener('click', closeProjectDeleteDialog);
+projectDeleteModal.addEventListener('click', e => { if(e.target === projectDeleteModal) closeProjectDeleteDialog(); });
+
 trashEntryBtn.addEventListener('click', () => {
     if(trashPanel.classList.contains('active')) closeTrashView();
     else openTrashView();
@@ -1124,6 +1186,7 @@ document.addEventListener('mousedown', e => {
 
 document.addEventListener('keydown', e => {
     if(e.key !== 'Escape') return;
+    if(projectDeleteModal.classList.contains('active')){ closeProjectDeleteDialog(); return; }
     closeCardMenu();
     closeCreateCard();
     boardWorld.querySelectorAll('.ws-card.confirming-delete').forEach(el => el.classList.remove('confirming-delete'));
@@ -1139,6 +1202,7 @@ window.addEventListener('message', event => {
         renderProjects();
         renderBoard();
         if(trashPanel.classList.contains('active')) renderTrash();
+        if(projectDeleteModal.classList.contains('active')) paintProjectDeleteDialog();
         refreshIcons();
     }
 });
