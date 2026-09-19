@@ -2625,6 +2625,12 @@ function promptNodeLLMInputText(node, ctx=smartLoopContext){
     const instruction = String(node?.llmInstruction || '').trim();
     return [upstream, instruction].filter(Boolean).join('\n\n');
 }
+// “生成要求”是用户对文本节点下达生成任务的显式意图；上游文本只是数据依赖。
+// 自动执行（整组执行等）据此决定是否调用 LLM，避免在没有指令的情况下让模型
+// 凭空改写并覆盖节点里手写的文本。
+function promptNodeHasTextGenerationRequest(node){
+    return Boolean(node) && String(node.llmInstruction || '').trim() !== '';
+}
 function promptNodeExpandedHeight(node){
     return promptNodeMinHeight(node);
 }
@@ -11863,7 +11869,49 @@ function workflowGroupCoverUrl(group){return workflowGroupOrderedMembers(group).
 function openWorkflowCreateDialog(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n)),modal=document.getElementById('workflowCreateModal');if(!group||!modal)return;pendingWorkflowCreateGroupId=id;const name=document.getElementById('workflowCreateName'),cover=document.getElementById('workflowCreateCover');if(name)name.value=String(group.title||'').slice(0,20);if(cover)cover.innerHTML=workflowGroupCoverUrl(group)?`<img src="${escapeAttr(workflowGroupCoverUrl(group))}" alt="">`:'<i data-lucide="workflow"></i>';document.getElementById('workflowCreateCount').textContent=`${Array.from(name?.value||'').length}/20`;modal.classList.add('open');refreshIcons();name?.focus();}
 function closeWorkflowCreateDialog(){document.getElementById('workflowCreateModal')?.classList.remove('open');pendingWorkflowCreateGroupId='';}
 async function confirmWorkflowCreate(){const group=nodes.find(n=>n.id===pendingWorkflowCreateGroupId&&isWorkflowOrganizerNode(n)),name=String(document.getElementById('workflowCreateName')?.value||'').trim();if(!group||!name){toast('请输入工作流名称');return;}const res=await fetch('/api/workflow-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...workflowGroupPayload(group),name,cover_url:workflowGroupCoverUrl(group)})});if(!res.ok)throw new Error(await responseErrorMessage(res,'创建工作流失败'));closeWorkflowCreateDialog();toast('工作流已创建');}
-async function runWorkflowGroup(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n));if(!group||workflowGroupRunState)return;const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));const cross=(canvas?.connections||[]).some(c=>{const a=nodes.find(n=>n.id===c.from),b=nodes.find(n=>n.id===c.to);return(a?.type==='smart-loop'||b?.type==='smart-loop')&&(ids.has(c.from)!==ids.has(c.to));});if(cross){toast('循环链路不能跨出工作流分组');return;}workflowGroupRunState={id};const original=selectedId;try{for(const node of members){if(!isSmartRunnableNode(node))continue;selectedId=node.id;selectedIds=[];await runGeneration(node);if(node.error)throw new Error(node.error);}toast('整组执行完成');}catch(e){toast(e.message||'整组执行已停止');}finally{workflowGroupRunState=null;selectedId=original;render();scheduleSave();}}
+// 整组执行逐个成员决定跑什么：文本节点只有在“生成要求”里有内容时才调用 LLM
+// （空要求说明它只是下游节点的静态提示词载体，绝不能覆盖用户手写的文本），
+// 其它节点沿用 runGeneration 的提交与回收语义。
+function workflowGroupMemberRunMode(node){
+    if(node?.type === 'smart-prompt') return promptNodeHasTextGenerationRequest(node) ? 'text' : 'skip';
+    return isSmartRunnableNode(node) ? 'generation' : 'skip';
+}
+async function runWorkflowGroup(id){
+    const group = nodes.find(n => n.id === id && isWorkflowOrganizerNode(n));
+    if(!group || workflowGroupRunState) return;
+    const members = workflowGroupOrderedMembers(group), ids = new Set(members.map(n => n.id));
+    const cross = (canvas?.connections || []).some(c => {
+        const a = nodes.find(n => n.id === c.from), b = nodes.find(n => n.id === c.to);
+        return (a?.type === 'smart-loop' || b?.type === 'smart-loop') && (ids.has(c.from) !== ids.has(c.to));
+    });
+    if(cross){ toast('循环链路不能跨出工作流分组'); return; }
+    workflowGroupRunState = {id};
+    const original = selectedId;
+    try {
+        for(const node of members){
+            const mode = workflowGroupMemberRunMode(node);
+            if(mode === 'skip') continue;
+            selectedId = node.id;
+            selectedIds = [];
+            if(mode === 'text'){
+                // 文本生成必须等待结果落回 node.text，下游图片节点提交时才会用到新文本。
+                const result = await runPromptLLMNode(node.id);
+                if(result?.status === 'error') throw new Error(result.message || tr('smart.promptLlmFailed'));
+                continue;
+            }
+            await runGeneration(node);
+            if(node.error) throw new Error(node.error);
+        }
+        toast('整组执行完成');
+    } catch(e) {
+        toast(e.message || '整组执行已停止');
+    } finally {
+        workflowGroupRunState = null;
+        selectedId = original;
+        render();
+        scheduleSave();
+    }
+}
 window.toggleWorkflowGroupLayoutMenu=toggleWorkflowGroupLayoutMenu;window.layoutWorkflowGroup=layoutWorkflowGroup;window.runWorkflowGroup=runWorkflowGroup;window.openWorkflowCreateDialog=openWorkflowCreateDialog;
 function canvasOrganizerHtml(node){
     const color=organizerColor(node);
@@ -21927,22 +21975,25 @@ async function runGeneration(targetNode=null){
     }
 }
 const SMART_TEXT_GENERATION_TIMEOUT_MS = 180000;
+// 返回值是给自动化调用方（整组执行等）的收口信号：
+// ok=已生成，busy=该节点已在本轮运行中，cancelled=本次执行被更新的执行取代，
+// error=未生成（message 为可直接展示的原因），skipped=目标不是文本节点。
 async function runPromptLLMNode(nodeId){
     const node = nodes.find(n => n.id === nodeId);
-    if(!node || node.type !== 'smart-prompt') return;
-    if(node.running) return;
+    if(!node || node.type !== 'smart-prompt') return {status:'skipped'};
+    if(node.running) return {status:'busy'};
     const message = promptNodeLLMInputText(node).trim();
     if(!message){
         promptRunFeedback.set(node.id, {type:'error', message:tr('smart.promptLlmNeedText')});
         render();
-        return;
+        return {status:'error', message:tr('smart.promptLlmNeedText')};
     }
     const provider = resolveChatProviderId(node.llmProvider || '');
     const model = resolveChatModel(node.llmModel || '', provider);
     if(!provider || !model){
         promptRunFeedback.set(node.id, {type:'error', message:tr('smart.promptLlmNoneHint')});
         render();
-        return;
+        return {status:'error', message:tr('smart.promptLlmNoneHint')};
     }
     const mediaRefs = promptNodeInputMediaForLLM(node);
     const runLogStartedAt = nowMs();
@@ -21991,7 +22042,7 @@ async function runPromptLLMNode(nodeId){
             throw new Error(body || tr('smart.textGenerationEmpty'));
         });
         const currentNode = liveSmartNode(node);
-        if(!isCurrentSmartNodeExecution(currentNode, execution)) return;
+        if(!isCurrentSmartNodeExecution(currentNode, execution)) return {status:'cancelled'};
         const generated = (result.text || '').trim();
         if(!generated) throw new Error(tr('smart.textGenerationEmpty'));
         currentNode.text = generated;
@@ -22007,8 +22058,9 @@ async function runPromptLLMNode(nodeId){
             promptRunFeedback.delete(currentNode.id);
             render();
         }, 1600);
+        return {status:'ok'};
     } catch(e) {
-        if(!isCurrentSmartNodeExecution(liveSmartNode(node), execution)) return;
+        if(!isCurrentSmartNodeExecution(liveSmartNode(node), execution)) return {status:'cancelled'};
         let message = String(e.message || tr('smart.promptLlmFailed')).slice(0, 220);
         if(execution.timedOut || e?.name === 'AbortError') message = tr('smart.textGenerationTimeout');
         if(promptNodeInputImages(node).length && /image|vision|multimodal|图片|视觉/i.test(message) && /support|unsupported|not allowed|不支持|无法/i.test(message)){
@@ -22016,6 +22068,7 @@ async function runPromptLLMNode(nodeId){
         }
         promptRunFeedback.set(node.id, {type:'error', message});
         addSmartGenerationLog({run:runLog, outputs:[], runMs:nowMs() - runLogStartedAt, error:message});
+        return {status:'error', message};
     } finally {
         if(finishSmartNodeExecution(liveSmartNode(node), execution)) render();
     }
