@@ -1,4 +1,4 @@
-﻿/* Workflow Library CSS */
+/* Workflow Library CSS */
 .workflow-library-card .library-card-cover {
     aspect-ratio: 16/10;
     background: var(--soft);
@@ -15,7 +15,7 @@
 .workflow-cover-placeholder svg { width: 48px; height: 48px; }
 .workflow-meta {
     margin-top: 6px; font-size: calc(11px * var(--canvas-font-scale, 1)); color: var(--muted);
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px;
 }
 .workflow-node-count { display: flex; align-items: center; gap: 4px; }
 .workflow-node-count svg { width: 13px; height: 13px; }
@@ -25,6 +25,16 @@
 .workflow-library-card .library-card-cover img { width:100%; height:100%; object-fit:cover; }
 .workflow-card-actions { opacity:0; transition:opacity .16s ease; }
 .workflow-library-card:hover .workflow-card-actions { opacity:1; }
-.workflow-card-actions button { height:32px; border:0; border-radius:8px; padding:0 10px; background:rgba(255,255,255,.92); color:#18202b; font:inherit; font-size:calc(12px * var(--canvas-font-scale, 1)); font-weight:800; cursor:pointer; }
+/* 我的发布：管理操作常显，取消发布不需要悬停才能发现 */
+.workflow-card-actions.is-managed { opacity:1; }
+.workflow-card-actions button { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:32px; border:0; border-radius:8px; padding:0 10px; background:rgba(255,255,255,.92); color:#18202b; font:inherit; font-size:calc(12px * var(--canvas-font-scale, 1)); font-weight:800; cursor:pointer; }
+.workflow-card-actions button svg { width:14px; height:14px; flex:0 0 auto; }
+.workflow-card-actions button:disabled { opacity:.6; cursor:wait; }
+.workflow-card-actions .is-spinning { animation:workflow-card-spin .8s linear infinite; }
+@keyframes workflow-card-spin { to { transform:rotate(360deg); } }
 .workflow-card-actions button.publish { background:transparent; border:1px solid var(--rh-brand); color:var(--rh-brand); }
+.workflow-card-actions button.is-published { background:rgba(199,255,0,.09); border:1px solid rgba(199,255,0,.42); color:#e7ff96; }
+.workflow-card-actions button.is-favorite { background:transparent; border:1px solid var(--rh-brand); color:var(--rh-brand); }
 .workflow-card-actions button.danger { background:transparent; color:#fff; }
+.workflow-card-actions.is-managed button.danger { border:1px solid rgba(255,108,108,.55); color:#ffb1b1; }
+.workflow-card-actions.is-managed button.danger:hover { border-color:#ff8c8c; background:rgba(185,54,54,.34); color:#fff; }
