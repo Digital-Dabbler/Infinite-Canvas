@@ -12214,8 +12214,15 @@ def remove_prompt_public_cover(record):
         except OSError:
             pass
 
-def public_prompt_libraries(data=None):
-    data = normalize_prompt_libraries(data or load_prompt_libraries())
+def merged_published_prompt_snapshots(data=None):
+    """Return normalized data plus every publication visible to users.
+
+    New publications are written to the Git-tracked catalog, but snapshots
+    created before that catalog existed are still stored in ``data["published"]``
+    and both layers are served.  Reads, re-publish checks and withdrawals must
+    therefore agree on this merged view instead of looking at one layer only.
+    """
+    data = normalize_prompt_libraries(data if isinstance(data, dict) else load_prompt_libraries())
     published = []
     seen_published_ids = set()
     # Historical runtime snapshots remain available locally. New snapshots are
@@ -12227,6 +12234,34 @@ def public_prompt_libraries(data=None):
             continue
         seen_published_ids.add(item_id)
         published.append(raw_item)
+    return data, published
+
+def remove_published_prompt_snapshot(snapshot_id):
+    """Delete one publication from every layer that may still hold it.
+
+    Withdrawal used to touch only the tracked catalog, so historical runtime
+    snapshots stayed visible in "我的发布" and the card looked impossible to
+    withdraw.  Returns the removed record, or ``None`` for an unknown ID.
+    """
+    snapshot_id = str(snapshot_id or "")
+    if not snapshot_id:
+        return None
+    removed = None
+    versioned = load_versioned_published_prompts()
+    kept_versioned = [item for item in versioned if str(item.get("id") or "") != snapshot_id]
+    if len(kept_versioned) != len(versioned):
+        removed = next(item for item in versioned if str(item.get("id") or "") == snapshot_id)
+        save_versioned_published_prompts(kept_versioned)
+    data = load_prompt_libraries()
+    runtime = data.get("published") or []
+    kept_runtime = [item for item in runtime if str((item or {}).get("id") or "") != snapshot_id]
+    if len(kept_runtime) != len(runtime):
+        removed = removed or next(item for item in runtime if str((item or {}).get("id") or "") == snapshot_id)
+        save_prompt_libraries({**data, "published": kept_runtime})
+    return removed
+
+def public_prompt_libraries(data=None):
+    data, published = merged_published_prompt_snapshots(data)
     return {
         "active_library_id": data.get("active_library_id") or (data.get("libraries") or [{}])[0].get("id") or "system",
         "libraries": data.get("libraries") or [],
@@ -23980,11 +24015,14 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
     if source.get("owner_type") != "user" or str(source.get("owner_id") or "") != user_id:
         raise HTTPException(status_code=403, detail="只能发布自己的个人提示词")
     versioned_published = load_versioned_published_prompts()
-    existing = next((item for item in versioned_published
+    # A publication may still live in the legacy runtime list, so look for an
+    # existing snapshot in the merged view to avoid publishing a duplicate.
+    _, visible_publications = merged_published_prompt_snapshots(data)
+    existing = next((item for item in visible_publications
                      if item.get("source_prompt_id") == item_id and str(item.get("owner_id") or "") == user_id), None)
     if not payload.published:
         if existing:
-            save_versioned_published_prompts([item for item in versioned_published if item.get("id") != existing.get("id")])
+            remove_published_prompt_snapshot(existing.get("id"))
             remove_prompt_public_cover(existing)
             data = load_prompt_libraries()
         return {"library": public_prompt_libraries_for_user(data, user), "published": False}
@@ -24046,14 +24084,13 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
 @app.delete("/api/prompt-libraries/published/{snapshot_id}")
 async def withdraw_prompt_library_snapshot(snapshot_id: str, request: Request):
     user = require_authenticated(request)
-    data = load_prompt_libraries()
     user_id = str(user.get("id") or "")
-    versioned_published = load_versioned_published_prompts()
-    snapshot = next((item for item in versioned_published
+    _, visible_publications = merged_published_prompt_snapshots()
+    snapshot = next((item for item in visible_publications
                      if item.get("id") == snapshot_id and (asset_is_admin(user) or str(item.get("owner_id") or "") == user_id)), None)
     if not snapshot:
         raise HTTPException(status_code=404, detail="已发布提示词不存在")
-    save_versioned_published_prompts([item for item in versioned_published if item.get("id") != snapshot_id])
+    remove_published_prompt_snapshot(snapshot_id)
     remove_prompt_public_cover(snapshot)
     data = load_prompt_libraries()
     return {"library": public_prompt_libraries_for_user(data, user), "withdrawn": True}
