@@ -179,6 +179,84 @@ class PromptLibraryPublicationTests(unittest.TestCase):
         self.assertEqual(stored_source["category"], "style")
         self.assertEqual(stored_source["subcategory"], "real")
 
+    def seed_legacy_runtime_publication(self, snapshot_id="published_legacy_0001", source_id="alice_prompt", owner="alice"):
+        """Reproduce a publication created before the versioned catalog existed."""
+        data = main.load_prompt_libraries()
+        data["published"] = [{
+            "id": snapshot_id,
+            "name": "Alice 旧发布",
+            "prefix": "alice prefix",
+            "source_prompt_id": source_id,
+            "source_author_id": owner,
+            "cover_url": f"/static/images/prompt-library/published/{snapshot_id}_cover.png",
+            "published": True,
+            "published_at": 1700000000000,
+            "owner_type": "user",
+            "owner_id": owner,
+        }]
+        main.save_prompt_libraries(data)
+        return snapshot_id
+
+    def test_legacy_runtime_publication_is_visible_and_withdrawable(self):
+        snapshot_id = self.seed_legacy_runtime_publication()
+        alice_view = main.public_prompt_libraries_for_user(main.load_prompt_libraries(), self.alice)
+        self.assertIn(snapshot_id, {item["id"] for item in alice_view["published"]})
+
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            result = asyncio.run(main.withdraw_prompt_library_snapshot(snapshot_id, object()))
+
+        self.assertTrue(result["withdrawn"])
+        self.assertEqual(main.load_prompt_libraries()["published"], [])
+        bob_view = main.public_prompt_libraries_for_user(main.load_prompt_libraries(), self.bob)
+        self.assertNotIn(snapshot_id, {item["id"] for item in bob_view["inspiration"]})
+
+    def test_other_users_cannot_withdraw_legacy_runtime_publication(self):
+        snapshot_id = self.seed_legacy_runtime_publication()
+
+        with patch.object(main, "require_authenticated", return_value=self.bob):
+            with self.assertRaises(main.HTTPException) as error:
+                asyncio.run(main.withdraw_prompt_library_snapshot(snapshot_id, object()))
+
+        self.assertEqual(error.exception.status_code, 404)
+        self.assertEqual([item["id"] for item in main.load_prompt_libraries()["published"]], [snapshot_id])
+
+    def test_withdraw_removes_legacy_runtime_cover(self):
+        snapshot_id = self.seed_legacy_runtime_publication()
+        os.makedirs(self.versioned_cover_dir, exist_ok=True)
+        cover_path = os.path.join(self.versioned_cover_dir, f"{snapshot_id}_cover.png")
+        with open(cover_path, "wb") as handle:
+            handle.write(b"png")
+
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            asyncio.run(main.withdraw_prompt_library_snapshot(snapshot_id, object()))
+
+        self.assertFalse(os.path.exists(cover_path))
+
+    def test_republish_does_not_duplicate_legacy_runtime_publication(self):
+        snapshot_id = self.seed_legacy_runtime_publication()
+
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            result = asyncio.run(main.publish_prompt_library_item(
+                "alice_prompt", main.PromptLibraryPublishRequest(published=True), object()
+            ))
+
+        self.assertTrue(result["published"])
+        self.assertEqual(result["snapshot"]["id"], snapshot_id)
+        self.assertEqual(main.load_versioned_published_prompts(), [])
+        self.assertEqual([item["id"] for item in main.load_prompt_libraries()["published"]], [snapshot_id])
+
+    def test_unpublish_flag_removes_legacy_runtime_publication(self):
+        snapshot_id = self.seed_legacy_runtime_publication()
+
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            result = asyncio.run(main.publish_prompt_library_item(
+                "alice_prompt", main.PromptLibraryPublishRequest(published=False), object()
+            ))
+
+        self.assertFalse(result["published"])
+        self.assertEqual(main.load_prompt_libraries()["published"], [])
+        self.assertNotIn(snapshot_id, {item["id"] for item in result["library"]["published"]})
+
     def test_publish_rejects_empty_name_and_unknown_category(self):
         with patch.object(main, "require_authenticated", return_value=self.alice):
             with self.assertRaises(main.HTTPException) as empty_name:
