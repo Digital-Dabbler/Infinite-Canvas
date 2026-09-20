@@ -95,7 +95,11 @@ for _ext, _mime in ((".webp", "image/webp"), (".avif", "image/avif")):
 1. **迁移**：运行时 `published` 中未被墓标的记录写入受跟踪布局，写完后从运行时 JSON 移除。工作流记录若 `archive_url`/`cover_url` 已不可解析，回退到 `source_workflow_id` 的私有包与封面；提示词记录**没有**回退路径，源条目的 `cover_url` 不参与。两者都取不到时字段写空，不丢弃记录。
 2. **清理**：删除运行时中已被墓标的记录。
 3. `git add -A -- <受跟踪路径中实际存在的那些>`。
-4. `git commit -m "chore(library): sync inspiration library" -- <同一组路径>`，使用 pathspec 以免提交无关的已暂存内容。路径已过滤为磁盘上存在的，因为 Git 把不存在的 pathspec 当错误。无变更时返回 `changed: false` 且不产生提交。
+4. 读回 `git diff --cached --name-only -z -- <同一组路径>`，对**返回的文件列表**执行
+   `git commit -m "chore(library): sync inspiration library" -- <文件>`。不能把目录路径直接交给
+   `git commit`：空目录存在于磁盘但不是 Git 认识的 pathspec，会让整次提交以
+   `did not match any file(s) match known to git` 失败，而"从未发布过"的机器正是这个状态。
+   用 pathspec 提交可避免带上无关的已暂存内容。列表为空时返回 `changed: false` 且不产生提交。
 5. 返回 commit hash、文件数与 Git 输出尾部。
 
 Git 调用统一走一个 helper：`subprocess.run` 包在 `asyncio.to_thread` 里、`cwd` 固定项目根、返回码与 stderr 尾部原样回传。不做 push。
@@ -105,7 +109,7 @@ Git 调用统一走一个 helper：`subprocess.run` 包在 `asyncio.to_thread` �
 - `static/admin.html`：在 `system` 分区新增同步 panel，元素带 id 以便 `sectionFor('#<id>')` 注册；把 `static/js/admin-dashboard-v2.js` 里该 workspace 的导航标签由「公告发布」放宽为覆盖两个面板。
 - `static/js/admin-dashboard-v2.js`：注册进 `workspaceElements.system`；渲染状态区与按钮；按钮有 busy 态与二次确认（动作会产生提交）；失败时展示 Git 的 stderr。
 - `static/js/prompt-library.js`、`static/js/workflow-library.js`：封面 `<img>` 加 `onerror` 兜底为现有占位图标。
-- `static/js/i18n/library.js`：新增文案补中英词条，前端一律走 `t()` 并保留中文兜底。
+- `static/admin.html` 未接入 i18n（该页文案直接写在标记里），因此新面板沿用该页的中文文案，不新增 `static/js/i18n/` 词条；两个库页面也没有新增文案，词条文件不变。
 - 不手工改 `?v=`，由 `sync_static_html_versions()` 维护。
 
 ### 9. 数据迁移提交

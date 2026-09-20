@@ -213,9 +213,12 @@ there; the label is widened to cover both panels. The panel markup needs an id t
    The pathspec is what keeps the action from committing unrelated staged work: with
    `git commit -- <paths>`, only those paths are committed and the rest of the index is untouched.
 
-   The pathspec is filtered to paths that exist on disk, because Git treats a non-existent
-   pathspec as an error and an empty directory cannot be tracked. A library with nothing published
-   yet therefore syncs to `changed: false` instead of failing.
+   The commit does not reuse the `git add` pathspec. An empty directory exists on disk but is not
+   a pathspec Git knows, and passing one makes `git commit` reject the entire commit with "did not
+   match any file(s) known to git" — which is the normal state of a machine that has never
+   published. The action therefore reads back `git diff --cached --name-only -z -- <library paths>`
+   after staging and commits exactly those files, so a library with nothing published yet syncs to
+   `changed: false` instead of failing.
 5. Return the commit hash, the file count, and the tail of Git's output.
 
 There is no commit when nothing changed: the response reports `changed: false`.
@@ -264,8 +267,9 @@ scope.
   so even a stale reference cannot render a broken image.
 - The admin panel described in §5, with a busy state and a confirmation step, since the action
   creates a commit.
-- New user-facing strings are added to `static/js/i18n/library.js` (zh and en) and read through
-  `t()` with a Chinese fallback.
+- `static/admin.html` is not wired into the i18n layer — its strings are Chinese in the markup —
+  so the new panel follows that page and adds no `static/js/i18n/` entries. The library pages gain
+  no new user-facing text, so the i18n dictionaries are unchanged.
 - `?v=` cache stamps are left alone; `sync_static_html_versions()` owns them.
 
 ## Out of Scope
