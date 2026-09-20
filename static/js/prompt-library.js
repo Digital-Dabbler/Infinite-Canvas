@@ -1,4 +1,4 @@
-﻿/* Prompt library: system inspiration, favorites, and private presets. */
+/* Prompt library: system inspiration, favorites, and private presets. */
 const PROMPT_EDITOR_SUBCATEGORIES = {
     style: [['real', '真人风格'], ['2d', '2D 风格'], ['3d', '3D 风格']],
     filter: [['film', '胶片质感'], ['color', '色彩调校'], ['lighting', '光效氛围']],
@@ -151,7 +151,7 @@ const PromptLibrary = {
         const isPublished = this.tab === 'myPublished';
         const publication = isMine ? this.publishedForSource(item.id) : null;
         const preview = [item.prefix || item.positive, item.suffix || item.negative].filter(Boolean).join(' · ');
-        const cover = item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy">` : `<div class="prompt-card-placeholder"><i data-lucide="sparkles"></i></div>`;
+        const cover = item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy" onerror="window.libraryCoverFallback?.(this, 'sparkles')">` : `<div class="prompt-card-placeholder"><i data-lucide="sparkles"></i></div>`;
         const applyLabel = selected ? '取消' : '应用';
         const applyIcon = selected ? 'x' : 'plus';
         return `<article class="prompt-card ${selected ? 'is-selected' : ''}">
@@ -213,7 +213,7 @@ const PromptLibrary = {
         return `<section class="prompt-detail" aria-labelledby="prompt-preview-title" aria-describedby="prompt-preview-description">
             <header class="prompt-preview-header"><div><span class="prompt-preview-eyebrow">${LibraryUtils.escapeHtml(previewLabel)}</span><span class="prompt-preview-recipe-label">${LibraryUtils.escapeHtml(recipeLabel)}</span></div><button type="button" class="prompt-preview-close" data-pl-preview-close aria-label="${LibraryUtils.escapeHtml(closeLabel)}"><i data-lucide="x"></i></button></header>
             <div class="prompt-detail-body"><div class="prompt-detail-grid">
-                <figure class="prompt-detail-cover">${item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}">` : '<i data-lucide="sparkles" aria-hidden="true"></i>'}</figure>
+                <figure class="prompt-detail-cover">${item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" onerror="window.libraryCoverFallback?.(this, 'sparkles')">` : '<i data-lucide="sparkles" aria-hidden="true"></i>'}</figure>
                 <div class="prompt-detail-copy"><span class="prompt-detail-kicker">${LibraryUtils.escapeHtml(item.subcategory || item.category)}</span><h2 id="prompt-preview-title">${LibraryUtils.escapeHtml(item.name)}</h2><p id="prompt-preview-description">${LibraryUtils.escapeHtml(item.description || '')}</p>
                     <section class="prompt-detail-recipe" aria-label="${LibraryUtils.escapeHtml(recipeLabel)}">
                         <div class="prompt-detail-field"><b>${LibraryUtils.escapeHtml(prefixLabel)}</b><pre>${LibraryUtils.escapeHtml(prefix)}</pre></div>

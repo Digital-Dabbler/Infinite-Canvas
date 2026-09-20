@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import main
@@ -16,8 +18,8 @@ class PromptLibraryPublicationTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.prompt_path = os.path.join(self.temp_dir.name, "prompt_libraries.json")
         self.trash_path = os.path.join(self.temp_dir.name, "asset_trash.json")
-        self.public_dir = os.path.join(self.temp_dir.name, "public")
-        self.versioned_path = os.path.join(self.temp_dir.name, "prompt-library-published.json")
+        self.versioned_dir = os.path.join(self.temp_dir.name, "prompt-library-published")
+        self.withdrawn_dir = os.path.join(self.temp_dir.name, "prompt-library-withdrawn")
         self.versioned_cover_dir = os.path.join(self.temp_dir.name, "published-covers")
         self.users = {
             "users": [
@@ -27,8 +29,8 @@ class PromptLibraryPublicationTests(unittest.TestCase):
         }
         self.patchers = [
             patch.object(main, "PROMPT_LIBRARY_PATH", self.prompt_path),
-            patch.object(main, "PROMPT_LIBRARY_PUBLIC_DIR", self.public_dir),
-            patch.object(main, "PROMPT_LIBRARY_PUBLISHED_PATH", self.versioned_path),
+            patch.object(main, "PROMPT_LIBRARY_PUBLISHED_DIR", self.versioned_dir),
+            patch.object(main, "PROMPT_LIBRARY_WITHDRAWN_DIR", self.withdrawn_dir),
             patch.object(main, "PROMPT_LIBRARY_PUBLISHED_COVER_DIR", self.versioned_cover_dir),
             patch.object(main, "ASSET_TRASH_PATH", self.trash_path),
             patch.object(main, "load_auth_users", return_value=self.users),
@@ -126,24 +128,73 @@ class PromptLibraryPublicationTests(unittest.TestCase):
                 "alice_prompt", main.PromptLibraryPublishRequest(published=True), object()
             ))
 
-        self.assertTrue(os.path.isfile(self.versioned_path))
+        snapshot_id = result["snapshot"]["id"]
+        self.assertTrue(os.path.isfile(os.path.join(self.versioned_dir, f"{snapshot_id}.json")))
         versioned = main.load_versioned_published_prompts()
-        self.assertEqual([item["id"] for item in versioned], [result["snapshot"]["id"]])
+        self.assertEqual([item["id"] for item in versioned], [snapshot_id])
         self.assertEqual(main.load_prompt_libraries()["published"], [])
 
-    def test_published_cover_is_copied_to_the_versioned_static_directory(self):
+    def test_published_cover_is_re_encoded_into_the_versioned_static_directory(self):
         source = os.path.join(self.temp_dir.name, "cover.png")
-        with open(source, "wb") as handle:
-            handle.write(b"png")
-        with patch.object(main, "output_file_from_url", return_value=source), \
-             patch.object(main, "content_type_for_path", return_value="image/png"):
+        Image.new("RGB", (1600, 900), (40, 90, 200)).save(source)
+        with patch.object(main, "output_file_from_url", return_value=source):
             url = main.prompt_public_cover_copy("/assets/uploads/cover.png", "published_example")
 
-        self.assertEqual(url, "/static/images/prompt-library/published/published_example_cover.png")
-        cover_path = os.path.join(self.versioned_cover_dir, "published_example_cover.png")
+        self.assertEqual(url, "/static/images/prompt-library/published/published_example_cover.webp")
+        cover_path = os.path.join(self.versioned_cover_dir, "published_example_cover.webp")
         self.assertTrue(os.path.isfile(cover_path))
+        with Image.open(cover_path) as stored:
+            self.assertEqual(max(stored.size), main.LIBRARY_COVER_MAX_EDGE)
         main.remove_prompt_public_cover({"cover_url": url})
         self.assertFalse(os.path.exists(cover_path))
+
+    def test_published_cover_copy_keeps_an_already_tracked_cover(self):
+        url = main.prompt_public_cover_copy(
+            "/static/images/prompt-library/style_ue5.webp?v=1", "published_example")
+        self.assertEqual(url, "/static/images/prompt-library/style_ue5.webp")
+
+    def test_published_cover_copy_reports_no_cover_for_an_unreadable_source(self):
+        source = os.path.join(self.temp_dir.name, "broken.png")
+        with open(source, "wb") as handle:
+            handle.write(b"not an image")
+        with patch.object(main, "output_file_from_url", return_value=source):
+            self.assertEqual(main.prompt_public_cover_copy("/assets/uploads/broken.png", "pub"), "")
+
+    def test_withdraw_leaves_a_deterministic_tombstone(self):
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            result = asyncio.run(main.publish_prompt_library_item(
+                "alice_prompt", main.PromptLibraryPublishRequest(published=True), object()
+            ))
+            snapshot_id = result["snapshot"]["id"]
+            asyncio.run(main.withdraw_prompt_library_snapshot(snapshot_id, object()))
+
+        tombstone = os.path.join(self.withdrawn_dir, f"{snapshot_id}.json")
+        self.assertTrue(os.path.isfile(tombstone))
+        with open(tombstone, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), '{\n  "id": "%s"\n}' % snapshot_id)
+        self.assertFalse(os.path.isfile(os.path.join(self.versioned_dir, f"{snapshot_id}.json")))
+
+    def test_tombstone_hides_a_stale_runtime_copy(self):
+        snapshot_id = self.seed_legacy_runtime_publication()
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            asyncio.run(main.withdraw_prompt_library_snapshot(snapshot_id, object()))
+
+        # A second machine can still hold the old runtime record. Re-seed it and
+        # confirm the tombstone keeps it out of the served view.
+        data = main.load_prompt_libraries()
+        data["published"] = [{
+            "id": snapshot_id,
+            "name": "陈旧副本",
+            "source_prompt_id": "alice_prompt",
+            "owner_type": "user",
+            "owner_id": "alice",
+            "published": True,
+        }]
+        main.save_prompt_libraries(data)
+
+        view = main.public_prompt_libraries_for_user(main.load_prompt_libraries(), self.alice)
+        self.assertNotIn(snapshot_id, {item["id"] for item in view["inspiration"]})
+        self.assertNotIn(snapshot_id, {item["id"] for item in view["published"]})
 
     def test_admin_my_publications_excludes_other_users_snapshots(self):
         with patch.object(main, "require_authenticated", return_value=self.alice):

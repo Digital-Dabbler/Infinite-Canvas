@@ -426,12 +426,13 @@ ASSET_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_library.json")
 ASSET_URL_LIBRARY_PATH = os.path.join(DATA_DIR, "asset_url_library.json")
 PROMPT_LIBRARY_PATH = os.path.join(DATA_DIR, "prompt_libraries.json")
 PROMPT_LIBRARY_DIR = os.path.join(ASSETS_DIR, "prompt_library")
-PROMPT_LIBRARY_PUBLIC_DIR = os.path.join(PROMPT_LIBRARY_DIR, "public")
-# Published prompt cards are project content, rather than per-machine runtime
-# state. Keep the manifest and copied covers under static/ so Git can carry
-# them between development machines. Personal drafts stay in
-# data/prompt_libraries.json.
-PROMPT_LIBRARY_PUBLISHED_PATH = os.path.join(STATIC_DIR, "data", "prompt-library-published.json")
+# Published inspiration-library content is project content, not per-machine
+# runtime state, so every artifact lives under static/ where Git carries it
+# between machines. One publication is one file: several machines publish
+# independently, and appending to a shared JSON array would conflict on every
+# pull. Personal drafts stay in data/prompt_libraries.json.
+PROMPT_LIBRARY_PUBLISHED_DIR = os.path.join(STATIC_DIR, "data", "prompt-library-published")
+PROMPT_LIBRARY_WITHDRAWN_DIR = os.path.join(STATIC_DIR, "data", "prompt-library-withdrawn")
 PROMPT_LIBRARY_PUBLISHED_COVER_DIR = os.path.join(STATIC_DIR, "images", "prompt-library", "published")
 LIBRARY_FAVORITES_PATH = os.path.join(DATA_DIR, "library_favorites.json")
 LIBRARY_FAVORITES_LOCK = Lock()
@@ -440,7 +441,22 @@ WORKFLOW_LIBRARY_PATH = os.path.join(DATA_DIR, "workflow_library.json")
 WORKFLOW_TRASH_PATH = os.path.join(DATA_DIR, "workflow_trash.json")
 WORKFLOW_LIBRARY_DIR = os.path.join(ASSETS_DIR, "workflow_library")
 WORKFLOW_LIBRARY_PRIVATE_DIR = os.path.join(WORKFLOW_LIBRARY_DIR, "private")
-WORKFLOW_LIBRARY_PUBLIC_DIR = os.path.join(WORKFLOW_LIBRARY_DIR, "public")
+WORKFLOW_LIBRARY_PUBLISHED_DIR = os.path.join(STATIC_DIR, "data", "workflow-library-published")
+WORKFLOW_LIBRARY_WITHDRAWN_DIR = os.path.join(STATIC_DIR, "data", "workflow-library-withdrawn")
+WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR = os.path.join(STATIC_DIR, "workflow-library", "published")
+WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR = os.path.join(STATIC_DIR, "images", "workflow-library", "published")
+# Single source for the read scan, the integrity self-check, and the Git
+# pathspec of the admin sync action. Consumers derive their globs from this so
+# the three cannot drift apart.
+LIBRARY_TRACKED_PATHS = (
+    "static/data/prompt-library-published",
+    "static/data/prompt-library-withdrawn",
+    "static/images/prompt-library/published",
+    "static/data/workflow-library-published",
+    "static/data/workflow-library-withdrawn",
+    "static/images/workflow-library/published",
+    "static/workflow-library/published",
+)
 ASSET_AI_SETTINGS_PATH = os.path.join(DATA_DIR, "asset_ai_settings.json")
 ASSET_AI_TASKS_PATH = os.path.join(DATA_DIR, "asset_ai_tasks.json")
 LOCAL_ASSET_OWNERSHIP_PATH = os.path.join(DATA_DIR, "local_asset_ownership.json")
@@ -2074,6 +2090,21 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(WORKFLOW_DIR, exist_ok=True)
 os.makedirs(CONVERSATION_DIR, exist_ok=True)
 os.makedirs(CANVAS_DIR, exist_ok=True)
+for _library_dir in LIBRARY_TRACKED_PATHS:
+    os.makedirs(os.path.join(BASE_DIR, _library_dir), exist_ok=True)
+
+# The bundled CPython on Windows resolves media types from the registry, and a
+# machine without a registered Content Type for these extensions gets no entry.
+# Starlette's FileResponse then falls back to "text/plain", so /static, /assets
+# and /output all serve the file with a type no browser will render as an image.
+# Registering the types here fixes every mounted directory at once.
+for _media_ext, _media_type in (
+    (".webp", "image/webp"),
+    (".avif", "image/avif"),
+    (".heic", "image/heic"),
+    (".heif", "image/heif"),
+):
+    mimetypes.add_type(_media_type, _media_ext)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
@@ -5250,6 +5281,269 @@ async def admin_save_site_announcement(payload: SiteAnnouncementRequest, request
     with SITE_ANNOUNCEMENT_LOCK:
         _write_json_file(SITE_ANNOUNCEMENT_FILE, announcement)
     return {"announcement": announcement, "active": site_announcement_is_active(announcement)}
+
+# --- 灵感库 Git 同步 ---
+# Published inspiration-library content lives under static/ so Git carries it
+# between machines. This action is the only place the server touches Git: it
+# migrates leftover runtime publications, then stages and commits exactly the
+# library paths. It never pushes, and the pathspec keeps unrelated staged work
+# out of the commit.
+LIBRARY_SYNC_COMMIT_MESSAGE = "chore(library): sync inspiration library"
+
+
+def tracked_static_url_file(url):
+    """Resolve a ``/static/...`` URL to a file inside STATIC_DIR, or ``None``."""
+    clean = urllib.parse.unquote(str(url or "").split("?", 1)[0])
+    if not clean.startswith("/static/"):
+        return None
+    path = os.path.abspath(os.path.join(STATIC_DIR, clean[len("/static/"):].replace("/", os.sep)))
+    try:
+        if os.path.commonpath([path, os.path.abspath(STATIC_DIR)]) != os.path.abspath(STATIC_DIR):
+            return None
+    except ValueError:
+        return None
+    return path if os.path.isfile(path) else None
+
+
+def migrate_prompt_publication_cover(url, snapshot_id):
+    """Resolve a runtime prompt cover into the tracked layer.
+
+    There is no source fallback for a prompt cover: unlike a workflow, a
+    publication has no private package behind it. A reference whose file is
+    already gone becomes empty instead of being written as a dead link.
+    """
+    clean = str(url or "").split("?", 1)[0]
+    if not clean:
+        return ""
+    if clean.startswith("/static/"):
+        return clean if tracked_static_url_file(clean) else ""
+    return prompt_public_cover_copy(clean, snapshot_id)
+
+
+def migrate_workflow_publication(item, workflows_by_id):
+    """Rebuild one runtime workflow publication into the tracked package.
+
+    The public archive and cover may already be gone from this machine, so the
+    owner's private workflow for the same publication is used as the fallback.
+    Returns the snapshot id on success, or "" when the record is unusable.
+    """
+    snapshot_id = safe_snapshot_file_id(item.get("id"))
+    if not snapshot_id or not str(item.get("source_workflow_id") or ""):
+        return ""
+    archive_url = str(item.get("archive_url") or "").split("?", 1)[0]
+    cover_url = str(item.get("cover_url") or "").split("?", 1)[0]
+    source = workflows_by_id.get(str(item.get("source_workflow_id") or "")) or {}
+    if not workflow_file_path(archive_url):
+        archive_url = str(source.get("archive_url") or "").split("?", 1)[0]
+    if not workflow_file_path(cover_url):
+        cover_url = str(source.get("cover_url") or "").split("?", 1)[0]
+    if not archive_url.startswith("/static/workflow-library/published/"):
+        source_archive = workflow_file_path(archive_url)
+        archive_url = ""
+        if source_archive:
+            with open(source_archive, "rb") as handle:
+                archive_url = workflow_archive_copy(
+                    workflow_public_archive_bytes(handle.read()), snapshot_id, public=True)
+    if not cover_url.startswith("/static/images/workflow-library/published/"):
+        cover_url = workflow_cover_copy(cover_url, snapshot_id, public=True)
+    write_tracked_snapshot(WORKFLOW_LIBRARY_PUBLISHED_DIR, snapshot_id, {
+        **{key: value for key, value in item.items() if key not in {"archive_url", "cover_url"}},
+        "id": snapshot_id,
+        "archive_url": archive_url,
+        "cover_url": cover_url,
+    })
+    return snapshot_id
+
+
+def migrate_runtime_library_publications():
+    """Move machine-local runtime publications into the tracked package.
+
+    Runs once per machine in practice, and is idempotent: already-migrated
+    entries are gone from the runtime array, and re-running rewrites identical
+    files. A publication whose assets are gone is still migrated — with an empty
+    URL — so the record is never silently dropped.
+    """
+    summary = {"prompt": 0, "prompt_withdrawn": 0, "workflow": 0, "workflow_withdrawn": 0}
+
+    data = load_prompt_libraries()
+    runtime = [item for item in (data.get("published") or []) if isinstance(item, dict)]
+    prompt_withdrawn = withdrawn_snapshot_ids(PROMPT_LIBRARY_WITHDRAWN_DIR)
+    kept = []
+    for item in runtime:
+        snapshot_id = safe_snapshot_file_id(item.get("id"))
+        if not snapshot_id:
+            # No usable id means it cannot be named as a tracked file. Leave it
+            # in place instead of dropping the record on the floor.
+            kept.append(item)
+            continue
+        if snapshot_id in prompt_withdrawn:
+            summary["prompt_withdrawn"] += 1
+            continue
+        record = normalize_prompt_library_item({**item, "published": True})
+        record["cover_url"] = migrate_prompt_publication_cover(record.get("cover_url"), snapshot_id)
+        write_tracked_snapshot(PROMPT_LIBRARY_PUBLISHED_DIR, snapshot_id, record)
+        summary["prompt"] += 1
+    if kept != runtime:
+        save_prompt_libraries({**data, "published": kept})
+
+    workflow_data = load_workflow_library()
+    workflows_by_id = {
+        str(item.get("id") or ""): item for item in (workflow_data.get("workflows") or [])
+        if isinstance(item, dict)
+    }
+    workflow_withdrawn = withdrawn_snapshot_ids(WORKFLOW_LIBRARY_WITHDRAWN_DIR)
+    kept = []
+    for item in [entry for entry in (workflow_data.get("published") or []) if isinstance(entry, dict)]:
+        snapshot_id = safe_snapshot_file_id(item.get("id"))
+        if not snapshot_id:
+            kept.append(item)
+            continue
+        if snapshot_id in workflow_withdrawn:
+            summary["workflow_withdrawn"] += 1
+            continue
+        if migrate_workflow_publication(item, workflows_by_id):
+            summary["workflow"] += 1
+        else:
+            kept.append(item)
+    if kept != [entry for entry in (workflow_data.get("published") or []) if isinstance(entry, dict)]:
+        save_workflow_library({**workflow_data, "published": kept})
+
+    return summary
+
+
+def run_library_git(args, timeout=30):
+    """Run one Git command in the project root. Never raises; returns a triple."""
+    try:
+        completed = subprocess.run(
+            ["git", *args], cwd=BASE_DIR, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except FileNotFoundError:
+        return 127, "", "此机器上没有找到 git 命令。"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"git 执行超时（{timeout} 秒）。"
+    except OSError as exc:
+        return 126, "", f"无法执行 git：{exc}"
+    return completed.returncode, completed.stdout or "", completed.stderr or ""
+
+
+def existing_library_tracked_paths():
+    """The tracked library paths that exist on disk.
+
+    Git treats a non-existent pathspec as an error and an empty directory cannot
+    be tracked, so a library with nothing published yet must pass an empty list
+    rather than fail.
+    """
+    return [path for path in LIBRARY_TRACKED_PATHS if os.path.exists(os.path.join(BASE_DIR, path))]
+
+
+def library_git_state():
+    code, out, err = run_library_git(["rev-parse", "--is-inside-work-tree"])
+    if code == 127:
+        return {"available": False, "repository": False, "branch": "", "changed_files": 0, "error": err.strip()}
+    if code != 0:
+        return {"available": True, "repository": False, "branch": "", "changed_files": 0,
+                "error": (err or out).strip() or "项目目录不是 Git 仓库。"}
+    branch_code, branch_out, _ = run_library_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    paths = existing_library_tracked_paths()
+    changed_files = 0
+    if paths:
+        status_code, status_out, _ = run_library_git(
+            ["-c", "core.quotepath=false", "status", "--porcelain", "--", *paths])
+        if status_code == 0:
+            changed_files = len([line for line in status_out.splitlines() if line.strip()])
+    return {
+        "available": True,
+        "repository": True,
+        "branch": branch_out.strip() if branch_code == 0 else "",
+        "changed_files": changed_files,
+        "error": "",
+    }
+
+
+def library_sync_report():
+    """State shown before the administrator presses the sync button."""
+    prompt_runtime = [
+        item for item in (load_prompt_libraries().get("published") or [])
+        if safe_snapshot_file_id((item or {}).get("id"))
+    ]
+    workflow_runtime = [
+        item for item in (load_workflow_library().get("published") or [])
+        if safe_snapshot_file_id((item or {}).get("id"))
+    ]
+    # The self-check that catches "the manifest was committed but the cover was
+    # not", which is how a pulled library ends up with broken cards.
+    missing = []
+    prompt_tracked = read_tracked_snapshots(PROMPT_LIBRARY_PUBLISHED_DIR, PROMPT_LIBRARY_WITHDRAWN_DIR)
+    for snapshot_id, raw in prompt_tracked:
+        cover = str(raw.get("cover_url") or "")
+        if cover and not (tracked_static_url_file(cover) or output_file_from_url(cover)):
+            missing.append({"id": snapshot_id, "kind": "prompt", "field": "cover_url", "url": cover})
+    workflow_tracked = read_tracked_snapshots(WORKFLOW_LIBRARY_PUBLISHED_DIR, WORKFLOW_LIBRARY_WITHDRAWN_DIR)
+    for snapshot_id, raw in workflow_tracked:
+        for field in ("archive_url", "cover_url"):
+            url = str(raw.get(field) or "")
+            if url and not workflow_file_path(url):
+                missing.append({"id": snapshot_id, "kind": "workflow", "field": field, "url": url})
+    return {
+        "git": library_git_state(),
+        "pending": {"prompt": len(prompt_runtime), "workflow": len(workflow_runtime)},
+        "tracked": {"prompt": len(prompt_tracked), "workflow": len(workflow_tracked)},
+        "missing": missing[:20],
+        "missing_total": len(missing),
+        "commit_message": LIBRARY_SYNC_COMMIT_MESSAGE,
+    }
+
+
+@app.get("/api/admin/library-sync")
+async def admin_library_sync_status(request: Request):
+    require_admin(request)
+    return await asyncio.to_thread(library_sync_report)
+
+
+@app.post("/api/admin/library-sync")
+async def admin_library_sync(request: Request):
+    require_admin(request)
+    migrated = await asyncio.to_thread(migrate_runtime_library_publications)
+    state = await asyncio.to_thread(library_git_state)
+    if not state.get("available"):
+        raise HTTPException(status_code=409, detail=state.get("error") or "此机器上没有可用的 git。")
+    if not state.get("repository"):
+        raise HTTPException(status_code=409, detail=state.get("error") or "项目目录不是 Git 仓库。")
+    paths = existing_library_tracked_paths()
+    if not paths or not state.get("changed_files"):
+        return {"changed": False, "commit": "", "files": 0, "migrated": migrated, "output": ""}
+    add_code, _, add_err = await asyncio.to_thread(
+        run_library_git, ["add", "-A", "--", *paths], 60)
+    if add_code != 0:
+        raise HTTPException(status_code=409, detail=f"git add 失败：{add_err.strip()}")
+    # Only paths Git actually knows about may be handed to `git commit`: an empty
+    # directory exists on disk but is not a known pathspec, and passing one makes
+    # Git reject the entire commit with "did not match any file(s) known to git".
+    list_code, list_out, list_err = await asyncio.to_thread(
+        run_library_git, ["diff", "--cached", "--name-only", "-z", "--", *paths], 60)
+    if list_code != 0:
+        raise HTTPException(status_code=409, detail=f"读取待提交文件失败：{list_err.strip()}")
+    staged = [name for name in list_out.split("\0") if name.strip()]
+    if not staged:
+        return {"changed": False, "commit": "", "files": 0, "migrated": migrated, "output": ""}
+    commit_code, commit_out, commit_err = await asyncio.to_thread(
+        run_library_git, ["commit", "-m", LIBRARY_SYNC_COMMIT_MESSAGE, "--", *staged], 60)
+    if commit_code != 0:
+        detail = (commit_err or commit_out).strip()
+        if "nothing to commit" in detail or "no changes added to commit" in detail:
+            return {"changed": False, "commit": "", "files": 0, "migrated": migrated, "output": detail}
+        raise HTTPException(status_code=409, detail=f"git commit 失败：{detail}")
+    head_code, head_out, _ = await asyncio.to_thread(run_library_git, ["rev-parse", "HEAD"])
+    message_code, message_out, _ = await asyncio.to_thread(
+        run_library_git, ["show", "--stat", "--oneline", "--no-renames", "HEAD"])
+    return {
+        "changed": True,
+        "commit": head_out.strip() if head_code == 0 else "",
+        "files": len(staged),
+        "migrated": migrated,
+        "output": (message_out or commit_out).strip(),
+    }
 
 class CloudGenRequest(BaseModel):
     prompt: str
@@ -12000,45 +12294,215 @@ def normalize_prompt_library_item(item):
     return normalized
 
 
+LIBRARY_COVER_MAX_EDGE = 1024
+LIBRARY_COVER_QUALITY = 82
+WORKFLOW_RESOURCE_MAX_EDGE = 2048
+WORKFLOW_RESOURCE_QUALITY = 90
+
+
+def safe_snapshot_file_id(snapshot_id):
+    """Return a snapshot id that is safe to use as a file name, or "".
+
+    Ids arrive from URL paths and from stored records, so they are validated
+    rather than sanitized: silently rewriting an id would point a withdrawal at
+    a different publication's file.
+    """
+    clean = str(snapshot_id or "")
+    return clean if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", clean) else ""
+
+
+def withdrawn_snapshot_ids(withdrawn_dir):
+    """Ids that carry a tombstone.
+
+    Tombstones are permanent: removing one would let a stale runtime copy on a
+    machine that has not pulled the withdrawal resurrect the publication.
+    """
+    try:
+        names = os.listdir(withdrawn_dir)
+    except OSError:
+        return set()
+    return {name[:-5] for name in names if name.endswith(".json") and len(name) > 5}
+
+
+def read_tracked_snapshots(published_dir, withdrawn_dir):
+    """Read the tracked one-file-per-snapshot records as ``(id, raw)`` pairs.
+
+    Sorted by id so the served list order is identical on every machine instead
+    of following directory iteration order, which differs between filesystems.
+    """
+    withdrawn = withdrawn_snapshot_ids(withdrawn_dir)
+    try:
+        names = sorted(name for name in os.listdir(published_dir) if name.endswith(".json"))
+    except OSError:
+        return []
+    records = []
+    for name in names:
+        snapshot_id = safe_snapshot_file_id(name[:-5])
+        if not snapshot_id or snapshot_id in withdrawn:
+            continue
+        raw = _read_json_file(os.path.join(published_dir, name), None)
+        if isinstance(raw, dict):
+            # The file name is authoritative: tombstones and withdrawals are
+            # keyed by it, so a record must never advertise a different id.
+            records.append((snapshot_id, {**raw, "id": snapshot_id}))
+    return records
+
+
+def write_tracked_snapshot(published_dir, snapshot_id, record):
+    """Write one snapshot into the tracked package. Returns its path, or ""."""
+    snapshot_id = safe_snapshot_file_id(snapshot_id)
+    if not snapshot_id:
+        return ""
+    path = os.path.join(published_dir, f"{snapshot_id}.json")
+    with CANVAS_LOCK:
+        _write_json_atomic(path, record)
+    return path
+
+
+def delete_tracked_snapshot(published_dir, withdrawn_dir, snapshot_id):
+    """Delete a tracked snapshot and leave a deterministic tombstone.
+
+    The tombstone holds only the id, so two machines withdrawing the same
+    snapshot write byte-identical files and Git merges them without conflict.
+    The withdrawal time is in ``git log`` and deliberately not duplicated here.
+    """
+    snapshot_id = safe_snapshot_file_id(snapshot_id)
+    if not snapshot_id:
+        return None
+    with CANVAS_LOCK:
+        path = os.path.join(published_dir, f"{snapshot_id}.json")
+        removed = _read_json_file(path, None)
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        _write_json_atomic(os.path.join(withdrawn_dir, f"{snapshot_id}.json"), {"id": snapshot_id})
+    return removed if isinstance(removed, dict) else None
+
+
+def library_image_webp_bytes(source, max_edge, quality):
+    """Re-encode image bytes into WebP, or return ``None``.
+
+    Library artifacts are committed to Git, so they are re-encoded instead of
+    copied: the previous publish path wrote 1.6-2.7 MB PNG covers and 14.9 MB
+    workflow packages per card.
+    """
+    try:
+        with Image.open(BytesIO(source)) as image:
+            image = ImageOps.exif_transpose(image) or image
+            if image.mode not in ("RGB", "RGBA"):
+                image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+            if max(image.size) > max_edge:
+                image.thumbnail((max_edge, max_edge), Image.LANCZOS)
+            buffer = BytesIO()
+            image.save(buffer, "WEBP", quality=quality, method=4)
+    except Exception:
+        return None
+    return buffer.getvalue() or None
+
+
+def library_cover_webp(source_path, target_path, max_edge=LIBRARY_COVER_MAX_EDGE, quality=LIBRARY_COVER_QUALITY):
+    """Write a re-encoded WebP cover to ``target_path``. Best effort."""
+    try:
+        with open(source_path, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        return False
+    converted = library_image_webp_bytes(raw, max_edge, quality)
+    if not converted:
+        return False
+    try:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        with open(target_path, "wb") as handle:
+            handle.write(converted)
+    except OSError:
+        return False
+    return True
+
+
+def workflow_public_archive_bytes(raw):
+    """Rebuild a published workflow archive with re-encoded image resources.
+
+    Only the copy Git carries is rewritten; the owner's private archive is left
+    alone. Resource ``url`` values are never changed: ``import_canvas_workflow``
+    rewrites node references through ``url`` and locates files by ``archive``,
+    so renaming a resource without keeping ``url`` stable would break the nodes
+    that reference it. Best effort: anything unreadable is copied through.
+    """
+    try:
+        with zipfile.ZipFile(BytesIO(raw), "r") as source:
+            entries = {name: source.read(name) for name in source.namelist()}
+    except Exception:
+        return raw
+    workflow_name = "workflow.json" if "workflow.json" in entries else next(
+        (name for name in entries if name.lower().endswith("workflow.json")), "")
+    if not workflow_name:
+        return raw
+    workflow = _parse_workflow_json_bytes(entries[workflow_name])
+    if not isinstance(workflow, dict):
+        return raw
+    resources = workflow.get("resources") if isinstance(workflow.get("resources"), list) else []
+    replaced = {}
+    for resource in resources:
+        if not isinstance(resource, dict):
+            continue
+        archive = str(resource.get("archive") or "").replace("\\", "/").lstrip("/")
+        if not archive or archive not in entries:
+            continue
+        converted = library_image_webp_bytes(
+            entries[archive], WORKFLOW_RESOURCE_MAX_EDGE, WORKFLOW_RESOURCE_QUALITY)
+        if not converted:
+            continue
+        new_archive = f"{os.path.splitext(archive)[0]}.webp"
+        replaced[archive] = (new_archive, converted)
+        resource["archive"] = new_archive
+        resource["name"] = f"{os.path.splitext(str(resource.get('name') or os.path.basename(archive)))[0]}.webp"
+        resource["size"] = len(converted)
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for name in entries:
+            if name == workflow_name:
+                continue
+            if name in replaced:
+                target.writestr(replaced[name][0], replaced[name][1])
+            else:
+                target.writestr(name, entries[name])
+        target.writestr(workflow_name, json.dumps(workflow, ensure_ascii=False, indent=2))
+    return buffer.getvalue() or raw
+
+
+def _parse_workflow_json_bytes(raw):
+    try:
+        return json.loads(raw.decode("utf-8-sig"))
+    except Exception:
+        return None
+
+
 def load_versioned_published_prompts():
     """Read the Git-tracked public prompt catalog without falling back to runtime data."""
-    try:
-        with open(PROMPT_LIBRARY_PUBLISHED_PATH, "r", encoding="utf-8") as handle:
-            raw_items = json.load(handle)
-    except (OSError, json.JSONDecodeError):
-        raw_items = []
-    if not isinstance(raw_items, list):
-        return []
     items = []
     seen_ids = set()
-    for raw_item in raw_items:
-        if not isinstance(raw_item, dict):
-            continue
+    for _snapshot_id, raw_item in read_tracked_snapshots(
+            PROMPT_LIBRARY_PUBLISHED_DIR, PROMPT_LIBRARY_WITHDRAWN_DIR):
         item = normalize_prompt_library_item({**raw_item, "published": True})
         item_id = item.get("id") or ""
-        if not item_id or item_id in seen_ids:
+        if not item_id or item_id in seen_ids or not item.get("source_prompt_id"):
             continue
         seen_ids.add(item_id)
         items.append(item)
     return items
 
 
-def save_versioned_published_prompts(items):
-    """Persist only publishable snapshots into the tracked prompt package."""
-    cleaned = []
-    seen_ids = set()
-    for raw_item in items if isinstance(items, list) else []:
-        if not isinstance(raw_item, dict):
-            continue
-        item = normalize_prompt_library_item({**raw_item, "published": True})
-        item_id = item.get("id") or ""
-        if not item_id or item_id in seen_ids or not item.get("source_prompt_id"):
-            continue
-        seen_ids.add(item_id)
-        cleaned.append(item)
-    with CANVAS_LOCK:
-        _write_json_atomic(PROMPT_LIBRARY_PUBLISHED_PATH, cleaned)
-    return cleaned
+def save_versioned_published_prompt(snapshot):
+    """Write one publishable prompt snapshot into the tracked package."""
+    item = normalize_prompt_library_item({**snapshot, "published": True})
+    item_id = item.get("id") or ""
+    if not item_id or not item.get("source_prompt_id"):
+        return None
+    write_tracked_snapshot(PROMPT_LIBRARY_PUBLISHED_DIR, item_id, item)
+    return item
+
 
 def seed_system_prompt_library():
     return {
@@ -12182,20 +12646,33 @@ def save_prompt_libraries(data):
     return data
 
 def prompt_public_cover_copy(url, snapshot_id):
-    url = str(url or "")
+    """Copy a publication cover into the tracked cover directory as WebP.
+
+    Returns "" when the source cannot be read as an image. The publication is
+    still written in that case, just without a cover.
+    """
+    url = str(url or "").split("?", 1)[0]
+    snapshot_id = safe_snapshot_file_id(snapshot_id)
+    if not snapshot_id:
+        return ""
+    # A cover already served from static/ needs no copy: system catalog covers
+    # stay where they are, and re-publishing keeps the tracked cover.
     if url.startswith("/static/images/prompt-library/"):
         return url
     source = output_file_from_url(url)
-    if not source or not os.path.isfile(source) or not content_type_for_path(source).startswith("image/"):
+    if not source or not os.path.isfile(source):
         return ""
-    os.makedirs(PROMPT_LIBRARY_PUBLISHED_COVER_DIR, exist_ok=True)
-    ext = os.path.splitext(source)[1].lower() or ".png"
-    target = os.path.join(PROMPT_LIBRARY_PUBLISHED_COVER_DIR, f"{snapshot_id}_cover{ext}")
-    shutil.copy2(source, target)
+    target = os.path.join(PROMPT_LIBRARY_PUBLISHED_COVER_DIR, f"{snapshot_id}_cover.webp")
+    if not library_cover_webp(source, target):
+        return ""
     return f"/static/images/prompt-library/published/{urllib.parse.quote(os.path.basename(target))}"
 
 def remove_prompt_public_cover(record):
-    """Remove only the versioned cover copied for a withdrawn publication."""
+    """Remove the tracked cover copied for a withdrawn publication.
+
+    Older publications used a non-WebP extension, so the same stem is removed
+    for ``.png`` and ``.webp`` regardless of which one the record names.
+    """
     url = str((record or {}).get("cover_url") or "").split("?", 1)[0]
     prefix = "/static/images/prompt-library/published/"
     if not url.startswith(prefix):
@@ -12203,16 +12680,19 @@ def remove_prompt_public_cover(record):
     filename = os.path.basename(urllib.parse.unquote(url[len(prefix):]))
     if not filename:
         return
-    path = os.path.abspath(os.path.join(PROMPT_LIBRARY_PUBLISHED_COVER_DIR, filename))
-    try:
-        is_public_cover = os.path.commonpath([path, os.path.abspath(PROMPT_LIBRARY_PUBLISHED_COVER_DIR)]) == os.path.abspath(PROMPT_LIBRARY_PUBLISHED_COVER_DIR)
-    except ValueError:
-        is_public_cover = False
-    if is_public_cover and os.path.isfile(path):
+    root = os.path.abspath(PROMPT_LIBRARY_PUBLISHED_COVER_DIR)
+    stem = os.path.splitext(filename)[0]
+    for candidate in (filename, f"{stem}.png", f"{stem}.webp"):
+        path = os.path.abspath(os.path.join(root, candidate))
         try:
-            os.remove(path)
-        except OSError:
-            pass
+            is_public_cover = os.path.commonpath([path, root]) == root
+        except ValueError:
+            is_public_cover = False
+        if is_public_cover and os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 def merged_published_prompt_snapshots(data=None):
     """Return normalized data plus every publication visible to users.
@@ -12221,8 +12701,11 @@ def merged_published_prompt_snapshots(data=None):
     created before that catalog existed are still stored in ``data["published"]``
     and both layers are served.  Reads, re-publish checks and withdrawals must
     therefore agree on this merged view instead of looking at one layer only.
+    Tombstones filter both layers: a withdrawal only stays withdrawn if a stale
+    runtime copy on another machine cannot resurrect it.
     """
     data = normalize_prompt_libraries(data if isinstance(data, dict) else load_prompt_libraries())
+    withdrawn = withdrawn_snapshot_ids(PROMPT_LIBRARY_WITHDRAWN_DIR)
     published = []
     seen_published_ids = set()
     # Historical runtime snapshots remain available locally. New snapshots are
@@ -12230,7 +12713,7 @@ def merged_published_prompt_snapshots(data=None):
     # stale runtime copy with the same ID.
     for raw_item in [*load_versioned_published_prompts(), *(data.get("published") or [])]:
         item_id = str((raw_item or {}).get("id") or "")
-        if not item_id or item_id in seen_published_ids:
+        if not item_id or item_id in seen_published_ids or item_id in withdrawn:
             continue
         seen_published_ids.add(item_id)
         published.append(raw_item)
@@ -12241,17 +12724,14 @@ def remove_published_prompt_snapshot(snapshot_id):
 
     Withdrawal used to touch only the tracked catalog, so historical runtime
     snapshots stayed visible in "我的发布" and the card looked impossible to
-    withdraw.  Returns the removed record, or ``None`` for an unknown ID.
+    withdraw.  A tombstone is always written, including when the record only
+    existed in a runtime copy.  Returns the removed record, or ``None``.
     """
-    snapshot_id = str(snapshot_id or "")
+    snapshot_id = safe_snapshot_file_id(snapshot_id)
     if not snapshot_id:
         return None
-    removed = None
-    versioned = load_versioned_published_prompts()
-    kept_versioned = [item for item in versioned if str(item.get("id") or "") != snapshot_id]
-    if len(kept_versioned) != len(versioned):
-        removed = next(item for item in versioned if str(item.get("id") or "") == snapshot_id)
-        save_versioned_published_prompts(kept_versioned)
+    removed = delete_tracked_snapshot(
+        PROMPT_LIBRARY_PUBLISHED_DIR, PROMPT_LIBRARY_WITHDRAWN_DIR, snapshot_id)
     data = load_prompt_libraries()
     runtime = data.get("published") or []
     kept_runtime = [item for item in runtime if str((item or {}).get("id") or "") != snapshot_id]
@@ -12479,36 +12959,198 @@ def workflow_relative_url(path):
     rel = os.path.relpath(path, ASSETS_DIR).replace("\\", "/")
     return f"/assets/{urllib.parse.quote(rel, safe='/')}"
 
+def _static_tree_file_path(url, prefix, root):
+    """Resolve a ``/static/...`` URL inside ``root``, refusing traversal."""
+    if not url.startswith(prefix):
+        return None
+    filename = os.path.basename(urllib.parse.unquote(url[len(prefix):]))
+    if not filename:
+        return None
+    path = os.path.abspath(os.path.join(root, filename))
+    try:
+        if os.path.commonpath([path, os.path.abspath(root)]) != os.path.abspath(root):
+            return None
+    except ValueError:
+        return None
+    return path if os.path.isfile(path) else None
+
 def workflow_file_path(url):
-    return output_file_from_url(url) if str(url or "").startswith("/assets/") else None
+    """Resolve a workflow archive or cover URL to a local file.
+
+    Published snapshots live under static/ so Git carries them, while private
+    workflows stay under /assets/. Both must resolve here: apply, download and
+    file removal all go through this function, and a URL it cannot resolve is
+    deleted silently.
+    """
+    url = str(url or "").split("?", 1)[0]
+    if url.startswith("/assets/"):
+        return output_file_from_url(url)
+    for prefix, root in (
+        ("/static/workflow-library/published/", WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR),
+        ("/static/images/workflow-library/published/", WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR),
+    ):
+        path = _static_tree_file_path(url, prefix, root)
+        if path:
+            return path
+    return None
 
 def workflow_archive_copy(raw, workflow_id, public=False):
-    target_dir = WORKFLOW_LIBRARY_PUBLIC_DIR if public else WORKFLOW_LIBRARY_PRIVATE_DIR
-    os.makedirs(target_dir, exist_ok=True)
-    target = os.path.join(target_dir, f"{workflow_id}.zip")
+    """Store a workflow archive. Private archives stay under /assets/."""
+    if not public:
+        os.makedirs(WORKFLOW_LIBRARY_PRIVATE_DIR, exist_ok=True)
+        target = os.path.join(WORKFLOW_LIBRARY_PRIVATE_DIR, f"{workflow_id}.zip")
+        with open(target, "wb") as handle:
+            handle.write(raw)
+        return workflow_relative_url(target)
+    workflow_id = safe_snapshot_file_id(workflow_id)
+    if not workflow_id:
+        return ""
+    os.makedirs(WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR, exist_ok=True)
+    target = os.path.join(WORKFLOW_LIBRARY_PUBLISHED_ARCHIVE_DIR, f"{workflow_id}.zip")
     with open(target, "wb") as handle:
         handle.write(raw)
-    return workflow_relative_url(target)
+    return f"/static/workflow-library/published/{urllib.parse.quote(os.path.basename(target))}"
 
 def workflow_cover_copy(url, workflow_id, public=False):
-    source = output_file_from_url(url)
-    if not source or not os.path.isfile(source) or not content_type_for_path(source).startswith("image/"):
+    """Store a workflow cover. Published covers are re-encoded WebP."""
+    url = str(url or "").split("?", 1)[0]
+    if not public:
+        source = output_file_from_url(url)
+        if not source or not os.path.isfile(source) or not content_type_for_path(source).startswith("image/"):
+            return ""
+        os.makedirs(WORKFLOW_LIBRARY_PRIVATE_DIR, exist_ok=True)
+        ext = os.path.splitext(source)[1].lower() or ".png"
+        target = os.path.join(WORKFLOW_LIBRARY_PRIVATE_DIR, f"{workflow_id}_cover{ext}")
+        shutil.copy2(source, target)
+        return workflow_relative_url(target)
+    workflow_id = safe_snapshot_file_id(workflow_id)
+    if not workflow_id:
         return ""
-    target_dir = WORKFLOW_LIBRARY_PUBLIC_DIR if public else WORKFLOW_LIBRARY_PRIVATE_DIR
-    os.makedirs(target_dir, exist_ok=True)
-    ext = os.path.splitext(source)[1].lower() or ".png"
-    target = os.path.join(target_dir, f"{workflow_id}_cover{ext}")
-    shutil.copy2(source, target)
-    return workflow_relative_url(target)
+    # A cover already served from the tracked published directory needs no copy.
+    if url.startswith("/static/images/workflow-library/published/"):
+        return url
+    source = workflow_file_path(url) if url.startswith("/static/") else output_file_from_url(url)
+    if not source or not os.path.isfile(source):
+        return ""
+    target = os.path.join(WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR, f"{workflow_id}_cover.webp")
+    if not library_cover_webp(source, target):
+        return ""
+    return f"/static/images/workflow-library/published/{urllib.parse.quote(os.path.basename(target))}"
 
 def remove_workflow_files(record):
     for field in ("archive_url", "cover_url"):
-        path = workflow_file_path(record.get(field) or "")
-        if path and os.path.isfile(path):
+        url = str((record or {}).get(field) or "").split("?", 1)[0]
+        for path in _workflow_file_variants(url):
+            if path and os.path.isfile(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+def _workflow_file_variants(url):
+    """Candidate local files for one workflow URL.
+
+    Covers were not always WebP, so the same stem is tried for both extensions
+    in addition to whatever the record names.
+    """
+    primary = workflow_file_path(url)
+    paths = [primary]
+    prefix = "/static/images/workflow-library/published/"
+    if url.startswith(prefix):
+        root = os.path.abspath(WORKFLOW_LIBRARY_PUBLISHED_COVER_DIR)
+        stem = os.path.splitext(os.path.basename(urllib.parse.unquote(url[len(prefix):])))[0]
+        for ext in (".png", ".webp", ".jpg", ".jpeg"):
+            candidate = os.path.abspath(os.path.join(root, f"{stem}{ext}"))
             try:
-                os.remove(path)
-            except OSError:
-                pass
+                if os.path.commonpath([candidate, root]) == root:
+                    paths.append(candidate)
+            except ValueError:
+                continue
+    return [path for path in dict.fromkeys(paths) if path]
+
+def published_workflow_snapshots(data):
+    """Every workflow publication visible to users, tracked package first.
+
+    Mirrors ``merged_published_prompt_snapshots``: the Git-tracked catalog wins
+    over a stale machine-local runtime copy with the same id, and a tombstone
+    hides the id in both layers.
+    """
+    withdrawn = withdrawn_snapshot_ids(WORKFLOW_LIBRARY_WITHDRAWN_DIR)
+    snapshots = []
+    seen_ids = set()
+    tracked = [
+        {**raw, "id": snapshot_id}
+        for snapshot_id, raw in read_tracked_snapshots(
+            WORKFLOW_LIBRARY_PUBLISHED_DIR, WORKFLOW_LIBRARY_WITHDRAWN_DIR)
+    ]
+    for item in [*tracked, *((data or {}).get("published") or [])]:
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id in seen_ids or item_id in withdrawn:
+            continue
+        seen_ids.add(item_id)
+        snapshots.append(_drop_missing_workflow_assets(item))
+    return snapshots
+
+def _drop_missing_workflow_assets(item):
+    """Blank a URL whose file is gone so the card shows an unavailable state."""
+    resolved = dict(item)
+    for field in ("archive_url", "cover_url"):
+        url = str(resolved.get(field) or "")
+        if url and not workflow_file_path(url):
+            resolved[field] = ""
+    return resolved
+
+def save_versioned_published_workflow(snapshot):
+    """Write one publishable workflow snapshot into the tracked package."""
+    snapshot_id = safe_snapshot_file_id((snapshot or {}).get("id"))
+    if not snapshot_id or not str((snapshot or {}).get("source_workflow_id") or ""):
+        return None
+    record = {**snapshot, "id": snapshot_id}
+    write_tracked_snapshot(WORKFLOW_LIBRARY_PUBLISHED_DIR, snapshot_id, record)
+    return record
+
+def remove_published_workflow_snapshot(snapshot_id):
+    """Delete a workflow publication from the tracked layer and any runtime copy."""
+    snapshot_id = safe_snapshot_file_id(snapshot_id)
+    if not snapshot_id:
+        return None
+    removed = delete_tracked_snapshot(
+        WORKFLOW_LIBRARY_PUBLISHED_DIR, WORKFLOW_LIBRARY_WITHDRAWN_DIR, snapshot_id)
+    data = load_workflow_library()
+    runtime = data.get("published") or []
+    kept_runtime = [item for item in runtime if str((item or {}).get("id") or "") != snapshot_id]
+    if len(kept_runtime) != len(runtime):
+        removed = removed or next(item for item in runtime if str((item or {}).get("id") or "") == snapshot_id)
+        save_workflow_library({**data, "published": kept_runtime})
+    return removed
+
+def build_published_workflow_snapshot(source, source_archive, workflow_id, snapshot_id):
+    """Create the tracked snapshot record for one workflow publication.
+
+    Runs off the event loop: it re-encodes the archive's image resources and the
+    cover. A missing or unreadable asset is stored as "" so the card shows the
+    unavailable state rather than the publication being dropped.
+    """
+    try:
+        with open(source_archive, "rb") as handle:
+            raw = handle.read()
+    except OSError:
+        raw = b""
+    snapshot_archive = ""
+    if raw:
+        snapshot_archive = workflow_archive_copy(
+            workflow_public_archive_bytes(raw), snapshot_id, public=True)
+    return {
+        **{key: value for key, value in source.items() if key not in {"id", "archive_url", "cover_url"}},
+        "id": snapshot_id,
+        "source_workflow_id": workflow_id,
+        "archive_url": snapshot_archive,
+        "cover_url": workflow_cover_copy(source.get("cover_url") or "", snapshot_id, public=True),
+        "published_at": now_ms(),
+        "created_at": now_ms(),
+    }
 
 def cleanup_expired_workflow_trash():
     trash = load_workflow_trash()
@@ -12526,11 +13168,12 @@ def cleanup_expired_workflow_trash():
 def workflow_public_view(data, user):
     uid = str((user or {}).get("id") or "")
     cleanup_expired_workflow_trash()
+    published = published_workflow_snapshots(data)
     return {
         "viewer": {"user_id": uid, "is_admin": asset_is_admin(user)},
         "workflows": [item for item in data.get("workflows") or [] if str(item.get("owner_id") or "") == uid],
-        "published": [item for item in data.get("published") or [] if str(item.get("owner_id") or "") == uid],
-        "inspiration": list(data.get("published") or []),
+        "published": [item for item in published if str(item.get("owner_id") or "") == uid],
+        "inspiration": published,
     }
 
 def clear_legacy_asset_library_workflows():
@@ -23472,12 +24115,15 @@ async def publish_workflow_library_item(workflow_id: str, payload: WorkflowLibra
     source = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
     if not source:
         raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
-    existing = next((item for item in data.get("published") or [] if item.get("source_workflow_id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
+    # A publication may live in the tracked package or in a legacy runtime
+    # copy, so both layers are searched before creating a new snapshot.
+    existing = next((item for item in published_workflow_snapshots(data)
+                     if item.get("source_workflow_id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
     if not payload.published:
         if existing:
-            data["published"] = [item for item in data.get("published") or [] if item is not existing]
+            remove_published_workflow_snapshot(existing.get("id"))
             remove_workflow_files(existing)
-            save_workflow_library(data)
+            data = load_workflow_library()
         return {"library": workflow_public_view(data, user), "published": False}
     if existing:
         return {"library": workflow_public_view(data, user), "snapshot": existing, "published": True}
@@ -23485,15 +24131,10 @@ async def publish_workflow_library_item(workflow_id: str, payload: WorkflowLibra
     if not source_archive or not os.path.isfile(source_archive):
         raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u5c01\u5305\u4e0d\u5b58\u5728")
     snapshot_id = f"published_{uuid.uuid4().hex[:14]}"
-    with open(source_archive, "rb") as handle:
-        snapshot_archive = workflow_archive_copy(handle.read(), snapshot_id, public=True)
-    snapshot = {**{key: value for key, value in source.items() if key not in {"id", "archive_url", "cover_url"}},
-        "id": snapshot_id, "source_workflow_id": workflow_id,
-        "archive_url": snapshot_archive,
-        "cover_url": workflow_cover_copy(source.get("cover_url") or "", snapshot_id, public=True),
-        "published_at": now_ms(), "created_at": now_ms()}
-    data.setdefault("published", []).append(snapshot)
-    save_workflow_library(data)
+    # The tracked copy is re-encoded, which is image work: keep it off the loop.
+    snapshot = await asyncio.to_thread(
+        build_published_workflow_snapshot, source, source_archive, workflow_id, snapshot_id)
+    save_versioned_published_workflow(snapshot)
     return {"library": workflow_public_view(data, user), "snapshot": snapshot, "published": True}
 
 @app.delete("/api/workflow-library/{workflow_id}")
@@ -23538,12 +24179,13 @@ async def withdraw_workflow_library_snapshot(snapshot_id: str, request: Request)
     user = require_authenticated(request)
     data = load_workflow_library()
     uid = str(user.get("id") or "")
-    snapshot = next((item for item in data.get("published") or [] if item.get("id") == snapshot_id and str(item.get("owner_id") or "") == uid), None)
+    snapshot = next((item for item in published_workflow_snapshots(data)
+                     if item.get("id") == snapshot_id and str(item.get("owner_id") or "") == uid), None)
     if not snapshot:
         raise HTTPException(status_code=404, detail="\u5df2\u53d1\u5e03\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
-    data["published"] = [item for item in data.get("published") or [] if item is not snapshot]
+    remove_published_workflow_snapshot(snapshot_id)
     remove_workflow_files(snapshot)
-    save_workflow_library(data)
+    data = load_workflow_library()
     return {"library": workflow_public_view(data, user), "withdrawn": True}
 
 @app.get("/api/workflow-library/{workflow_id}/package")
@@ -23552,7 +24194,7 @@ async def download_workflow_library_package(workflow_id: str, request: Request):
     data = load_workflow_library()
     uid = str(user.get("id") or "")
     record = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
-    record = record or next((item for item in data.get("published") or [] if item.get("id") == workflow_id), None)
+    record = record or next((item for item in published_workflow_snapshots(data) if item.get("id") == workflow_id), None)
     if not record:
         raise HTTPException(status_code=404, detail="\u5de5\u4f5c\u6d41\u4e0d\u5b58\u5728")
     archive = workflow_file_path(record.get("archive_url") or "")
@@ -23689,7 +24331,7 @@ async def apply_workflow_library_item(workflow_id: str, request: Request):
     data = load_workflow_library()
     uid = str(user.get("id") or "")
     record = next((item for item in data.get("workflows") or [] if item.get("id") == workflow_id and str(item.get("owner_id") or "") == uid), None)
-    record = record or next((item for item in data.get("published") or [] if item.get("id") == workflow_id), None)
+    record = record or next((item for item in published_workflow_snapshots(data) if item.get("id") == workflow_id), None)
     if not record:
         raise HTTPException(status_code=404, detail="\\u5de5\\u4f5c\\u6d41\\u4e0d\\u5b58\\u5728")
     archive = workflow_file_path(record.get("archive_url") or "")
@@ -24035,7 +24677,6 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
         raise HTTPException(status_code=404, detail="提示词不存在")
     if source.get("owner_type") != "user" or str(source.get("owner_id") or "") != user_id:
         raise HTTPException(status_code=403, detail="只能发布自己的个人提示词")
-    versioned_published = load_versioned_published_prompts()
     # A publication may still live in the legacy runtime list, so look for an
     # existing snapshot in the merged view to avoid publishing a duplicate.
     _, visible_publications = merged_published_prompt_snapshots(data)
@@ -24084,6 +24725,9 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
     elif public_subcategory not in allowed_public_subcategories.get(public_category, set()):
         public_subcategory = ""
     snapshot_id = f"published_{uuid.uuid4().hex[:14]}"
+    # Re-encoding the cover is image work, so it runs off the event loop.
+    cover_url = await asyncio.to_thread(
+        prompt_public_cover_copy, source.get("cover_url"), snapshot_id)
     snapshot = normalize_prompt_library_item({
         **source,
         "id": snapshot_id,
@@ -24092,13 +24736,13 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
         "subcategory": public_subcategory,
         "source_prompt_id": item_id,
         "source_author_id": source.get("owner_id") or "",
-        "cover_url": prompt_public_cover_copy(source.get("cover_url"), snapshot_id),
+        "cover_url": cover_url,
         "published": True,
         "published_at": now_ms(),
         "created_at": now_ms(),
         "updated_at": now_ms(),
     })
-    save_versioned_published_prompts([*versioned_published, snapshot])
+    snapshot = await asyncio.to_thread(save_versioned_published_prompt, snapshot) or snapshot
     data = load_prompt_libraries()
     return {"library": public_prompt_libraries_for_user(data, user), "snapshot": snapshot, "published": True}
 

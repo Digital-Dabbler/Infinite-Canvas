@@ -107,7 +107,7 @@ const WorkflowLibrary = {
         const id = LibraryUtils.escapeHtml(item.id);
         const publication = mine ? this.publishedForSource(item.id) : null;
         const cover = item.cover_url
-            ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy">`
+            ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy" onerror="window.libraryCoverFallback?.(this, 'workflow', 'workflow-cover-placeholder')">`
             : '<div class="workflow-cover-placeholder"><i data-lucide="workflow"></i></div>';
         const applyAction = `<button type="button" data-wf-action="apply" data-id="${id}">${LibraryUtils.escapeHtml(t('library.apply', '应用'))}</button>`;
         let actions;

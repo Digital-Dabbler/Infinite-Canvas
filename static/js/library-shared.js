@@ -1,4 +1,4 @@
-﻿/* ============================================
+/* ============================================
    Library Shared JS - 三个库共享逻辑
    ============================================ */
 
@@ -206,8 +206,24 @@ const LibraryUtils = {
         } catch {
             return fallback;
         }
+    },
+
+    // A published card can outlive the cover file it names: a machine may have
+    // pulled a manifest whose cover was never committed, or a withdrawal may
+    // have removed the file. Swap the broken image for the card's placeholder
+    // instead of leaving a broken-image glyph behind.
+    replaceBrokenCover(img, icon = 'image-off', placeholderClass = 'prompt-card-placeholder') {
+        if (!img || !img.parentNode) return;
+        const placeholder = document.createElement('div');
+        placeholder.className = placeholderClass;
+        placeholder.innerHTML = `<i data-lucide="${icon}"></i>`;
+        img.replaceWith(placeholder);
+        window.lucide?.createIcons();
     }
 };
+
+window.libraryCoverFallback = (img, icon, placeholderClass) =>
+    LibraryUtils.replaceBrokenCover(img, icon, placeholderClass);
 
 function t(key, fallback = '') {
     if (window.StudioI18n?.t) {

@@ -44,7 +44,7 @@
       ['overview', '概览与部门对比'],
       ['accounts', '用户与配置'],
       ['usage', '调用排障'],
-      ['system', '公告发布']
+      ['system', '系统与同步']
     ].forEach(function (entry) {
       var button = document.createElement('button');
       button.type = 'button';
@@ -62,7 +62,80 @@
       ],
       accounts: [sectionFor('#departments'), sectionFor('#apiProfiles'), sectionFor('#users')],
       usage: [sectionFor('#events'), sectionFor('#alerts')],
-      system: [sectionFor('#announcementTitle')]
+      system: [sectionFor('#announcementTitle'), sectionFor('#librarySyncPanel')]
+    };
+  }
+
+  function librarySyncMessage(text, kind) {
+    var message = document.querySelector('#librarySyncMessage');
+    if (!message) return;
+    message.textContent = text || '';
+    message.className = 'message' + (kind ? ' ' + kind : '');
+  }
+
+  function renderLibrarySyncStatus(report) {
+    var target = document.querySelector('#librarySyncStatus');
+    if (!target) return;
+    var git = report.git || {};
+    var pending = report.pending || {};
+    var tracked = report.tracked || {};
+    var parts = [];
+    if (!git.available) parts.push('<span class="bad">未找到 git</span>');
+    else if (!git.repository) parts.push('<span class="bad">不是 Git 仓库</span>');
+    else parts.push('分支 <code>' + esc(git.branch || '（未知）') + '</code>');
+    parts.push('待提交变更 <strong>' + (git.changed_files || 0) + '</strong>');
+    parts.push('已入库 提示词 ' + (tracked.prompt || 0) + ' / 工作流 ' + (tracked.workflow || 0));
+    if (pending.prompt || pending.workflow) {
+      parts.push('<span class="warn">待迁移 提示词 ' + (pending.prompt || 0) +
+        ' / 工作流 ' + (pending.workflow || 0) + '</span>');
+    }
+    if (report.missing_total) {
+      parts.push('<span class="bad">清单引用了 ' + report.missing_total + ' 个缺失的封面或包</span>');
+    }
+    target.innerHTML = parts.join(' · ');
+  }
+
+  async function loadLibrarySyncStatus() {
+    var target = document.querySelector('#librarySyncStatus');
+    if (!target) return;
+    target.textContent = '正在读取状态…';
+    try {
+      renderLibrarySyncStatus(await get('/api/admin/library-sync'));
+    } catch (error) {
+      target.textContent = '无法读取状态';
+      librarySyncMessage(error.message || '读取灵感库同步状态失败。', 'error');
+    }
+  }
+
+  function installLibrarySyncPanel() {
+    var refresh = document.querySelector('#refreshLibrarySync');
+    var run = document.querySelector('#runLibrarySync');
+    if (refresh) refresh.onclick = function () { librarySyncMessage(''); loadLibrarySyncStatus(); };
+    if (!run) return;
+    run.onclick = async function () {
+      if (!confirm('将把灵感库的已发布内容暂存并提交到本机 Git 仓库。\n\n这会创建一个提交，但不会 push。继续吗？')) return;
+      var previous = run.textContent;
+      run.disabled = true;
+      run.textContent = '同步中…';
+      librarySyncMessage('');
+      try {
+        var result = await send('/api/admin/library-sync', 'POST');
+        var migrated = result.migrated || {};
+        var lines = [result.changed
+          ? '已提交 ' + (result.files || 0) + ' 项，commit ' + String(result.commit || '').slice(0, 7) + '。'
+          : '没有需要提交的变更。'];
+        var moved = (migrated.prompt || 0) + (migrated.workflow || 0);
+        if (moved) lines.push('已迁移 ' + moved + ' 条遗留发布记录。');
+        librarySyncMessage(lines.join(' '), 'success');
+        var commit = document.querySelector('#librarySyncCommit');
+        if (commit) commit.textContent = String(result.output || '').split('\n')[0] || '';
+        await loadLibrarySyncStatus();
+      } catch (error) {
+        librarySyncMessage(error.message || '同步失败。', 'error');
+      } finally {
+        run.disabled = false;
+        run.textContent = previous;
+      }
     };
   }
 
@@ -76,6 +149,7 @@
     document.querySelectorAll('[data-workspace]').forEach(function (button) {
       button.setAttribute('aria-selected', String(button.dataset.workspace === name));
     });
+    if (name === 'system') loadLibrarySyncStatus();
     if (name === 'overview') {
       if (usageAnalytics && Object.keys(usageAnalytics).length) {
         renderDashboard();
@@ -701,6 +775,7 @@
     return result;
   };
 
+  installLibrarySyncPanel();
   switchWorkspace('overview');
   var readyTimer = window.setInterval(function () {
     if (!departmentRows.length || !apiProfileRows.length || !userRows.length) return;
