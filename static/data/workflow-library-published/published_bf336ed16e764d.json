@@ -1,0 +1,15 @@
+{
+  "name": "绘画风格反推",
+  "owner_id": "44cd4a316277481b9dfc9124293fc0a8",
+  "owner_name": "系统管理员",
+  "node_count": 2,
+  "connection_count": 1,
+  "resource_count": 1,
+  "created_at": 1789875721654,
+  "updated_at": 1788420017718,
+  "id": "published_bf336ed16e764d",
+  "source_workflow_id": "workflow_d10c9a2f548e4b",
+  "published_at": 1789875721654,
+  "archive_url": "/static/workflow-library/published/published_bf336ed16e764d.zip",
+  "cover_url": "/static/images/workflow-library/published/published_bf336ed16e764d_cover.webp"
+}

@@ -1,0 +1,15 @@
+{
+  "name": "提示词反推",
+  "owner_id": "44cd4a316277481b9dfc9124293fc0a8",
+  "owner_name": "系统管理员",
+  "node_count": 2,
+  "connection_count": 1,
+  "resource_count": 1,
+  "created_at": 1789875691400,
+  "updated_at": 1788493927980,
+  "id": "published_2136df2d11a54e",
+  "source_workflow_id": "workflow_256a80bd6f8348",
+  "published_at": 1789875691400,
+  "archive_url": "/static/workflow-library/published/published_2136df2d11a54e.zip",
+  "cover_url": "/static/images/workflow-library/published/published_2136df2d11a54e_cover.webp"
+}

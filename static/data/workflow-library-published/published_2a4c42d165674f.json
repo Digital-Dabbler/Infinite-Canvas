@@ -1,0 +1,15 @@
+{
+  "name": "图片复刻",
+  "owner_id": "44cd4a316277481b9dfc9124293fc0a8",
+  "owner_name": "系统管理员",
+  "node_count": 3,
+  "connection_count": 2,
+  "resource_count": 4,
+  "created_at": 1789849750212,
+  "updated_at": 1789849137651,
+  "id": "published_2a4c42d165674f",
+  "source_workflow_id": "workflow_78516b72eed64e",
+  "published_at": 1789849750212,
+  "archive_url": "/static/workflow-library/published/published_2a4c42d165674f.zip",
+  "cover_url": "/static/images/workflow-library/published/published_2a4c42d165674f_cover.webp"
+}
