@@ -74,11 +74,20 @@ favourites, and trash stay machine-local and are not synced, per `AGENTS.md`. Th
 their current locations: private workflow packages stay in `assets/workflow_library/private/`
 served as `/assets/...`, and personal prompt covers stay wherever the owner put them.
 
-One `LIBRARY_TRACKED_PATHS` constant lists the seven paths above. It is the single source for the
-read scan, the integrity self-check, and the Git pathspec, so the three cannot drift apart.
+One `LIBRARY_TRACKED_PATHS` constant lists the seven directories above. The published and withdrawn
+globs for the read scan (§2), the residue check for the integrity self-check (§5), and the Git
+pathspec (§5) are all derived from it, so the three cannot drift apart. The constant names
+directories only; each consumer derives what it needs.
+
+Tombstones are permanent by design. They are one small file per withdrawn snapshot and there is no
+pruning step: deleting a tombstone would let a stale runtime copy resurrect the publication on a
+machine that has not pulled the removal. No garbage collection is planned.
 
 `PROMPT_LIBRARY_PUBLIC_DIR` (`assets/prompt_library/public`) has no reference anywhere in
-`main.py` and is deleted.
+`main.py` and is deleted. Existing machines may still hold orphaned files under
+`assets/prompt_library/public/` and `assets/workflow_library/public/`; both trees are ignored by
+Git, are never read again after migration, and are left on disk rather than deleted, so that a
+migration that goes wrong can still be retried from the originals.
 
 ### 2. Reading
 
@@ -96,8 +105,32 @@ read scan, the integrity self-check, and the Git pathspec, so the three cannot d
 Steps 2 and 3 exist as a pair. Step 3 alone would resurrect withdrawn publications from stale
 runtime copies; step 2 alone would hide content that has not been migrated yet.
 
-`workflow_public_view()` serves `published` (the viewer's own) and `inspiration` (everyone's) from
-this merged view, matching `public_prompt_libraries_for_user()`.
+Every server path that resolves a published snapshot must go through this merged view. The prompt
+library already does: `publish_prompt_library_item()`, `withdraw_prompt_library_snapshot()`, and
+`remove_published_prompt_snapshot()` all consult `merged_published_prompt_snapshots()`. The
+workflow library does not, and leaving it reading `data["published"]` directly breaks the feature
+in ways that are not obvious from the publish button alone:
+
+| Call site | Today | Required |
+| --- | --- | --- |
+| `workflow_public_view()` | `published` / `inspiration` straight from `data["published"]` | merged view |
+| `apply_workflow_library_item()` (`POST /api/workflow-library/{id}/apply`) | looks the record up in `data["published"]` | merged view |
+| `download_workflow_library_package()` (`GET .../package`) | same lookup | merged view |
+| `publish_workflow_library_item()` | `existing` computed from `data["published"]` | merged view, so an already-published snapshot is not duplicated |
+| `withdraw_workflow_library_snapshot()` | `snapshot` looked up in `data["published"]` | merged view |
+| `remove_workflow_files()` | deletes through `workflow_file_path()` | must resolve the new `/static/...` paths |
+
+`apply_workflow_library_item()` is what the 应用 button calls for every workflow card, including
+cards in 灵感库. Once §5 empties the runtime array it would 404 「工作流不存在」 on a pulled
+publication, so this is not optional cleanup.
+
+`workflow_file_path()` currently returns `output_file_from_url(url)` only for `/assets/` URLs. It
+must additionally map `/static/workflow-library/published/` to the published archive directory and
+`/static/images/workflow-library/published/` to the published cover directory, with the same
+`commonpath` containment check the function already applies elsewhere. Without that, `apply`,
+`package`, and `remove_workflow_files()` all fail: the last one silently deletes nothing, so a
+withdrawn package stays on disk and the next `git add -A` re-commits it — precisely the failure
+this spec exists to remove.
 
 ### 3. Writing
 
@@ -108,6 +141,20 @@ this merged view, matching `public_prompt_libraries_for_user()`.
   `static/data/*-withdrawn/<snapshot_id>.json`. Idempotent; withdrawing twice is not an error.
 - Publish and withdraw only touch working-tree files. They never write the index and never invoke
   Git. Git participates only when the administrator runs the sync action.
+
+On the prompt side this changes three existing helpers rather than adding new ones:
+`load_versioned_published_prompts()` scans the directory, `save_versioned_published_prompts()` is
+replaced by a per-snapshot writer, and `remove_published_prompt_snapshot()` deletes the
+per-snapshot file and writes the tombstone instead of rewriting an array.
+
+**Concurrency and offloading.** Publish, withdraw, and sync-migration are all writers of the same
+per-snapshot files, so they share one lock. `save_versioned_published_prompts()` currently takes
+`CANVAS_LOCK`; the replacement reuses `CANVAS_LOCK` rather than introducing an uncoordinated
+parallel lock, per `AGENTS.md`. All image work (PIL cover re-encode, zip rebuild) and all file
+copying run under `asyncio.to_thread`; `AGENTS.md` forbids image processing and file I/O inside
+`async def`. This matters concretely: rebuilding the 14.9 MB package means reading and re-encoding
+four 3.4 MB PNGs, which would stall the event loop and every open WebSocket for the duration.
+Migration (§5) is the heaviest writer and follows the same rule.
 
 ### 4. Asset re-encoding
 
@@ -120,8 +167,9 @@ Workflow packages are rebuilt on the public copy only: image resources inside th
 re-encoded to WebP (longest edge 2048, quality 90) and `workflow.json` is rewritten so that each
 resource's `archive`, `name`, and `size` match the new file. `url` is deliberately left untouched,
 because `import_canvas_workflow()` maps resources by `url` when rewriting node references and
-locates files by `archive`. The import path therefore needs no change. The private archive is
-never rewritten: it is what the owner's canvas references.
+locates files by `archive`. Resource mapping inside the import path therefore needs no change; the
+published-record lookup that feeds it does, as §2 describes. The private archive is never
+rewritten: it is what the owner's canvas references.
 
 Measured on `published_2a4c42d165674f.zip`: 14.9 MB total, of which 14.3 MB is four PNG reference
 images (3.37–3.84 MB each) and 22 KB is `workflow.json`. PNG is already compressed, so the zip
@@ -134,6 +182,9 @@ image, is copied through unchanged rather than failing the publish.
 
 A new panel in the `system` workspace of `static/admin.html`, registered in
 `workspaceElements.system` in `static/js/admin-dashboard-v2.js` so workspace switching controls it.
+The workspace's nav label is currently 「公告发布」, which would make a sync panel undiscoverable
+there; the label is widened to cover both panels. The panel markup needs an id that
+`sectionFor('#<id>')` can resolve, matching how the other workspaces register their sections.
 
 `GET /api/admin/library-sync` (`require_admin`) reports:
 
@@ -148,12 +199,14 @@ A new panel in the `system` workspace of `static/admin.html`, registered in
 `POST /api/admin/library-sync` (`require_admin`):
 
 1. **Migrate.** For every runtime publication that is not tombstoned, write it into the tracked
-   layout and remove it from the runtime JSON. A publication whose `archive_url` or `cover_url` no
-   longer resolves falls back to its `source_workflow_id`'s private package and cover — verified to
-   work for `published_c3e06d05885c4f` and `published_64e09f5f7b8b49`, whose public files are gone
-   from this machine while `workflow_d10c9a2f548e4b` and `workflow_256a80bd6f8348` remain. If no
-   source survives, the field is written empty rather than dropping the record; the card then shows
-   the unavailable-resource state.
+   layout and remove it from the runtime JSON. A workflow publication whose `archive_url` or
+   `cover_url` no longer resolves falls back to its `source_workflow_id`'s private package and
+   cover — verified to work for `published_c3e06d05885c4f` and `published_64e09f5f7b8b49`, whose
+   public files are gone from this machine while `workflow_d10c9a2f548e4b` and
+   `workflow_256a80bd6f8348` remain. Prompt publications have no such fallback: there is no private
+   package behind a prompt publication, and the source item's own `cover_url` is not consulted.
+   When nothing resolves, the field is written empty rather than dropping the record; the card then
+   shows the unavailable-resource state.
 2. **Purge.** Delete runtime publications whose id has a tombstone.
 3. `git add -A -- <tracked library paths that exist>`.
 4. `git commit -m "chore(library): sync inspiration library" -- <same paths>`.
@@ -199,8 +252,11 @@ returns `image/webp` where it previously returned `None`.
 - Migration is idempotent: entries are removed from the runtime JSON as they are written.
 
 Measured on the reference machine: one prompt publication
-(`published_dd79aadc656b4f`「Playrix Township 风格转换」, 吴和蕊, 2026-08-17) whose cover is not
-recoverable, and three workflow publications, two of which need the private-source fallback.
+(`published_dd79aadc656b4f`「Playrix Township 风格转换」, 吴和蕊, 2026-08-17) and three workflow
+publications, two of which need the private-source fallback. That prompt publication's cover does
+exist in the repository, on `708a683`; it is deliberately not recovered, so it migrates cover-less.
+The distinction matters: nothing is being lost to corruption here, the branch is simply out of
+scope.
 
 ### 8. Frontend
 
@@ -233,6 +289,10 @@ recoverable, and three workflow publications, two of which need the private-sour
   encoded once, by the machine that published it.
 - A re-encoded workflow package contains lower-fidelity reference images than the private original.
   This is a deliberate trade for repository size and is recorded here as a known behaviour change.
+- Sync-migration and a concurrent publish both write the tracked layout. They share the lock from
+  §3, so one waits for the other instead of interleaving half-written snapshot files.
+- Tombstones are never pruned (§1). A long-lived deployment accumulates one small file per
+  withdrawn snapshot; this is bounded by how many publications are ever withdrawn.
 
 ## Verification
 
@@ -245,8 +305,13 @@ recoverable, and three workflow publications, two of which need the private-sour
   `changed: false` and no commit; a non-repository or missing `git` returns a readable error rather
   than a 500.
 - New `tests/test_static_media_mime.py`: `.webp` resolves to `image/webp`.
-- Updated `tests/test_prompt_library_publication.py` and
-  `tests/test_workflow_library_publication.py` for the directory layout and tombstone semantics.
+- Updated `tests/test_workflow_library_publication.py`, extended to cover the §2 call sites that
+  would otherwise regress: after a publication exists only in the tracked layer and the runtime
+  array is empty, 应用 resolves it, `/package` resolves it, and `withdraw` removes it and deletes
+  its files from the new `/static/...` locations. Publishing a second time for the same source
+  workflow still finds the existing snapshot instead of creating a duplicate.
+- Updated `tests/test_prompt_library_publication.py` for the directory layout and tombstone
+  semantics.
 - Running-server check: `curl -I /static/images/prompt-library/style_ue5.webp` reports
   `Content-Type: image/webp`.
 - Browser check in the smart-canvas 灵感库: opening both libraries shows no download prompts and no
