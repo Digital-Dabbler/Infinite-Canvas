@@ -21,8 +21,8 @@
 
 ## 目标
 
-1. 便签可**就地**富文本编辑（加粗/斜体/删除线/列表/待办/标题层级/链接/四档字号/对齐），没有编辑态切换、没有常驻工具栏。
-2. **拖右下角手柄改框宽**并切成固定模式，内容向下增长、永不裁剪；**Alt/Ctrl + 拖动整体等比缩放**（框与字号一起）。
+1. 便签可**就地**富文本编辑（加粗/斜体/删除线/列表/待办/标题层级/链接/四档字号/对齐）：**双击正文才进编辑态**，失焦/Esc/点到便签外即收笔；非编辑态没有常驻工具栏，正文不再吃键盘，也不参与选区。
+2. **非编辑态＝普通图元**：按正文就能拖动，拖右下角手柄**整体等比缩放**（框与字号同一因子，文字跟着缩放）；编辑态里普通拖动仍是「只改框宽」（固定框、内容向下增长、永不裁剪），修饰键才等比。任何一次拖手柄都切成固定模式。
 3. 6 色与背景透明度收进「选中便签时浮出的菜单」，`bgAlpha = 0` 即纯文字。
 4. 任何来源（本地输入、协作对端、服务端回灌）的富文本都走同一条白名单路径，渲染侧不存在 `innerHTML = node.richText`。
 5. 旧便签零迁移零破坏：没有 `richText` 时按 `text` 渲染；旧前端仍能通过 `text` 读写。
@@ -51,7 +51,8 @@
 `static/js/smart-canvas.js`：
 
 - `createSmartNote()`（`:8733`）新节点增加 `sizeMode: 'auto'`、`bgAlpha: 20`；不预写 `richText`（首次编辑时才生成，等价于对旧数据格式保持沉默）。
-- `canvasOrganizerHtml()`（`:11918`）便签分支：`.smart-note-text` 由 `<textarea>` 改 `<div contenteditable="true">`，类名保留（CSS 与复制按钮的选择器不用改）。内容：有 `richText` 时 `appendChild(buildNoteFragment(node.richText))`，没有时 `document.createTextNode(node.text)`（旧便签原样显示）。
+- `canvasOrganizerHtml()`（`:11918`）便签分支：`.smart-note-text` 由 `<textarea>` 改 `<div class="smart-note-text">`，类名保留（CSS 与复制按钮的选择器不用改）。`contenteditable` 由 `noteEditingIds.has(node.id)` 决定（`"true"`/`"false"`，`role="textbox" aria-multiline="true"` 只在编辑态加）；内容：有 `richText` 时 `appendChild(buildNoteFragment(node.richText))`，没有时 `document.createTextNode(node.text)`（旧便签原样显示）。
+- 编辑态进入/退出：`beginSmartNoteEdit(node, el, event)`（`noteEditingIds.add` + 置 `contenteditable="true"` + focus + `placeNoteCaretFromPoint()` 把光标落在双击处）由**双击的第二下**（`beginNodeDrag` 里 `e.detail >= 2` 的分支，比 `dblclick` 事件可靠：两次点击之间选中态重渲染会把元素换掉）、`el.ondblclick`、以及 `createSmartNote()` 调用；退出＝`blur`（补回 `contenteditable="false"` 并摘掉 role，因为失焦不触发 render）、`Escape`、以及 capture 阶段 `document` mousedown 里「按在便签外就 `editor.blur()`」（画布的平移/框选会 `preventDefault()`，浏览器不会自己移焦点）。拖动守卫相应改成只跳过 `.smart-note-text[contenteditable="true"]`。
 - 新增 `noteEditingIds = new Set()`（放在 `static/js/smart-canvas.js:110` 的 `promptTextEditingIds` 旁）；`render()` 收集 `editingNodeIds` 处（`:11959`）一并加入 `noteEditingIds`；`focus` 时 add（对标 `:12466`）、`blur` 时 delete（对标 `:12478`）。**没有这一步中文输入法会在合成中途被 DOM 重建打断。**
 - 输入处理（`:13441-13449`）改为：DOM 即真源 → `node.richText = sanitizeNoteRichText(el.innerHTML)`、`node.text = el.innerText` → 仅当 `node.sizeMode === 'auto'` 调 `fitSmartNoteToText(node, el)`，否则调 `fitNoteHeightToContent(node, el)`（步骤 4）→ `renderMinimap()`、`scheduleConnectionLayerRefresh()`、`scheduleSave()`。同步继续走既有 `node_fields` 操作，协议不变。
 - `beforeinput` 守卫：会超过 `NOTE_RICHTEXT_MAX` 的输入 `preventDefault()`，避免本地存下服务端下次必然 400 的内容。
@@ -59,11 +60,11 @@
 
 ### 4. 尺寸语义
 
-- `fitSmartNoteToText()`（`:8637`）：仍只在 `auto` 模式调用；高度语义由「上限 720 的裁剪」改为「不小于内容高度」。
-- 新增 `fitNoteHeightToContent(node, el)`：`node.h = max(node.h, el.scrollHeight + 内边距/工具条高度)`，fixed 模式用它，保证内容永不裁剪。
-- 手柄 mousedown（`:13761-13768`）：保留 `resizeState.startFontSize`，新增 `resizeState.uniform = e.altKey || e.ctrlKey || e.metaKey`。
-- 手柄 move（`:23605-23611`）：`uniform` 为真时沿用现有 `startFontSize * sqrt(widthRatio * heightRatio)` 并同步等比缩放 `w`/`h`；为假时由指针位移定 `node.w`、置 `node.sizeMode = 'fixed'`、**不动 `fontSize`**，高度交给 `fitNoteHeightToContent()`。
-- 节点最小尺寸沿用 `:23545-23546`（160×110）。
+- `fitSmartNoteToText()`（`:8637`）：仍只在 `auto` 模式调用；高度语义由「上限 720 的裁剪」改为「不小于内容高度」，并且**优先量屏幕上那份 DOM**（`measureNoteContentHeight()`：临时置 `height: auto` 读 `editor.scrollHeight` 再还原，加 24px 内边距），canvas `measureText` 估算只当无 DOM 时的兜底。下限 `NOTE_MIN_HEIGHT = 44`（一行正文＋内边距）。
+- 新增 `fitNoteHeightToContent(node, el)`：内容溢出时 `node.h = max(NOTE_MIN_HEIGHT, node.h + 溢出量)`，fixed 模式用它，保证内容永不裁剪、也不会留一截空白。
+- 手柄 mousedown（`:13761-13768`）：保留 `resizeState.startFontSize`，`resizeState.uniform = !noteEditingIds.has(node.id) || e.altKey || e.ctrlKey || e.metaKey`——**非编辑态一律等比**（便签当图片用），编辑态里普通拖动才是「只改框宽」。
+- 手柄 move（`:23605-23611`）：`uniform` 时用 `startFontSize * sqrt(widthRatio * heightRatio)` 并同步等比缩放 `w`/`h`/`fontSize`，下限夹在**因子**上（`minFactor = max(NOTE_MIN_WIDTH/startW, NOTE_MIN_HEIGHT/startH, 10/startFontSize)`）而不是分别夹宽高，缩到最小也不破比例；非 uniform 时由指针位移定 `node.w`，高度交给 `fitNoteHeightToContent()`。两条分支都置 `node.sizeMode = 'fixed'`。
+- 节点最小尺寸：便签改为 160×44（`NOTE_MIN_WIDTH`/`NOTE_MIN_HEIGHT`，旧的 160×110 是「框里还挂着工具栏」时代的值，正是「贴不到文字」的来源），其他节点类型不变。
 
 ### 5. 浮条、节点菜单、样式与文案
 
@@ -73,6 +74,8 @@
 - **i18n** `static/js/i18n/smart-canvas.js`：浮条、菜单、尺寸模式、透明度、链接等新文案补 zh/en 双语，`node static/js/i18n/validate-i18n.js` 必须保持通过。
 
 > 与原计划的偏差（实现后回写）：①浮条不是 `#noteFormatBar`，而是懒创建的单例 `div.smart-note-format-bar`（`data-note-format-bar="1"`）append 到 `document.body`，每帧按 Selection 的 client rect 重算位置（`updateNoteFormatBar()` 自递归 rAF）；②节点菜单不是新 id `#noteNodeMenu`，而是复用 `.smart-node-floating-menu` 的 `smartNoteFloatingMenuHtml()`（`class="smart-node-floating-menu smart-note-menu"`），于是「选中才浮出、拖拽/多选/缩放时隐藏、反向抵消画布缩放」全部自动成立；③色块与复制按钮必须用双类选择器（`.smart-note-menu .smart-note-menu-colors .organizer-color`、`.smart-note-menu .smart-text-copy-btn`）压过 `.smart-node-floating-menu button` 的通用尺寸，否则色块被撑成透明药丸；④字号/对齐/清单都落在 enclosing block 的 `data-fs`/`data-align` 上，不是节点基准 `fontSize`。
+>
+> 偏差（用户看完初版后的返工，2026-09-21 二次落盘）：⑤**初版把 `contenteditable="true"` 写死在卡片 HTML 里**，便签因此永远处于编辑态——点空白也不失焦（画布手势 `preventDefault` 掉了 mousedown，浏览器没有移焦点的机会），既不能像图片那样拖动，也没法整体缩放。改成「双击才进编辑态」后，非编辑态的正文就是一块普通图元：`cursor:move`、可拖、手柄等比缩放（文字同因子），编辑态才恢复 `cursor:text` + 选中浮条 + 焦点描边。⑥非编辑态拖手柄从「只改框宽」改成「整体等比」，编辑态保留宽向拖动；两条分支都置 `sizeMode = 'fixed'`。⑦高度从「估算＋110px 固定下限（外加旧的 39px 工具条高度）」改成「实测渲染后的正文高度＋44px 下限」，这才真正贴合文字。
 
 ### 6. 粘贴
 
@@ -83,7 +86,7 @@
 ### 7. 测试
 
 - 新增 `tests/fixtures/smart-note-richtext-cases.json`：脏输入 → 期望输出的共享语料（`<script>`、`on*`、`style`、`javascript:`/`data:` href、`<iframe>`、`<img>`、表格、字体标签、`data-fs="9"`、`data-align="justify"`；**已落地 44 条**，另含段落 `p`/`div` 边界、实体只解一次、注释/CDATA/doctype 丢弃等）。
-- **实际落地为一个文件** `tests/test_smart_note_richtext.py`（29 个用例，四个类）：`SmartNoteRichTextCaseTests`（客户端与服务端各跑同一份语料 + 两侧互等）、`SmartNoteNodeFieldTests`（`validate_canvas_node_fields()` 的 `smart-note` 特例：超长 400、`sizeMode` 只认两个字面量、`bgAlpha` 夹取、非便签节点忽略便签字段）、`SmartNoteRenderContractTests`（渲染唯一入口、编辑期 DOM 保活、自适应不裁剪、拖动/修饰键缩放语义、正文内拖选不移动节点）、`SmartNoteFormattingContractTests`（浮条保选区、命令产出语义标签、默认块属性被删、勾选与链接形状、四档字号、`selectionchange`、菜单替换常驻工具条、粘贴剪枝、透明度只改自定义属性、CSS 分层淡出、两侧段落白名单字面量、菜单双类覆盖、`richText` 绝不进 `innerHTML`、i18n 键全有 zh/en）。
+- **实际落地为一个文件** `tests/test_smart_note_richtext.py`（**35 个用例**，四个类）：`SmartNoteRichTextCaseTests`（客户端与服务端各跑同一份语料 + 两侧互等）、`SmartNoteNodeFieldTests`（`validate_canvas_node_fields()` 的 `smart-note` 特例：超长 400、`sizeMode` 只认两个字面量、`bgAlpha` 夹取、非便签节点忽略便签字段）、`SmartNoteRenderContractTests`（渲染唯一入口、编辑期 DOM 保活、双击才进编辑态、新建便签直接可打字、失焦/点便签外收笔、自适应按实测正文贴合且不再有 110/工具条常量、非编辑态等比缩放且下限夹在因子上、正文拖动/编辑区不拖动、持久态与编辑态 CSS 分离）、`SmartNoteFormattingContractTests`（浮条保选区、命令产出语义标签、默认块属性被删、勾选与链接形状、四档字号、`selectionchange`、菜单替换常驻工具条、粘贴剪枝、透明度只改自定义属性、CSS 分层淡出、两侧段落白名单字面量、菜单双类覆盖、`richText` 绝不进 `innerHTML`、i18n 键全有 zh/en）。
   > 与原计划的偏差：原计划拆成 `test_smart_note_richtext_sanitizer.py` / `test_smart_note_richtext_client.py` / `test_smart_note_size_semantics.py` 三个文件，实施时合并成一个——三者共用同一套 `extract_function()`/`node -e` 骨架，拆开只会三份重复 harness。
 - 更新既有测试：`tests/test_smart_canvas_outline.py` 的 `test_note_edits_do_not_rebuild_the_outline` 改断言共享写入口 `syncNoteFromEditor(nodeForControls, noteInput, el);`（仍保留 `assertNotIn("renderSmartOutline", …)`）。
 
@@ -94,7 +97,7 @@
 - `git diff --check`。
 - 定向单测：`.\python\python.exe -m unittest tests.test_smart_note_richtext_sanitizer tests.test_smart_note_richtext_client tests.test_smart_note_size_semantics tests.test_smart_canvas_outline tests.test_workflow_group_text_run tests.test_smart_canvas_only`。
   - 环境注意：本机沙箱拒绝在 `tempfile.mkdtemp()` 生成的目录下建子目录，`tests/test_canvas_field_deletion.py`、`tests/test_static_cache_stamp.py` 的 `setUp` 会 `PermissionError: [WinError 5]`；这是环境限制而非代码问题。必要时用临时 runner 把 `tempfile.mkdtemp` 换成 `os.mkdir(name, 0o777)`（本次已用它验证过 44 tests OK）。
-- 浏览器验收由用户完成（本机沙箱禁止 Chrome 命名管道 IPC，无法无头代验）：中文输入法连续输入不中断；从网页粘贴保留加粗/列表/链接、丢掉字体与图片；手动拖框后继续打字宽度不变、高度向下增长；透明度拖到 0 变纯文字；第二个浏览器会话看到同样的富文本。
+- 浏览器验收由用户完成（本机沙箱禁止 Chrome 命名管道 IPC，无法无头代验）：**双击正文才进编辑态、单击正文只拖动节点、点画布空白立刻收笔、Esc 收笔**；**非编辑态拖手柄整体等比缩放（文字跟着放大缩小、比例不歪）**；中文输入法连续输入不中断；从网页粘贴保留加粗/列表/链接、丢掉字体与图片；手动拖框后继续打字宽度不变、高度向下增长；透明度拖到 0 变纯文字；第二个浏览器会话看到同样的富文本。
 
 ## 不在本轮范围内
 

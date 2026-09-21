@@ -2235,7 +2235,11 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .smart-note-node:hover { border-color:color-mix(in srgb, var(--organizer-color) var(--note-hover-alpha, 58%), transparent); }
 .smart-note-node.selected { box-shadow:0 0 0 2px var(--organizer-color),0 10px 24px color-mix(in srgb, var(--shadow) var(--note-shadow-alpha, 28%), transparent); }
 /* 便签正文：高度交给 fitNoteHeightToContent/fitSmartNoteToText 保证，这里只负责排版；overflow 只为量出溢出量。 */
-.smart-note-text { width:100%; height:100%; overflow:hidden; border:0; outline:0; background:transparent; color:var(--text); font-family:inherit; font-size:calc(var(--note-font-size, 13px) * var(--canvas-font-scale, 1)); font-weight:650; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; cursor:text; }
+.smart-note-text { width:100%; height:100%; overflow:hidden; border:0; outline:0; background:transparent; color:var(--text); font-family:inherit; font-size:calc(var(--note-font-size, 13px) * var(--canvas-font-scale, 1)); font-weight:650; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
+/* 非编辑态便签就是一块图元：光标自证「可以拖」；只有双击进编辑态才有文字光标和一圈编辑描边。 */
+.smart-note-text[contenteditable="false"] { cursor:move; }
+.smart-note-text[contenteditable="true"] { cursor:text; user-select:text; -webkit-user-select:text; }
+.smart-note-node:has(.smart-note-text[contenteditable="true"]) { border-color:color-mix(in srgb, var(--organizer-color) 74%, transparent); box-shadow:0 0 0 2px color-mix(in srgb, var(--organizer-color) 34%, transparent), 0 10px 24px color-mix(in srgb, var(--shadow) var(--note-shadow-alpha, 28%), transparent); }
 .smart-note-text > *:first-child { margin-top:0; }
 .smart-note-text > *:last-child { margin-bottom:0; }
 .smart-note-text h1,.smart-note-text h2,.smart-note-text h3 { margin:0 0 .35em; font-weight:800; line-height:1.3; }

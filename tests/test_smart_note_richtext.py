@@ -211,7 +211,8 @@ class SmartNoteNodeFieldTests(unittest.TestCase):
 class SmartNoteRenderContractTests(unittest.TestCase):
     def test_note_body_is_rendered_through_the_whitelist(self):
         body = extract_function("canvasOrganizerHtml")
-        self.assertIn('contenteditable="true"', body)
+        self.assertIn("const editing = noteEditingIds.has(node.id);", body)
+        self.assertIn("contenteditable=\"${editing?'true':'false'}\"", body)
         self.assertIn("${noteRichTextHtml(node)}", body)
         self.assertNotIn("<textarea class=\"smart-note-text\">", body)
         self.assertNotIn("escapeHtml(node.text||'')", body)
@@ -223,22 +224,88 @@ class SmartNoteRenderContractTests(unittest.TestCase):
         self.assertIn("noteEditingIds.delete(nodeForControls.id);", SMART_CANVAS_JS)
         self.assertIn("promptTextEditingIds.has(node.id) || noteEditingIds.has(node.id)", SMART_CANVAS_JS)
 
-    def test_autosize_never_clips_the_body(self):
+    def test_note_enters_edit_mode_only_on_double_click(self):
+        # 便签其余时间必须是普通图元（可拖、可等比缩放），只有双击正文才吃键盘输入。
+        self.assertIn("beginSmartNoteEdit(nodeForControls, el, event);", SMART_CANVAS_JS)
+        enter = extract_function("beginSmartNoteEdit")
+        self.assertIn("noteEditingIds.add(node.id);", enter)
+        self.assertIn("editor.setAttribute('contenteditable', 'true');", enter)
+        self.assertIn("placeNoteCaretFromPoint(editor, event);", enter)
+
+    def test_leaving_the_editor_restores_the_passive_card(self):
+        # 失焦不会触发 render()，编辑态属性必须在 onblur 里自己收拾干净（含 CSS 的编辑描边）。
+        self.assertIn("noteInput.setAttribute('contenteditable', 'false');", SMART_CANVAS_JS)
+        self.assertIn("noteInput.removeAttribute('role');", SMART_CANVAS_JS)
+        self.assertIn("if(event.key !== 'Escape') return;", SMART_CANVAS_JS)
+
+    def test_clicking_outside_the_note_ends_the_edit(self):
+        # 画布的平移/框选会 preventDefault 掉 mousedown，浏览器不会自动挪走焦点：必须手动 blur。
+        marker = "// 便签只有双击才进编辑态：点到便签自己以外的地方就立刻收笔。"
+        guard = SMART_CANVAS_JS[SMART_CANVAS_JS.index(marker):]
+        guard = guard[:guard.index("}, true);")]
+        self.assertIn("editor.blur();", guard)
+        self.assertIn("card.contains(event.target)", guard)
+        self.assertIn(".smart-note-format-bar", guard)
+
+    def test_a_new_note_opens_in_edit_mode(self):
+        body = extract_function("createSmartNote")
+        self.assertIn("const editor = beginSmartNoteEdit(node, card);", body)
+        self.assertIn("fitSmartNoteToText(node, card);", body)
+        self.assertIn("selection?.addRange(range);", body)
+
+    def test_autosize_measures_the_rendered_body_instead_of_a_fixed_floor(self):
         body = extract_function("fitSmartNoteToText")
         self.assertNotIn("Math.min(720", body)
-        self.assertIn("noteContentOverflow(node, element)", body)
+        self.assertNotIn("toolbarHeight", body)
+        self.assertIn("const measuredHeight = measureNoteContentHeight(el);", body)
+        self.assertIn("Math.max(NOTE_MIN_HEIGHT, measuredHeight || estimatedHeight)", body)
+        measure = extract_function("measureNoteContentHeight")
+        self.assertIn("element.style.height = 'auto';", measure)
+        self.assertIn("editor.scrollHeight", measure)
 
-    def test_plain_drag_fixes_width_and_modifier_drag_scales_the_whole_note(self):
+    def test_resizing_a_note_scales_the_whole_note_outside_edit_mode(self):
         self.assertIn("node.sizeMode = 'fixed';", SMART_CANVAS_JS)
-        self.assertIn("resizeState.uniform = !!(e.altKey || e.ctrlKey || e.metaKey);", SMART_CANVAS_JS)
         self.assertIn(
-            "const factor = Math.max(0.25, Math.min(4, Math.sqrt(widthRatio * heightRatio)));",
+            "resizeState.uniform = !noteEditingIds.has(node.id) || !!(e.altKey || e.ctrlKey || e.metaKey);",
             SMART_CANVAS_JS,
         )
-        self.assertIn("if(noteEl) fitNoteHeightToContent(node, noteEl);", SMART_CANVAS_JS)
+        # 下限夹在「因子」上，宽/高/字号才能一直同比例；分别夹宽高会在缩小时把比例拉歪。
+        self.assertIn(
+            "const minFactor = Math.max(NOTE_MIN_WIDTH / startW, NOTE_MIN_HEIGHT / startH, 10 / Math.max(1, resizeState.startFontSize || 13));",
+            SMART_CANVAS_JS,
+        )
+        self.assertIn("const factor = Math.max(minFactor, Math.min(4, Math.sqrt(widthRatio * heightRatio)));", SMART_CANVAS_JS)
+        self.assertIn("if(noteEl && !resizeState.uniform) fitNoteHeightToContent(node, noteEl);", SMART_CANVAS_JS)
 
-    def test_dragging_inside_the_body_does_not_move_the_node(self):
-        self.assertIn(".smart-node-floating-menu, .smart-note-text, .node-resize-handle", SMART_CANVAS_JS)
+    def test_a_note_can_shrink_to_its_text(self):
+        # 旧实现到处写死 110：自动尺寸、固定框长高、拖动手柄下限，便签永远比文字高一大截。
+        self.assertIn("const NOTE_MIN_HEIGHT = 44;", SMART_CANVAS_JS)
+        self.assertNotIn("Math.max(110", extract_function("fitNoteHeightToContent"))
+        self.assertNotIn("Math.max(110", extract_function("fitSmartNoteToText"))
+        self.assertIn(
+            "node.h = Math.max(NOTE_MIN_HEIGHT, Math.round((Number(node.h) || 0) + overflow));",
+            extract_function("fitNoteHeightToContent"),
+        )
+        self.assertIn("isSmartNoteNode(node) ? NOTE_MIN_HEIGHT : 48", SMART_CANVAS_JS)
+        self.assertIn("isSmartNoteNode(node) ? NOTE_MIN_WIDTH : 48", SMART_CANVAS_JS)
+
+    def test_passive_body_drags_the_node_but_the_editor_does_not(self):
+        self.assertIn(
+            ".smart-node-floating-menu, .smart-note-text[contenteditable=\"true\"], .node-resize-handle",
+            SMART_CANVAS_JS,
+        )
+        self.assertIn(
+            "const passiveNoteSurface = Boolean(e.target?.closest?.('.smart-note-text[contenteditable=\"false\"]'));",
+            SMART_CANVAS_JS,
+        )
+        self.assertIn("if((readonlyTextSurface || passiveNoteSurface) && e.detail >= 2) return;", SMART_CANVAS_JS)
+        # 双击的第二下按 mousedown 计数直接进编辑态：dblclick 事件可能落在被重渲染换掉的旧元素上。
+        self.assertIn("if(passiveNoteSurface && e.detail >= 2 && e.button === 0){", SMART_CANVAS_JS)
+        self.assertIn("beginSmartNoteEdit(noteNode, el, e);", SMART_CANVAS_JS)
+
+    def test_css_distinguishes_the_passive_and_editing_states(self):
+        self.assertIn('.smart-note-text[contenteditable="false"] { cursor:move; }', SMART_CANVAS_CSS)
+        self.assertIn('.smart-note-node:has(.smart-note-text[contenteditable="true"])', SMART_CANVAS_CSS)
 
 
 class SmartNoteFormattingContractTests(unittest.TestCase):

@@ -56,10 +56,29 @@ may still be running the old frontend.
 
 ### 2. Editing
 
-- `.smart-note-text` becomes `<div class="smart-note-text" contenteditable="true">` instead of a
+- `.smart-note-text` becomes a `<div class="smart-note-text" contenteditable="…">` instead of a
   `<textarea>`. The class name is kept so the CSS and the copy button keep working.
-- **No edit mode.** Clicking the note focuses the editable; blurring it saves. There is no
-  "editing" chrome, per the request for in-place WYSIWYG.
+- **One mode at a time.** `canvasOrganizerHtml()` renders `contenteditable="false"` unless the
+  node's id is in `noteEditingIds`, so a note at rest is a plain canvas item: its body drags the
+  node, it scales like an image, and its text is not selectable. `beginSmartNoteEdit()` — called
+  from the second press of a double click (the `mousedown` whose `detail >= 2`), from the `dblclick`
+  handler, and from `createSmartNote()`, which therefore opens ready to type — flips the attribute
+  to `"true"`, focuses the editor and drops the caret where the double-click landed
+  (`document.caretRangeFromPoint`, falling back to the browser's own default). The second press is
+  what drives this, rather than the `dblclick` event alone, because the selection re-render between
+  the two clicks replaces the card element and the event is then not guaranteed to reach the
+  current DOM. The drag guard skips `.smart-note-text[contenteditable="true"]` only and turns that
+  second press into the editor instead of a drag, so a passive body click starts a drag while a
+  double-click opens the editor. The body cursor is `move` at rest and `text` while editing.
+- **Leaving edit mode**: blur, `Escape`, or a press anywhere outside the card. The canvas pan and
+  box-select gestures call `preventDefault()` on `mousedown`, so the browser never moves focus by
+  itself; a capture-phase `document` listener blurs the editor explicitly when a press lands
+  outside the note. Presses on the floating bar (which preserves its own selection with
+  `preventDefault()`) and presses on the card itself count as inside. The `blur` handler restores
+  `contenteditable="false"` and drops the `textbox` role, because a blur alone does not re-render.
+- **Editing chrome.** While the body is editable the card carries a focus ring, driven from the DOM
+  state (`.smart-note-node:has(.smart-note-text[contenteditable="true"])`) rather than from a
+  second class that would have to be kept in sync.
 - **IME composition must not be interrupted.** `render()` rebuilds node DOM; for prompt nodes the
   repo already guards this with `promptTextEditingIds` (`static/js/smart-canvas.js:11944-11959`),
   which keeps a node's DOM alive while it is being edited. The note path gets the same treatment:
@@ -98,22 +117,32 @@ may still be running the old frontend.
 
 ### 3. Size semantics
 
-- **`sizeMode = 'auto'`** (new notes): width is measured from the content, as today, and height
-  grows downward with the content. `fitSmartNoteToText()` (`static/js/smart-canvas.js:8637`) is
-  still the measuring routine, called from the `input` handler and from `createSmartNote()`
-  (`static/js/smart-canvas.js:8733`).
-- **Plain handle drag → width.** A drag on `.node-resize-handle` sets the note's width from the
-  pointer delta, sets `sizeMode = 'fixed'`, and leaves height content-driven: the frame grows
-  downward instead of clipping. A user-dragged height acts as a minimum.
-- **Alt/Ctrl + handle drag → uniform scale.** Width, height and `fontSize` scale by the same
-  factor, preserving today's feel, and `sizeMode` is left as it was.
-- **Font size** is per run, as the floating bar's four steps (§2); the node's own base
-  `fontSize` (clamped 10–48 by `smartNoteFontSize()`, `static/js/smart-canvas.js:8634`) changes
-  only through the modifier drag, and drives `--note-font-size` for the whole note.
-- **No clipping, ever.** The 720 ceiling in `fitSmartNoteToText()` stops being a clip: height is
-  at least the content height, so the `overflow: hidden` in
-  `static/css/smart-canvas.css:2221-2238` never hides text. Minimum node size stays as it is
-  (`static/js/smart-canvas.js:23545-23546`, 160×110).
+- **`sizeMode = 'auto'`** (new notes): width is measured from the content, as today, and the height
+  is measured from the *rendered* body. `measureNoteContentHeight()` sets the card to
+  `height: auto`, reads the editor's `scrollHeight` and adds the two 12px paddings; the
+  canvas-`measureText` estimate inside `fitSmartNoteToText()` is only the fallback for when there
+  is no DOM to measure. The floor is `NOTE_MIN_HEIGHT = 44`, one body line plus padding. The old
+  routine reserved a fixed `toolbarHeight = 39` row and a 110px floor, which is why a note always
+  stood taller than its text.
+- **Handle drag — uniform outside edit mode.** At rest, any drag on `.node-resize-handle` scales the
+  whole note (width, height and `fontSize` by one factor), so a note resizes like an image and its
+  text scales with it. While the note is being edited, a plain drag sets the width and leaves the
+  height content-driven (grows downward, never clips) and only a modifier drag scales uniformly.
+  The floor is applied to the *factor* —
+  `minFactor = max(NOTE_MIN_WIDTH / startW, NOTE_MIN_HEIGHT / startH, 10 / startFontSize)` — rather
+  than to width and height separately, so the aspect ratio survives a shrink all the way down to
+  the smallest allowed font.
+- **Any handle drag sets `sizeMode = 'fixed'`** — the equivalent of PureRef's "Auto size" going off
+  once the user has resized by hand — otherwise the next auto measurement would snap the frame back
+  around the text. A non-uniform drag then re-fits the height (grow-only,
+  `fitNoteHeightToContent()`); a uniform drag needs no re-fit, because the font and the frame scale
+  by the same factor.
+- **Font size** is per run, as the floating bar's four steps (§2); the node's own base `fontSize`
+  (clamped 10–48 by `smartNoteFontSize()`) changes only through a uniform drag, and drives
+  `--note-font-size` for the whole note.
+- **No clipping, ever.** The `overflow: hidden` in `static/css/smart-canvas.css` never hides text,
+  because the height is at least the content height. The note floors are now 160×44
+  (`NOTE_MIN_WIDTH` / `NOTE_MIN_HEIGHT`) instead of 160×110.
 
 ### 4. Visual
 
@@ -194,18 +223,21 @@ One whitelist, two implementations, one shared corpus.
 - `python -m unittest` for the canvas modules. Note: the sandbox denies `mkdir` inside
   `tempfile.mkdtemp()` directories, which breaks `setUp` for `tests/test_canvas_field_deletion.py`
   and `tests/test_static_cache_stamp.py`; that is an environment limitation, not a product fault.
-- New `tests/test_smart_note_richtext_sanitizer.py` (server): script tags, event-handler
-  attributes, `style` attributes, `javascript:` / `data:` hrefs, `<iframe>`, `<img>`, tables and
-  font tags are stripped; bold / italic / strike / lists / checklists / h1-h3 / `br` / safe links
-  survive; oversized input is rejected; `sizeMode` and `bgAlpha` are validated.
-- New `tests/test_smart_note_richtext_client.py` (node harness, the
-  `tests/test_workflow_group_text_run.py` pattern): the client sanitizer produces the same result
-  as the server for every case in `tests/fixtures/smart-note-richtext-cases.json`, and a source
-  contract asserts that `node.richText` is never assigned to `innerHTML`.
-- New `tests/test_smart_note_size_semantics.py` (node harness): a plain handle drag changes `w`
-  and sets `sizeMode = 'fixed'` without touching `fontSize`; a modifier drag scales `w`, `h` and
-  `fontSize` by one factor; `fitSmartNoteToText()` is not called for a fixed note; a note whose
-  content is taller than the height cap reports a height that fits the content.
-- Manual browser check in the smart canvas: type Chinese with an IME mid-note, paste from a web
-  page, size a frame by hand and keep typing, drag the background to `0`, and confirm a second
-  browser session sees the same rich text.
+- Server-side validation of the note fields rides in the same file, through
+  `validate_canvas_node_fields()`: `richText` over 20000 characters or of the wrong type is a
+  `400`, `sizeMode` only accepts the two literals, and `bgAlpha` is clamped.
+- `tests/test_smart_note_richtext.py` carries all of the above, server and client in one file
+  (35 cases, the `tests/test_workflow_group_text_run.py` `extract_function()` harness): the shared
+  corpus in `tests/fixtures/smart-note-richtext-cases.json` gives the same result on both sides;
+  script tags, event-handler attributes, `style` attributes, `javascript:` / `data:` hrefs,
+  `<iframe>`, `<img>`, tables and font tags are stripped while bold / italic / strike / lists /
+  checklists / h1-h3 / `br` / safe links survive; oversized input is rejected and `sizeMode` /
+  `bgAlpha` are validated; `node.richText` is never assigned to `innerHTML`; edit mode is entered
+  only from the double-click path and left by blur, `Escape` and outside presses; a new note opens
+  in edit mode; auto-sizing measures the rendered body and no longer carries the 110px or toolbar
+  floor; the passive/editing CSS split is in place.
+- Manual browser check in the smart canvas: double-click to edit, click the body to drag without
+  entering edit mode, click empty canvas and press `Escape` to leave edit mode, drag the corner to
+  scale a note proportionally (text scales with it), type Chinese with an IME mid-note, paste from
+  a web page, size a frame by hand and keep typing, drag the background to `0`, and confirm a
+  second browser session sees the same rich text.

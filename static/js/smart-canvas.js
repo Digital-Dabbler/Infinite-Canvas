@@ -8811,6 +8811,10 @@ function noteRichTextHtml(node){
     if(rich) return sanitizeNoteRichText(rich);
     return escapeHtml(node.text || '');
 }
+// 自动尺寸的高度下限＝一行正文（13px × 1.55 ≈ 20px）＋上下内边距；空便签也要留出可点可拖的一块。
+// 旧值 110 是给「框内还挂着一条工具栏」的时代留的，所以便签总比文字高一大截（用户反馈的贴不到文字）。
+const NOTE_MIN_HEIGHT = 44;
+const NOTE_MIN_WIDTH = 160;
 function smartNoteFontSize(node){
     return Math.max(10, Math.min(48, Number(node?.fontSize) || 13));
 }
@@ -8846,7 +8850,8 @@ function fitNoteHeightToContent(node, element=null){
     el.style.height = `${Number(node.h) || 0}px`;
     const overflow = noteContentOverflow(node, element);
     if(overflow <= 1) return false;
-    node.h = Math.max(110, Math.round((Number(node.h) || 0) + overflow));
+    // 高度下限与自动尺寸同源：固定框便签也要能贴到文字，不能卡在旧的 110px 上。
+    node.h = Math.max(NOTE_MIN_HEIGHT, Math.round((Number(node.h) || 0) + overflow));
     el.style.height = `${node.h}px`;
     return true;
 }
@@ -8865,19 +8870,32 @@ function fitSmartNoteToText(node, element=null){
     const targetWidth = Math.max(160, Math.min(maxWidth, Math.ceil(longestLine + horizontalPadding)));
     const textWidth = Math.max(1, targetWidth - horizontalPadding);
     const visualLines = measured.reduce((sum, width) => sum + Math.max(1, Math.ceil(width / textWidth)), 0);
-    const toolbarHeight = 39;
-    // 估算值只保证下限：实测内容更高时按实测走，720 不再是裁剪线（§3 尺寸语义）。
-    const estimatedHeight = Math.max(110, Math.ceil(toolbarHeight + visualLines * fontSize * 1.55 + 24));
-    const measuredHeight = Math.round((Number(node.h) || 0) + noteContentOverflow(node, element));
-    const targetHeight = Math.max(estimatedHeight, measuredHeight);
+    const estimatedHeight = Math.ceil(visualLines * fontSize * 1.55 + 24);
+    const el = element || world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+    // 高度优先量屏幕上那份 DOM：估算是 canvas 按字体量出来的，段落字号、列表缩进、待办勾选
+    // 都量不准，只能兜底。实测才能「完全贴合文字」——既不掉在旧的 110px 下限上，也不会长出一截。
+    const measuredHeight = measureNoteContentHeight(el);
+    const targetHeight = Math.max(NOTE_MIN_HEIGHT, measuredHeight || estimatedHeight);
     const changed = Math.abs((Number(node.w) || 0) - targetWidth) > 1 || Math.abs((Number(node.h) || 0) - targetHeight) > 1;
     node.w = targetWidth;
     node.h = targetHeight;
-    if(element){
-        element.style.width = `${targetWidth}px`;
-        element.style.height = `${targetHeight}px`;
+    if(el){
+        el.style.width = `${targetWidth}px`;
+        el.style.height = `${targetHeight}px`;
     }
     return changed;
+}
+// 便签正文的真实高度：把卡片临时置 auto 再量，量完立刻还原（同步读写，不会闪）。
+// 不能拿「当前框高 + 溢出量」反推——那只能量出被裁剪的多少，量不出框比文字高多少。
+function measureNoteContentHeight(element){
+    if(!element) return 0;
+    const editor = element.querySelector('.smart-note-text');
+    if(!editor) return 0;
+    const previousHeight = element.style.height;
+    element.style.height = 'auto';
+    const contentHeight = editor.scrollHeight;
+    element.style.height = previousHeight;
+    return contentHeight > 0 ? Math.ceil(contentHeight + 24) : 0;
 }
 // ---- 便签富文本：单点写入 + 段落级格式命令（步骤 5）----
 // 编辑区写回节点字段只有这一条路：输入、浮条命令、粘贴、勾选待办都走它，
@@ -8892,6 +8910,33 @@ function syncNoteFromEditor(node, editor, element=null){
     renderMinimap();
     scheduleConnectionLayerRefresh();
     scheduleSave();
+}
+// 便签平时只是一块普通图元（可拖、可等比缩放），只有双击正文才进编辑态；
+// 新建便签也走这里，等于替用户双击了一次。编辑态唯一标志是 noteEditingIds。
+function beginSmartNoteEdit(node, element=null, event=null){
+    if(!isSmartNoteNode(node)) return null;
+    const editor = noteEditorFor(node, element);
+    if(!editor) return null;
+    noteEditingIds.add(node.id);
+    editor.setAttribute('contenteditable', 'true');
+    editor.setAttribute('role', 'textbox');
+    editor.setAttribute('aria-multiline', 'true');
+    try { editor.focus({preventScroll:true}); } catch(e) { editor.focus(); }
+    placeNoteCaretFromPoint(editor, event);
+    scheduleNoteFormatBar();
+    return editor;
+}
+// 双击落在哪个字上就从哪个字开始编：拿不到坐标（键盘触发、无此 API）就保持浏览器给的默认位置。
+function placeNoteCaretFromPoint(editor, event){
+    if(!event || typeof document.caretRangeFromPoint !== 'function') return false;
+    let range = null;
+    try { range = document.caretRangeFromPoint(event.clientX, event.clientY); } catch(e) { range = null; }
+    if(!range || !editor.contains(range.startContainer)) return false;
+    const selection = window.getSelection();
+    if(!selection) return false;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    return true;
 }
 // 执行命令后浏览器可能在编辑区里塞进白名单外的标签/属性（span、style、align）。
 // 就地剪一遍，保证「屏幕上看到的」和「即将存下的」是同一份 DOM；选区不受影响。
@@ -9214,9 +9259,11 @@ function createSmartNote(point=viewportCenter()){
     render();
     scheduleSave();
     requestAnimationFrame(() => {
-        const editor = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"] .smart-note-text`);
+        const card = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+        // 新建＝替用户双击一次，直接进编辑态；上屏后再按实测内容贴一次高度。
+        const editor = beginSmartNoteEdit(node, card);
         if(!editor) return;
-        editor.focus();
+        fitSmartNoteToText(node, card);
         // 新建便签默认全选占位文案：第一次输入直接覆盖，不用先手动删掉。
         const range = document.createRange();
         range.selectNodeContents(editor);
@@ -12399,7 +12446,11 @@ async function runWorkflowGroup(id){
 window.toggleWorkflowGroupLayoutMenu=toggleWorkflowGroupLayoutMenu;window.layoutWorkflowGroup=layoutWorkflowGroup;window.runWorkflowGroup=runWorkflowGroup;window.openWorkflowCreateDialog=openWorkflowCreateDialog;
 function canvasOrganizerHtml(node){
     const color=organizerColor(node);
-    if(isSmartNoteNode(node)) return `<div class="image-node smart-note-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" data-size-mode="${smartNoteSizeMode(node)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||240}px;height:${node.h||180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px;${noteAlphaVars(smartNoteBgAlpha(node))}">${smartNoteFloatingMenuHtml(node)}<div class="smart-note-text" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true">${noteRichTextHtml(node)}</div><div class="node-resize-handle" data-resize="1"></div></div>`;
+    if(isSmartNoteNode(node)){
+        // 正文只在编辑态可编辑：其余时间便签跟图片一样，能拖、能等比缩放（见 beginSmartNoteEdit）。
+        const editing = noteEditingIds.has(node.id);
+        return `<div class="image-node smart-note-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" data-size-mode="${smartNoteSizeMode(node)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||240}px;height:${node.h||180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px;${noteAlphaVars(smartNoteBgAlpha(node))}">${smartNoteFloatingMenuHtml(node)}<div class="smart-note-text" contenteditable="${editing?'true':'false'}" spellcheck="false"${editing?' role="textbox" aria-multiline="true"':''}>${noteRichTextHtml(node)}</div><div class="node-resize-handle" data-resize="1"></div></div>`;
+    }
     delete node.titleFontSize;
     const title=String(node.title||'未命名工作流');
     return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||520}px;height:${node.h||320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}"><div class="workflow-organizer-head"><div class="organizer-title-control"><span class="workflow-organizer-title-label" role="button" tabindex="0" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${escapeHtml(title)}</span><input class="workflow-organizer-title-input" type="text" value="${escapeAttr(title)}" aria-label="${escapeAttr(tr('smart.workflowGroup'))}" hidden></div></div><div class="node-resize-handle" data-resize="1"></div></div>`;
@@ -13936,8 +13987,19 @@ function bindNodeEvents(){
                 noteInput.onfocus = () => { noteEditingIds.add(nodeForControls.id); };
                 noteInput.onblur = () => {
                     noteEditingIds.delete(nodeForControls.id);
+                    // 失焦不会触发 render()，这里必须自己把编辑态收拾干净（否则光标和编辑描边都留在卡片上）。
+                    noteInput.setAttribute('contenteditable', 'false');
+                    noteInput.removeAttribute('role');
+                    noteInput.removeAttribute('aria-multiline');
                     syncNoteFromEditor(nodeForControls, noteInput, el);
                     if(noteFormatBarNoteId === nodeForControls.id) hideNoteFormatBar();
+                };
+                // Esc 收笔：输入早就由 oninput 写回节点，这里只负责离开编辑态。
+                noteInput.onkeydown = event => {
+                    if(event.key !== 'Escape') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    noteInput.blur();
                 };
                 // 粘贴剪枝：剪贴板带 HTML 时先过白名单再插入，只留基础格式；纯文本走浏览器默认插入。
                 noteInput.addEventListener('paste', event => {
@@ -13952,6 +14014,8 @@ function bindNodeEvents(){
                 });
                 // 勾选框只在左侧那一小块标记区生效，点正文仍然只是把光标放进文字里。
                 noteInput.addEventListener('click', event => {
+                    // 非编辑态整块正文都能拖动：刚拖完那一下不算点击，免得顺手勾掉一条待办。
+                    if(Date.now() < suppressNodeClickUntil) return;
                     const item = event.target.closest ? event.target.closest('li[data-checked]') : null;
                     if(!item || !noteInput.contains(item)) return;
                     if(event.clientX - item.getBoundingClientRect().left > 24) return;
@@ -13960,6 +14024,7 @@ function bindNodeEvents(){
                 });
                 // 链接：Ctrl/Cmd + 点击打开，普通点击仍然留给选词和改字。
                 noteInput.addEventListener('click', event => {
+                    if(Date.now() < suppressNodeClickUntil) return;
                     const anchor = event.target.closest ? event.target.closest('a[href]') : null;
                     if(!anchor || !(event.ctrlKey || event.metaKey)) return;
                     event.preventDefault();
@@ -14039,7 +14104,14 @@ function bindNodeEvents(){
             button.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); openDirector3d(button.dataset.director3dOpen || id); });
         });
         if(isSmart3dDirectorNode(nodeForControls)) el.ondblclick = event => { event.preventDefault(); event.stopPropagation(); openDirector3d(id); };
-        if(nodeForControls?.type !== 'smart-group' && !isSmart3dDirectorNode(nodeForControls)) el.ondblclick = e => e.stopPropagation();
+        else if(isSmartNoteNode(nodeForControls)) el.ondblclick = event => {
+            // 双击正文＝进编辑态（PureRef 的 Note 手感）；手柄和浮出菜单上的双击不算。
+            if(event.target.closest?.('.node-resize-handle, .smart-node-floating-menu')) return;
+            event.preventDefault();
+            event.stopPropagation();
+            beginSmartNoteEdit(nodeForControls, el, event);
+        };
+        else if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => e.stopPropagation();
         const nodeDrop = el.querySelector('.node-drop');
         nodeDrop?.addEventListener('mousedown', e => {
             if(e.button !== 0) return;
@@ -14311,8 +14383,9 @@ function bindNodeEvents(){
             const rect = nodeRect(node);
             resizeState = {id, startX:e.clientX, startY:e.clientY, startW:rect.width, startH:rect.height};
             if(isSmartNoteNode(node)) resizeState.startFontSize = smartNoteFontSize(node);
-            // 便签：修饰键拖动＝整体等比缩放（框与字号一起变），普通拖动＝只改框宽。
-            if(isSmartNoteNode(node)) resizeState.uniform = !!(e.altKey || e.ctrlKey || e.metaKey);
+            // 便签：非编辑态拖手柄＝整体等比缩放（框与字号一起变，和图片一样）；正在改字时
+            // 普通拖动只改框宽（等于给段落定宽），只有带修饰键才整体等比。
+            if(isSmartNoteNode(node)) resizeState.uniform = !noteEditingIds.has(node.id) || !!(e.altKey || e.ctrlKey || e.metaKey);
             // 分组缩放：记录本次手势开始时所有成员的位置/尺寸快照与起始缩放，缩放过程按相对快照的比例实时计算，
             // 整体等比缩放+重排。用快照而非持久基准，移动成员后再缩放也不会回退到旧位置。
             if(isSmartGroupNode(node)){
@@ -14335,8 +14408,21 @@ function bindNodeEvents(){
         });
         const beginNodeDrag = e => {
             const readonlyTextSurface = Boolean(e.target?.matches?.('.prompt-node-text[readonly]'));
-            if(readonlyTextSurface && e.detail >= 2) return;
-            if(e.button !== 0 || (!readonlyTextSurface && e.target.closest('.mini-x, .smart-node-floating-menu, .smart-note-text, .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button'))) return;
+            // 非编辑态的便签正文就是一块可拖区域（和图片一样）：双击的第二下必须放行给 ondblclick。
+            const passiveNoteSurface = Boolean(e.target?.closest?.('.smart-note-text[contenteditable="false"]'));
+            // 双击的第二下直接进编辑态，不靠 dblclick 事件：两次点击之间选中态会重渲染，元素换成
+            // 新的那份，dblclick 不一定落在当前 DOM 上；按 mousedown 的 detail 计数最稳。
+            if(passiveNoteSurface && e.detail >= 2 && e.button === 0){
+                const noteNode = nodes.find(n => n.id === id);
+                if(noteNode && isSmartNoteNode(noteNode)){
+                    e.preventDefault();
+                    e.stopPropagation();
+                    beginSmartNoteEdit(noteNode, el, e);
+                    return;
+                }
+            }
+            if((readonlyTextSurface || passiveNoteSurface) && e.detail >= 2) return;
+            if(e.button !== 0 || (!readonlyTextSurface && e.target.closest('.mini-x, .smart-node-floating-menu, .smart-note-text[contenteditable="true"], .node-resize-handle, .thumb-item, .node-port, .prompt-node-control, select, input, textarea, button'))) return;
             if(e.target.closest('.prompt-node-pill, textarea:not(.prompt-node-text)')) return;
             if(!readonlyTextSurface) e.preventDefault();
             e.stopPropagation();
@@ -24089,8 +24175,8 @@ window.onmousemove = e => {
         if(!node) return;
         const dx = (e.clientX - resizeState.startX) / viewport.scale;
         const dy = (e.clientY - resizeState.startY) / viewport.scale;
-        const minW = node.type === 'smart-prompt' ? 260 : node.type === 'smart-loop' ? 252 : node.type === 'smart-group' ? SMART_GROUP_MIN_WIDTH : isWorkflowOrganizerNode(node) ? 300 : isSmartNoteNode(node) ? 160 : 48;
-        const minH = node.type === 'smart-prompt' ? 170 : node.type === 'smart-loop' ? 132 : node.type === 'smart-group' ? SMART_GROUP_MIN_HEIGHT : isWorkflowOrganizerNode(node) ? 180 : isSmartNoteNode(node) ? 110 : 48;
+        const minW = node.type === 'smart-prompt' ? 260 : node.type === 'smart-loop' ? 252 : node.type === 'smart-group' ? SMART_GROUP_MIN_WIDTH : isWorkflowOrganizerNode(node) ? 300 : isSmartNoteNode(node) ? NOTE_MIN_WIDTH : 48;
+        const minH = node.type === 'smart-prompt' ? 170 : node.type === 'smart-loop' ? 132 : node.type === 'smart-group' ? SMART_GROUP_MIN_HEIGHT : isWorkflowOrganizerNode(node) ? 180 : isSmartNoteNode(node) ? NOTE_MIN_HEIGHT : 48;
         if(node.type === 'smart-group' && smartGroupImageRefs(node).some(ref => ref.item?.url)){
             // 图片分组：和普通节点一样直接改 w/h，缩略图网格按新尺寸实时重排。不要走下面的“成员缩放”那套，
             // 否则拖动过程里会按成员包围盒/缩放比例收缩，松手才回到拖动宽度（用户反馈的“变宽时先缩小”）。
@@ -24148,23 +24234,31 @@ window.onmousemove = e => {
             return;
         }
         if(isSmartNoteNode(node) && resizeState.uniform){
-            // Alt/Ctrl 拖动＝整体等比缩放：宽、高、字号同一因子，观感与旧版一致。
-            const widthRatio = Math.max(1, resizeState.startW + dx) / Math.max(1, resizeState.startW);
-            const heightRatio = Math.max(1, resizeState.startH + dy) / Math.max(1, resizeState.startH);
-            const factor = Math.max(0.25, Math.min(4, Math.sqrt(widthRatio * heightRatio)));
-            node.w = Math.max(minW, Math.round(resizeState.startW * factor));
-            node.h = Math.max(minH, Math.round(resizeState.startH * factor));
+            // 非编辑态拖手柄＝整体等比缩放（框与字号一起变），观感与图片一致；
+            // 编辑态带修饰键也走这里。
+            const startW = Math.max(1, resizeState.startW);
+            const startH = Math.max(1, resizeState.startH);
+            const widthRatio = Math.max(1, startW + dx) / startW;
+            const heightRatio = Math.max(1, startH + dy) / startH;
+            // 下限作用在「因子」上而不是分别夹宽/高：否则宽先撞到 160、高还在缩，比例就破了。
+            // 三个下限谁先到谁说了算：框宽、框高、字号（10px）。
+            const minFactor = Math.max(NOTE_MIN_WIDTH / startW, NOTE_MIN_HEIGHT / startH, 10 / Math.max(1, resizeState.startFontSize || 13));
+            const factor = Math.max(minFactor, Math.min(4, Math.sqrt(widthRatio * heightRatio)));
+            node.w = Math.round(startW * factor);
+            node.h = Math.round(startH * factor);
             node.fontSize = Math.max(10, Math.min(48, Math.round(resizeState.startFontSize * factor * 10) / 10));
         } else {
             node.w = Math.max(minW, Math.round(resizeState.startW + dx));
             node.h = Math.max(minH, Math.round(resizeState.startH + dy));
         }
         if(isSmartNoteNode(node)){
-            // 普通拖动＝只改框宽（转固定框），高度仍由内容决定，拉过的高度当下限。
-            if(!resizeState.uniform) node.sizeMode = 'fixed';
+            // 动过手柄就转固定框（等同 PureRef 里手动改过尺寸后不再 Auto size），否则下一帧
+            // 自动尺寸又会按文字把宽高收回去。等比拖动时字号与框同因子，内容照样贴合；
+            // 只改框宽时高度仍由内容决定，拉过的高度当下限。
+            node.sizeMode = 'fixed';
             const noteEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
             noteEl?.style.setProperty('--note-font-size', `${node.fontSize}px`);
-            if(noteEl) fitNoteHeightToContent(node, noteEl);
+            if(noteEl && !resizeState.uniform) fitNoteHeightToContent(node, noteEl);
         }
         node.scale = 1;
         updateNodeElementDuringResize(node);
@@ -25482,6 +25576,17 @@ window.addEventListener('resize', () => {
     if(panoramaState.enabled) resizePanoramaViewer();
     if(uploadResourcePanel && uploadResourcePanel.isOpen()) requestAnimationFrame(() => uploadResourcePanel.reposition());
 });
+// 便签只有双击才进编辑态：点到便签自己以外的地方就立刻收笔。画布的平移/框选手势会
+// preventDefault 掉 mousedown，浏览器因此不会自动移走焦点，必须在这里手动 blur。
+document.addEventListener('mousedown', event => {
+    const editor = document.activeElement;
+    if(!editor?.classList?.contains?.('smart-note-text')) return;
+    // 浮条按钮自己 preventDefault 保住选区，点它不算「点到别处」。
+    if(event.target?.closest?.('.smart-note-format-bar')) return;
+    const card = editor.closest('.image-node[data-id]');
+    if(card && event.target && card.contains(event.target)) return;
+    editor.blur();
+}, true);
 // 选区浮条只在便签正文里出现；浮条自己按 Range 矩形逐帧定位，所以平移/缩放/滚动都不用额外处理。
 document.addEventListener('selectionchange', () => {
     if(document.activeElement?.closest?.('.smart-note-text')) scheduleNoteFormatBar();
