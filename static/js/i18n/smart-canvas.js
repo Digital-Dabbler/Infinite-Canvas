@@ -652,8 +652,8 @@
         ,"smart.addNote": { zh: "添加便签", en: "Add note" }
         ,"smart.addNoteSub": { zh: "记录说明、状态和待办", en: "Record notes, status, and tasks" }
         ,"smart.outline": { zh: "画布目录", en: "Canvas outline" }
-        ,"smart.outlineSub": { zh: "工作流分组与标注", en: "Workflow groups and annotations" }
-        ,"smart.outlineSearch": { zh: "搜索名称、说明或便签", en: "Search names, descriptions, or notes" }
+        ,"smart.outlineSub": { zh: "工作流分组", en: "Workflow groups" }
+        ,"smart.outlineSearch": { zh: "搜索分组名称或说明", en: "Search group names or descriptions" }
         ,"smart.shortcutWorkflowGroup": { zh: "创建工作流管理分组", en: "Create a workflow management group" }
         ,"smart.imageUpload": { zh: "上传", en: "Upload" }
         ,"smart.imageUploadSub": { zh: "支持图片、视频和音频", en: "Images, video, and audio" }

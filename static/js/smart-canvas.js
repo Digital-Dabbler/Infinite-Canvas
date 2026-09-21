@@ -11923,17 +11923,17 @@ function canvasOrganizerHtml(node){
 function renderSmartOutline(){
     if(!smartOutlineList) return;
     const query = String(smartOutlineSearch?.value || '').trim().toLowerCase();
-    const list = nodes.filter(isCanvasOrganizerNode).filter(node => {
-        const text = isSmartNoteNode(node) ? node.text : `${node.title || ''} ${node.description || ''}`;
+    // 画布目录只负责在分组之间导航；便签是画布上的自由标注，不进目录。
+    const list = nodes.filter(isWorkflowOrganizerNode).filter(node => {
+        const text = `${node.title || ''} ${node.description || ''}`;
         return !query || String(text || '').toLowerCase().includes(query);
     });
     smartOutlineList.innerHTML = list.length ? list.map(node => {
-        const note = isSmartNoteNode(node);
-        const title = note ? (String(node.text || '').trim().split(/\r?\n/)[0] || '空便签') : (node.title || '未命名工作流');
-        const sub = note ? '便签' : '工作流分组';
-        const count = note ? '' : `${workflowOrganizerMembers(node).length} 节点`;
+        const title = node.title || '未命名工作流';
+        const sub = '工作流分组';
+        const count = `${workflowOrganizerMembers(node).length} 节点`;
         return `<button class="smart-outline-item" type="button" data-outline-id="${escapeAttr(node.id)}" style="--item-color:${organizerColor(node)}"><span class="smart-outline-dot"></span><span class="smart-outline-copy"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(sub)}</small></span><span class="smart-outline-count">${count}</span></button>`;
-    }).join('') : '<div class="smart-outline-empty">还没有工作流分组或便签</div>';
+    }).join('') : '<div class="smart-outline-empty">还没有工作流分组</div>';
 }
 function render(){
     if(smartWorkflowTransferModal?.classList.contains('open')) updateSmartWorkflowTransferMeta();
@@ -13442,7 +13442,6 @@ function bindNodeEvents(){
             if(noteInput) noteInput.oninput = e => {
                 nodeForControls.text = e.target.value;
                 fitSmartNoteToText(nodeForControls, el);
-                renderSmartOutline();
                 renderMinimap();
                 scheduleConnectionLayerRefresh();
                 scheduleSave();
