@@ -302,29 +302,6 @@
       "system": false
     },
     {
-      "id": "personal_435237d8d606450aa42550393ad4e53",
-      "name": "测试用户的资产库",
-      "type": "asset",
-      "personal": true,
-      "fixed": true,
-      "owner_type": "user",
-      "owner_id": "435237d8d606450aa42550393ad4e536",
-      "created_by": "435237d8d606450aa42550393ad4e536",
-      "categories": [
-        {
-          "id": "wf_34c2d3a55ca7",
-          "name": "工作流",
-          "type": "workflow",
-          "items": [],
-          "owner_type": "user",
-          "owner_id": "435237d8d606450aa42550393ad4e536",
-          "created_by": "435237d8d606450aa42550393ad4e536",
-          "library_id": "personal_435237d8d606450aa42550393ad4e53"
-        }
-      ],
-      "system": false
-    },
-    {
       "id": "personal_04d2787c99da41dfbc061e7b971b341",
       "name": "系统管理员的资产库",
       "type": "asset",
