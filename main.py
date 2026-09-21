@@ -28,6 +28,7 @@ import functools
 import contextvars
 import secrets
 import html
+from html.parser import HTMLParser
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -7190,6 +7191,164 @@ def validate_director_scene(value):
         raise HTTPException(status_code=400, detail="3D 场景比例无效")
     return value
 
+NOTE_RICHTEXT_MAX = 20000
+NOTE_RICHTEXT_TAGS = ("strong", "em", "s", "ul", "ol", "li", "h1", "h2", "h3", "br", "a")
+NOTE_RICHTEXT_ALIASES = {"b": "strong", "i": "em", "strike": "s", "del": "s", "ins": "s"}
+NOTE_RICHTEXT_BLOCK_TAGS = ("h1", "h2", "h3", "li")
+NOTE_RICHTEXT_SIZES = ("1", "2", "3", "4")
+NOTE_RICHTEXT_ALIGNMENTS = ("left", "center", "right")
+# 这些标签连同内部文本一起丢弃：解包会把脚本正文变成可见文字。
+NOTE_RICHTEXT_DROP_TAGS = {
+    "script", "style", "iframe", "object", "embed", "svg", "math", "template",
+    "noscript", "title", "head", "textarea", "select", "option", "form", "input", "button",
+}
+
+def note_richtext_safe_link(value):
+    """Only http/https/mailto and same-origin relative paths survive."""
+    text = str(value or "").strip()
+    if not text or len(text) > 2048:
+        return ""
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in text):
+        return ""
+    if text.startswith("//"):
+        return ""
+    if text.lower().startswith(("http://", "https://", "mailto:")):
+        return text
+    if re.match(r"^[a-z][a-z0-9+.\-]*:", text, re.IGNORECASE):
+        return ""
+    return text
+
+def note_richtext_checked_value(value):
+    return "true" if str(value or "").strip().lower() in {"true", "1", "yes", "checked"} else "false"
+
+def note_richtext_size_value(value):
+    text = str(value or "").strip()
+    return text if text in NOTE_RICHTEXT_SIZES else ""
+
+def note_richtext_align_value(value):
+    text = str(value or "").strip().lower()
+    return text if text in NOTE_RICHTEXT_ALIGNMENTS else ""
+
+class NoteRichTextSanitizer(HTMLParser):
+    """Whitelist sanitiser for smart-note rich text.
+
+    Mirrors ``sanitizeNoteRichText()`` in ``static/js/smart-canvas.js``: the same
+    tag list, the same attribute rules, the same link policy.  Every ``style``,
+    ``class`` and ``on*`` attribute is dropped, font size and alignment are kept
+    only as validated ``data-*`` values, and unknown tags are unwrapped (their
+    text survives, the tag does not) while script-like tags lose their content.
+    """
+
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.parts: List[str] = []
+        self.open_tags: List[str] = []
+        self.drop_stack: List[str] = []
+
+    def _attributes(self, name, attrs):
+        allowed: Dict[str, str] = {}
+        for raw_key, raw_value in attrs or []:
+            key = str(raw_key or "").lower()
+            value = "" if raw_value is None else str(raw_value)
+            if name == "a" and key == "href":
+                link = note_richtext_safe_link(value)
+                if link:
+                    allowed["href"] = link
+            elif name == "li" and key == "data-checked":
+                allowed["data-checked"] = note_richtext_checked_value(value)
+            elif key == "data-fs" and name in NOTE_RICHTEXT_BLOCK_TAGS:
+                size = note_richtext_size_value(value)
+                if size:
+                    allowed["data-fs"] = size
+            elif key == "data-align" and name in NOTE_RICHTEXT_BLOCK_TAGS:
+                align = note_richtext_align_value(value)
+                if align:
+                    allowed["data-align"] = align
+        return "".join(
+            ' %s="%s"' % (key, html.escape(allowed[key], quote=True))
+            for key in ("href", "data-checked", "data-fs", "data-align")
+            if key in allowed
+        )
+
+    def _start(self, tag, attrs, self_closing):
+        raw_name = str(tag or "").lower()
+        name = NOTE_RICHTEXT_ALIASES.get(raw_name, raw_name)
+        if self.drop_stack:
+            if name in NOTE_RICHTEXT_DROP_TAGS and not self_closing:
+                self.drop_stack.append(name)
+            return
+        if name in NOTE_RICHTEXT_DROP_TAGS:
+            if not self_closing:
+                self.drop_stack.append(name)
+            return
+        if name not in NOTE_RICHTEXT_TAGS:
+            return
+        if name == "br":
+            self.parts.append("<br>")
+            return
+        self.parts.append("<%s%s>" % (name, self._attributes(name, attrs)))
+        if not self_closing:
+            self.open_tags.append(name)
+
+    def handle_starttag(self, tag, attrs):
+        self._start(tag, attrs, False)
+
+    def handle_startendtag(self, tag, attrs):
+        self._start(tag, attrs, True)
+
+    def handle_endtag(self, tag):
+        raw_name = str(tag or "").lower()
+        name = NOTE_RICHTEXT_ALIASES.get(raw_name, raw_name)
+        if self.drop_stack:
+            if self.drop_stack[-1] == name:
+                self.drop_stack.pop()
+            return
+        if name not in self.open_tags:
+            return
+        index = len(self.open_tags) - 1 - self.open_tags[::-1].index(name)
+        while len(self.open_tags) > index:
+            self.parts.append("</%s>" % self.open_tags.pop())
+
+    def handle_data(self, data):
+        if self.drop_stack:
+            return
+        text = str(data or "")
+        if text:
+            # 与客户端一致：只转义尖括号，实体引用原样透传（避免两侧重复转义）。
+            self.parts.append(text.replace("<", "&lt;").replace(">", "&gt;"))
+
+    def handle_entityref(self, name):
+        if not self.drop_stack:
+            self.parts.append("&%s;" % name)
+
+    def handle_charref(self, name):
+        if not self.drop_stack:
+            self.parts.append("&#%s;" % name)
+
+    def handle_comment(self, data):
+        return
+
+    def handle_decl(self, decl):
+        return
+
+    def handle_pi(self, data):
+        return
+
+    def unknown_decl(self, data):
+        return
+
+def sanitize_note_richtext(value):
+    """Return the whitelisted subset of a smart-note rich text payload."""
+    parser = NoteRichTextSanitizer()
+    try:
+        parser.feed(value if isinstance(value, str) else "")
+        parser.close()
+    except Exception:
+        # 解析器遇到异常输入时不抛给调用方：宁可退化成已产出的部分，也不让节点更新失败。
+        pass
+    parser.parts.extend("</%s>" % name for name in reversed(parser.open_tags))
+    return "".join(parser.parts)
+
 def validate_canvas_node_fields(node, fields):
     """Reject reserved identity/sharing/audit fields; accept all other node fields.
 
@@ -7210,6 +7369,25 @@ def validate_canvas_node_fields(node, fields):
         thumb = clean["directorThumb"]
         if str((node or {}).get("type") or "") != "smart-3d-director" or not isinstance(thumb, str) or len(thumb) > 55000 or (thumb and not re.fullmatch(r"data:image/jpeg;base64,[A-Za-z0-9+/=]+", thumb)):
             raise HTTPException(status_code=400, detail="3D 场景缩略图无效")
+    node_type = str((node or {}).get("type") or "")
+    if "richText" in clean:
+        if node_type != "smart-note":
+            raise HTTPException(status_code=400, detail="只有便签节点可更新富文本")
+        raw_note = clean["richText"]
+        if not isinstance(raw_note, str) or len(raw_note) > NOTE_RICHTEXT_MAX:
+            raise HTTPException(status_code=400, detail="便签富文本无效")
+        # 便签正文是节点字段里唯一会被渲染成 HTML 的内容，因此它是唯一走白名单的字段：
+        # 客户端也有一份同样的剪枝，这里是不信任客户端的那一层。
+        clean["richText"] = sanitize_note_richtext(raw_note)
+    if node_type == "smart-note":
+        if "sizeMode" in clean and clean["sizeMode"] not in {"auto", "fixed"}:
+            raise HTTPException(status_code=400, detail="便签尺寸模式无效")
+        if "bgAlpha" in clean:
+            try:
+                alpha = int(clean["bgAlpha"])
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="便签背景透明度无效")
+            clean["bgAlpha"] = max(0, min(100, alpha))
     return clean
 
 CANVAS_NODE_CLEAR_FIELD_LIMIT = 96
