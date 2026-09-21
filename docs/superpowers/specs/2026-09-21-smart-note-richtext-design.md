@@ -73,15 +73,21 @@ may still be running the old frontend.
   (`updated = {**nodes[node_index], **fields}`, `main.py:7300-7315`) and is idempotent per
   `operation_id`, which is exactly the granularity a new string field needs.
 - **Paste is filtered before insertion, not after.** `paste` calls `preventDefault()`, takes
-  `text/html` (falling back to `text/plain`), parses it into a detached `<template>`, prunes it
-  with the client whitelist (§5), and inserts the surviving nodes through the Range API. Bold,
-  italic, strikethrough, lists, checklists, heading levels and links survive; fonts, colours,
+  `text/html` (falling back to `text/plain`), runs it through the client whitelist (§5), inserts
+  the result with `document.execCommand('insertHTML')`, then prunes the editor in place once more.
+  `insertHTML` rather than the Range API so the paste stays on the browser's undo stack; the
+  second prune catches whatever the parser restructured on the way in. Bold, italic,
+  strikethrough, paragraphs, lists, checklists, heading levels and links survive; fonts, colours,
   images and tables do not.
 - **Selection floating bar.** When the selection inside a note is non-empty, a small
-  `position: fixed` bar appears over the note with: bold, size, alignment, bullet list, numbered
-  list, checklist, link. Size is per run and is one of four steps (`data-fs` 1–4, §5); it is not
-  the node's base `fontSize`, which is unchanged by this bar. The bar disappears on blur or on a
-  collapsed selection; nothing is shown when there is no selection.
+  `position: fixed` bar appears over the note with: bold, italic, strikethrough, four size steps,
+  alignment, bullet list, numbered list, checklist, link. It re-measures every frame from the
+  selection's client rect, so panning, zooming and typing keep it attached; it disappears on blur,
+  on a collapsed selection, or when the selection leaves the note. Size and alignment are
+  paragraph-level (`data-fs` / `data-align` on the enclosing block, §5) and are not the node's
+  base `fontSize`, which this bar never touches. Bold/italic/strikethrough run with
+  `styleWithCSS=false`, so the browser emits `<b>`/`<i>`/`<strike>` and the whitelist normalises
+  them to `<strong>`/`<em>`/`<s>` instead of storing inline styles.
 - **The 20000-character cap is a `beforeinput` guard on the client, not just a server rule**, so a
   note can never hold content the server would reject on the next save.
 - **Node menu.** Selecting a note shows a compact menu at its top-right corner with the six
@@ -124,7 +130,12 @@ may still be running the old frontend.
 
 One whitelist, two implementations, one shared corpus.
 
-- **Allowed tags:** `strong`, `em`, `s`, `ul`, `ol`, `li`, `h1`, `h2`, `h3`, `br`, `a`.
+- **Allowed tags:** `strong`, `em`, `s`, `ul`, `ol`, `li`, `h1`, `h2`, `h3`, `p`, `div`, `br`,
+  `a`. `p` and `div` are in the list because they are the paragraphs of the editing model, not
+  decoration: Chromium emits a new `<div>` for every Enter pressed inside a `contenteditable`
+  note and pasted prose is usually `<p>`. Unwrapping them would silently merge every paragraph
+  into one line on the next save, so both are kept as plain block containers that may carry the
+  paragraph attributes below.
 - **Allowed attributes:** `a[href]`, `li[data-checked="true"|"false"]`, and `data-fs` /
   `data-align` on block elements. `data-fs` holds one of four steps (`1`–`4`, rendered as
   0.85× / 1× / 1.25× / 1.6× of `--note-font-size`); `data-align` holds `left`, `center` or
@@ -135,8 +146,11 @@ One whitelist, two implementations, one shared corpus.
 - **Checklists** are `li[data-checked="true"|"false"]`, not `<input>`, so no form element is ever
   created from stored HTML.
 - **Links:** `href` must be `http:`, `https:`, `mailto:`, or a same-origin relative path.
-  `javascript:` and `data:` are dropped. Rendered anchors get
-  `rel="noopener noreferrer" target="_blank"`.
+  `javascript:` and `data:` are dropped. An anchor stores nothing but `href` — `target`, `rel`,
+  `class` and every `on*` handler are dropped like any other attribute. A link opens on
+  Ctrl/Cmd+click: `http(s)` goes through `window.open(href, '_blank', 'noopener')` and anything
+  else navigates the current tab, so the opener isolation comes from the opening call instead of
+  from a stored attribute. A plain click stays inside the editor for caret placement.
 - **Client rendering path.** `richText` is never assigned to `innerHTML`. A single
   `buildNoteFragment(html)` parses the string, prunes it, and creates DOM nodes, and *that* is the
   only path from stored data to the canvas — for local input, for a peer's broadcast, and for a

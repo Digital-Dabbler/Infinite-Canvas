@@ -3,6 +3,7 @@
 日期：2026-09-21
 范围：`smart-note` 由纯文本 `<textarea>` 改造为受限 HTML + contenteditable 的富文本节点；拖手柄改框宽 / 修饰键整体缩放；选中文本浮条与节点浮出菜单；背景透明度；客户端与服务端同一套白名单清洗
 设计依据：`docs/superpowers/specs/2026-09-21-smart-note-richtext-design.md`
+状态：步骤 1–4 已提交 `cd85a35`；步骤 5–7 已提交 `b838669`（含段落白名单 `p`/`div` 修复与菜单双类选择器覆盖）；步骤 8 的三条静态验收命令已跑通，浏览器交互验收待人工完成。
 
 ## 背景
 
@@ -71,17 +72,20 @@
 - **CSS** `static/css/smart-canvas.css:2221-2238`：`.smart-note-node` 改弱边框（hover 才显形）、更小圆角、去重阴影，背景由 `--note-bg-alpha` 与 `--organizer-color` 经 `color-mix` 计算，`bgAlpha = 0` 时边框与阴影一并淡出；`.smart-note-text` 不再靠 `overflow: hidden` 兜底（高度由步骤 4 保证）；新增浮条、浮出菜单、`data-fs` 四档、`data-align` 三档、`li[data-checked]` 勾选样式。
 - **i18n** `static/js/i18n/smart-canvas.js`：浮条、菜单、尺寸模式、透明度、链接等新文案补 zh/en 双语，`node static/js/i18n/validate-i18n.js` 必须保持通过。
 
+> 与原计划的偏差（实现后回写）：①浮条不是 `#noteFormatBar`，而是懒创建的单例 `div.smart-note-format-bar`（`data-note-format-bar="1"`）append 到 `document.body`，每帧按 Selection 的 client rect 重算位置（`updateNoteFormatBar()` 自递归 rAF）；②节点菜单不是新 id `#noteNodeMenu`，而是复用 `.smart-node-floating-menu` 的 `smartNoteFloatingMenuHtml()`（`class="smart-node-floating-menu smart-note-menu"`），于是「选中才浮出、拖拽/多选/缩放时隐藏、反向抵消画布缩放」全部自动成立；③色块与复制按钮必须用双类选择器（`.smart-note-menu .smart-note-menu-colors .organizer-color`、`.smart-note-menu .smart-text-copy-btn`）压过 `.smart-node-floating-menu button` 的通用尺寸，否则色块被撑成透明药丸；④字号/对齐/清单都落在 enclosing block 的 `data-fs`/`data-align` 上，不是节点基准 `fontSize`。
+
 ### 6. 粘贴
 
-便签内 `paste`：`preventDefault()`；取 `text/html`（无则 `text/plain`）；`buildNoteFragment()` 剪枝；用 Range 插入到光标处。图片/文件粘贴直接忽略（对标提示词节点 `static/js/smart-canvas.js:24556` 的做法）。
+便签内 `paste`：`text/html` 非空时 `preventDefault()`，过一遍客户端白名单（`sanitizeNoteRichText()`）后用 `document.execCommand('insertHTML')` 插入到光标处，再就地 `pruneNoteEditorDom(editor)` 兜住解析器的重构；`text/html` 为空则回退插入转义后的 `text/plain`。洗完为空就什么都不插（图片、表格、字体标签粘贴后不残留）。图片/文件粘贴直接忽略（对标提示词节点 `static/js/smart-canvas.js:24556` 的做法）。
+
+> 与原计划的偏差：没用 `buildNoteFragment()` + Range 手写插入，而是走 `execCommand('insertHTML')`——只有走浏览器的编辑命令才能留在撤销栈上（Ctrl+Z 能撤回这次粘贴），代价是插入后要多 prune 一次。见 spec §2 粘贴一节。
 
 ### 7. 测试
 
-- 新增 `tests/fixtures/smart-note-richtext-cases.json`：脏输入 → 期望输出的共享语料（`<script>`、`on*`、`style`、`javascript:`/`data:` href、`<iframe>`、`<img>`、表格、字体标签、`data-fs="9"`、`data-align="justify"`、超长输入）。
-- 新增 `tests/test_smart_note_richtext_sanitizer.py`：直接测 `main.py` 的 `sanitize_note_richtext()`，逐条比对语料；另测 `validate_canvas_node_fields()` 的 `smart-note` 特例（超长 400、`sizeMode` 非法、`bgAlpha` 归一、正常加粗/列表/待办/链接保留）。
-- 新增 `tests/test_smart_note_richtext_client.py`：`node -e` 跑 `sanitizeNoteRichText`，逐条比对**同一份语料**（客户端与服务端不许漂移）；另加源码契约断言：便签渲染路径中不出现把 `richText` 直接赋给 `innerHTML`。
-- 新增 `tests/test_smart_note_size_semantics.py`（同一 node 范式）：普通拖动改 `w`、置 `sizeMode='fixed'`、不动 `fontSize`；修饰键拖动按同一比例缩放 `w`/`h`/`fontSize`；fixed 便签不调用 `fitSmartNoteToText`；内容高于 720 时高度容纳内容。
-- 更新既有测试：实施时先 `grep -rn "smart-note-text" tests/` 找断言便签 DOM 的用例，随 `textarea → div` 调整。
+- 新增 `tests/fixtures/smart-note-richtext-cases.json`：脏输入 → 期望输出的共享语料（`<script>`、`on*`、`style`、`javascript:`/`data:` href、`<iframe>`、`<img>`、表格、字体标签、`data-fs="9"`、`data-align="justify"`；**已落地 44 条**，另含段落 `p`/`div` 边界、实体只解一次、注释/CDATA/doctype 丢弃等）。
+- **实际落地为一个文件** `tests/test_smart_note_richtext.py`（29 个用例，四个类）：`SmartNoteRichTextCaseTests`（客户端与服务端各跑同一份语料 + 两侧互等）、`SmartNoteNodeFieldTests`（`validate_canvas_node_fields()` 的 `smart-note` 特例：超长 400、`sizeMode` 只认两个字面量、`bgAlpha` 夹取、非便签节点忽略便签字段）、`SmartNoteRenderContractTests`（渲染唯一入口、编辑期 DOM 保活、自适应不裁剪、拖动/修饰键缩放语义、正文内拖选不移动节点）、`SmartNoteFormattingContractTests`（浮条保选区、命令产出语义标签、默认块属性被删、勾选与链接形状、四档字号、`selectionchange`、菜单替换常驻工具条、粘贴剪枝、透明度只改自定义属性、CSS 分层淡出、两侧段落白名单字面量、菜单双类覆盖、`richText` 绝不进 `innerHTML`、i18n 键全有 zh/en）。
+  > 与原计划的偏差：原计划拆成 `test_smart_note_richtext_sanitizer.py` / `test_smart_note_richtext_client.py` / `test_smart_note_size_semantics.py` 三个文件，实施时合并成一个——三者共用同一套 `extract_function()`/`node -e` 骨架，拆开只会三份重复 harness。
+- 更新既有测试：`tests/test_smart_canvas_outline.py` 的 `test_note_edits_do_not_rebuild_the_outline` 改断言共享写入口 `syncNoteFromEditor(nodeForControls, noteInput, el);`（仍保留 `assertNotIn("renderSmartOutline", …)`）。
 
 ### 8. 验收
 

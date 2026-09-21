@@ -7192,9 +7192,11 @@ def validate_director_scene(value):
     return value
 
 NOTE_RICHTEXT_MAX = 20000
-NOTE_RICHTEXT_TAGS = ("strong", "em", "s", "ul", "ol", "li", "h1", "h2", "h3", "br", "a")
+# div/p 是纯块级容器，本身不带表现（客户端 contenteditable 按 Enter 产出 <div>，粘贴常见 <p>）；
+# 必须与 static/js/smart-canvas.js 的同名常量逐字对齐，否则换行会在保存时被抹平。
+NOTE_RICHTEXT_TAGS = ("strong", "em", "s", "ul", "ol", "li", "h1", "h2", "h3", "p", "div", "br", "a")
 NOTE_RICHTEXT_ALIASES = {"b": "strong", "i": "em", "strike": "s", "del": "s", "ins": "s"}
-NOTE_RICHTEXT_BLOCK_TAGS = ("h1", "h2", "h3", "li")
+NOTE_RICHTEXT_BLOCK_TAGS = ("h1", "h2", "h3", "li", "p", "div")
 NOTE_RICHTEXT_SIZES = ("1", "2", "3", "4")
 NOTE_RICHTEXT_ALIGNMENTS = ("left", "center", "right")
 # 这些标签连同内部文本一起丢弃：解包会把脚本正文变成可见文字。

@@ -691,5 +691,26 @@
         ,"smart.railEditNeedImage": { zh: "请先选择一张图片", en: "Select an image first" }
         ,"smart.panelClickToOpen": { zh: "点击打开{name}", en: "Click to open {name}" }
         ,"smart.panelClickToClose": { zh: "点击关闭{name}", en: "Click to close {name}" }
+        ,"smart.noteFormat": { zh: "便签格式", en: "Note formatting" }
+        ,"smart.noteBold": { zh: "加粗", en: "Bold" }
+        ,"smart.noteItalic": { zh: "斜体", en: "Italic" }
+        ,"smart.noteStrike": { zh: "删除线", en: "Strikethrough" }
+        ,"smart.noteSizeSmall": { zh: "小号文字", en: "Small text" }
+        ,"smart.noteSizeNormal": { zh: "正文文字", en: "Normal text" }
+        ,"smart.noteSizeLarge": { zh: "大号文字", en: "Large text" }
+        ,"smart.noteSizeHuge": { zh: "特大文字", en: "Extra large text" }
+        ,"smart.noteAlignLeft": { zh: "左对齐", en: "Align left" }
+        ,"smart.noteAlignCenter": { zh: "居中对齐", en: "Align center" }
+        ,"smart.noteAlignRight": { zh: "右对齐", en: "Align right" }
+        ,"smart.noteChecklist": { zh: "待办清单", en: "Checklist" }
+        ,"smart.noteBulletList": { zh: "项目符号列表", en: "Bulleted list" }
+        ,"smart.noteNumberedList": { zh: "编号列表", en: "Numbered list" }
+        ,"smart.noteLink": { zh: "插入链接", en: "Insert link" }
+        ,"smart.noteLinkPrompt": { zh: "输入链接地址（留空则移除）", en: "Enter a link URL (leave empty to remove)" }
+        ,"smart.noteColor": { zh: "便签颜色", en: "Note color" }
+        ,"smart.noteBgAlpha": { zh: "背景透明度", en: "Background opacity" }
+        ,"smart.noteSizeAuto": { zh: "改为自适应尺寸", en: "Switch to auto size" }
+        ,"smart.noteSizeFixed": { zh: "改为固定尺寸", en: "Switch to fixed size" }
+        ,"smart.noteRichTextLimit": { zh: "便签内容已达 {n} 字上限", en: "Notes are limited to {n} characters" }
     });
 })();

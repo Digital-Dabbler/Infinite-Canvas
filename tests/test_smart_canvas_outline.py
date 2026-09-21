@@ -122,7 +122,8 @@ class SmartCanvasOutlineTests(unittest.TestCase):
         marker = "const noteInput = el.querySelector('.smart-note-text');"
         start = SMART_CANVAS_JS.index(marker)
         handler = SMART_CANVAS_JS[start:SMART_CANVAS_JS.index("};", start) + 2]
-        self.assertIn("fitSmartNoteToText(nodeForControls, el);", handler)
+        # 正文写入收敛到 syncNoteFromEditor（唯一写入口），编辑过程中不得重建目录。
+        self.assertIn("syncNoteFromEditor(nodeForControls, noteInput, el);", handler)
         self.assertNotIn("renderSmartOutline", handler)
 
 

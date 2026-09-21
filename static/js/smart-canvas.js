@@ -8639,9 +8639,11 @@ function organizerColor(node){
 // 所有 style/class/on* 一律丢弃（字号与对齐存 data-*，由 CSS class 呈现），
 // 这样即使存储被投毒也拼不出 position:fixed / url() 这类 CSS 注入面。
 const NOTE_RICHTEXT_MAX = 20000;
-const NOTE_RICHTEXT_TAGS = ['strong','em','s','ul','ol','li','h1','h2','h3','br','a'];
+// div/p 只是块级容器，本身不带表现：Chrome 在 contenteditable 里按 Enter 产出的就是 <div>，
+// 粘贴来的段落多半是 <p>，两者都不放行的话换行会在清洗时被抹平。
+const NOTE_RICHTEXT_TAGS = ['strong','em','s','ul','ol','li','h1','h2','h3','p','div','br','a'];
 const NOTE_RICHTEXT_ALIASES = {b:'strong', i:'em', strike:'s', del:'s', ins:'s'};
-const NOTE_RICHTEXT_BLOCK_TAGS = ['h1','h2','h3','li'];
+const NOTE_RICHTEXT_BLOCK_TAGS = ['h1','h2','h3','li','p','div'];
 const NOTE_RICHTEXT_SIZES = ['1','2','3','4'];
 const NOTE_RICHTEXT_ALIGNMENTS = ['left','center','right'];
 // 这些标签连同内部文本一起丢弃：解包会把脚本正文变成可见文字。
@@ -8819,6 +8821,12 @@ function smartNoteBgAlpha(node){
 function smartNoteSizeMode(node){
     return node?.sizeMode === 'fixed' ? 'fixed' : 'auto';
 }
+// 透明度同时驱动底色、描边和阴影：调到 0 时三者一起淡出，便签退化成浮在画布上的文字。
+function noteAlphaVars(alpha){
+    const value = Math.max(0, Math.min(100, Math.round(Number(alpha) || 0)));
+    return `--note-bg-alpha:${value}%;--note-border-alpha:${Math.min(100, Math.round(value * 1.6))}%;`
+        + `--note-shadow-alpha:${Math.min(100, Math.round(value * 1.4))}%;--note-hover-alpha:${Math.min(100, Math.round(value * 2.9))}%`;
+}
 function noteEditorFor(node, element=null){
     const el = element || world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
     return el ? el.querySelector('.smart-note-text') : null;
@@ -8870,6 +8878,261 @@ function fitSmartNoteToText(node, element=null){
         element.style.height = `${targetHeight}px`;
     }
     return changed;
+}
+// ---- 便签富文本：单点写入 + 段落级格式命令（步骤 5）----
+// 编辑区写回节点字段只有这一条路：输入、浮条命令、粘贴、勾选待办都走它，
+// 否则很容易出现「屏幕上变了、存下来的 richText 还是旧的」。
+function syncNoteFromEditor(node, editor, element=null){
+    if(!isSmartNoteNode(node) || !editor) return;
+    node.richText = sanitizeNoteRichText(editor.innerHTML);
+    node.text = editor.innerText;
+    const card = element || editor.closest('.image-node[data-id]');
+    if(smartNoteSizeMode(node) === 'auto') fitSmartNoteToText(node, card);
+    else fitNoteHeightToContent(node, card);
+    renderMinimap();
+    scheduleConnectionLayerRefresh();
+    scheduleSave();
+}
+// 执行命令后浏览器可能在编辑区里塞进白名单外的标签/属性（span、style、align）。
+// 就地剪一遍，保证「屏幕上看到的」和「即将存下的」是同一份 DOM；选区不受影响。
+function pruneNoteEditorDom(editor){
+    if(!editor) return;
+    pruneNoteRichTextTree(editor);
+}
+function noteBlockFor(range, editor){
+    if(!range || !editor) return null;
+    let element = range.startContainer;
+    if(element && element.nodeType !== 1) element = element.parentElement;
+    if(!element || !editor.contains(element)) return null;
+    while(element && element !== editor){
+        if(NOTE_RICHTEXT_BLOCK_TAGS.includes(element.tagName.toLowerCase())) return element;
+        element = element.parentElement;
+    }
+    return null;
+}
+function noteCurrentRange(editor){
+    const selection = window.getSelection();
+    if(!selection || !selection.rangeCount) return null;
+    const range = selection.getRangeAt(0);
+    const start = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+    return start && editor?.contains(start) ? range : null;
+}
+// 段落级属性（data-fs/data-align）需要落在一个块级元素上；光标停在根层裸文本上时先包一层 div。
+function noteEnsureBlock(editor){
+    const range = noteCurrentRange(editor);
+    const existing = noteBlockFor(range, editor);
+    if(existing) return existing;
+    document.execCommand('formatBlock', false, 'div');
+    return noteBlockFor(noteCurrentRange(editor), editor);
+}
+function setNoteBlockAttribute(editor, name, value, defaultValue){
+    const block = noteEnsureBlock(editor);
+    if(!block) return false;
+    if(value === defaultValue) block.removeAttribute(name);
+    else block.setAttribute(name, value);
+    return true;
+}
+function noteBlockState(editor){
+    const range = noteCurrentRange(editor);
+    const block = noteBlockFor(range, editor);
+    const link = range ? (range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement)?.closest?.('a[href]') : null;
+    return {
+        block,
+        tag: block ? block.tagName.toLowerCase() : '',
+        list: block?.closest?.('ul,ol') ? block.closest('ul,ol').tagName.toLowerCase() : '',
+        size: block ? (block.getAttribute('data-fs') || '2') : '2',
+        align: block ? (block.getAttribute('data-align') || 'left') : 'left',
+        checked: block ? block.getAttribute('data-checked') : null,
+        link: Boolean(link),
+        bold: document.queryCommandState('bold'),
+        italic: document.queryCommandState('italic'),
+        strike: document.queryCommandState('strikeThrough')
+    };
+}
+function toggleNoteChecklist(editor){
+    const state = noteBlockState(editor);
+    if(state.block && state.tag === 'li'){
+        state.block.setAttribute('data-checked', state.checked === 'true' ? 'false' : 'true');
+        return true;
+    }
+    document.execCommand('insertUnorderedList');
+    const block = noteBlockFor(noteCurrentRange(editor), editor);
+    const item = block ? (block.tagName.toLowerCase() === 'li' ? block : block.closest('li')) : null;
+    if(!item) return false;
+    item.setAttribute('data-checked', 'false');
+    return true;
+}
+function applyNoteLink(editor){
+    const range = noteCurrentRange(editor);
+    if(!range) return false;
+    const anchor = (range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement)?.closest?.('a[href]');
+    const current = anchor ? String(anchor.getAttribute('href') || '') : '';
+    const saved = range.cloneRange();
+    const answer = window.prompt(tr('smart.noteLinkPrompt'), current);
+    if(answer === null) return false;
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(saved);
+    editor.focus();
+    const value = noteRichTextSafeLink(String(answer || '').trim());
+    if(!value){
+        document.execCommand('unlink');
+        return true;
+    }
+    document.execCommand('createLink', false, value);
+    return true;
+}
+// 选区浮条：单例、fixed 定位（不受画布缩放影响），只对当前便签里的非折叠选区显形。
+let noteFormatBar = null;
+let noteFormatBarRaf = 0;
+let noteFormatBarNoteId = '';
+const NOTE_FS_OPTIONS = [['1','smart.noteSizeSmall',11],['2','smart.noteSizeNormal',13],['3','smart.noteSizeLarge',15],['4','smart.noteSizeHuge',18]];
+function noteFormatBarEl(){
+    if(noteFormatBar && noteFormatBar.isConnected) return noteFormatBar;
+    const bar = document.createElement('div');
+    bar.className = 'smart-note-format-bar';
+    bar.dataset.noteFormatBar = '1';
+    bar.setAttribute('role', 'toolbar');
+    bar.hidden = true;
+    // 按下就阻止默认：否则点按钮会先折叠选区，命令作用不到选中的文字。
+    bar.addEventListener('mousedown', event => { event.preventDefault(); event.stopPropagation(); });
+    bar.addEventListener('click', event => {
+        const button = event.target.closest('[data-note-format]');
+        if(!button) return;
+        event.preventDefault();
+        event.stopPropagation();
+        runNoteFormatCommand(button.dataset.noteFormat);
+    });
+    document.body.appendChild(bar);
+    noteFormatBar = bar;
+    return bar;
+}
+function noteFormatBarHtml(){
+    const iconButton = (command, icon, label) => `<button type="button" data-note-format="${escapeAttr(command)}" title="${escapeAttr(label)}" aria-label="${escapeAttr(label)}"><i data-lucide="${escapeAttr(icon)}"></i></button>`;
+    const sizeButtons = NOTE_FS_OPTIONS.map(([value, key, px]) => `<button type="button" data-note-format="fs-${value}" data-note-fs="${value}" title="${escapeAttr(tr(key))}" aria-label="${escapeAttr(tr(key))}"><span style="font-size:${px}px">A</span></button>`).join('');
+    const separator = '<span class="smart-note-format-sep" aria-hidden="true"></span>';
+    return [
+        iconButton('bold', 'bold', tr('smart.noteBold')),
+        iconButton('italic', 'italic', tr('smart.noteItalic')),
+        iconButton('strike', 'strikethrough', tr('smart.noteStrike')),
+        separator,
+        sizeButtons,
+        separator,
+        iconButton('align-left', 'align-left', tr('smart.noteAlignLeft')),
+        iconButton('align-center', 'align-center', tr('smart.noteAlignCenter')),
+        iconButton('align-right', 'align-right', tr('smart.noteAlignRight')),
+        separator,
+        iconButton('ul', 'list', tr('smart.noteBulletList')),
+        iconButton('ol', 'list-ordered', tr('smart.noteNumberedList')),
+        iconButton('checklist', 'list-checks', tr('smart.noteChecklist')),
+        iconButton('link', 'link', tr('smart.noteLink'))
+    ].join('');
+}
+function noteFormatState(){
+    const editor = document.activeElement?.closest?.('.smart-note-text') || (() => {
+        const selection = window.getSelection();
+        if(!selection || !selection.rangeCount || selection.isCollapsed) return null;
+        const node = selection.getRangeAt(0).startContainer;
+        return (node.nodeType === 1 ? node : node.parentElement)?.closest?.('.smart-note-text') || null;
+    })();
+    if(!editor) return null;
+    const card = editor.closest('.image-node[data-id]');
+    const node = card ? nodes.find(item => item.id === card.dataset.id) : null;
+    if(!node || !isSmartNoteNode(node)) return null;
+    const range = noteCurrentRange(editor);
+    if(!range || range.collapsed) return null;
+    return {node, editor, range};
+}
+function noteFormatBarVisible(){ return Boolean(noteFormatBar && !noteFormatBar.hidden); }
+function hideNoteFormatBar(){
+    if(noteFormatBarRaf){ cancelAnimationFrame(noteFormatBarRaf); noteFormatBarRaf = 0; }
+    noteFormatBarNoteId = '';
+    if(noteFormatBar) noteFormatBar.hidden = true;
+}
+function refreshNoteFormatBarState(state){
+    const bar = noteFormatBarEl();
+    const active = noteBlockState(state.editor);
+    bar.querySelectorAll('[data-note-format]').forEach(button => {
+        const command = button.dataset.noteFormat;
+        let on = false;
+        if(command === 'bold') on = active.bold;
+        else if(command === 'italic') on = active.italic;
+        else if(command === 'strike') on = active.strike;
+        else if(command === 'link') on = active.link;
+        else if(command === 'checklist') on = Boolean(active.checked);
+        else if(command === 'ul') on = active.list === 'ul';
+        else if(command === 'ol') on = active.list === 'ol';
+        else if(command.startsWith('fs-')) on = active.size === command.slice(3);
+        else if(command.startsWith('align-')) on = active.align === command.slice(6);
+        button.classList.toggle('on', on);
+        button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+}
+function positionNoteFormatBar(range){
+    const rect = range.getBoundingClientRect();
+    if(!rect || (!rect.width && !rect.height)) return false;
+    const bar = noteFormatBarEl();
+    bar.hidden = false;
+    const barRect = bar.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - barRect.width - 8, rect.left + rect.width / 2 - barRect.width / 2));
+    const above = rect.top - barRect.height - 8;
+    const top = above < 8 ? Math.min(window.innerHeight - barRect.height - 8, rect.bottom + 8) : above;
+    bar.style.left = `${Math.round(left)}px`;
+    bar.style.top = `${Math.round(top)}px`;
+    return true;
+}
+// 跟随 Range 逐帧重算：画布平移/缩放、文字增删都会改变矩形，而浮条是 fixed 定位的。
+function updateNoteFormatBar(){
+    noteFormatBarRaf = 0;
+    const state = noteFormatState();
+    if(!state){ hideNoteFormatBar(); return; }
+    if(noteFormatBarNoteId !== state.node.id){
+        noteFormatBarNoteId = state.node.id;
+        noteFormatBarEl().innerHTML = noteFormatBarHtml();
+        refreshIcons();
+    }
+    refreshNoteFormatBarState(state);
+    if(!positionNoteFormatBar(state.range)){ hideNoteFormatBar(); return; }
+    noteFormatBarRaf = requestAnimationFrame(updateNoteFormatBar);
+}
+function scheduleNoteFormatBar(){
+    if(noteFormatBarRaf) return;
+    noteFormatBarRaf = requestAnimationFrame(updateNoteFormatBar);
+}
+function runNoteFormatCommand(command){
+    const state = noteFormatState();
+    if(!state) return;
+    const {node, editor} = state;
+    // 产出语义标签（<b>/<i>/<strike>）而不是内联样式，交给清洗器归一成 strong/em/s。
+    document.execCommand('styleWithCSS', false, false);
+    if(command === 'bold') document.execCommand('bold');
+    else if(command === 'italic') document.execCommand('italic');
+    else if(command === 'strike') document.execCommand('strikeThrough');
+    else if(command === 'checklist') toggleNoteChecklist(editor);
+    else if(command === 'ul') document.execCommand('insertUnorderedList');
+    else if(command === 'ol') document.execCommand('insertOrderedList');
+    else if(command === 'link') applyNoteLink(editor);
+    else if(command.startsWith('align-')) setNoteBlockAttribute(editor, 'data-align', command.slice(6), 'left');
+    else if(command.startsWith('fs-')) setNoteBlockAttribute(editor, 'data-fs', command.slice(3), '2');
+    else return;
+    pruneNoteEditorDom(editor);
+    syncNoteFromEditor(node, editor);
+    scheduleNoteFormatBar();
+}
+// 便签常驻工具栏已取消：颜色/透明度/尺寸模式/复制/删除收进选中时浮出的菜单（样式复用 .smart-node-floating-menu）。
+function smartNoteFloatingMenuHtml(node){
+    const selected = organizerColor(node);
+    const swatches = ORGANIZER_COLORS.map(color => `<button class="organizer-color" type="button" role="menuitemradio" aria-checked="${color === selected ? 'true' : 'false'}" data-organizer-color="${color}" title="${escapeAttr(organizerColorLabel(color))}" aria-label="${escapeAttr(organizerColorLabel(color))}" style="--swatch:${color}"></button>`).join('');
+    const mode = smartNoteSizeMode(node);
+    const nextMode = mode === 'auto' ? 'fixed' : 'auto';
+    const modeLabel = mode === 'auto' ? tr('smart.noteSizeAuto') : tr('smart.noteSizeFixed');
+    return `<div class="smart-node-floating-menu smart-note-menu" data-smart-note-menu="1">
+        <span class="smart-note-menu-colors" role="group" aria-label="${escapeAttr(tr('smart.noteColor'))}">${swatches}</span>
+        <label class="smart-note-menu-alpha" title="${escapeAttr(tr('smart.noteBgAlpha'))}"><i data-lucide="droplet"></i><input type="range" min="0" max="100" step="1" value="${smartNoteBgAlpha(node)}" data-note-alpha="1" aria-label="${escapeAttr(tr('smart.noteBgAlpha'))}"></label>
+        <button type="button" data-note-size-mode="${nextMode}" title="${escapeAttr(modeLabel)}" aria-label="${escapeAttr(modeLabel)}"><i data-lucide="${mode === 'auto' ? 'move-horizontal' : 'maximize-2'}"></i><span>${escapeHtml(modeLabel)}</span></button>
+        ${smartTextCopyButtonHtml('.smart-note-text')}
+        <button class="organizer-edit node-delete" type="button" title="${escapeAttr(tr('smart.deleteNode'))}" aria-label="${escapeAttr(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>
+    </div>`;
 }
 function workflowOrganizerMembers(group){
     return isWorkflowOrganizerNode(group) ? nodes.filter(node => !isWorkflowOrganizerNode(node) && node.workflowGroupId === group.id) : [];
@@ -12136,7 +12399,7 @@ async function runWorkflowGroup(id){
 window.toggleWorkflowGroupLayoutMenu=toggleWorkflowGroupLayoutMenu;window.layoutWorkflowGroup=layoutWorkflowGroup;window.runWorkflowGroup=runWorkflowGroup;window.openWorkflowCreateDialog=openWorkflowCreateDialog;
 function canvasOrganizerHtml(node){
     const color=organizerColor(node);
-    if(isSmartNoteNode(node)) return `<div class="image-node smart-note-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" data-size-mode="${smartNoteSizeMode(node)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||240}px;height:${node.h||180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px;--note-bg-alpha:${smartNoteBgAlpha(node)}%"><div class="smart-note-toolbar">${organizerColorButtons(node)}${smartTextCopyButtonHtml('.smart-note-text')}<button class="organizer-edit node-delete" type="button"><i data-lucide="trash-2"></i></button></div><div class="smart-note-text" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true">${noteRichTextHtml(node)}</div><div class="node-resize-handle" data-resize="1"></div></div>`;
+    if(isSmartNoteNode(node)) return `<div class="image-node smart-note-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" data-size-mode="${smartNoteSizeMode(node)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||240}px;height:${node.h||180}px;--organizer-color:${color};--note-font-size:${smartNoteFontSize(node)}px;${noteAlphaVars(smartNoteBgAlpha(node))}">${smartNoteFloatingMenuHtml(node)}<div class="smart-note-text" contenteditable="true" spellcheck="false" role="textbox" aria-multiline="true">${noteRichTextHtml(node)}</div><div class="node-resize-handle" data-resize="1"></div></div>`;
     delete node.titleFontSize;
     const title=String(node.title||'未命名工作流');
     return `<div class="image-node workflow-organizer-node ${isNodeSelected(node.id)?'selected':''}" data-id="${escapeHtml(node.id)}" style="left:${node.x||0}px;top:${node.y||0}px;width:${node.w||520}px;height:${node.h||320}px;z-index:${workflowOrganizerLayer(node)};--organizer-color:${color}"><div class="workflow-organizer-head"><div class="organizer-title-control"><span class="workflow-organizer-title-label" role="button" tabindex="0" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${escapeHtml(title)}</span><input class="workflow-organizer-title-input" type="text" value="${escapeAttr(title)}" aria-label="${escapeAttr(tr('smart.workflowGroup'))}" hidden></div></div><div class="node-resize-handle" data-resize="1"></div></div>`;
@@ -13661,31 +13924,50 @@ function bindNodeEvents(){
                 };
             }            const noteInput = el.querySelector('.smart-note-text');
             if(noteInput){
-                noteInput.oninput = e => {
-                    const editor = e.currentTarget;
-                    // 先清洗再落库：richText 是渲染源，text 只是纯文本镜像（复制/搜索用）。
-                    nodeForControls.richText = sanitizeNoteRichText(editor.innerHTML);
-                    nodeForControls.text = editor.innerText;
-                    if(smartNoteSizeMode(nodeForControls) === 'auto') fitSmartNoteToText(nodeForControls, el);
-                    else fitNoteHeightToContent(nodeForControls, el);
-                    renderMinimap();
-                    scheduleConnectionLayerRefresh();
-                    scheduleSave();
-                };
+                noteInput.oninput = () => { syncNoteFromEditor(nodeForControls, noteInput, el); };
                 noteInput.onbeforeinput = e => {
                     if(e.inputType !== 'insertText' || !e.data) return;
-                    // 超出上限就地拦下，避免整段编辑内容在服务端 400 后丢失。
-                    if((noteInput.innerText || '').length + e.data.length > NOTE_RICHTEXT_MAX) e.preventDefault();
+                    // 超出上限就地拦下并提示，避免整段编辑内容在服务端 400 后丢失。
+                    if((noteInput.innerText || '').length + e.data.length > NOTE_RICHTEXT_MAX){
+                        e.preventDefault();
+                        toast(trf('smart.noteRichTextLimit', {n: NOTE_RICHTEXT_MAX}));
+                    }
                 };
                 noteInput.onfocus = () => { noteEditingIds.add(nodeForControls.id); };
                 noteInput.onblur = () => {
                     noteEditingIds.delete(nodeForControls.id);
-                    nodeForControls.richText = sanitizeNoteRichText(noteInput.innerHTML);
-                    nodeForControls.text = noteInput.innerText;
-                    if(smartNoteSizeMode(nodeForControls) === 'auto') fitSmartNoteToText(nodeForControls, el);
-                    else fitNoteHeightToContent(nodeForControls, el);
-                    scheduleSave();
+                    syncNoteFromEditor(nodeForControls, noteInput, el);
+                    if(noteFormatBarNoteId === nodeForControls.id) hideNoteFormatBar();
                 };
+                // 粘贴剪枝：剪贴板带 HTML 时先过白名单再插入，只留基础格式；纯文本走浏览器默认插入。
+                noteInput.addEventListener('paste', event => {
+                    const data = event.clipboardData;
+                    const html = data ? data.getData('text/html') : '';
+                    if(!data || !html) return;
+                    event.preventDefault();
+                    const clean = sanitizeNoteRichText(html) || escapeHtml(data.getData('text/plain') || '');
+                    document.execCommand('insertHTML', false, clean);
+                    pruneNoteEditorDom(noteInput);
+                    syncNoteFromEditor(nodeForControls, noteInput, el);
+                });
+                // 勾选框只在左侧那一小块标记区生效，点正文仍然只是把光标放进文字里。
+                noteInput.addEventListener('click', event => {
+                    const item = event.target.closest ? event.target.closest('li[data-checked]') : null;
+                    if(!item || !noteInput.contains(item)) return;
+                    if(event.clientX - item.getBoundingClientRect().left > 24) return;
+                    item.setAttribute('data-checked', item.getAttribute('data-checked') === 'true' ? 'false' : 'true');
+                    syncNoteFromEditor(nodeForControls, noteInput, el);
+                });
+                // 链接：Ctrl/Cmd + 点击打开，普通点击仍然留给选词和改字。
+                noteInput.addEventListener('click', event => {
+                    const anchor = event.target.closest ? event.target.closest('a[href]') : null;
+                    if(!anchor || !(event.ctrlKey || event.metaKey)) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const href = anchor.getAttribute('href') || '';
+                    if(/^https?:/i.test(href)) window.open(href, '_blank', 'noopener');
+                    else window.location.href = href;
+                });
             }
             el.querySelectorAll('[data-organizer-color]').forEach(button => {
                 button.onclick = e => {
@@ -13695,6 +13977,29 @@ function bindNodeEvents(){
                     scheduleSave();
                 };
             });
+            const noteAlpha = el.querySelector('[data-note-alpha]');
+            if(noteAlpha){
+                // 拖滑杆只改自定义属性，避免整块重渲染打断拖动。
+                noteAlpha.oninput = event => {
+                    nodeForControls.bgAlpha = Math.max(0, Math.min(100, Math.round(Number(event.target.value)) || 0));
+                    noteAlphaVars(nodeForControls.bgAlpha).split(';').forEach(entry => {
+                        const [name, value] = entry.split(':');
+                        if(name && value) el.style.setProperty(name.trim(), value.trim());
+                    });
+                    scheduleSave();
+                };
+            }
+            const noteSizeModeButton = el.querySelector('[data-note-size-mode]');
+            if(noteSizeModeButton){
+                noteSizeModeButton.onclick = event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    nodeForControls.sizeMode = noteSizeModeButton.dataset.noteSizeMode === 'fixed' ? 'fixed' : 'auto';
+                    if(nodeForControls.sizeMode === 'auto') fitSmartNoteToText(nodeForControls);
+                    render();
+                    scheduleSave();
+                };
+            }
         }
         if(nodeForControls?.type === 'smart-loop') bindLoopNodeControls(el, nodeForControls);
         if(nodeForControls?.type === 'smart-group') {
@@ -25177,6 +25482,11 @@ window.addEventListener('resize', () => {
     if(panoramaState.enabled) resizePanoramaViewer();
     if(uploadResourcePanel && uploadResourcePanel.isOpen()) requestAnimationFrame(() => uploadResourcePanel.reposition());
 });
+// 选区浮条只在便签正文里出现；浮条自己按 Range 矩形逐帧定位，所以平移/缩放/滚动都不用额外处理。
+document.addEventListener('selectionchange', () => {
+    if(document.activeElement?.closest?.('.smart-note-text')) scheduleNoteFormatBar();
+    else if(noteFormatBarVisible()) hideNoteFormatBar();
+});
 window.addEventListener('studio-theme-change', event => applyTheme(event.detail?.theme || 'light'));
 try {
     const apiChannel = new BroadcastChannel('studio-api');
@@ -25208,6 +25518,7 @@ window.addEventListener('storage', event => {
     }
 });
 window.addEventListener('studio-lang-change', () => {
+    noteFormatBarNoteId = '';
     renderDynamicParams();
     renderInputThumbsRow(composerActionNode());
     renderAssetLibrary();
