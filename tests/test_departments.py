@@ -17,6 +17,13 @@ class DepartmentManagementTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.users_path = os.path.join(self.temp_dir.name, "auth_users.json")
         self.departments_path = os.path.join(self.temp_dir.name, "departments.json")
+        # auth_register() → ensure_user_asset_spaces() 会给新用户建个人资产库/提示词库。
+        # 不隔离这两个路径，跑一次注册用例就往仓库的 data/*.json 里塞一个
+        # 「测试用户的资产库」，asset_library.json 是跟踪文件会脏工作区、
+        # prompt_libraries.json 被 .gitignore 忽略则悄悄累积。见下方
+        # test_registration_does_not_write_the_repository_data_files 的回归防线。
+        self.asset_library_path = os.path.join(self.temp_dir.name, "asset_library.json")
+        self.prompt_library_path = os.path.join(self.temp_dir.name, "prompt_libraries.json")
         with open(self.users_path, "w", encoding="utf-8") as handle:
             json.dump(
                 {
@@ -53,6 +60,8 @@ class DepartmentManagementTests(unittest.TestCase):
         self.patchers = [
             patch.object(main, "AUTH_USERS_FILE", self.users_path),
             patch.object(main, "DEPARTMENTS_FILE", self.departments_path),
+            patch.object(main, "ASSET_LIBRARY_PATH", self.asset_library_path),
+            patch.object(main, "PROMPT_LIBRARY_PATH", self.prompt_library_path),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -138,6 +147,45 @@ class DepartmentManagementTests(unittest.TestCase):
         with self.assertRaises(main.HTTPException) as caught:
             asyncio.run(main.admin_delete_department(department["id"], self.request))
         self.assertEqual(caught.exception.status_code, 409)
+
+    def test_registration_does_not_write_the_repository_data_files(self):
+        """回归防线：注册用例只能在临时目录里建个人空间。
+
+        这个文件曾经漏掉 ASSET_LIBRARY_PATH / PROMPT_LIBRARY_PATH，
+        于是 `-m unittest discover -s tests` 每跑一次就往仓库 data/ 里塞一个
+        「测试用户的资产库」（asset_library.json 是跟踪文件，工作区变脏）和一个
+        「测试用户的提示词库」（prompt_libraries.json 被忽略，悄悄累积）。这里直接
+        比对仓库文件字节，把隔离去掉就会红。
+        """
+        root = Path(__file__).resolve().parents[1]
+        repo_files = [
+            root / "data" / "asset_library.json",
+            root / "data" / "prompt_libraries.json",
+        ]
+        before = {path: (path.read_bytes() if path.exists() else None) for path in repo_files}
+
+        department = main.load_departments()["departments"][0]
+        asyncio.run(
+            main.auth_register(
+                main.AuthRegisterRequest(
+                    username="isolation-user",
+                    password="a-secure-password",
+                    name="测试用户",
+                    department=department["id"],
+                )
+            )
+        )
+
+        after = {path: (path.read_bytes() if path.exists() else None) for path in repo_files}
+        self.assertEqual(after, before, "注册用例写进了仓库的 data/ 文件")
+
+        # 个人空间确实建了，只是建在临时目录里——不是靠「跳过建库」冒充隔离。
+        with open(self.asset_library_path, "r", encoding="utf-8") as handle:
+            libraries = json.load(handle)["libraries"]
+        self.assertIn("测试用户的资产库", [row.get("name") for row in libraries])
+        with open(self.prompt_library_path, "r", encoding="utf-8") as handle:
+            prompt_libraries = json.load(handle)["libraries"]
+        self.assertIn("测试用户的提示词库", [row.get("name") for row in prompt_libraries])
 
 
 if __name__ == "__main__":
