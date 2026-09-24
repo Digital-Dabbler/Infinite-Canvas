@@ -150,6 +150,12 @@ const PromptLibrary = {
         const isMine = this.tab === 'myPrompts';
         const isPublished = this.tab === 'myPublished';
         const publication = isMine ? this.publishedForSource(item.id) : null;
+        // The public copy falls behind when the prompt is edited after publishing;
+        // the card then offers a one-click update instead of plain "已发布".
+        const publicationOutdated = Boolean(publication && item.publication_outdated);
+        const publicationButton = publicationOutdated
+            ? `<button type="button" class="is-published is-outdated" data-pl-update-publication="${LibraryUtils.escapeHtml(item.id)}" title="${LibraryUtils.escapeHtml(t('library.updatePublishedHint', '原提示词已有改动，点击把最新内容同步到公开版本'))}" aria-label="${LibraryUtils.escapeHtml(t('library.updatePublished', '更新发布'))}"><i data-lucide="refresh-cw"></i><span>${LibraryUtils.escapeHtml(t('library.updatePublished', '更新发布'))}</span></button>`
+            : `<button type="button" class="is-published" data-pl-show-publication="${LibraryUtils.escapeHtml(publication ? publication.id : '')}"><i data-lucide="check-circle-2"></i><span>${LibraryUtils.escapeHtml(t('library.published', '已发布'))}</span></button>`;
         const preview = [item.prefix || item.positive, item.suffix || item.negative].filter(Boolean).join(' · ');
         const cover = item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy" onerror="window.libraryCoverFallback?.(this, 'sparkles')">` : `<div class="prompt-card-placeholder"><i data-lucide="sparkles"></i></div>`;
         const applyLabel = selected ? '取消' : '应用';
@@ -161,7 +167,7 @@ const PromptLibrary = {
         return `<article class="prompt-card ${selected ? 'is-selected' : ''}">
             <div class="prompt-card-cover">${cover}<div class="prompt-card-hover" aria-label="${LibraryUtils.escapeHtml(item.name || '提示词')} 操作"><button type="button" class="prompt-card-action prompt-card-apply ${selected ? 'is-applied' : ''}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button><button type="button" class="prompt-card-action" data-pl-preview="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="expand"></i>预览</button></div>${descriptionNote}${duplicateButton}</div>
             <div class="prompt-card-info"><h3>${LibraryUtils.escapeHtml(item.name || t('library.untitled', '未命名'))}</h3><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-card-preview">${LibraryUtils.escapeHtml(LibraryUtils.truncate(preview, 96) || t('library.emptyPrompt', '（空提示词）'))}</div>${!isMine && !isPublished && item.owner_type !== 'system' ? `<span class="prompt-card-meta"><i data-lucide="user-round"></i>${LibraryUtils.escapeHtml(this.publishedMeta(item))}</span>` : ''}</div>
-            ${isMine ? `<div class="prompt-card-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.promptManageActions', '提示词管理操作'))}"><button type="button" data-pl-edit="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="pencil"></i><span>${LibraryUtils.escapeHtml(t('library.edit', '编辑'))}</span></button>${publication ? `<button type="button" class="is-published" data-pl-show-publication="${LibraryUtils.escapeHtml(publication.id)}"><i data-lucide="check-circle-2"></i><span>${LibraryUtils.escapeHtml(t('library.published', '已发布'))}</span></button>` : `<button type="button" data-pl-publish="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="send"></i><span>${LibraryUtils.escapeHtml(t('library.publish', '发布'))}</span></button>`}<button type="button" class="danger" data-pl-delete="${LibraryUtils.escapeHtml(item.id)}" aria-label="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}" title="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}"><i data-lucide="trash-2"></i></button></div>` : isPublished ? `<div class="prompt-card-manage prompt-card-published-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.publishedManageActions', '已发布提示词操作'))}"><button type="button" class="danger" data-pl-withdraw="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="rotate-ccw"></i><span>${LibraryUtils.escapeHtml(t('library.withdraw', '撤回'))}</span></button></div>` : `<div class="prompt-card-foot"><button type="button" class="prompt-card-favorite ${favorite ? 'is-favorite' : ''}" data-pl-favorite="${LibraryUtils.escapeHtml(item.id)}" title="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-label="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-pressed="${favorite ? 'true' : 'false'}"><i data-lucide="heart"></i></button></div>`}
+            ${isMine ? `<div class="prompt-card-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.promptManageActions', '提示词管理操作'))}"><button type="button" data-pl-edit="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="pencil"></i><span>${LibraryUtils.escapeHtml(t('library.edit', '编辑'))}</span></button>${publication ? publicationButton : `<button type="button" data-pl-publish="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="send"></i><span>${LibraryUtils.escapeHtml(t('library.publish', '发布'))}</span></button>`}<button type="button" class="danger" data-pl-delete="${LibraryUtils.escapeHtml(item.id)}" aria-label="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}" title="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}"><i data-lucide="trash-2"></i></button></div>` : isPublished ? `<div class="prompt-card-manage prompt-card-published-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.publishedManageActions', '已发布提示词操作'))}"><button type="button" class="danger" data-pl-withdraw="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="rotate-ccw"></i><span>${LibraryUtils.escapeHtml(t('library.withdraw', '撤回'))}</span></button></div>` : `<div class="prompt-card-foot"><button type="button" class="prompt-card-favorite ${favorite ? 'is-favorite' : ''}" data-pl-favorite="${LibraryUtils.escapeHtml(item.id)}" title="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-label="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-pressed="${favorite ? 'true' : 'false'}"><i data-lucide="heart"></i></button></div>`}
         </article>`;
     },
 
@@ -540,6 +546,15 @@ const PromptLibrary = {
         await this.load();
         window.toast?.(t('library.publishedToast', '已发布到灵感库'));
     },
+    async updatePublication(id) {
+        // "更新发布" re-sends the publish request without metadata: the server
+        // refreshes the existing snapshot in place and keeps the public name
+        // and category that were chosen when it was first published.
+        const response = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(id)}/publish`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({published:true})});
+        if (!response.ok) throw new Error((await response.text()) || t('library.updatePublishFailed', '更新发布失败'));
+        await this.load();
+        window.toast?.(t('library.publishUpdatedToast', '已更新发布内容'));
+    },
     async withdrawItem(id) {
         if (!confirm(t('library.withdrawPromptConfirm', '确认撤回这条已发布提示词？其他用户将不能再从灵感库使用它。'))) return;
         const response = await fetch(`/api/prompt-libraries/published/${encodeURIComponent(id)}`, {method:'DELETE'});
@@ -564,6 +579,7 @@ const PromptLibrary = {
         const publishCancel=event.target.closest('[data-pl-publish-cancel]'); if(publishCancel){event.stopPropagation();this.closePublishDialog();return;}
         const publish=event.target.closest('[data-pl-publish]'); if(publish){event.stopPropagation();this.openPublishDialog(publish.dataset.plPublish, publish);return;}
         const withdraw=event.target.closest('[data-pl-withdraw]'); if(withdraw){event.stopPropagation();try{await this.withBusy(withdraw,()=>this.withdrawItem(withdraw.dataset.plWithdraw))}catch(error){window.toast?.(error.message)}return;}
+        const updatePublication=event.target.closest('[data-pl-update-publication]'); if(updatePublication){event.stopPropagation();try{await this.withBusy(updatePublication,()=>this.updatePublication(updatePublication.dataset.plUpdatePublication))}catch(error){window.toast?.(error.message)}return;}
         const showPublication=event.target.closest('[data-pl-show-publication]'); if(showPublication){event.stopPropagation();this.tab='myPublished';this.render();requestAnimationFrame(()=>this.content()?.querySelector(`[data-pl-withdraw="${CSS.escape(showPublication.dataset.plShowPublication)}"]`)?.focus());return;}
         const fav=event.target.closest('[data-pl-favorite]'); if(fav){event.stopPropagation();try{await this.toggleFavorite(fav.dataset.plFavorite)}catch(error){window.toast?.(error.message)}return;}
         const apply=event.target.closest('[data-pl-apply]'); if(apply){try{await this.apply(apply.dataset.plApply)}catch(error){window.toast?.(error.message)}return;}

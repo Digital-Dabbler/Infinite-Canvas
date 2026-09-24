@@ -105,6 +105,10 @@
 .prompt-card-manage button:hover { border-color: #c7ff00; background: #31371f; color: #f2ffbc; }
 .prompt-card-manage button:focus-visible { border-color: #c7ff00; background: #31371f; color: #f2ffbc; outline: 2px solid #c7ff00; outline-offset: 2px; }
 .prompt-card-manage button.is-published { border-color: rgba(199,255,0,.42); background: rgba(199,255,0,.09); color: #e7ff96; }
+/* 更新发布 keeps the published semantics but must read as "your edit is not
+   public yet", so it uses the amber warning palette instead of the lime one. */
+.prompt-card-manage button.is-published.is-outdated { border-color: rgba(255,186,73,.55); background: rgba(255,168,26,.15); color: #ffd79a; }
+.prompt-card-manage button.is-published.is-outdated:hover, .prompt-card-manage button.is-published.is-outdated:focus-visible { border-color: #ffc247; background: rgba(255,176,32,.26); color: #fff1d2; outline-color: #ffc247; }
 .prompt-card-manage button.danger { border-color: rgba(255,108,108,.48); background: rgba(151,47,47,.18); color: #ffb1b1; }
 .prompt-card-manage button.danger:hover, .prompt-card-manage button.danger:focus-visible { border-color: #ff8c8c; background: rgba(185,54,54,.34); color: #fff; }
 .prompt-card-manage button:disabled { opacity: .55; cursor: wait; }

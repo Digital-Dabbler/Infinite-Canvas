@@ -12920,6 +12920,65 @@ def remove_published_prompt_snapshot(snapshot_id):
         save_prompt_libraries({**data, "published": kept_runtime})
     return removed
 
+def prompt_publication_content(item):
+    """The prompt content a publication mirrors.
+
+    The public name and category are chosen while publishing and the cover is
+    re-encoded into the tracked cover directory, so neither takes part in the
+    comparison: only the text and the description must match the source.
+    """
+    normalized = normalize_prompt_library_item(item or {})
+    return (
+        normalized.get("prefix") or "",
+        normalized.get("suffix") or "",
+        normalized.get("description") or "",
+        json.dumps(normalized.get("params") or {}, sort_keys=True, ensure_ascii=False),
+    )
+
+
+def prompt_publication_needs_update(source, snapshot):
+    """Whether a publication no longer mirrors its source prompt.
+
+    Two independent signals: the mirrored content changed, or the source was
+    saved after the publication was last refreshed. The timestamp also catches
+    edits the comparison cannot see (a new cover, for instance); its cost is a
+    redundant refresh when a prompt is saved unchanged, never data loss.
+    """
+    source_item = normalize_prompt_library_item(source or {})
+    snapshot_item = normalize_prompt_library_item(snapshot or {})
+    if prompt_publication_content(source_item) != prompt_publication_content(snapshot_item):
+        return True
+    return int(source_item.get("updated_at") or 0) > int(snapshot_item.get("updated_at") or 0)
+
+
+def update_published_prompt_snapshot(snapshot):
+    """Refresh an existing publication in place, in the layer that holds it.
+
+    Publications created before the tracked catalog existed live in the runtime
+    library data, so refreshing one must not also write a tracked copy: two
+    records for one id would make the same card appear twice. Returns the stored
+    record, or ``None`` when it has no id or source.
+    """
+    item = normalize_prompt_library_item({**snapshot, "published": True})
+    item_id = safe_snapshot_file_id(item.get("id"))
+    if not item_id or not item.get("source_prompt_id"):
+        return None
+    if os.path.isfile(os.path.join(PROMPT_LIBRARY_PUBLISHED_DIR, f"{item_id}.json")):
+        write_tracked_snapshot(PROMPT_LIBRARY_PUBLISHED_DIR, item_id, item)
+        return item
+    data = load_prompt_libraries()
+    runtime = list(data.get("published") or [])
+    for index, row in enumerate(runtime):
+        if str((row or {}).get("id") or "") == item_id:
+            runtime[index] = item
+            save_prompt_libraries({**data, "published": runtime})
+            return item
+    # Neither layer holds the id any more (a withdrawal raced this refresh):
+    # store the refreshed content in the tracked catalog rather than dropping it.
+    write_tracked_snapshot(PROMPT_LIBRARY_PUBLISHED_DIR, item_id, item)
+    return item
+
+
 def public_prompt_libraries(data=None):
     data, published = merged_published_prompt_snapshots(data)
     return {
@@ -13051,6 +13110,20 @@ def public_prompt_libraries_for_user(data, user):
         item["can_manage"] = admin or item.get("owner_id") == user_id
         item["owner_name"] = user_names.get(item.get("owner_id"), "未知用户")
         item["published"] = True
+    # A card in "我的提示词" tells its owner when the public copy fell behind the
+    # edited prompt, so the card can offer a one-click "更新发布".
+    publications_by_source = {}
+    for item in all_published:
+        source_id = str(item.get("source_prompt_id") or "")
+        if source_id and str(item.get("owner_id") or "") == user_id:
+            publications_by_source.setdefault(source_id, item)
+    for library in visible_libraries:
+        for item in library.get("items", []) or []:
+            if item.get("owner_type") != "user" or str(item.get("owner_id") or "") != user_id:
+                continue
+            snapshot = publications_by_source.get(str(item.get("id") or ""))
+            if snapshot is not None:
+                item["publication_outdated"] = prompt_publication_needs_update(item, snapshot)
     public["inspiration"] = [
         *next((library.get("items") or [] for library in visible_libraries if library.get("id") == "system"), []),
         *all_published,
@@ -24868,8 +24941,9 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
             remove_prompt_public_cover(existing)
             data = load_prompt_libraries()
         return {"library": public_prompt_libraries_for_user(data, user), "published": False}
-    if existing:
-        return {"library": public_prompt_libraries_for_user(data, user), "snapshot": existing, "published": True}
+    # The publication metadata is resolved before the existing-publication
+    # branch below: a refresh keeps the values chosen earlier unless this
+    # request explicitly changes them, and both branches share the validation.
     public_name = source.get("name") or "提示词"
     if payload.name is not None:
         requested_name = str(payload.name).strip()
@@ -24904,6 +24978,39 @@ async def publish_prompt_library_item(item_id: str, payload: PromptLibraryPublis
         public_subcategory = requested_subcategory if valid_subcategories else ""
     elif public_subcategory not in allowed_public_subcategories.get(public_category, set()):
         public_subcategory = ""
+    source_cover = str(source.get("cover_url") or "")
+    if existing:
+        # Publishing an already published prompt refreshes the public copy in
+        # place instead of creating a second card: the snapshot keeps its id,
+        # its cover file and the public name/category chosen earlier, but picks
+        # up the text, description and cover the source uses now.  Repeating it
+        # is safe, an unchanged prompt just rewrites the same record.
+        refreshed_cover = existing.get("cover_url") or ""
+        if source_cover:
+            # Re-encoding the cover is image work, so it runs off the event loop.
+            refreshed_cover = await asyncio.to_thread(
+                prompt_public_cover_copy, source_cover, existing.get("id")) or refreshed_cover
+        refreshed = normalize_prompt_library_item({
+            **source,
+            "id": existing.get("id"),
+            # Absent metadata means "leave the public version as it is": only an
+            # explicit request may rename or re-categorise the publication.
+            "name": public_name if payload.name is not None else existing.get("name") or public_name,
+            "category": public_category if payload.category is not None else existing.get("category"),
+            "subcategory": public_subcategory if (payload.category is not None or payload.subcategory is not None) else existing.get("subcategory"),
+            "source_prompt_id": item_id,
+            "source_author_id": existing.get("source_author_id") or source.get("owner_id") or "",
+            "cover_url": refreshed_cover,
+            "published": True,
+            # The publication keeps the date it first became public; the refresh
+            # only moves updated_at, which is what the staleness check compares.
+            "published_at": int(existing.get("published_at") or 0) or now_ms(),
+            "created_at": existing.get("created_at") or now_ms(),
+            "updated_at": now_ms(),
+        })
+        refreshed = await asyncio.to_thread(update_published_prompt_snapshot, refreshed) or refreshed
+        data = load_prompt_libraries()
+        return {"library": public_prompt_libraries_for_user(data, user), "snapshot": refreshed, "published": True}
     snapshot_id = f"published_{uuid.uuid4().hex[:14]}"
     # Re-encoding the cover is image work, so it runs off the event loop.
     cover_url = await asyncio.to_thread(
