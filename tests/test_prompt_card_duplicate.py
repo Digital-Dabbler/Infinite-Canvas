@@ -1,8 +1,8 @@
-"""提示词库“我的提示词”卡片新增的说明条与“创建副本”按钮。
+"""提示词库“我的提示词”卡片上的“创建副本”按钮。
 
-用户可见改动有两处（均为卡片悬停态）：
-* 封面底部显示提示词说明，最多两行，超出部分用省略号；
-* 封面右上角的小按钮“创建副本”，复制出一条新的提示词用于试微调，原版保持不变。
+说明条是本仓库所有提示词卡片的统一标准（灵感库 / 我的收藏 / 我的提示词 / 我的发布），
+它的契约与渲染验证在 ``tests/test_prompt_card_description.py``；这里只覆盖副本按钮：
+最多两行的说明条旁边那颗小按钮，复制出一条新的提示词用于试微调，原版保持不变。
 
 前端部分按仓库惯例做静态契约断言（读取 js/css/i18n 源文件），
 后端部分直接调用 ``add_prompt_library_item`` 验证“副本”复用的接口行为：
@@ -30,14 +30,12 @@ LUCIDE_VENDOR = (ROOT / "static" / "vendor" / "js" / "lucide.js").read_text(enco
 
 
 class PromptCardMarkupContractTests(unittest.TestCase):
-    """卡片模板与交互钩子必须按约定渲染（仅“我的提示词”）。"""
+    """卡片模板与交互钩子必须按约定渲染（副本按钮仅“我的提示词”）。"""
 
-    def test_cover_renders_description_strip_for_my_prompts(self):
-        self.assertIn("const description = String(item.description || item.scene || '').trim();", PROMPT_JS)
-        self.assertIn("const descriptionNote = isMine && description", PROMPT_JS)
-        self.assertIn('<p class="prompt-card-desc">', PROMPT_JS)
-        # 说明条在封面容器内部（与 1 号区域一致：缩略图底部横带）。
+    def test_duplicate_button_sits_inside_the_cover(self):
+        # 与说明条同级、都在封面容器内部：2 号区域（缩略图右上角）。
         self.assertIn("</button></div>${descriptionNote}${duplicateButton}</div>", PROMPT_JS)
+        self.assertIn('class="prompt-card-cover">${cover}', PROMPT_JS)
 
     def test_cover_renders_duplicate_button_for_my_prompts(self):
         self.assertIn("const duplicateButton = isMine ?", PROMPT_JS)
@@ -73,19 +71,16 @@ class PromptCardMarkupContractTests(unittest.TestCase):
         self.assertIn("taken.has(name)", PROMPT_JS)
         self.assertIn("index <= 99", PROMPT_JS)
 
-    def test_card_styles_reveal_on_hover_with_two_line_ellipsis(self):
+    def test_duplicate_button_styles_reveal_on_hover(self):
         self.assertIn(".prompt-card-duplicate {", PROMPT_CSS)
-        self.assertIn(".prompt-card-desc {", PROMPT_CSS)
-        self.assertIn("-webkit-line-clamp: 2", PROMPT_CSS)
         self.assertIn(
             ".prompt-card:hover .prompt-card-duplicate, .prompt-card:focus-within .prompt-card-duplicate,",
             PROMPT_CSS,
         )
-        self.assertIn(
-            ".prompt-card:hover .prompt-card-desc, .prompt-card:focus-within .prompt-card-desc { opacity: 1; transform: none; }",
-            PROMPT_CSS,
-        )
-        # 触屏没有 hover，两个新元素必须常显，否则点不到副本按钮。
+        # 忙碌态复用卡片既有的旋转动画，且按钮此时不可点。
+        self.assertIn(".prompt-card-duplicate .is-spinning { animation: prompt-card-spin .8s linear infinite; }", PROMPT_CSS)
+        self.assertIn(".prompt-card-duplicate:disabled { opacity: .6; cursor: wait; }", PROMPT_CSS)
+        # 触屏没有 hover，按钮必须常显，否则点不到副本。
         self.assertIn(
             ".prompt-card-duplicate, .prompt-card-desc { opacity: 1; transform: none; }",
             PROMPT_CSS,

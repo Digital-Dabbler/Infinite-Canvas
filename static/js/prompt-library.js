@@ -154,9 +154,9 @@ const PromptLibrary = {
         const cover = item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy" onerror="window.libraryCoverFallback?.(this, 'sparkles')">` : `<div class="prompt-card-placeholder"><i data-lucide="sparkles"></i></div>`;
         const applyLabel = selected ? '取消' : '应用';
         const applyIcon = selected ? 'x' : 'plus';
-        // 我的提示词卡片：hover 时在封面底部显示说明（超出部分省略号），右上角提供“创建副本”。
+        // 卡片统一标准：hover 时在封面底部显示说明（最多两行，超出部分省略号），没有说明则显示“无说明”。
         const description = String(item.description || item.scene || '').trim();
-        const descriptionNote = isMine && description ? `<p class="prompt-card-desc">${LibraryUtils.escapeHtml(description)}</p>` : '';
+        const descriptionNote = `<p class="prompt-card-desc${description ? '' : ' is-empty'}">${LibraryUtils.escapeHtml(description || t('library.noDescription', '无说明'))}</p>`;
         const duplicateButton = isMine ? `<button type="button" class="prompt-card-duplicate" data-pl-duplicate="${LibraryUtils.escapeHtml(item.id)}" title="${LibraryUtils.escapeHtml(t('library.duplicateHint', '创建副本，用于试验提示词微调'))}" aria-label="${LibraryUtils.escapeHtml(t('library.duplicatePrompt', '创建副本'))}"><i data-lucide="copy-plus"></i></button>` : '';
         return `<article class="prompt-card ${selected ? 'is-selected' : ''}">
             <div class="prompt-card-cover">${cover}<div class="prompt-card-hover" aria-label="${LibraryUtils.escapeHtml(item.name || '提示词')} 操作"><button type="button" class="prompt-card-action prompt-card-apply ${selected ? 'is-applied' : ''}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button><button type="button" class="prompt-card-action" data-pl-preview="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="expand"></i>预览</button></div>${descriptionNote}${duplicateButton}</div>

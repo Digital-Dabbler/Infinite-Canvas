@@ -134,6 +134,7 @@
         "library.duplicateSuffix": { zh: "副本", en: "Copy" },
         "library.duplicateDone": { zh: "已创建提示词副本", en: "Prompt copy created" },
         "library.duplicateFailed": { zh: "创建副本失败", en: "Failed to create a copy" },
+        "library.noDescription": { zh: "无说明", en: "No description" },
         "library.myWorkflows": { zh: "我的工作流", en: "My Workflows" },
         "library.loadFailed": { zh: "加载失败", en: "Failed to load" },
         "library.workflowActions": { zh: "工作流操作", en: "Workflow actions" },
