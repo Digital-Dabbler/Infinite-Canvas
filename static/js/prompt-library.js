@@ -154,8 +154,12 @@ const PromptLibrary = {
         const cover = item.cover_url ? `<img src="${LibraryUtils.escapeHtml(item.cover_url)}" alt="${LibraryUtils.escapeHtml(item.name || '')}" loading="lazy" onerror="window.libraryCoverFallback?.(this, 'sparkles')">` : `<div class="prompt-card-placeholder"><i data-lucide="sparkles"></i></div>`;
         const applyLabel = selected ? '取消' : '应用';
         const applyIcon = selected ? 'x' : 'plus';
+        // 我的提示词卡片：hover 时在封面底部显示说明（超出部分省略号），右上角提供“创建副本”。
+        const description = String(item.description || item.scene || '').trim();
+        const descriptionNote = isMine && description ? `<p class="prompt-card-desc">${LibraryUtils.escapeHtml(description)}</p>` : '';
+        const duplicateButton = isMine ? `<button type="button" class="prompt-card-duplicate" data-pl-duplicate="${LibraryUtils.escapeHtml(item.id)}" title="${LibraryUtils.escapeHtml(t('library.duplicateHint', '创建副本，用于试验提示词微调'))}" aria-label="${LibraryUtils.escapeHtml(t('library.duplicatePrompt', '创建副本'))}"><i data-lucide="copy-plus"></i></button>` : '';
         return `<article class="prompt-card ${selected ? 'is-selected' : ''}">
-            <div class="prompt-card-cover">${cover}<div class="prompt-card-hover" aria-label="${LibraryUtils.escapeHtml(item.name || '提示词')} 操作"><button type="button" class="prompt-card-action prompt-card-apply ${selected ? 'is-applied' : ''}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button><button type="button" class="prompt-card-action" data-pl-preview="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="expand"></i>预览</button></div></div>
+            <div class="prompt-card-cover">${cover}<div class="prompt-card-hover" aria-label="${LibraryUtils.escapeHtml(item.name || '提示词')} 操作"><button type="button" class="prompt-card-action prompt-card-apply ${selected ? 'is-applied' : ''}" data-pl-apply="${LibraryUtils.escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}"><i data-lucide="${applyIcon}"></i>${applyLabel}</button><button type="button" class="prompt-card-action" data-pl-preview="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="expand"></i>预览</button></div>${descriptionNote}${duplicateButton}</div>
             <div class="prompt-card-info"><h3>${LibraryUtils.escapeHtml(item.name || t('library.untitled', '未命名'))}</h3><p>${LibraryUtils.escapeHtml(item.description || '')}</p><div class="prompt-card-preview">${LibraryUtils.escapeHtml(LibraryUtils.truncate(preview, 96) || t('library.emptyPrompt', '（空提示词）'))}</div>${!isMine && !isPublished && item.owner_type !== 'system' ? `<span class="prompt-card-meta"><i data-lucide="user-round"></i>${LibraryUtils.escapeHtml(this.publishedMeta(item))}</span>` : ''}</div>
             ${isMine ? `<div class="prompt-card-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.promptManageActions', '提示词管理操作'))}"><button type="button" data-pl-edit="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="pencil"></i><span>${LibraryUtils.escapeHtml(t('library.edit', '编辑'))}</span></button>${publication ? `<button type="button" class="is-published" data-pl-show-publication="${LibraryUtils.escapeHtml(publication.id)}"><i data-lucide="check-circle-2"></i><span>${LibraryUtils.escapeHtml(t('library.published', '已发布'))}</span></button>` : `<button type="button" data-pl-publish="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="send"></i><span>${LibraryUtils.escapeHtml(t('library.publish', '发布'))}</span></button>`}<button type="button" class="danger" data-pl-delete="${LibraryUtils.escapeHtml(item.id)}" aria-label="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}" title="${LibraryUtils.escapeHtml(t('library.delete', '删除'))}"><i data-lucide="trash-2"></i></button></div>` : isPublished ? `<div class="prompt-card-manage prompt-card-published-manage" role="group" aria-label="${LibraryUtils.escapeHtml(t('library.publishedManageActions', '已发布提示词操作'))}"><button type="button" class="danger" data-pl-withdraw="${LibraryUtils.escapeHtml(item.id)}"><i data-lucide="rotate-ccw"></i><span>${LibraryUtils.escapeHtml(t('library.withdraw', '撤回'))}</span></button></div>` : `<div class="prompt-card-foot"><button type="button" class="prompt-card-favorite ${favorite ? 'is-favorite' : ''}" data-pl-favorite="${LibraryUtils.escapeHtml(item.id)}" title="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-label="${favorite ? t('library.unfavorite', '取消收藏') : t('library.favorite', '收藏')}" aria-pressed="${favorite ? 'true' : 'false'}"><i data-lucide="heart"></i></button></div>`}
         </article>`;
@@ -505,6 +509,31 @@ const PromptLibrary = {
         await this.load();
         window.toast?.(t('library.promptMovedToTrash', '已移至回收站，可在回收站恢复'));
     },
+    duplicateName(item) {
+        const stem = String(item?.name || '').trim() || t('library.untitled', '未命名');
+        const suffix = t('library.duplicateSuffix', '副本');
+        const taken = new Set(this.mineItems().map(entry => String(entry?.name || '').trim()));
+        let name = `${stem} ${suffix}`.slice(0, 120);
+        for (let index = 2; index <= 99 && taken.has(name); index += 1) name = `${stem} ${suffix} ${index}`.slice(0, 120);
+        return name;
+    },
+    async duplicateItem(id, button) {
+        const item = this.mineItems().find(entry => entry?.id === id) || this.find(id);
+        const libraryId = item && this.mineLibrary()?.id;
+        if (!item || !libraryId) throw new Error(t('library.duplicateFailed', '创建副本失败'));
+        const payload = {
+            library_id: libraryId, name: this.duplicateName(item),
+            category: item.category || 'other', subcategory: item.subcategory || '',
+            description: item.description || item.scene || '', cover_url: item.cover_url || '',
+            prefix: item.prefix || item.positive || '', suffix: item.suffix || item.negative || '',
+        };
+        await this.withBusy(button, async () => {
+            const response = await fetch('/api/prompt-libraries/items', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+            if (!response.ok) throw new Error((await response.text()) || t('library.duplicateFailed', '创建副本失败'));
+            await this.load();
+            window.toast?.(t('library.duplicateDone', '已创建提示词副本'));
+        });
+    },
     async publishItem(id, metadata = {}) {
         const response = await fetch(`/api/prompt-libraries/items/${encodeURIComponent(id)}/publish`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({published:true, ...metadata})});
         if (!response.ok) throw new Error((await response.text()) || t('library.publishFailed', '发布失败'));
@@ -531,6 +560,7 @@ const PromptLibrary = {
         const newButton=event.target.closest('[data-pl-new]'); if(newButton){this.editorId='__new__';this.render();return;}
         const edit=event.target.closest('[data-pl-edit]'); if(edit){event.stopPropagation();this.openEditor(edit.dataset.plEdit);return;}
         const del=event.target.closest('[data-pl-delete]'); if(del){event.stopPropagation();try{await this.deleteItem(del.dataset.plDelete)}catch(error){window.toast?.(error.message)}return;}
+        const duplicate=event.target.closest('[data-pl-duplicate]'); if(duplicate){event.stopPropagation();try{await this.duplicateItem(duplicate.dataset.plDuplicate, duplicate)}catch(error){window.toast?.(error.message)}return;}
         const publishCancel=event.target.closest('[data-pl-publish-cancel]'); if(publishCancel){event.stopPropagation();this.closePublishDialog();return;}
         const publish=event.target.closest('[data-pl-publish]'); if(publish){event.stopPropagation();this.openPublishDialog(publish.dataset.plPublish, publish);return;}
         const withdraw=event.target.closest('[data-pl-withdraw]'); if(withdraw){event.stopPropagation();try{await this.withBusy(withdraw,()=>this.withdrawItem(withdraw.dataset.plWithdraw))}catch(error){window.toast?.(error.message)}return;}
