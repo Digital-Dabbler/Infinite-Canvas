@@ -6,13 +6,16 @@
 提示词库四个 tab（灵感库 / 我的收藏 / 我的提示词 / 我的发布）共用
 ``static/js/prompt-library.js`` 的 ``cardHtml()``，所以“统一”意味着说明条不再按 tab 收窄。
 
-覆盖两类断言：
+覆盖三类断言：
 * 静态契约：模板无条件渲染说明条、i18n 词条中英齐全、CSS 两行省略 + 悬停显现 + 触屏常显；
 * 行为验证：用 node 在 vm 中加载真实的 prompt-library.js，对四个 tab 各渲染一次卡片，
-  断言说明条都存在、空白说明回落到“无说明”、description 缺失时回退到 scene、文本被转义。
+  断言说明条都存在、空白说明回落到“无说明”、description 缺失时回退到 scene、文本被转义；
+* 排版契约：说明条底内边距必须为 0，且悬停层的底部预留高度必须大于说明条自身高度，
+  否则（无头 Chrome 实测）会出现“半行文字”残影以及说明条压住“应用 / 预览”按钮。
 """
 
 import json
+import re
 import shutil
 import subprocess
 import unittest
@@ -121,6 +124,87 @@ class PromptCardDescriptionContractTests(unittest.TestCase):
 
     def test_i18n_has_the_no_description_label(self):
         self.assertIn('"library.noDescription": { zh: "无说明", en: "No description" }', LIBRARY_I18N)
+
+
+def _rule_body(css_text, selector):
+    """取出某条 CSS 规则的声明块（选择器必须精确匹配，不会误命中 `.prompt-card-desc.is-empty`）。"""
+    match = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css_text)
+    if not match:
+        raise AssertionError(f"CSS 里找不到规则 {selector}")
+    return match.group(1)
+
+
+def _declaration(body, prop):
+    match = re.search(r"(?:^|;)\s*" + re.escape(prop) + r"\s*:\s*([^;]+)", body)
+    if not match:
+        raise AssertionError(f"规则里找不到声明 {prop}")
+    return match.group(1).strip()
+
+
+def _em_px(expression):
+    """把 `calc(2.9em + 7px)` 这类表达式拆成 (em 系数, px 值)。"""
+    em = re.search(r"([\d.]+)em", expression)
+    px = re.search(r"([\d.]+)px", expression)
+    if not em or not px:
+        raise AssertionError(f"无法解析高度表达式：{expression}")
+    return float(em.group(1)), float(px.group(1))
+
+
+def _padding_terms(value):
+    """按顶层空白切分 padding（`calc(2.9em + 21px)` 内部的空格不算切分点）。"""
+    return re.findall(r"calc\([^)]*\)|\S+", value)
+
+
+class PromptCardDescriptionLayoutTests(unittest.TestCase):
+    """排版契约：两行说明条既不能露出“半行”残影，也不能压住封面上的「应用 / 预览」。
+
+    无头 Chrome 实测过两个真实缺陷（用户报障）：
+    1. `-webkit-line-clamp: 2` 只把元素高度压到两行，超出的行盒仍在文档流里，
+       而 `overflow: hidden` 的裁剪边界是 padding box——底内边距一旦非 0，
+       第三行文字的顶部就会从这段内边距里露出来（“半行文字”）。
+    2. 两行说明条按 `bottom` 锚定后会向上长高，顶边压住封面居中的按钮。
+    """
+
+    DESC = ".prompt-card-desc"
+    HOVER = ".prompt-card-hover"
+    OFFSET_PX = 7  # 说明条距封面底边的内缩，与 `bottom: 7px` 一致
+    GAP_PX = 7  # 说明条顶边与按钮之间必须保留的最小间隙
+
+    @classmethod
+    def setUpClass(cls):
+        cls.desc = _rule_body(PROMPT_CSS, cls.DESC)
+        cls.hover = _rule_body(PROMPT_CSS, cls.HOVER)
+
+    def test_strip_has_no_bottom_padding(self):
+        padding = _padding_terms(_declaration(self.desc, "padding"))
+        self.assertEqual(len(padding), 3, f"说明条应写成 `padding: 上 左右 下`，实际是 {padding}")
+        self.assertEqual(padding[2], "0", "说明条的底部内边距必须为 0，否则会露出被裁掉的半行文字")
+        self.assertEqual(_declaration(self.desc, "box-sizing"), "border-box")
+
+    def test_strip_max_height_matches_two_lines(self):
+        line_height = float(_declaration(self.desc, "line-height"))
+        em, px = _em_px(_declaration(self.desc, "max-height"))
+        self.assertAlmostEqual(em, 2 * line_height, places=3, msg="max-height 的 em 部分应恰好等于两行行高")
+        self.assertEqual(px, 7, "max-height 的 px 部分 = 5px 上内边距 + 上下各 1px 边框")
+
+    def test_hover_reserve_clears_the_strip(self):
+        padding = _padding_terms(_declaration(self.hover, "padding"))
+        self.assertEqual(len(padding), 3, f"悬停层应写成 `padding: 上 左右 下`，实际是 {padding}")
+        reserve_em, reserve_px = _em_px(padding[2])
+        strip_em, strip_px = _em_px(_declaration(self.desc, "max-height"))
+        self.assertAlmostEqual(reserve_em, strip_em, places=3, msg="悬停预留与说明条必须用同一套 em 高度")
+        self.assertEqual(
+            reserve_px - strip_px,
+            self.OFFSET_PX + self.GAP_PX,
+            "悬停层的底部预留 = 说明条高度 + 说明条底边内缩 + 按钮间隙，否则按钮会与说明条重叠",
+        )
+
+    def test_hover_font_size_matches_the_strip(self):
+        self.assertEqual(
+            _declaration(self.hover, "font-size"),
+            _declaration(self.desc, "font-size"),
+            "悬停层与说明条的字号必须同源，否则 em 预留高度对不上",
+        )
 
 
 @unittest.skipUnless(NODE, "node is required to render the prompt card template")

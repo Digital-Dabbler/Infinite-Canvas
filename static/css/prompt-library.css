@@ -62,7 +62,11 @@
 .prompt-card-placeholder > svg { width: 42px; height: 42px; stroke-width: 1.7; }
 .prompt-card:hover .prompt-card-cover { border-color: #7f7f7f; }
 .prompt-card:hover .prompt-card-cover > img { transform: scale(1.025); filter: brightness(1.05); }
-.prompt-card-hover { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 7px; opacity: 0; background: rgba(0,0,0,.32); transition: opacity .16s ease; pointer-events: none; }
+/* 为封面底部的说明条预留高度，避免两行说明与「应用 / 预览」重叠：
+   说明条盒高 = 2 行 × 1.45em + 5px 上内边距 + 2px 上下边框 = calc(2.9em + 7px)；
+   这里再留出 7px 底边距和 7px 间隙，因此 padding-bottom = calc(2.9em + 21px)。
+   字号跟随 --canvas-font-scale，与说明条保持一致，缩放后预留高度仍然够用。 */
+.prompt-card-hover { position: absolute; inset: 0; z-index: 4; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 7px 7px calc(2.9em + 21px); font-size: calc(11px * var(--canvas-font-scale, 1)); opacity: 0; background: rgba(0,0,0,.32); transition: opacity .16s ease; pointer-events: none; }
 .prompt-card:hover .prompt-card-hover, .prompt-card:focus-within .prompt-card-hover { opacity: 1; pointer-events: auto; }
 .prompt-card-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 70px; min-height: 44px; padding: 0 12px; border: 1px solid rgba(255,255,255,.72); border-radius: 7px; background: rgba(21,21,21,.88); color: #fff; font-size:calc(12px * var(--canvas-font-scale, 1)); font-weight: 750; cursor: pointer; transition: background .15s ease, border-color .15s ease, transform .15s ease; }
 .prompt-card-action:hover, .prompt-card-action:focus-visible { border-color: #fff; background: rgba(38,38,38,.96); transform: translateY(-1px); outline: none; }
@@ -87,8 +91,11 @@
 .prompt-card-duplicate svg { display: block; width: 16px; height: 16px; stroke-width: 2.1; fill: transparent; }
 .prompt-card-duplicate:disabled { opacity: .6; cursor: wait; }
 .prompt-card-duplicate .is-spinning { animation: prompt-card-spin .8s linear infinite; }
-/* 我的提示词卡片：封面底部说明条，最多两行，超出用省略号。 */
-.prompt-card-desc { position: absolute; left: 7px; right: 7px; bottom: 7px; z-index: 6; display: -webkit-box; overflow: hidden; margin: 0; padding: 5px 8px; border: 1px solid rgba(255,255,255,.18); border-radius: 6px; background: rgba(12,12,12,.86); color: #ececec; font-size:calc(11px * var(--canvas-font-scale, 1)); line-height: 1.45; text-align: left; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; opacity: 0; transform: translateY(4px); transition: opacity .16s ease, transform .16s ease; pointer-events: none; }
+/* 提示词库卡片：封面底部说明条，最多两行，超出用省略号。
+   注意 padding-bottom 必须为 0：overflow: hidden 的裁剪边界是 padding box，只要留了底部内边距，
+   被裁掉的第三行文字就会从这段内边距里露出“半行”残影。max-height 与 hover 预留高度同源，
+   即便某个引擎不支持 -webkit-line-clamp，也只会整齐地截断在两行。 */
+.prompt-card-desc { position: absolute; left: 7px; right: 7px; bottom: 7px; z-index: 6; display: -webkit-box; overflow: hidden; box-sizing: border-box; max-height: calc(2.9em + 7px); margin: 0; padding: 5px 8px 0; border: 1px solid rgba(255,255,255,.18); border-radius: 6px; background: rgba(12,12,12,.86); color: #ececec; font-size:calc(11px * var(--canvas-font-scale, 1)); line-height: 1.45; text-align: left; overflow-wrap: anywhere; -webkit-line-clamp: 2; -webkit-box-orient: vertical; opacity: 0; transform: translateY(4px); transition: opacity .16s ease, transform .16s ease; pointer-events: none; }
 .prompt-card:hover .prompt-card-duplicate, .prompt-card:focus-within .prompt-card-duplicate,
 .prompt-card:hover .prompt-card-desc, .prompt-card:focus-within .prompt-card-desc { opacity: 1; transform: none; }
 .prompt-card-desc.is-empty { border-style: dashed; background: rgba(12,12,12,.74); color: rgba(236,236,236,.66); }
