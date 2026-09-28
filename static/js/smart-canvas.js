@@ -11271,6 +11271,107 @@ function positionPhotoshopContextMenu(clientX, clientY){
     photoshopContextMenu.style.left = `${Math.max(margin, Math.min(window.innerWidth - width - margin, clientX))}px`;
     photoshopContextMenu.style.top = `${Math.max(margin, Math.min(window.innerHeight - height - margin, clientY))}px`;
 }
+function loadImageForClipboardCopy(url){
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.addEventListener('load', () => resolve(image), {once:true});
+        image.addEventListener('error', () => reject(new Error('image load failed')), {once:true});
+        image.src = url;
+    });
+}
+async function rasterBlobToPngBlob(blob){
+    const source = await createImageBitmap(blob);
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = source.width || 1;
+        canvas.height = source.height || 1;
+        const context = canvas.getContext('2d');
+        if(!context) throw new Error('canvas 2d unavailable');
+        context.drawImage(source, 0, 0, canvas.width, canvas.height);
+        return await new Promise((resolve, reject) => {
+            canvas.toBlob(result => result ? resolve(result) : reject(new Error('png encode failed')), 'image/png');
+        });
+    } finally {
+        source.close?.();
+    }
+}
+async function imageBlobForClipboardCopy(url){
+    const response = await fetch(url, {credentials:'same-origin'});
+    if(!response.ok) throw new Error(`image fetch failed: ${response.status}`);
+    const blob = await response.blob();
+    // 系统剪贴板只可靠接受 image/png，其他位图（jpeg/webp/avif）先在本机转码。
+    if(blob.type === 'image/png') return blob;
+    return await rasterBlobToPngBlob(blob);
+}
+function copyImageWithClipboardApi(url){
+    // 返回 null 表示该浏览器/上下文没有图片剪贴板能力，false 表示写入被拒绝。
+    if(window.isSecureContext === false) return null;
+    if(typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) return null;
+    const blobPromise = imageBlobForClipboardCopy(url);
+    blobPromise.catch(() => {});
+    let item = null;
+    try {
+        item = new ClipboardItem({'image/png': blobPromise});
+    } catch(_) {
+        return null;
+    }
+    return navigator.clipboard.write([item]).then(() => true, () => false);
+}
+function copyImageWithSelection(image){
+    // 局域网 http 下没有 Clipboard API，退回到「选中图片再执行复制」的原生行为。
+    const selection = window.getSelection?.();
+    if(!selection || typeof document.execCommand !== 'function') return false;
+    const savedRanges = [];
+    for(let index = 0; index < selection.rangeCount; index += 1){
+        try { savedRanges.push(selection.getRangeAt(index).cloneRange()); } catch(_) {}
+    }
+    const holder = document.createElement('div');
+    holder.setAttribute('aria-hidden', 'true');
+    holder.style.cssText = 'position:fixed;left:-10000px;top:0;pointer-events:none;';
+    let copied = false;
+    try {
+        const clone = image.cloneNode(true);
+        holder.appendChild(clone);
+        document.body.appendChild(holder);
+        const range = document.createRange();
+        range.selectNode(clone);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        copied = document.execCommand('copy');
+    } catch(_) {
+        copied = false;
+    } finally {
+        try {
+            holder.remove();
+            selection.removeAllRanges();
+            savedRanges.forEach(range => selection.addRange(range));
+        } catch(_) {}
+    }
+    return copied;
+}
+async function copyImageToClipboard(nodeId, imageIndex){
+    const node = nodes.find(item => item.id === nodeId);
+    const image = imageForDisplay(node?.images?.[imageIndex]);
+    const url = image?.url;
+    if(!node || !url){
+        toast(tr('smart.copyImageFailed'));
+        return;
+    }
+    // 先在点击手势内同步发起写入，避免 await 之后丢失用户激活态。
+    const apiAttempt = copyImageWithClipboardApi(url);
+    if(apiAttempt && await apiAttempt){
+        toast(tr('smart.copyImageDone'));
+        return;
+    }
+    try {
+        const imageElement = await loadImageForClipboardCopy(url);
+        if(copyImageWithSelection(imageElement)){
+            toast(tr('smart.copyImageDone'));
+            return;
+        }
+    } catch(_) {}
+    toast(tr('smart.copyImageFailed'));
+}
 function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
     if(!photoshopContextMenu) return;
     const node = nodes.find(item => item.id === nodeId);
@@ -11285,6 +11386,7 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
     const menuItems = [];
     if(kind === 'image'){
         menuItems.push(`<button type="button" role="menuitem" data-send-photoshop><i data-lucide="panels-top-left"></i><span>${escapeHtml(tr('smart.sendToPhotoshop'))}</span></button>`);
+        menuItems.push(`<button type="button" role="menuitem" data-copy-image><i data-lucide="copy"></i><span>${escapeHtml(tr('smart.copyImage'))}</span></button>`);
     }
     menuItems.push(`<button type="button" role="menuitem" data-add-my-assets><i data-lucide="library-big"></i><span>${escapeHtml(tr('library.addToMyAssets'))}</span></button>`);
     menuItems.push('<button type="button" role="menuitem" data-set-canvas-cover><i data-lucide="panel-top"></i><span>设为封面</span></button>');
@@ -11299,6 +11401,12 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
         event.preventDefault();
         event.stopPropagation();
         sendImageToPhotoshop(nodeId, imageIndex, event.currentTarget);
+    });
+    photoshopContextMenu.querySelector('[data-copy-image]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        closePhotoshopContextMenu();
+        copyImageToClipboard(nodeId, imageIndex);
     });
     photoshopContextMenu.querySelector('[data-add-my-assets]')?.addEventListener('click', event => {
         event.preventDefault();
