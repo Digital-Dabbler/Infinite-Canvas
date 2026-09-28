@@ -11349,6 +11349,20 @@ function copyImageWithSelection(image){
     }
     return copied;
 }
+async function copyImageToSystemClipboard(nodeId, imageIndex){
+    // 局域网 http 不是安全上下文，浏览器没有图片剪贴板能力，改由服务端写本机剪贴板。
+    if(!canvasId) return false;
+    try {
+        const response = await fetch('/api/system-clipboard/image', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({canvas_id:canvasId, node_id:nodeId, image_index:imageIndex})
+        });
+        return response.ok;
+    } catch(_) {
+        return false;
+    }
+}
 async function copyImageToClipboard(nodeId, imageIndex){
     const node = nodes.find(item => item.id === nodeId);
     const image = imageForDisplay(node?.images?.[imageIndex]);
@@ -11361,6 +11375,10 @@ async function copyImageToClipboard(nodeId, imageIndex){
     const apiAttempt = copyImageWithClipboardApi(url);
     if(apiAttempt && await apiAttempt){
         toast(tr('smart.copyImageDone'));
+        return;
+    }
+    if(await copyImageToSystemClipboard(nodeId, imageIndex)){
+        toast(tr('smart.copyImageDoneLocal'));
         return;
     }
     try {

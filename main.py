@@ -13,6 +13,9 @@ import random
 import sys
 import subprocess
 import time
+import io
+import struct
+import ctypes
 import traceback
 import shutil
 import glob
@@ -6286,6 +6289,11 @@ class CanvasOperationRequest(BaseModel):
     node: Dict[str, Any] = Field(default_factory=dict)
 
 class PhotoshopBridgeCreateRequest(BaseModel):
+    canvas_id: str = ""
+    node_id: str = ""
+    image_index: int = 0
+
+class SystemClipboardImageRequest(BaseModel):
     canvas_id: str = ""
     node_id: str = ""
     image_index: int = 0
@@ -23787,6 +23795,173 @@ async def cancel_photoshop_bridge_task(task_id: str, payload: PhotoshopBridgeCan
         task["error"] = str(payload.reason or "")[:300]
         save_photoshop_bridge_tasks(tasks)
     return {"task": photoshop_bridge_public_task(task)}
+
+# --- 本机剪贴板（浏览器没有图片剪贴板能力时的服务端回退） ---
+
+CLIPBOARD_DIB_FORMAT = 8
+CLIPBOARD_PNG_FORMAT_NAME = "PNG"
+CLIPBOARD_OPEN_ATTEMPTS = 8
+CLIPBOARD_OPEN_INTERVAL = 0.05
+CLIPBOARD_DIB_BIT_COUNT = 24
+CLIPBOARD_DIB_PIXELS_PER_METER = 2835
+
+def system_clipboard_available():
+    # 只有 Windows 提供这套 Win32 剪贴板接口，其他平台保持不可用。
+    return os.name == "nt"
+
+def image_to_dib_bytes(path):
+    """把本地图片编码成 CF_DIB（BITMAPINFOHEADER + 自下而上的 24 位 BGR 行）。"""
+    with Image.open(path) as source:
+        image = source.convert("RGB")
+        width, height = image.size
+        # CF_DIB 的像素按 BGR 排列；按 RGB 顺序写入会让 Photoshop 里的红蓝通道互换。
+        pixels = image.tobytes("raw", "BGR")
+    row_bytes = width * 3
+    stride = (row_bytes + 3) & ~3
+    padding = b"\x00" * (stride - row_bytes)
+    header = struct.pack(
+        "<IiiHHIIiiII",
+        40,
+        width,
+        height,
+        1,
+        CLIPBOARD_DIB_BIT_COUNT,
+        0,
+        stride * height,
+        CLIPBOARD_DIB_PIXELS_PER_METER,
+        CLIPBOARD_DIB_PIXELS_PER_METER,
+        0,
+        0,
+    )
+    rows = [header]
+    for row in range(height - 1, -1, -1):
+        rows.append(pixels[row * row_bytes:(row + 1) * row_bytes])
+        rows.append(padding)
+    return b"".join(rows)
+
+def image_to_clipboard_png_bytes(path):
+    """返回写入剪贴板 PNG 格式的字节，已经是 PNG 的文件按原样使用。"""
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return raw
+    with Image.open(path) as source:
+        buffer = io.BytesIO()
+        source.convert("RGB").save(buffer, format="PNG")
+        return buffer.getvalue()
+
+def system_clipboard_win32():
+    """延迟绑定 Win32 剪贴板函数，非 Windows 平台不会走到这里。"""
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+    user32.RegisterClipboardFormatW.restype = wintypes.UINT
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HANDLE
+    kernel32.GlobalLock.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalFree.argtypes = [wintypes.HANDLE]
+    kernel32.GlobalFree.restype = wintypes.HANDLE
+    return user32, kernel32
+
+def system_clipboard_set_bytes(user32, kernel32, clipboard_format, payload):
+    """把一段字节挂到指定剪贴板格式上，内存所有权随 SetClipboardData 交给系统。"""
+    handle = kernel32.GlobalAlloc(0x0002, len(payload))  # GMEM_MOVEABLE
+    if not handle:
+        raise RuntimeError("分配剪贴板内存失败。")
+    pointer = kernel32.GlobalLock(handle)
+    if not pointer:
+        kernel32.GlobalFree(handle)
+        raise RuntimeError("锁定剪贴板内存失败。")
+    try:
+        ctypes.memmove(pointer, payload, len(payload))
+    finally:
+        kernel32.GlobalUnlock(handle)
+    if not user32.SetClipboardData(clipboard_format, handle):
+        kernel32.GlobalFree(handle)
+        raise RuntimeError("写入系统剪贴板失败。")
+    return True
+
+def system_clipboard_open(user32):
+    """剪贴板可能被别的程序短暂占用，重试几次再放弃。"""
+    for _ in range(CLIPBOARD_OPEN_ATTEMPTS):
+        if user32.OpenClipboard(None):
+            return True
+        time.sleep(CLIPBOARD_OPEN_INTERVAL)
+    return False
+
+def copy_image_to_system_clipboard(path):
+    """把图片写进运行服务的这台电脑的系统剪贴板，格式与浏览器原生「复制图片」一致。"""
+    if not system_clipboard_available():
+        raise RuntimeError("本机剪贴板仅支持在 Windows 上运行的服务。")
+    dib = image_to_dib_bytes(path)
+    png = image_to_clipboard_png_bytes(path)
+    user32, kernel32 = system_clipboard_win32()
+    if not system_clipboard_open(user32):
+        raise RuntimeError("系统剪贴板正被其他程序占用，请稍后重试。")
+    try:
+        if not user32.EmptyClipboard():
+            raise RuntimeError("清空系统剪贴板失败。")
+        system_clipboard_set_bytes(user32, kernel32, CLIPBOARD_DIB_FORMAT, dib)
+        png_format = user32.RegisterClipboardFormatW(CLIPBOARD_PNG_FORMAT_NAME)
+        if png_format:
+            system_clipboard_set_bytes(user32, kernel32, png_format, png)
+    finally:
+        user32.CloseClipboard()
+    return {"dib_bytes": len(dib), "png_bytes": len(png)}
+
+def system_clipboard_node_image(canvas, node_id, image_index):
+    """解析智能画布节点图片对应的本地文件路径，供本机剪贴板回退使用。"""
+    if str(canvas.get("kind") or "").strip().lower() != "smart":
+        raise HTTPException(status_code=400, detail="复制图片当前仅支持智能画布。")
+    node = next((item for item in (canvas.get("nodes") or []) if str(item.get("id") or "") == node_id), None)
+    if not node:
+        raise HTTPException(status_code=404, detail="图片节点不存在，可能已被删除。")
+    images = node.get("images") if isinstance(node.get("images"), list) else []
+    if image_index < 0 or image_index >= len(images):
+        raise HTTPException(status_code=400, detail="当前图片索引无效，请重新选择图片。")
+    image = photoshop_bridge_image_value(images[image_index])
+    candidates = [
+        image.get("originalLocalUrl"), image.get("localUrl"), image.get("sourceUrl"),
+        image.get("local_url"), image.get("source_url"), image.get("url"),
+    ]
+    for candidate in candidates:
+        path = output_file_from_url(str(candidate or "").strip())
+        if not path or not os.path.isfile(path):
+            continue
+        if not str(content_type_for_path(path) or "").lower().startswith("image/"):
+            continue
+        return path
+    raise HTTPException(status_code=400, detail="当前图片不是可复制的站内本地图片。")
+
+@app.post("/api/system-clipboard/image")
+async def copy_canvas_image_to_system_clipboard(payload: SystemClipboardImageRequest, request: Request):
+    """局域网 http 下浏览器拿不到图片剪贴板，改由服务端写入本机系统剪贴板。"""
+    require_authenticated(request)
+    canvas_id = str(payload.canvas_id or "").strip()
+    node_id = str(payload.node_id or "").strip()
+    if not canvas_id or not node_id:
+        raise HTTPException(status_code=400, detail="缺少画布或图片节点 ID。")
+    if not system_clipboard_available():
+        raise HTTPException(status_code=501, detail="当前服务不在 Windows 上运行，无法写入本机剪贴板。")
+    canvas = await asyncio.to_thread(load_canvas, canvas_id)
+    path = system_clipboard_node_image(canvas, node_id, int(payload.image_index))
+    try:
+        await asyncio.to_thread(copy_image_to_system_clipboard, path)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error))
+    return {"ok": True, "name": os.path.basename(path)}
 
 # --- 画布管理 ---
 

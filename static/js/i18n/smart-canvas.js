@@ -154,6 +154,7 @@
         "smart.copyEmpty": { zh: "暂无可复制内容", en: "Nothing to copy" },
         "smart.copyImage": { zh: "复制图片", en: "Copy image" },
         "smart.copyImageDone": { zh: "已复制图片，可直接粘贴到其他软件", en: "Image copied — paste it into any other app" },
+        "smart.copyImageDoneLocal": { zh: "已复制图片到本机剪贴板，可直接粘贴到 Photoshop", en: "Image copied to this computer's clipboard — paste it into Photoshop" },
         "smart.copyImageFailed": { zh: "复制图片失败，请右键图片选择“图片另存为”", en: "Could not copy the image. Right-click it and choose “Save image as”." },
         "smart.mediaUnavailable": { zh: "图片暂不可加载", en: "Image is temporarily unavailable" },
         "smart.retryMediaLoad": { zh: "重试加载", en: "Retry load" },

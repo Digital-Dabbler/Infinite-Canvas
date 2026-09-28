@@ -77,8 +77,25 @@ class SmartCanvasCopyImageTests(unittest.TestCase):
         self.assertIn("holder.remove();", body)
         self.assertIn("savedRanges.forEach(range => selection.addRange(range));", body)
 
+    def test_system_clipboard_fallback_precedes_the_selection_copy(self):
+        body = extract_function(SMART_CANVAS_JS, "copyImageToClipboard")
+
+        # 局域网 http 不是安全上下文，服务端回退必须排在只写 HTML 的选区回退之前。
+        self.assertLess(body.index("copyImageToSystemClipboard(nodeId, imageIndex)"), body.index("copyImageWithSelection(imageElement)"))
+        self.assertIn("if(await copyImageToSystemClipboard(nodeId, imageIndex)){", body)
+        self.assertIn("toast(tr('smart.copyImageDoneLocal'));", body)
+
+    def test_system_clipboard_request_targets_the_server_endpoint(self):
+        body = extract_function(SMART_CANVAS_JS, "copyImageToSystemClipboard")
+
+        self.assertIn("if(!canvasId) return false;", body)
+        self.assertIn("fetch('/api/system-clipboard/image'", body)
+        self.assertIn("method:'POST'", body)
+        self.assertIn("JSON.stringify({canvas_id:canvasId, node_id:nodeId, image_index:imageIndex})", body)
+        self.assertIn("return response.ok;", body)
+
     def test_i18n_entries_exist_in_both_locales(self):
-        for key in ("smart.copyImage", "smart.copyImageDone", "smart.copyImageFailed"):
+        for key in ("smart.copyImage", "smart.copyImageDone", "smart.copyImageDoneLocal", "smart.copyImageFailed"):
             match = re.search(rf'"{re.escape(key)}":\s*\{{[^}}]*\}}', SMART_CANVAS_I18N)
             self.assertIsNotNone(match, f"missing i18n entry: {key}")
             entry = match.group(0)
