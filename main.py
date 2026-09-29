@@ -13,6 +13,7 @@ import random
 import sys
 import subprocess
 import time
+import socket
 import io
 import struct
 import ctypes
@@ -23901,6 +23902,31 @@ def system_clipboard_open(user32):
         time.sleep(CLIPBOARD_OPEN_INTERVAL)
     return False
 
+def local_client_addresses():
+    """收集本机可能作为浏览器来源地址的 IP，用于判断请求是否来自运行服务的这台电脑。"""
+    addresses = {"127.0.0.1", "::1", "localhost"}
+    hostname = socket.gethostname()
+    try:
+        for info in socket.getaddrinfo(hostname, None):
+            addresses.add(str(info[4][0]))
+    except OSError:
+        pass
+    try:
+        for address in socket.gethostbyname_ex(hostname)[2]:
+            addresses.add(str(address))
+    except OSError:
+        pass
+    return addresses
+
+def is_local_clipboard_request(request):
+    """服务端剪贴板只能写运行服务这台电脑的剪贴板，因此只认本机浏览器发来的请求。"""
+    host = str(getattr(getattr(request, "client", None), "host", "") or "").strip()
+    if not host:
+        return False
+    if host in ("127.0.0.1", "::1", "localhost"):
+        return True
+    return host in local_client_addresses()
+
 def copy_image_to_system_clipboard(path):
     """把图片写进运行服务的这台电脑的系统剪贴板，格式与浏览器原生「复制图片」一致。"""
     if not system_clipboard_available():
@@ -23953,6 +23979,11 @@ async def copy_canvas_image_to_system_clipboard(payload: SystemClipboardImageReq
     node_id = str(payload.node_id or "").strip()
     if not canvas_id or not node_id:
         raise HTTPException(status_code=400, detail="缺少画布或图片节点 ID。")
+    if not is_local_clipboard_request(request):
+        raise HTTPException(
+            status_code=409,
+            detail="当前页面在局域网其他电脑上，无法直接写入这台电脑的剪贴板。请在图片上使用浏览器自带的「复制图片」。",
+        )
     if not system_clipboard_available():
         raise HTTPException(status_code=501, detail="当前服务不在 Windows 上运行，无法写入本机剪贴板。")
     canvas = await asyncio.to_thread(load_canvas, canvas_id)

@@ -1761,6 +1761,21 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .photoshop-context-menu .workflow-group-context-color-grid .workflow-group-color-choice-swatch { width:16px; height:16px; }
 .photoshop-context-menu .workflow-group-context-color-grid .workflow-group-color-choice[aria-checked="true"] { background:rgba(255,255,255,.1); }
 .photoshop-context-menu svg { width:17px; height:17px; color:#31a8ff; flex:0 0 auto; }
+.native-copy-guide { position:fixed; z-index:160; inset:0; display:none; }
+.native-copy-guide.open { display:flex; align-items:center; justify-content:center; }
+.native-copy-guide-backdrop { position:absolute; inset:0; background:rgba(6,8,14,.66); backdrop-filter:blur(3px); }
+.native-copy-guide-panel { position:relative; z-index:1; display:flex; flex-direction:column; gap:10px; max-width:min(1120px, calc(100vw - 48px)); max-height:calc(100vh - 48px); padding:14px 16px 12px; border:1px solid var(--line); border-radius:18px; background:var(--panel); box-shadow:0 24px 64px var(--shadow); }
+.native-copy-guide-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.native-copy-guide-head strong { font-size:calc(13px * var(--canvas-font-scale, 1)); font-weight:850; }
+.native-copy-guide-close { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:1px solid var(--line); border-radius:9px; background:transparent; color:var(--muted); cursor:pointer; }
+.native-copy-guide-close:hover { color:var(--text); border-color:color-mix(in srgb, var(--border) 78%, transparent); }
+.native-copy-guide-close svg { width:15px; height:15px; }
+.native-copy-guide-hint { margin:0; color:var(--muted); font-size:calc(12px * var(--canvas-font-scale, 1)); line-height:1.6; }
+.native-copy-guide-stage { display:flex; align-items:center; justify-content:center; min-height:120px; padding:8px; border-radius:12px; background:var(--soft); overflow:auto; }
+.native-copy-guide-image { display:block; max-width:min(900px, calc(100vw - 120px)); max-height:calc(100vh - 320px); background:var(--soft); cursor:copy; }
+.native-copy-guide-foot { display:flex; flex-wrap:wrap; align-items:center; gap:6px 16px; color:var(--muted); font-size:calc(11px * var(--canvas-font-scale, 1)); }
+.native-copy-guide-link { margin-left:auto; padding:6px 12px; border:1px solid var(--line); border-radius:10px; background:transparent; color:var(--text); font-size:calc(11px * var(--canvas-font-scale, 1)); cursor:pointer; }
+.native-copy-guide-link:hover { border-color:color-mix(in srgb, var(--border) 78%, transparent); background:rgba(255,255,255,.06); }
 .photoshop-install-modal {
     position:fixed;
     z-index:150;

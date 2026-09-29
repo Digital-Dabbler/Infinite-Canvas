@@ -480,7 +480,7 @@
                     <div class="image-edit-stage-inner">
                         <div id="previewStage" class="preview-stage" style="display:none">
                             <div id="previewFrame" class="preview-frame">
-                                <img id="previewCurrentImage" class="preview-current" alt="current">
+                                <img id="previewCurrentImage" class="preview-current" alt="current" draggable="true">
                                 <video id="previewCurrentVideo" class="preview-current preview-current-video" controls preload="metadata" crossorigin="anonymous" playsinline disablepictureinpicture controlslist="nodownload noplaybackrate noremoteplayback" style="display:none"></video>
                                 <div id="panoramaStage" class="panorama-stage" style="display:none">
                                     <canvas id="panoramaCanvas"></canvas>
@@ -792,6 +792,24 @@
                         <button class="library-editor-btn primary" type="button" data-upload-submit>上传</button>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+    <div id="nativeCopyGuide" class="native-copy-guide" aria-hidden="true">
+        <div class="native-copy-guide-backdrop" data-native-copy-close></div>
+        <div class="native-copy-guide-panel" role="dialog" aria-modal="true" aria-labelledby="nativeCopyGuideTitle">
+            <div class="native-copy-guide-head">
+                <strong id="nativeCopyGuideTitle" data-i18n="smart.copyImageNativeTitle">用浏览器原生「复制图片」</strong>
+                <button type="button" class="native-copy-guide-close" data-native-copy-close data-i18n-title="smart.copyImageNativeClose" aria-label="关闭"><i data-lucide="x"></i></button>
+            </div>
+            <p class="native-copy-guide-hint" data-i18n="smart.copyImageNativeHint">当前页面是 http 局域网地址，浏览器不允许网页直接写入图片剪贴板。请在这张图上点右键，选择「复制图片」。</p>
+            <div class="native-copy-guide-stage">
+                <img id="nativeCopyGuideImage" class="native-copy-guide-image" alt="" draggable="true">
+            </div>
+            <div class="native-copy-guide-foot">
+                <span class="native-copy-guide-tip" data-i18n="smart.copyImageNativeAltHint">也可以在画布图片上按住 Alt 再右键，直接用浏览器菜单。</span>
+                <span class="native-copy-guide-tip" data-i18n="smart.copyImageNativeDragHint">按住 Ctrl 拖动这张图，可直接拖进 Photoshop。</span>
+                <button type="button" class="native-copy-guide-link" data-native-copy-link data-i18n="smart.copyImageNativeLink">改为复制图片链接</button>
             </div>
         </div>
     </div>

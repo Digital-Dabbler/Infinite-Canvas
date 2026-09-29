@@ -1,8 +1,10 @@
+import inspect
 import io
 import os
 import struct
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -171,6 +173,43 @@ class SystemClipboardPlatformTests(unittest.TestCase):
         with patch.object(main, "system_clipboard_available", return_value=False):
             with self.assertRaises(RuntimeError):
                 main.copy_image_to_system_clipboard("unused.png")
+
+
+class SystemClipboardLocalClientTests(unittest.TestCase):
+    """服务端只能写运行服务这台电脑的剪贴板，局域网其他电脑必须被拒绝并改走浏览器原生复制。"""
+
+    @staticmethod
+    def request_from(host):
+        return types.SimpleNamespace(client=types.SimpleNamespace(host=host))
+
+    def test_loopback_clients_are_local(self):
+        for host in ("127.0.0.1", "::1", "localhost"):
+            self.assertTrue(main.is_local_clipboard_request(self.request_from(host)), host)
+
+    def test_own_network_addresses_are_local(self):
+        others = [item for item in main.local_client_addresses() if item not in ("127.0.0.1", "::1", "localhost")]
+        if not others:
+            self.skipTest("no non-loopback local address on this machine")
+
+        for address in others:
+            self.assertTrue(main.is_local_clipboard_request(self.request_from(address)), address)
+
+    def test_other_computers_are_not_local(self):
+        peer = "192.168.6.99"
+        if peer in main.local_client_addresses():
+            self.skipTest("test address is also assigned to this machine")
+
+        self.assertFalse(main.is_local_clipboard_request(self.request_from(peer)))
+        self.assertFalse(main.is_local_clipboard_request(types.SimpleNamespace(client=None)))
+        self.assertFalse(main.is_local_clipboard_request(types.SimpleNamespace()))
+
+    def test_endpoint_rejects_non_local_clients_with_409(self):
+        source = inspect.getsource(main.copy_canvas_image_to_system_clipboard)
+
+        self.assertIn("is_local_clipboard_request(request)", source)
+        self.assertIn("status_code=409", source)
+        # 拒绝必须排在实际写剪贴板之前，否则远端请求会误写服务这台电脑的剪贴板。
+        self.assertLess(source.index("is_local_clipboard_request(request)"), source.index("copy_image_to_system_clipboard"))
 
 
 if __name__ == "__main__":
