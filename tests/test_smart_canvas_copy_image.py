@@ -50,7 +50,7 @@ class SmartCanvasCopyImageTests(unittest.TestCase):
         self.assertIn("closePhotoshopContextMenu();", handler)
         self.assertIn("copyImageToClipboard(nodeId, imageIndex);", handler)
 
-    def test_clipboard_api_then_server_then_native_guide(self):
+    def test_clipboard_api_then_server_then_link_fallback(self):
         body = extract_function(SMART_CANVAS_JS, "copyImageToClipboard")
 
         # 写入必须在点击手势内同步发起，否则 await 之后会丢掉用户激活态。
@@ -60,12 +60,15 @@ class SmartCanvasCopyImageTests(unittest.TestCase):
         self.assertIn("const serverResult = await copyImageToSystemClipboard(nodeId, imageIndex);", body)
         self.assertIn("if(serverResult === 'done'){", body)
         self.assertIn("toast(tr('smart.copyImageDoneLocal'));", body)
-        self.assertIn("openNativeCopyGuide(nodeId, imageIndex, serverResult);", body)
-        # 顺序固定：浏览器剪贴板 API → 服务端本机剪贴板 → 浏览器原生复制引导。
+        self.assertIn("if(await copyImageLinkToClipboard(url)){", body)
+        self.assertIn("toast(tr('smart.copyImageLinkDone'));", body)
+        # 顺序固定：浏览器剪贴板 API → 服务端本机剪贴板 → 复制图片 HTML（局域网其他电脑的兜底）。
         self.assertLess(body.index("copyImageWithClipboardApi(url)"), body.index("copyImageToSystemClipboard(nodeId, imageIndex)"))
-        self.assertLess(body.index("copyImageToSystemClipboard(nodeId, imageIndex)"), body.index("openNativeCopyGuide(nodeId, imageIndex, serverResult)"))
-        # 「复制失败」只能出现在拿不到图片地址的早退分支，不能掩盖「必须走原生菜单」的结论。
-        self.assertEqual(body.count("toast(tr('smart.copyImageFailed'));"), 1)
+        self.assertLess(body.index("copyImageToSystemClipboard(nodeId, imageIndex)"), body.index("copyImageLinkToClipboard(url)"))
+        # 局域网其他电脑不做任何额外操作：不再有引导层/原生菜单提示。
+        self.assertNotIn("openNativeCopyGuide", body)
+        # 「复制失败」只出现在「拿不到图片地址」与「三条路径全部失败」两个收尾分支。
+        self.assertEqual(body.count("toast(tr('smart.copyImageFailed'));"), 2)
 
     def test_clipboard_write_normalises_to_png(self):
         api_body = extract_function(SMART_CANVAS_JS, "copyImageWithClipboardApi")
@@ -112,33 +115,24 @@ class SmartCanvasCopyImageTests(unittest.TestCase):
         self.assertIn("event.stopPropagation();", listener)
         self.assertNotIn("preventDefault", listener)
 
-    def test_native_copy_guide_shows_a_draggable_image(self):
-        guide_start = SMART_CANVAS_HTML.index('id="nativeCopyGuide"')
-        guide_end = SMART_CANVAS_HTML.index('data-native-copy-link')
-        guide_html = SMART_CANVAS_HTML[guide_start:guide_end]
+    def test_no_native_copy_guide_anywhere(self):
+        # 局域网其他电脑不做任何额外操作：引导层（弹窗 + 原生菜单提示）已整体移除。
+        for source in (SMART_CANVAS_JS, SMART_CANVAS_HTML, SMART_CANVAS_CSS, SMART_CANVAS_I18N):
+            self.assertNotIn("nativeCopyGuide", source)
+            self.assertNotIn("native-copy-guide", source)
+        self.assertNotIn("copyImageNative", SMART_CANVAS_I18N)
 
-        # 引导层里必须是真实可拖拽的 <img>：浏览器原生「复制图片」和拖进 Photoshop 都依赖它。
-        self.assertIn('id="nativeCopyGuideImage"', guide_html)
-        self.assertIn('draggable="true"', guide_html)
-        self.assertIn("data-native-copy-close", guide_html)
-        self.assertIn(".native-copy-guide.open", SMART_CANVAS_CSS)
+    def test_link_fallback_inlines_the_image_when_bitmaps_are_impossible(self):
+        body = extract_function(SMART_CANVAS_JS, "copyImageLinkToClipboard")
 
-        body = extract_function(SMART_CANVAS_JS, "openNativeCopyGuide")
-        self.assertIn("guideImage.setAttribute('src', url);", body)
-        self.assertIn("guide.classList.add('open');", body)
-        self.assertIn("guide.setAttribute('aria-hidden', 'false');", body)
-
-    def test_native_guide_link_button_keeps_the_html_link_fallback(self):
-        body = extract_function(SMART_CANVAS_JS, "copyNativeGuideImageLink")
-
-        self.assertIn("await loadImageForClipboardCopy(url)", body)
-        self.assertIn("copyImageWithSelection(imageElement)", body)
-        self.assertIn("toast(tr('smart.copyImageLinkDone'));", body)
-
-        init = extract_function(SMART_CANVAS_JS, "initNativeCopyGuide")
-        self.assertIn("data-native-copy-close", init)
-        self.assertIn("data-native-copy-link", init)
-        self.assertIn("guide.dataset.bound === '1'", init)
+        self.assertIn("if(!url) return false;", body)
+        self.assertIn("await Promise.all([", body)
+        self.assertIn("loadImageForClipboardCopy(url),", body)
+        self.assertIn("imageBlobForClipboardCopy(url).catch(() => null)", body)
+        # 内联成 data URL，粘到文档/笔记里是真图，不依赖原地址可访问。
+        self.assertIn("reader.readAsDataURL(blob);", body)
+        self.assertIn("if(dataUrl) imageElement.src = dataUrl;", body)
+        self.assertIn("return copyImageWithSelection(imageElement);", body)
 
     def test_preview_image_supports_native_drag_to_photoshop(self):
         self.assertIn('<img id="previewCurrentImage" class="preview-current" alt="current" draggable="true">', SMART_CANVAS_HTML)
@@ -154,8 +148,6 @@ class SmartCanvasCopyImageTests(unittest.TestCase):
     def test_i18n_entries_exist_in_both_locales(self):
         for key in (
             "smart.copyImage", "smart.copyImageDone", "smart.copyImageDoneLocal", "smart.copyImageFailed",
-            "smart.copyImageNativeTitle", "smart.copyImageNativeHint", "smart.copyImageNativeAltHint",
-            "smart.copyImageNativeDragHint", "smart.copyImageNativeLink", "smart.copyImageNativeClose",
             "smart.copyImageLinkDone",
         ):
             match = re.search(rf'"{re.escape(key)}":\s*\{{[^}}]*\}}', SMART_CANVAS_I18N)

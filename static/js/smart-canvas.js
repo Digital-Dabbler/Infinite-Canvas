@@ -11351,7 +11351,7 @@ function copyImageWithSelection(image){
 }
 async function copyImageToSystemClipboard(nodeId, imageIndex){
     // 局域网 http 不是安全上下文，浏览器没有图片剪贴板能力，改由服务端写本机剪贴板。
-    // 服务端只能写「运行服务这台电脑」，局域网其他电脑会被拒绝（409）并改走浏览器原生复制引导。
+    // 服务端只能写「运行服务这台电脑」，局域网其他电脑会被拒绝（409）并退化为复制图片 HTML。
     if(!canvasId) return 'failed';
     try {
         const response = await fetch('/api/system-clipboard/image', {
@@ -11387,71 +11387,36 @@ async function copyImageToClipboard(nodeId, imageIndex){
         toast(tr('smart.copyImageDoneLocal'));
         return;
     }
-    // 浏览器（非安全上下文）和服务端（请求来自局域网其他电脑）都写不了剪贴板位图时，
-    // 唯一能写出位图的是浏览器自带的「复制图片」，所以改成引导用户走原生菜单。
-    openNativeCopyGuide(nodeId, imageIndex, serverResult);
-}
-function nativeCopyGuideElement(){
-    return document.getElementById('nativeCopyGuide');
-}
-function closeNativeCopyGuide(){
-    const guide = nativeCopyGuideElement();
-    if(!guide) return;
-    guide.classList.remove('open');
-    guide.setAttribute('aria-hidden', 'true');
-    const image = guide.querySelector('#nativeCopyGuideImage');
-    if(image) image.removeAttribute('src');
-}
-async function copyNativeGuideImageLink(){
-    // 原生菜单之外的兜底：只写 HTML 链接，图文编辑器能粘，Photoshop 不认。
-    const guide = nativeCopyGuideElement();
-    const url = guide?.querySelector('#nativeCopyGuideImage')?.getAttribute('src') || '';
-    if(!url){
-        toast(tr('smart.copyImageFailed'));
+    // 局域网其他电脑：http 页面写不了剪贴板位图，退化为「复制图片」的 HTML 形式（内联 data URL）。
+    // 不弹任何引导层——使用者只需要一个「已复制」的结果，位图能力不可能由服务端补上。
+    if(await copyImageLinkToClipboard(url)){
+        toast(tr('smart.copyImageLinkDone'));
         return;
     }
-    try {
-        const imageElement = await loadImageForClipboardCopy(url);
-        if(copyImageWithSelection(imageElement)){
-            toast(tr('smart.copyImageLinkDone'));
-            return;
-        }
-    } catch(_) {}
     toast(tr('smart.copyImageFailed'));
 }
-function initNativeCopyGuide(){
-    const guide = nativeCopyGuideElement();
-    if(!guide || guide.dataset.bound === '1') return;
-    guide.dataset.bound = '1';
-    guide.addEventListener('click', event => {
-        if(event.target.closest('[data-native-copy-close]')){
-            closeNativeCopyGuide();
-            return;
+async function copyImageLinkToClipboard(url){
+    // 没有位图能力时的兜底：把图片内联成 data URL 放进选区再执行复制，
+    // 粘到 Word/Obsidian/文档里就是真图，但 Photoshop 不认。
+    if(!url) return false;
+    try {
+        const [imageElement, blob] = await Promise.all([
+            loadImageForClipboardCopy(url),
+            imageBlobForClipboardCopy(url).catch(() => null)
+        ]);
+        if(blob && blob.type === 'image/png' && typeof FileReader === 'function'){
+            const dataUrl = await new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+                reader.onerror = () => resolve('');
+                reader.readAsDataURL(blob);
+            });
+            if(dataUrl) imageElement.src = dataUrl;
         }
-        if(event.target.closest('[data-native-copy-link]')) copyNativeGuideImageLink();
-    });
-    document.addEventListener('keydown', event => {
-        if(event.key !== 'Escape') return;
-        if(nativeCopyGuideElement()?.classList.contains('open')) closeNativeCopyGuide();
-    });
-}
-function openNativeCopyGuide(nodeId, imageIndex, reason){
-    const node = nodes.find(item => item.id === nodeId);
-    const image = imageForDisplay(node?.images?.[imageIndex]);
-    const url = image?.url || '';
-    initNativeCopyGuide();
-    const guide = nativeCopyGuideElement();
-    const guideImage = guide?.querySelector('#nativeCopyGuideImage');
-    if(!guide || !guideImage || !url){
-        toast(tr('smart.copyImageFailed'));
-        return;
+        return copyImageWithSelection(imageElement);
+    } catch(_) {
+        return false;
     }
-    if(guideImage.getAttribute('src') !== url) guideImage.setAttribute('src', url);
-    guideImage.dataset.reason = reason || '';
-    guide.classList.add('open');
-    guide.setAttribute('aria-hidden', 'false');
-    if(typeof refreshIcons === 'function') refreshIcons();
-    guide.querySelector('.native-copy-guide-close')?.focus?.();
 }
 // 非安全上下文（http 局域网）里脚本写不进图片剪贴板，浏览器自带的「复制图片」是唯一的位图写入路径。
 // 按住 Alt（或 Ctrl/⌘）右键画布图片时放行事件，让浏览器弹出自己的原生菜单。
