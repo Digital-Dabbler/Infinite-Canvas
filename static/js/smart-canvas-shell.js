@@ -77,6 +77,8 @@
             document.getElementById('rhAccountDepartment').textContent = user.department || '—';
             document.getElementById('rhAccountRole').textContent = user.role === 'admin' ? '管理员' : '普通用户';
             document.getElementById('rhAccountProfile').textContent = user.api_profile_name || '默认配置';
+            const adminEntry = document.getElementById('rhAdminEntry');
+            if(adminEntry) adminEntry.hidden = user.role !== 'admin';
             applyCanvasFontScale(clampCanvasFontScale((user.preferences || {}).canvas_font_scale || 1));
             syncCanvasAccountFontScaleUI();
         } catch(e){}
@@ -347,6 +349,14 @@
     document.getElementById('rhAccountBtn').onclick = event => { event.stopPropagation(); balancePopover.classList.remove('open'); accountPopover.classList.toggle('open'); syncCanvasAccountFontScaleUI(); };
     document.getElementById('rhBalanceBtn').onclick = event => { event.stopPropagation(); accountPopover.classList.remove('open'); balancePopover.classList.toggle('open'); };
     document.getElementById('rhBalanceRefresh').onclick = () => loadBalances(true);
+    // 管理员入口：跳到系统管理后台并携带当前画布地址，后台的“返回”会回到这张画布。
+    document.getElementById('rhAdminEntry')?.addEventListener('click', async event => {
+        event.stopPropagation();
+        closePopovers();
+        try { await saveCanvas(); } catch(e){}
+        const back = `${location.pathname}${location.search}`;
+        location.href = `/static/admin.html?back=${encodeURIComponent(back)}`;
+    });
     shellTitle.onclick = () => {
         if(!canvas) return;
         const title = prompt('画布名称',canvas.title || '');

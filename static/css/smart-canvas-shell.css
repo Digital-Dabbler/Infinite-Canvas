@@ -109,6 +109,10 @@
 .rh-account-font-scale button { height:24px; padding:0 9px; border:1px solid var(--line); border-radius:8px; background:var(--soft); color:var(--muted); font-size:calc(10px * var(--canvas-font-scale, 1)); font-weight:800; cursor:pointer; }
 .rh-account-font-scale button:hover { color:var(--text); border-color:var(--rh-brand); }
 .rh-account-preference-hint { display:block; margin-top:7px; color:var(--faint); font-size:calc(9.5px * var(--canvas-font-scale, 1)); }
+.rh-account-admin { display:flex; align-items:center; justify-content:center; gap:7px; width:100%; margin-top:12px; padding:9px 10px; border:1px solid var(--line); border-radius:10px; background:var(--soft); color:var(--text); font-size:calc(12px * var(--canvas-font-scale, 1)); font-weight:800; cursor:pointer; transition:border-color .16s ease, background .16s ease; }
+.rh-account-admin:hover { border-color:var(--rh-brand); }
+.rh-account-admin svg { width:14px; height:14px; }
+.rh-account-admin[hidden] { display:none; }
 .rh-balance-popover header { display:flex; align-items:center; justify-content:space-between; padding-bottom:10px; border-bottom:1px solid var(--line); }.rh-balance-popover header button { width:30px; height:30px; display:grid; place-items:center; border-radius:9px; background:var(--soft); color:var(--muted); }
 .rh-balance-details { display:grid; gap:7px; padding-top:10px; }.rh-balance-item { display:flex; align-items:center; justify-content:space-between; padding:9px 10px; border-radius:10px; background:var(--soft); font-size:calc(11px * var(--canvas-font-scale, 1)); }.rh-balance-item span { color:var(--muted); }
 .create-menu { width:286px; max-height:calc(100dvh - 24px); padding:6px; overflow:auto; overscroll-behavior:contain; border-radius:14px; background:var(--panel); }.create-menu-grid { grid-template-columns:1fr; gap:2px; }
