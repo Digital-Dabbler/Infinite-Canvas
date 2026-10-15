@@ -17,7 +17,7 @@
   },
   "470": {
     "inputs": {
-      "image": "portrait_model_denim.png"
+      "image": "111.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -72,14 +72,14 @@
   },
   "507": {
     "inputs": {
-      "seed": 891836227295375,
+      "seed": 917273581097979,
       "steps": 25,
       "cfg": 1,
       "sampler_name": "euler",
       "scheduler": "simple",
       "denoise": 1,
       "model": [
-        "509",
+        "512",
         0
       ],
       "positive": [
@@ -116,7 +116,7 @@
   },
   "510": {
     "inputs": {
-      "prompt": "",
+      "prompt": "把上方中间的女性抠出来，透明背景",
       "negative_prompt": "",
       "resolution": 0,
       "clip": [
@@ -135,6 +135,25 @@
     "class_type": "TextEncodeQwenImage21",
     "_meta": {
       "title": "文本编码 Qwen Image 2.1"
+    }
+  },
+  "512": {
+    "inputs": {
+      "attention": "kitchen_int8",
+      "step_cache": "te_predictor",
+      "reuse_threshold": 0.06,
+      "start_percent": 0,
+      "end_percent": 0,
+      "predictor_error_limit": 0.08,
+      "verbose": false,
+      "model": [
+        "509",
+        0
+      ]
+    },
+    "class_type": "TESpeedQwenImage21",
+    "_meta": {
+      "title": "TE-Speed Qwen Image 2.1"
     }
   }
 }
