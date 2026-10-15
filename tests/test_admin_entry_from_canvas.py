@@ -45,9 +45,17 @@ class AdminEntryFromCanvasTests(unittest.TestCase):
         return_end = self.admin_html.index("\n", return_start)
         return_body = self.admin_html[return_start:return_end]
         self.assertIn("const back=canvasBackTarget();if(back){window.location.href=back;return}", return_body)
-        # 没有 back 参数时保持原有“返回工作台”行为。
+        # 嵌在 Studio 外壳面板里时，通过 postMessage 关闭面板，而不是在 iframe 内跳转 '/'。
+        self.assertIn("window.parent.postMessage({type:'studio:close-panel'},location.origin)", return_body)
+        self.assertNotIn("switchUI", return_body)
+        # 独立打开且没有 back 参数时保持原有“返回工作台”行为。
         self.assertIn("window.location.href='/'", return_body)
         self.assertIn("返回画布", self.admin_html)
+
+    def test_shell_header_hidden_for_admin_panel(self):
+        shell_css = (ROOT / "static" / "css" / "studio-shell.css").read_text(encoding="utf-8")
+        # 管理台统一使用自己 masthead 的返回入口，外壳的“返回工作台 + 标题”栏必须隐藏。
+        self.assertIn('.studio-panel-overlay[data-name="admin"] > header { display:none; }', shell_css)
 
     def test_admin_entry_style_respects_hidden(self):
         self.assertIn(".rh-account-admin {", self.shell_css)
