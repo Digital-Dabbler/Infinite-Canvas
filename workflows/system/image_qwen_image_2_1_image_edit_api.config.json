@@ -1,0 +1,19 @@
+{
+  "title": "指定抠图",
+  "fields": [
+    {
+      "id": "source_image",
+      "label": "原图",
+      "type": "image",
+      "node": "470",
+      "input": "image"
+    },
+    {
+      "id": "matting_prompt",
+      "label": "抠图提示词",
+      "type": "prompt",
+      "node": "510",
+      "input": "prompt"
+    }
+  ]
+}

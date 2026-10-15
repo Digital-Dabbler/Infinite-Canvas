@@ -1519,6 +1519,9 @@ function isSmartEraseNode(node){
 function isSmartComfyUpscaleNode(node){
     return Boolean(isSmartImageGenerationNode(node) && node.upscale?.engine === 'comfy');
 }
+function isSmartPromptMattingNode(node){
+    return Boolean(isSmartImageGenerationNode(node) && node.mattingPrompt);
+}
 function isSmartVideoGenerationNode(node){
     return Boolean(node && node.type === 'smart-video-generation');
 }
@@ -12290,11 +12293,14 @@ async function runSmartPromptMatting(sourceNode, imageIndex, promptText){
     created.mattingPrompt = {workflow:SMART_PROMPT_MATTING_WORKFLOW, sourceNodeId:source.id, sourceImageIndex:index, sourceUrl:item.url, prompt};
     created.sourceNodeId = source.id;
     created.runInputRefs = [{...sourceRef}];
+    // 结果节点可重跑：预填本次提示词并把原图挂为手动引用，生成面板据此带上 470 图片与 510 提示词。
+    created.runPrompt = prompt;
+    created.manualInputRefs = [{...sourceRef}];
     created.runSettings = runSettings;
     created.runStartedAt = nowMs();
     created.running = true;
     created.pending = 1;
-    // 与去背景一致：结果是独立节点，不画连线，选中时不打开生成面板。
+    // 结果是独立节点，不画连线；选中时打开生成面板，用 runPrompt + manualInputRefs 还原本次参数与原图。
     selectedId = created.id;
     selectedIds = [];
     selectedImage = {nodeId:'', index:-1};
@@ -12883,7 +12889,7 @@ function render(){
         const imgs = node.images || [];
         const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
         const isErase = isSmartEraseNode(node);
-        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted') : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -12897,7 +12903,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isSmartPromptMattingNode(node) ? 'wand-sparkles' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -14907,6 +14913,7 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
 }
 function smartConnectionNodeLabel(node){
     if(isSmartVideoGenerationNode(node)) return '视频生成';
+    if(isSmartPromptMattingNode(node)) return tr('smart.mattingTargeted');
     if(isSmartBackgroundRemovalNode(node)) return tr('smart.removeBackground');
     if(isSmartEraseNode(node)) return tr('smart.erase');
     if(isSmartComfyUpscaleNode(node)) return tr('smart.comfyUpscaleOutputMain');

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,6 +95,36 @@ class MattingToolbarTests(unittest.TestCase):
         self.assertIn("width:min(540px", self.canvas_css)
         self.assertIn(".composer.matting-hidden {", self.canvas_css)
         self.assertIn("const gap = 14;", self.canvas_js[self.canvas_js.index("function positionMattingPromptPanel"):])
+
+    def test_result_node_title_is_matting(self):
+        # 结果节点标题从「图片生成」改为「指定抠图」：标题链、连接标签与图标均走 isSmartPromptMattingNode。
+        self.assertIn("function isSmartPromptMattingNode(node){", self.canvas_js)
+        self.assertIn("isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted')", self.canvas_js)
+        self.assertIn("if(isSmartPromptMattingNode(node)) return tr('smart.mattingTargeted');", self.canvas_js)
+        self.assertIn("isSmartPromptMattingNode(node) ? 'wand-sparkles'", self.canvas_js)
+
+    def test_result_node_rerun_carries_prompt_and_source_image(self):
+        start = self.canvas_js.index("async function runSmartPromptMatting")
+        body = self.canvas_js[start:start + 4600]
+        # 重跑时生成面板预填提示词并带上原图（manualInputRefs 进入 comfy 自定义工作流 refs）。
+        self.assertIn("created.runPrompt = prompt;", body)
+        self.assertIn("created.manualInputRefs = [{...sourceRef}];", body)
+
+    def test_matting_workflow_config_maps_panel_fields(self):
+        config_path = ROOT / "workflows" / "system" / "image_qwen_image_2_1_image_edit_api.config.json"
+        self.assertTrue(config_path.exists())
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        workflow = json.loads((ROOT / "workflows" / "system" / "image_qwen_image_2_1_image_edit_api.json").read_text(encoding="utf-8"))
+        fields = {field["id"]: field for field in config["fields"]}
+        self.assertEqual(fields["source_image"]["type"], "image")
+        self.assertEqual(fields["matting_prompt"]["type"], "prompt")
+        for field_id in ("source_image", "matting_prompt"):
+            field = fields[field_id]
+            node = workflow.get(field["node"])
+            self.assertIsNotNone(node, f"workflow node {field['node']} missing")
+            self.assertIn(field["input"], node.get("inputs", []), f"{field_id} input not declared on node")
+        self.assertIn("470", workflow)
+        self.assertIn("510", workflow)
 
     def test_css_panel_and_i18n_keys(self):
         self.assertIn(".matting-prompt-panel.open { display:flex; }", self.canvas_css)
