@@ -11019,18 +11019,20 @@ function imageMattingMenuClose(){
     imageMattingMenu.classList.remove('open');
     imageMattingMenu.setAttribute('aria-hidden', 'true');
 }
-// 指定抠图面板：锚定在图片节点下方；目标图片丢失、翻页或切换节点时自动关闭。
+// 指定抠图面板：锚定在图片节点下方、替换原本的生成面板（composer）；目标图片丢失、翻页或切换节点时自动关闭。
 let mattingPromptTarget = null;
 function openMattingPromptPanel(target){
     if(!mattingPromptPanel || !target?.node) return;
     mattingPromptTarget = {nodeId:target.node.id, index:Number(target.index) || 0};
     mattingPromptPanel.classList.add('open');
     mattingPromptPanel.setAttribute('aria-hidden', 'false');
+    composer?.classList.add('matting-hidden');
     positionMattingPromptPanel(target);
     requestAnimationFrame(() => mattingPromptInput?.focus());
 }
 function closeMattingPromptPanel(){
     mattingPromptTarget = null;
+    composer?.classList.remove('matting-hidden');
     if(!mattingPromptPanel) return;
     mattingPromptPanel.classList.remove('open');
     mattingPromptPanel.setAttribute('aria-hidden', 'true');
@@ -11045,14 +11047,15 @@ function positionMattingPromptPanel(target = currentMediaToolbarTarget()){
     if(!nodeEl){ closeMattingPromptPanel(); return; }
     const shellRect = shell.getBoundingClientRect();
     const nodeRect = nodeEl.getBoundingClientRect();
-    const width = mattingPromptPanel.offsetWidth || 340;
+    const width = mattingPromptPanel.offsetWidth || 540;
     const height = mattingPromptPanel.offsetHeight || 150;
+    const gap = 14;
     const edge = 12;
     let left = nodeRect.left - shellRect.left + nodeRect.width / 2 - width / 2;
     left = Math.max(edge, Math.min(shellRect.width - width - edge, left));
-    let top = nodeRect.bottom - shellRect.top + 10;
-    if(top + height > shellRect.height - edge && nodeRect.top - shellRect.top - height - 10 > edge){
-        top = nodeRect.top - shellRect.top - height - 10;
+    let top = nodeRect.bottom - shellRect.top + gap;
+    if(top + height > shellRect.height - edge && nodeRect.top - shellRect.top - height - gap > edge){
+        top = nodeRect.top - shellRect.top - height - gap;
     }
     mattingPromptPanel.style.left = `${Math.round(left)}px`;
     mattingPromptPanel.style.top = `${Math.round(top)}px`;

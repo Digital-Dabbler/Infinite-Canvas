@@ -82,6 +82,19 @@ class MattingToolbarTests(unittest.TestCase):
         # Escape 关闭菜单与面板。
         self.assertIn("closeSmartCanvasShortcuts(); imageMattingMenuClose(); closeMattingPromptPanel(); }", self.canvas_js)
 
+    def test_panel_replaces_composer(self):
+        # 打开面板时隐藏原生成面板（composer），关闭时恢复。
+        start = self.canvas_js.index("function openMattingPromptPanel")
+        body = self.canvas_js[start:start + 500]
+        self.assertIn("composer?.classList.add('matting-hidden')", body)
+        close_start = self.canvas_js.index("function closeMattingPromptPanel")
+        close_body = self.canvas_js[close_start:close_start + 400]
+        self.assertIn("composer?.classList.remove('matting-hidden')", close_body)
+        # 面板与 composer 同宽同位（540px、节点下方 gap 14）。
+        self.assertIn("width:min(540px", self.canvas_css)
+        self.assertIn(".composer.matting-hidden {", self.canvas_css)
+        self.assertIn("const gap = 14;", self.canvas_js[self.canvas_js.index("function positionMattingPromptPanel"):])
+
     def test_css_panel_and_i18n_keys(self):
         self.assertIn(".matting-prompt-panel.open { display:flex; }", self.canvas_css)
         self.assertIn(".image-matting-menu .background-removal-mark", self.canvas_css)
