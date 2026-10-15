@@ -29,6 +29,10 @@ let outpaintRunSettings = null;
 let outpaintFillColor = '#ffffff';
 const imageActionToolbar = document.getElementById('imageActionToolbar');
 const imageUpscaleMenu = document.getElementById('imageUpscaleMenu');
+const imageMattingMenu = document.getElementById('imageMattingMenu');
+const mattingPromptPanel = document.getElementById('mattingPromptPanel');
+const mattingPromptInput = document.getElementById('mattingPromptInput');
+const mattingPromptRun = document.getElementById('mattingPromptRun');
 const workflowGroupToolbar = document.getElementById('workflowGroupToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const photoshopInstallModal = document.getElementById('photoshopInstallModal');
@@ -2907,6 +2911,8 @@ function applyViewport(){
         positionImageActionToolbar();
         positionWorkflowGroupToolbar();
         imageUpscaleMenuClose();
+        imageMattingMenuClose();
+        positionMattingPromptPanel();
         if(uploadResourcePanel && uploadResourcePanel.isOpen()) uploadResourcePanel.reposition();
         // 图片生成 composer 位于 world 内，会随视口变换自然移动；文本节点的
         // 生成面板在独立图层中，因此在每次平移/缩放后按当前节点屏幕位置同步。
@@ -10913,7 +10919,7 @@ function updateImageActionToolbar(){
         const requiredKind = button.dataset.toolbarKind || '';
         button.hidden = Boolean(
             (target && requiredKind && requiredKind !== target.kind)
-            || (action === 'remove-background' && !canRemoveBackground)
+            || (action === 'matting' && !canRemoveBackground)
             || (action === 'erase' && !canRemoveBackground)
         );
         button.disabled = !target || (action === 'upscale' && !upscaleModesAvailable());
@@ -10927,6 +10933,13 @@ function updateImageActionToolbar(){
                 option.disabled = !upscaleModeAvailable(option.dataset.upscaleMode || '');
             });
         }
+    }
+    // 「抠图」下拉与指定抠图面板跟随工具栏目标：目标丢失或切换图片时关闭/重定位。
+    if(!target || target.kind !== 'image'){
+        imageMattingMenuClose();
+        closeMattingPromptPanel();
+    } else if(mattingPromptPanel?.classList.contains('open')){
+        requestAnimationFrame(() => positionMattingPromptPanel(target));
     }
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
 }
@@ -10974,6 +10987,75 @@ function imageUpscaleMenuClose(){
     if(!imageUpscaleMenu) return;
     imageUpscaleMenu.classList.remove('open');
     imageUpscaleMenu.setAttribute('aria-hidden', 'true');
+}
+// 「抠图」悬停菜单：第一项去背景（原流程），第二项指定抠图打开提示词面板。
+function positionImageMattingMenu(){
+    if(!imageMattingMenu || !imageMattingMenu.classList.contains('open')) return;
+    const mattingButton = imageActionToolbar?.querySelector('[data-image-toolbar-action="matting"]');
+    if(!mattingButton) return;
+    const shellRect = shell.getBoundingClientRect();
+    const btnRect = mattingButton.getBoundingClientRect();
+    const width = imageMattingMenu.offsetWidth || 168;
+    const height = imageMattingMenu.offsetHeight || 108;
+    let left = btnRect.left - shellRect.left + btnRect.width / 2 - width / 2;
+    left = Math.max(12, Math.min(shellRect.width - width - 12, left));
+    let top = btnRect.bottom - shellRect.top + 4;
+    if(top + height > shellRect.height - 12 && btnRect.top - shellRect.top - height - 10 > 12){
+        top = btnRect.top - shellRect.top - height - 10;
+    }
+    imageMattingMenu.style.left = `${Math.round(left)}px`;
+    imageMattingMenu.style.top = `${Math.round(top)}px`;
+}
+function imageMattingMenuOpen(){
+    if(!imageMattingMenu) return;
+    const target = currentMediaToolbarTarget();
+    if(!target?.kind || target.kind !== 'image') return;
+    imageMattingMenu.classList.add('open');
+    imageMattingMenu.setAttribute('aria-hidden', 'false');
+    positionImageMattingMenu();
+}
+function imageMattingMenuClose(){
+    if(!imageMattingMenu) return;
+    imageMattingMenu.classList.remove('open');
+    imageMattingMenu.setAttribute('aria-hidden', 'true');
+}
+// 指定抠图面板：锚定在图片节点下方；目标图片丢失、翻页或切换节点时自动关闭。
+let mattingPromptTarget = null;
+function openMattingPromptPanel(target){
+    if(!mattingPromptPanel || !target?.node) return;
+    mattingPromptTarget = {nodeId:target.node.id, index:Number(target.index) || 0};
+    mattingPromptPanel.classList.add('open');
+    mattingPromptPanel.setAttribute('aria-hidden', 'false');
+    positionMattingPromptPanel(target);
+    requestAnimationFrame(() => mattingPromptInput?.focus());
+}
+function closeMattingPromptPanel(){
+    mattingPromptTarget = null;
+    if(!mattingPromptPanel) return;
+    mattingPromptPanel.classList.remove('open');
+    mattingPromptPanel.setAttribute('aria-hidden', 'true');
+}
+function positionMattingPromptPanel(target = currentMediaToolbarTarget()){
+    if(!mattingPromptPanel || !mattingPromptPanel.classList.contains('open')) return;
+    if(!target || target.kind !== 'image' || target.node?.id !== mattingPromptTarget?.nodeId || Number(target.index) !== mattingPromptTarget?.index){
+        closeMattingPromptPanel();
+        return;
+    }
+    const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(target.node.id)}"]`);
+    if(!nodeEl){ closeMattingPromptPanel(); return; }
+    const shellRect = shell.getBoundingClientRect();
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const width = mattingPromptPanel.offsetWidth || 340;
+    const height = mattingPromptPanel.offsetHeight || 150;
+    const edge = 12;
+    let left = nodeRect.left - shellRect.left + nodeRect.width / 2 - width / 2;
+    left = Math.max(edge, Math.min(shellRect.width - width - edge, left));
+    let top = nodeRect.bottom - shellRect.top + 10;
+    if(top + height > shellRect.height - edge && nodeRect.top - shellRect.top - height - 10 > edge){
+        top = nodeRect.top - shellRect.top - height - 10;
+    }
+    mattingPromptPanel.style.left = `${Math.round(left)}px`;
+    mattingPromptPanel.style.top = `${Math.round(top)}px`;
 }
 function currentWorkflowGroupToolbarTarget(){
     const ids = selectedNodeIds();
@@ -11597,7 +11679,8 @@ function runImageToolbarAction(action, mode){
         openAngleControl(node, index);
         return;
     }
-    if(action === 'remove-background'){
+    if(action === 'matting'){
+        // 主按钮默认执行下拉第一项（去背景）。
         runSmartBackgroundRemoval(node, index);
         return;
     }
@@ -11642,15 +11725,20 @@ imageActionToolbar?.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
     imageUpscaleMenuClose();
+    imageMattingMenuClose();
     runImageToolbarAction(button.dataset.imageToolbarAction || '');
 });
-// 「放大」悬停菜单：悬停主按钮弹出双模式选择，移出按钮/菜单后收起。
+// 「放大」「抠图」悬停菜单：悬停主按钮弹出模式选择，移出按钮/菜单后收起。
 imageActionToolbar?.addEventListener('mouseover', event => {
     if(event.target.closest?.('[data-image-toolbar-action="upscale"]')) imageUpscaleMenuOpen();
+    if(event.target.closest?.('[data-image-toolbar-action="matting"]')) imageMattingMenuOpen();
 });
 imageActionToolbar?.addEventListener('mouseout', event => {
     if(event.target.closest?.('[data-image-toolbar-action="upscale"]') && !event.relatedTarget?.closest?.('#imageUpscaleMenu')){
         imageUpscaleMenuClose();
+    }
+    if(event.target.closest?.('[data-image-toolbar-action="matting"]') && !event.relatedTarget?.closest?.('#imageMattingMenu')){
+        imageMattingMenuClose();
     }
 });
 imageUpscaleMenu?.addEventListener('mouseleave', () => imageUpscaleMenuClose());
@@ -11664,6 +11752,29 @@ imageUpscaleMenu?.addEventListener('click', event => {
     if(!target) return;
     imageUpscaleMenuClose();
     runImageToolbarAction('upscale', option.dataset.upscaleMode);
+});
+imageMattingMenu?.addEventListener('mouseleave', () => imageMattingMenuClose());
+imageMattingMenu?.addEventListener('mousedown', event => event.stopPropagation());
+imageMattingMenu?.addEventListener('click', event => {
+    const option = event.target.closest?.('[data-matting-mode]');
+    if(!option) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const target = currentMediaToolbarTarget();
+    if(!target) return;
+    imageMattingMenuClose();
+    if(option.dataset.mattingMode === 'prompt'){
+        openMattingPromptPanel(target);
+        return;
+    }
+    runSmartBackgroundRemoval(target.node, target.index);
+});
+mattingPromptPanel?.addEventListener('mousedown', event => event.stopPropagation());
+mattingPromptPanel?.addEventListener('click', event => event.stopPropagation());
+mattingPromptRun?.addEventListener('click', () => {
+    const target = currentMediaToolbarTarget();
+    if(!target || target.kind !== 'image') return;
+    runSmartPromptMatting(target.node, target.index, String(mattingPromptInput?.value || '').trim());
 });
 const ANGLE_AZIMUTHS = [
     {zh:'正面', en:'front view', onlineZh:'主体正面直视镜头', angle:0}, {zh:'右前', en:'front-right quarter view', onlineZh:'镜头从主体右前方的四分之三视角观察', angle:45},
@@ -12122,6 +12233,109 @@ async function runSmartBackgroundRemoval(sourceNode, imageIndex){
         toast(trf('smart.removeBackgroundFailed', {error:detail}).slice(0, 180));
     } finally {
         smartBackgroundRemovalRequests.delete(requestKey);
+    }
+}
+// 指定抠图：Qwen Image 2.1 编辑工作流，按提示词只抠出指定目标，透明背景输出。
+// 节点 470 是 LoadImage，节点 510 是提示词编码，输出来自 SaveImageAdvanced(461)。
+const SMART_PROMPT_MATTING_WORKFLOW = 'system/image_qwen_image_2_1_image_edit_api.json';
+const smartPromptMattingRequests = new Set();
+function smartPromptMattingRequestKey(node, index, item, prompt){
+    return `${node?.id || ''}:${Number(index) || 0}:${item?.url || ''}:${prompt || ''}`;
+}
+function smartPromptMattingOutputs(result){
+    const sourceItems = Array.isArray(result?.items) ? result.items : [];
+    return resultMediaUrls(result).map((output, index) => {
+        const url = typeof output === 'string' ? output : output?.url || '';
+        if(!url) return null;
+        const source = sourceItems.find(item => String(item?.url || '') === url) || {};
+        return stripImageGenerationMeta(copyMediaSizeFields(source, {
+            url,
+            kind:'image',
+            name:`Matting ${index + 1}.png`,
+            generatedResult:true
+        }));
+    }).filter(item => item?.url);
+}
+async function runSmartPromptMatting(sourceNode, imageIndex, promptText){
+    const prompt = String(promptText || '').trim();
+    if(!prompt){
+        toast(tr('smart.mattingNeedPrompt'));
+        return;
+    }
+    const source = liveSmartNode(sourceNode) || sourceNode;
+    const index = Number.isFinite(Number(imageIndex)) ? Number(imageIndex) : smartNodeToolbarImageIndex(source);
+    const item = imageForDisplay(source?.images?.[index]);
+    if(!source || !item?.url || mediaKindForItem(item) !== 'image'){
+        toast(tr('smart.removeBackgroundNeedImage'));
+        return;
+    }
+    const requestKey = smartPromptMattingRequestKey(source, index, item, prompt);
+    if(smartPromptMattingRequests.has(requestKey)) return;
+    smartPromptMattingRequests.add(requestKey);
+    pushUndo();
+    const rect = nodeRect(source);
+    const created = createImageGenerationNode({x:rect.x + rect.width + 200, y:rect.y + 118}, {
+        skipUndo:true,
+        select:true,
+        deferRender:true,
+        deferSave:true,
+        settingsMemory:false
+    });
+    const sourceRef = {url:item.url, name:item.name || smartImageNameFromUrl(item.url), kind:'image', nodeId:source.id, imageIndex:index};
+    const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_PROMPT_MATTING_WORKFLOW, apiKind:'image'};
+    created.title = tr('smart.mattingTargetedRunning');
+    created.mattingPrompt = {workflow:SMART_PROMPT_MATTING_WORKFLOW, sourceNodeId:source.id, sourceImageIndex:index, sourceUrl:item.url, prompt};
+    created.sourceNodeId = source.id;
+    created.runInputRefs = [{...sourceRef}];
+    created.runSettings = runSettings;
+    created.runStartedAt = nowMs();
+    created.running = true;
+    created.pending = 1;
+    // 与去背景一致：结果是独立节点，不画连线，选中时不打开生成面板。
+    selectedId = created.id;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    render();
+    updateComposer();
+    scheduleSave();
+    closeMattingPromptPanel();
+    const run = {nodeId:created.id, nodeType:created.type, kind:'image', settings:runSettings, prompt, refs:[sourceRef]};
+    const startedAt = nowMs();
+    try {
+        const inputName = await comfyNameForRef(sourceRef);
+        const result = await runQueuedSmartComfyGenerate({
+            workflow_json:SMART_PROMPT_MATTING_WORKFLOW,
+            params:{'470':{image:inputName}, '510':{prompt}},
+            type:'matting',
+            client_id:smartClientId
+        });
+        const outputs = smartPromptMattingOutputs(result);
+        if(!outputs.length) throw new Error(tr('smart.errComfyEmpty'));
+        const live = liveSmartNode(created) || created;
+        live.images = outputs;
+        live.activeImageIndex = 0;
+        live.title = tr('smart.mattingTargeted');
+        live.outputKind = 'image';
+        live.runFinishedAt = nowMs();
+        markSmartNodeComplete(live);
+        addSmartGenerationLog({run, outputs, runMs:nowMs() - startedAt});
+        selectedId = live.id;
+        selectedImage = {nodeId:live.id, index:0};
+        render();
+        scheduleSave();
+        toast(tr('smart.mattingTargetedDone'));
+    } catch(error){
+        const live = liveSmartNode(created) || created;
+        const detail = String(error?.message || error || tr('smart.errRunFailed')).slice(0, 600);
+        live.title = tr('smart.mattingTargetedFailedTitle');
+        live.lastRunError = detail;
+        markSmartNodeFailedIfIdle(live, detail);
+        addSmartGenerationLog({run, runMs:nowMs() - startedAt, error:detail});
+        render();
+        scheduleSave();
+        toast(trf('smart.mattingTargetedFailed', {error:detail}).slice(0, 180));
+    } finally {
+        smartPromptMattingRequests.delete(requestKey);
     }
 }
 // ComfyUI 本地放大：使用 system/2K高清放大-Klein 9B-api.json 工作流。
@@ -25421,7 +25635,7 @@ document.addEventListener('click', event => {
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
 });
 document.addEventListener('keydown', event => {
-    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); }
+    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); imageMattingMenuClose(); closeMattingPromptPanel(); }
 });
 function cropDragModeFromPointer(event){
     const explicit = event.target.closest?.('[data-crop-handle]')?.dataset?.cropHandle;

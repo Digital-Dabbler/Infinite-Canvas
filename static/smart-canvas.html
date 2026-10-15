@@ -130,7 +130,7 @@
         </section>
         <div id="imageActionToolbar" class="image-action-toolbar" aria-label="媒体工具">
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="edit" title="图片编辑"><i data-lucide="sparkles"></i><span>图片编辑</span></button>
-            <button type="button" class="image-toolbar-remove-background" data-toolbar-kind="image" data-image-toolbar-action="remove-background" title="去背景" data-i18n-title="smart.removeBackground"><span class="background-removal-mark" aria-hidden="true"></span><span data-i18n="smart.removeBackground">去背景</span></button>
+            <button type="button" class="image-toolbar-remove-background" data-toolbar-kind="image" data-image-toolbar-action="matting" title="抠图" data-i18n-title="smart.matting"><span class="background-removal-mark" aria-hidden="true"></span><span data-i18n="smart.matting">抠图</span></button>
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="outpaint" title="扩图"><i data-lucide="expand"></i><span>扩图</span></button>
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="erase" title="擦除" data-i18n-title="smart.erase"><i data-lucide="eraser"></i><span data-i18n="smart.erase">擦除</span></button>
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="upscale" title="放大"><i data-lucide="maximize-2"></i><span>放大</span></button>
@@ -149,6 +149,16 @@
             <div class="image-upscale-menu-title" data-i18n="smart.upscaleMode">放大方式</div>
             <button type="button" class="upscale-mode-option" data-upscale-mode="jimeng" role="menuitem" data-i18n="smart.upscaleModeJimeng" data-i18n-title="smart.upscaleModeJimengHint" title="使用即梦 image_upscale 超分"><i data-lucide="sparkles"></i><span>即梦</span></button>
             <button type="button" class="upscale-mode-option" data-upscale-mode="comfy" role="menuitem" data-i18n="smart.upscaleModeComfy" data-i18n-title="smart.upscaleModeComfyHint" title="使用本地 ComfyUI 放大工作流"><i data-lucide="cpu"></i><span>ComfyUI</span></button>
+        </div>
+        <div id="imageMattingMenu" class="image-upscale-menu image-matting-menu" role="menu" aria-label="抠图方式" aria-hidden="true">
+            <div class="image-upscale-menu-title" data-i18n="smart.mattingMode">抠图方式</div>
+            <button type="button" class="upscale-mode-option" data-matting-mode="background" role="menuitem" data-i18n-title="smart.backgroundRemovalHint" title="透明背景结果，可继续处理或连接下游生成"><span class="background-removal-mark" aria-hidden="true"></span><span data-i18n="smart.removeBackground">去背景</span></button>
+            <button type="button" class="upscale-mode-option" data-matting-mode="prompt" role="menuitem" data-i18n-title="smart.mattingTargetedHint" title="按提示词指定要抠出的目标，透明背景输出"><i data-lucide="wand-sparkles"></i><span data-i18n="smart.mattingTargeted">指定抠图</span></button>
+        </div>
+        <div id="mattingPromptPanel" class="matting-prompt-panel" role="dialog" aria-label="指定抠图" aria-hidden="true">
+            <div class="matting-prompt-guide"><i data-lucide="lightbulb"></i><span data-i18n="smart.mattingGuide">提示词案例“抠出【左上方传黑色背心的男性】，透明背景”，将【左上方传黑色背心的男性】替换成自己想要抠出的目标，尽可能的准确描述</span></div>
+            <textarea id="mattingPromptInput" rows="3" placeholder="输入抠图提示词" data-i18n-placeholder="smart.mattingPromptPlaceholder"></textarea>
+            <div class="matting-prompt-actions"><button id="mattingPromptRun" type="button" data-i18n="smart.mattingRun">运行</button></div>
         </div>
         <div id="angleControlModal" class="angle-control-modal" role="dialog" aria-modal="true" aria-labelledby="angleControlTitle" aria-hidden="true">
             <section class="angle-control-panel">
