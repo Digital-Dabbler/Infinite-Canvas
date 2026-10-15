@@ -3,7 +3,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-GUIDE_TEXT = "提示词案例“抠出【左上方传黑色背心的男性】，透明背景”，将【左上方传黑色背心的男性】替换成自己想要抠出的目标，尽可能的准确描述"
+GUIDE_TEXT = "提示词案例“抠出【左上方穿黑色背心的男性】，透明背景”，将【左上方穿黑色背心的男性】替换成自己想要抠出的目标，尽可能的准确描述"
 
 
 class MattingToolbarTests(unittest.TestCase):
