@@ -16,6 +16,9 @@ __pycache__/
 # Runtime generation history
 history.json
 
+# 每日重启任务的运行日志（本机运行时产生）
+logs/daily_restart.log
+
 # Local agent skills and lock files
 .agents/
 skills-lock.json
