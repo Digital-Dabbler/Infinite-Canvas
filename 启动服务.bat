@@ -1,4 +1,5 @@
 @echo off
+title Infinite Canvas
 cd /d "%~dp0"
 
 set "PYEXE=%~dp0python\python.exe"
@@ -14,9 +15,11 @@ echo Local: http://127.0.0.1:3000/
 echo Press Ctrl+C to stop.
 echo.
 
-start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 3; Start-Process '%APP_URL%'"
+rem Daily restart (tools\daily-restart) sets IC_NO_BROWSER=1 to start silently.
+if not defined IC_NO_BROWSER start "" /b powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 3; Start-Process '%APP_URL%'"
 "%PYEXE%" main.py
 
 echo.
 echo Server stopped.
-pause
+rem Daily restart starts the server with IC_NO_BROWSER=1: no pause, so the window closes by itself.
+if not defined IC_NO_BROWSER pause
