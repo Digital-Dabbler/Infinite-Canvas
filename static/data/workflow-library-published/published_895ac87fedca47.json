@@ -1,0 +1,15 @@
+{
+  "name": "改变渲染风格",
+  "owner_id": "44cd4a316277481b9dfc9124293fc0a8",
+  "owner_name": "系统管理员",
+  "node_count": 4,
+  "connection_count": 3,
+  "resource_count": 28,
+  "created_at": 1793253822192,
+  "updated_at": 1793253786796,
+  "id": "published_895ac87fedca47",
+  "source_workflow_id": "workflow_54fa4dc8103047",
+  "archive_url": "/static/workflow-library/published/published_895ac87fedca47.zip",
+  "cover_url": "/static/images/workflow-library/published/published_895ac87fedca47_cover.webp",
+  "published_at": 1793253822192
+}
