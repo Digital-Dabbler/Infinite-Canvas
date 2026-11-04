@@ -1,7 +1,7 @@
 {
   "157": {
     "inputs": {
-      "image": "__infinite_canvas_input_required__.png"
+      "image": "01e37476e8417cb62e1740d80b4a0ccce4d7f2622556ab-sQW1LO.jpg"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -399,6 +399,7 @@
   "193": {
     "inputs": {
       "shift": 3,
+      "sampling": "flow",
       "model": [
         "192",
         0
@@ -508,7 +509,11 @@
       "KV缓存V类型": "默认(F16)",
       "MoE专家上CPU": false,
       "前N层专家上CPU": 0,
-      "Qwen3.8推理强度": "xhigh"
+      "Qwen3.8推理强度": "xhigh",
+      "MTP推测解码": "关闭",
+      "MTP草稿token数": 2,
+      "Flash Attention": "不开启",
+      "MTP草稿模型": "无"
     },
     "class_type": "QwenTE_ModelLoader",
     "_meta": {
