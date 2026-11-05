@@ -205,6 +205,36 @@ class SmartCanvasOnlyTests(unittest.TestCase):
             "",
         )
 
+    def test_comfy_execution_failure_detail_reports_node_error_without_tensor_dump(self):
+        tensor_text = "tensor([[[[0.2314, 0.1804, 0.2902], [0.2353, 0.1765, 0.3020]]]])"
+        payload = {
+            "node_id": "7",
+            "node_type": "Mask_Remove_bg2",
+            "exception_type": "RuntimeError",
+            "exception_message": (
+                "Error in image processing: Error in Inspyrenet processing: "
+                "cannot import name 'median_blur' from 'albucore'"
+            ),
+            "current_inputs": {"image": [tensor_text * 200]},
+            "current_outputs": {"image": [tensor_text * 200]},
+            "traceback": ["Traceback (most recent call last):", tensor_text * 200],
+        }
+        detail = main.comfy_history_execution_failure({
+            "status": {"messages": [["execution_error", payload]]},
+        })
+        self.assertIn("node 7", detail)
+        self.assertIn("Mask_Remove_bg2", detail)
+        self.assertIn("RuntimeError", detail)
+        self.assertIn("median_blur", detail)
+        self.assertNotIn("tensor(", detail)
+        self.assertLessEqual(len(detail), main.COMFY_EXECUTION_ERROR_TEXT_LIMIT)
+
+    def test_comfy_execution_failure_detail_handles_plain_payload(self):
+        detail = main.comfy_history_execution_failure({
+            "status": {"messages": [["execution_error", "plain backend failure"]]},
+        })
+        self.assertIn("plain backend failure", detail)
+
     def test_comfy_execution_failover_walks_all_remaining_backends(self):
         self.assertEqual(
             main.comfy_execution_retry_backends(["first:8188", "second:8188", "third:8188"], "first:8188"),

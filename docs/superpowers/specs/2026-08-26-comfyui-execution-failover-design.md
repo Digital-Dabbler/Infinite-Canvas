@@ -23,6 +23,8 @@ If no backend produces an output, return the most useful ComfyUI error collected
 
 Task timing metadata will retain the existing `submission_attempts` fields and add execution-stage retry attempts with backend, prompt ID, elapsed time, and sanitized ComfyUI error detail. The final task will retain the successful backend, or the aggregated failure detail if all configured backends fail.
 
+The aggregated failure detail must identify the failing node and exception, for example `node 7 (Mask_Remove_bg2) RuntimeError: cannot import name 'median_blur' from 'albucore'`. It must not serialize `current_inputs`, `current_outputs`, or full tracebacks: those fields can contain entire image tensors and currently displace the actionable exception message in the 1200-character response.
+
 ## Validation
 
 - Add focused unit coverage for a first backend that reports an eligible execution failure and a later backend that succeeds.

@@ -6791,6 +6791,51 @@ def collect_comfy_file_items(node_output):
                 items.append((key, item))
     return items
 
+COMFY_EXECUTION_ERROR_TEXT_LIMIT = 800
+
+def comfy_execution_error_detail(payload, kind):
+    """Render a ComfyUI execution error without dumping tensor/input payloads."""
+    if isinstance(payload, str):
+        stripped = payload.strip()
+        if stripped.startswith("{"):
+            try:
+                payload = json.loads(stripped)
+            except Exception:
+                pass
+    if isinstance(payload, dict):
+        node_id = str(payload.get("node_id") or "").strip()
+        node_type = str(payload.get("node_type") or "").strip()
+        exception_type = str(
+            payload.get("exception_type") or payload.get("exception") or ""
+        ).strip()
+        message = payload.get("exception_message") or payload.get("message") or ""
+        if not message:
+            traceback_lines = payload.get("traceback")
+            if isinstance(traceback_lines, list) and traceback_lines:
+                message = traceback_lines[-1]
+        if not isinstance(message, str):
+            try:
+                message = json.dumps(message, ensure_ascii=False)
+            except Exception:
+                message = str(message)
+        message = " ".join(message.split())
+        target = " ".join(part for part in (
+            f"node {node_id}" if node_id else "",
+            f"({node_type})" if node_type else "",
+        ) if part)
+        if target or message:
+            detail = " ".join(part for part in (
+                target or "ComfyUI",
+                f"{exception_type}:" if exception_type else "",
+                message,
+            ) if part)
+            return detail[:COMFY_EXECUTION_ERROR_TEXT_LIMIT]
+    try:
+        detail = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        detail = str(payload)
+    return detail[:COMFY_EXECUTION_ERROR_TEXT_LIMIT] or kind
+
 def comfy_history_execution_failure(history_data):
     """Return an explicit ComfyUI execution error eligible for backend retry."""
     status = history_data.get("status") if isinstance(history_data, dict) else {}
@@ -6802,11 +6847,7 @@ def comfy_history_execution_failure(history_data):
         payload = message[1] if len(message) > 1 else ""
         if kind not in {"execution_error", "execution_exception"}:
             continue
-        try:
-            detail = json.dumps(payload, ensure_ascii=False, sort_keys=True)
-        except Exception:
-            detail = str(payload)
-        return detail[:1200] or kind
+        return comfy_execution_error_detail(payload, kind)
     return ""
 
 def comfy_execution_retry_backends(candidate_backends, failed_backend):
