@@ -1,0 +1,268 @@
+{
+  "1": {
+    "inputs": {
+      "image": "image (35).png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  },
+  "2": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  },
+  "3": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  },
+  "9": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  },
+  "10": {
+    "inputs": {
+      "seed": 423099591885332,
+      "steps": 25,
+      "cfg": 3,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "81",
+        0
+      ],
+      "positive": [
+        "82",
+        0
+      ],
+      "negative": [
+        "82",
+        1
+      ],
+      "latent_image": [
+        "82",
+        2
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "K采样器",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  },
+  "11": {
+    "inputs": {
+      "device": "auto",
+      "dtype": "default",
+      "model": [
+        "73",
+        0
+      ]
+    },
+    "class_type": "QwenImage21Cache",
+    "_meta": {
+      "title": "Qwen Image 2.1 缓存",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  },
+  "17": {
+    "inputs": {
+      "samples": [
+        "10",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  },
+  "73": {
+    "inputs": {
+      "lora_name": "Qwen 2.1\\心宝强化抠图.safetensors",
+      "strength_model": 0.5,
+      "model": [
+        "2",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoRA加载器（仅模型）"
+    }
+  },
+  "74": {
+    "inputs": {
+      "rule": "像素级描述（by:阿丹）",
+      "custom_rule": true,
+      "custom_rule_content": "帮我描述图片中的主体的材质，最重要的是讲明白，哪些材质是半透明，哪些材质是不透明的，直接说“产品的xxxxxx”另外，最后说明边缘一定实心的，因为边缘的反射菲尼尔现象，边缘一定呈现实心完整的状态，如果产品内部有物体，也要说明内部的物体是实心还是透明的，比如说玻璃杯内部有一个水果，那么玻璃杯是透明，但是水果是不透明，除了产品外不描述周围的任务物体或背景",
+      "user_prompt": "",
+      "vlm_service": "阿里云百炼/qwen3.8-27b",
+      "ollama_auto_unload": true,
+      "seed": 622523227153026,
+      "image": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ImageCaptionNode",
+    "_meta": {
+      "title": "✨图像反推提示词"
+    }
+  },
+  "75": {
+    "inputs": {
+      "string_a": [
+        "76",
+        0
+      ],
+      "string_b": [
+        "74",
+        0
+      ],
+      "delimiter": ""
+    },
+    "class_type": "StringConcatenate",
+    "_meta": {
+      "title": "连接"
+    }
+  },
+  "76": {
+    "inputs": {
+      "value": "Xinbao，抠出【产品】，严格保持该产品在原图中的位置、构图、尺寸、比例、朝向、视角以及所有未遮挡细节完全不变，准确保留该产品的透明度、半透明部分、透光效果、折射、反射、高光、表面纹理与内部结构；彻底移除背景、接触面、投影、手部以及所有不属于该产品的遮挡物；若该产品局部被手或物体遮挡，则仅依据该产品可见结构补全画面范围内被遮挡的产品部分，并与未遮挡部分自然连续衔接；最终只保留完整产品，输出带真实Alpha透明通道的透明背景PNG，产品外区域Alpha值为0，不以白底、黑底、灰底或棋盘格代替透明。"
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "字符串（多行）"
+    }
+  },
+  "77": {
+    "inputs": {
+      "compare_view": {
+        "__value__": [
+          "",
+          ""
+        ]
+      },
+      "image_a": [
+        "1",
+        0
+      ],
+      "image_b": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "ImageCompare",
+    "_meta": {
+      "title": "图像对比"
+    }
+  },
+  "78": {
+    "inputs": {
+      "filename_prefix": "抠图",
+      "images": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "80": {
+    "inputs": {
+      "source": [
+        "74",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "预览任意"
+    }
+  },
+  "81": {
+    "inputs": {
+      "attention": "kitchen_int8",
+      "step_cache": "te_predictor",
+      "reuse_threshold": 0.06,
+      "start_percent": 0,
+      "end_percent": 0,
+      "predictor_error_limit": 0.08,
+      "verbose": false,
+      "model": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "TESpeedQwenImage21",
+    "_meta": {
+      "title": "TE-Speed Qwen Image 2.1"
+    }
+  },
+  "82": {
+    "inputs": {
+      "prompt": [
+        "75",
+        0
+      ],
+      "negative_prompt": "",
+      "resolution": 1024,
+      "clip": [
+        "3",
+        0
+      ],
+      "images.image_1": [
+        "1",
+        0
+      ],
+      "vae": [
+        "9",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21",
+    "_meta": {
+      "title": "文本编码 Qwen Image 2.1",
+      "cnr_id": "comfy-core",
+      "ver": "0.37.0"
+    }
+  }
+}

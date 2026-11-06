@@ -1522,6 +1522,10 @@ function isSmartComfyUpscaleNode(node){
 function isSmartPromptMattingNode(node){
     return Boolean(isSmartImageGenerationNode(node) && node.mattingPrompt);
 }
+// 半透明产品：心宝3S 半透明抠图工作流的固定结果节点，与去背景一样是独立结果节点（不可重跑）。
+function isSmartTranslucentMattingNode(node){
+    return Boolean(isSmartImageGenerationNode(node) && node.translucentMatting);
+}
 function isSmartVideoGenerationNode(node){
     return Boolean(node && node.type === 'smart-video-generation');
 }
@@ -1554,8 +1558,8 @@ function isCanvasOrganizerNode(node){
     return isWorkflowOrganizerNode(node) || isSmartNoteNode(node);
 }
 function isSmartRunnableNode(node){
-    // 上传节点只是素材入口；去背景/擦除/放大节点是已完成的媒体结果，不能再次作为普通生成节点运行。
-    return Boolean(isSmartGenerationNode(node) && !isSmartBackgroundRemovalNode(node) && !isSmartEraseNode(node) && !isSmartComfyUpscaleNode(node));
+    // 上传节点只是素材入口；去背景/半透明产品/擦除/放大节点是已完成的媒体结果，不能再次作为普通生成节点运行。
+    return Boolean(isSmartGenerationNode(node) && !isSmartBackgroundRemovalNode(node) && !isSmartTranslucentMattingNode(node) && !isSmartEraseNode(node) && !isSmartComfyUpscaleNode(node));
 }
 function isHistoryGroupNode(node){
     return Boolean(isSmartImageNode(node) && (node.isHistoryGroup || node.historyFor));
@@ -10861,7 +10865,7 @@ function imageTaskRecoverBodyHtml(node, task, layout){
 }
 function failedGenerationOverlayHtml(node){
     const error = String(node?.lastRunError || tr('smart.errRunFailed')).replace(/\s+/g, ' ').trim();
-    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : node?.erase ? tr('smart.eraseFailedTitle') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleFailedTitle') : tr('smart.errRunFailed');
+    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : node?.translucentMatting ? tr('smart.translucentProductFailedTitle') : node?.erase ? tr('smart.eraseFailedTitle') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleFailedTitle') : tr('smart.errRunFailed');
     return `<div class="generation-failed-overlay" role="status"><i data-lucide="circle-alert"></i><span>${escapeHtml(title)}</span><small title="${escapeAttr(error)}">${escapeHtml(error)}</small></div>`;
 }
 function smartNodeToolbarImageIndex(node){
@@ -10991,7 +10995,7 @@ function imageUpscaleMenuClose(){
     imageUpscaleMenu.classList.remove('open');
     imageUpscaleMenu.setAttribute('aria-hidden', 'true');
 }
-// 「抠图」悬停菜单：第一项去背景（原流程），第二项指定抠图打开提示词面板。
+// 「抠图」悬停菜单：去背景（原流程）、半透明产品（心宝3S 工作流）、指定抠图（打开提示词面板）。
 function positionImageMattingMenu(){
     if(!imageMattingMenu || !imageMattingMenu.classList.contains('open')) return;
     const mattingButton = imageActionToolbar?.querySelector('[data-image-toolbar-action="matting"]');
@@ -11773,6 +11777,10 @@ imageMattingMenu?.addEventListener('click', event => {
         openMattingPromptPanel(target);
         return;
     }
+    if(option.dataset.mattingMode === 'translucent'){
+        runSmartTranslucentMatting(target.node, target.index);
+        return;
+    }
     runSmartBackgroundRemoval(target.node, target.index);
 });
 mattingPromptPanel?.addEventListener('mousedown', event => event.stopPropagation());
@@ -12239,6 +12247,102 @@ async function runSmartBackgroundRemoval(sourceNode, imageIndex){
         toast(trf('smart.removeBackgroundFailed', {error:detail}).slice(0, 180));
     } finally {
         smartBackgroundRemovalRequests.delete(requestKey);
+    }
+}
+// 半透明产品：心宝3S 半透明抠图工作流。节点 1 是 LoadImage，反推提示词与固定抠图指令由工作流内部拼接，
+// 因此这里只注入图片；结果与去背景一样是独立结果节点（不连线、不打开生成面板）。
+const SMART_TRANSLUCENT_MATTING_WORKFLOW = 'system/心宝3S半透明抠图_api.json';
+const smartTranslucentMattingRequests = new Set();
+function smartTranslucentMattingRequestKey(node, index, item){
+    return `${node?.id || ''}:${Number(index) || 0}:${item?.url || ''}`;
+}
+function smartTranslucentMattingOutputs(result){
+    const sourceItems = Array.isArray(result?.items) ? result.items : [];
+    return resultMediaUrls(result).map((output, index) => {
+        const url = typeof output === 'string' ? output : output?.url || '';
+        if(!url) return null;
+        const source = sourceItems.find(item => String(item?.url || '') === url) || {};
+        return stripImageGenerationMeta(copyMediaSizeFields(source, {
+            url,
+            kind:'image',
+            name:`Translucent ${index + 1}.png`,
+            generatedResult:true
+        }));
+    }).filter(item => item?.url);
+}
+async function runSmartTranslucentMatting(sourceNode, imageIndex){
+    const source = liveSmartNode(sourceNode) || sourceNode;
+    const index = Number.isFinite(Number(imageIndex)) ? Number(imageIndex) : smartNodeToolbarImageIndex(source);
+    const item = imageForDisplay(source?.images?.[index]);
+    if(!source || !item?.url || mediaKindForItem(item) !== 'image'){
+        toast(tr('smart.removeBackgroundNeedImage'));
+        return;
+    }
+    const requestKey = smartTranslucentMattingRequestKey(source, index, item);
+    if(smartTranslucentMattingRequests.has(requestKey)) return;
+    smartTranslucentMattingRequests.add(requestKey);
+    pushUndo();
+    const rect = nodeRect(source);
+    const created = createImageGenerationNode({x:rect.x + rect.width + 200, y:rect.y + 118}, {
+        skipUndo:true,
+        select:true,
+        deferRender:true,
+        deferSave:true,
+        settingsMemory:false
+    });
+    const sourceRef = {url:item.url, name:item.name || smartImageNameFromUrl(item.url), kind:'image', nodeId:source.id, imageIndex:index};
+    const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_TRANSLUCENT_MATTING_WORKFLOW, apiKind:'image'};
+    created.title = tr('smart.translucentProductRunning');
+    created.translucentMatting = {workflow:SMART_TRANSLUCENT_MATTING_WORKFLOW, sourceNodeId:source.id, sourceImageIndex:index, sourceUrl:item.url};
+    created.sourceNodeId = source.id;
+    created.runInputRefs = [{...sourceRef}];
+    created.runSettings = runSettings;
+    created.runStartedAt = nowMs();
+    created.running = true;
+    created.pending = 1;
+    selectedId = created.id;
+    selectedIds = [];
+    selectedImage = {nodeId:'', index:-1};
+    render();
+    updateComposer();
+    scheduleSave();
+    const run = {nodeId:created.id, nodeType:created.type, kind:'image', settings:runSettings, prompt:'', refs:[sourceRef]};
+    const startedAt = nowMs();
+    try {
+        const inputName = await comfyNameForRef(sourceRef);
+        const result = await runQueuedSmartComfyGenerate({
+            workflow_json:SMART_TRANSLUCENT_MATTING_WORKFLOW,
+            params:{'1':{image:inputName}},
+            type:'translucent-matting',
+            client_id:smartClientId
+        });
+        const outputs = smartTranslucentMattingOutputs(result);
+        if(!outputs.length) throw new Error(tr('smart.errComfyEmpty'));
+        const live = liveSmartNode(created) || created;
+        live.images = outputs;
+        live.activeImageIndex = 0;
+        live.title = tr('smart.translucentProduct');
+        live.outputKind = 'image';
+        live.runFinishedAt = nowMs();
+        markSmartNodeComplete(live);
+        addSmartGenerationLog({run, outputs, runMs:nowMs() - startedAt});
+        selectedId = live.id;
+        selectedImage = {nodeId:live.id, index:0};
+        render();
+        scheduleSave();
+        toast(tr('smart.translucentProductDone'));
+    } catch(error){
+        const live = liveSmartNode(created) || created;
+        const detail = String(error?.message || error || tr('smart.errRunFailed')).slice(0, 600);
+        live.title = tr('smart.translucentProductFailedTitle');
+        live.lastRunError = detail;
+        markSmartNodeFailedIfIdle(live, detail);
+        addSmartGenerationLog({run, runMs:nowMs() - startedAt, error:detail});
+        render();
+        scheduleSave();
+        toast(trf('smart.translucentProductFailed', {error:detail}).slice(0, 180));
+    } finally {
+        smartTranslucentMattingRequests.delete(requestKey);
     }
 }
 // 指定抠图：Qwen Image 2.1 编辑工作流，按提示词只抠出指定目标，透明背景输出。
@@ -12888,8 +12992,9 @@ function render(){
         if(isCanvasOrganizerNode(node)) return {node, html:canvasOrganizerHtml(node)};
         const imgs = node.images || [];
         const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
+        const isTranslucentMatting = isSmartTranslucentMattingNode(node);
         const isErase = isSmartEraseNode(node);
-        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted') : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted') : isTranslucentMatting ? tr('smart.translucentProduct') : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -12903,7 +13008,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isSmartPromptMattingNode(node) ? 'wand-sparkles' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isSmartPromptMattingNode(node) ? 'wand-sparkles' : isTranslucentMatting ? 'droplets' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -12913,7 +13018,7 @@ function render(){
         // anchored to that card.
         const renderedNodeHeight = layout.height;
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr('smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isTranslucentMatting ? escapeHtml(tr('smart.translucentProductNodeHint')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr('smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${isSmart3dDirectorNode(node) ? 'director3d-node' : ''} ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
@@ -14914,6 +15019,7 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
 function smartConnectionNodeLabel(node){
     if(isSmartVideoGenerationNode(node)) return '视频生成';
     if(isSmartPromptMattingNode(node)) return tr('smart.mattingTargeted');
+    if(isSmartTranslucentMattingNode(node)) return tr('smart.translucentProduct');
     if(isSmartBackgroundRemovalNode(node)) return tr('smart.removeBackground');
     if(isSmartEraseNode(node)) return tr('smart.erase');
     if(isSmartComfyUpscaleNode(node)) return tr('smart.comfyUpscaleOutputMain');

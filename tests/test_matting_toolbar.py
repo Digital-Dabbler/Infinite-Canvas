@@ -27,9 +27,47 @@ class MattingToolbarTests(unittest.TestCase):
     def test_matting_menu_has_background_first_then_prompt(self):
         menu_start = self.canvas_html.index('id="imageMattingMenu"')
         menu = self.canvas_html[menu_start:self.canvas_html.index("</div>", menu_start + 400)]
-        self.assertLess(menu.index('data-matting-mode="background"'), menu.index('data-matting-mode="prompt"'))
+        self.assertLess(menu.index('data-matting-mode="background"'), menu.index('data-matting-mode="translucent"'))
+        self.assertLess(menu.index('data-matting-mode="translucent"'), menu.index('data-matting-mode="prompt"'))
         self.assertIn("去背景", menu)
+        self.assertIn("半透明产品", menu)
         self.assertIn("指定抠图", menu)
+
+    def test_translucent_product_runs_xinbao_workflow(self):
+        # 第三种抠图方式“半透明产品”接心宝3S 工作流，走 LoadImage 节点 1。
+        self.assertIn(
+            "const SMART_TRANSLUCENT_MATTING_WORKFLOW = 'system/心宝3S半透明抠图_api.json';",
+            self.canvas_js,
+        )
+        self.assertTrue((ROOT / "workflows" / "system" / "心宝3S半透明抠图_api.json").exists())
+        start = self.canvas_js.index("async function runSmartTranslucentMatting")
+        body = self.canvas_js[start:start + 4400]
+        self.assertIn("params:{'1':{image:inputName}}", body)
+        self.assertIn("workflow_json:SMART_TRANSLUCENT_MATTING_WORKFLOW", body)
+        self.assertIn("type:'translucent-matting'", body)
+        self.assertIn("created.translucentMatting = {", body)
+        # 无图片时沿用去背景的拦截提示。
+        self.assertIn("smart.removeBackgroundNeedImage", body)
+        # 菜单第三项触发该流程。
+        menu_start = self.canvas_js.index("imageMattingMenu?.addEventListener('click'")
+        menu_body = self.canvas_js[menu_start:menu_start + 800]
+        self.assertIn("option.dataset.mattingMode === 'translucent'", menu_body)
+        self.assertIn("runSmartTranslucentMatting(target.node, target.index)", menu_body)
+
+    def test_translucent_result_node_is_independent_result(self):
+        # 与去背景一致：结果节点不可重跑，标题/图标/提示走 半透明产品。
+        self.assertIn("function isSmartTranslucentMattingNode(node){", self.canvas_js)
+        self.assertIn("!isSmartTranslucentMattingNode(node)", self.canvas_js)
+        self.assertIn("isTranslucentMatting ? tr('smart.translucentProduct')", self.canvas_js)
+        self.assertIn("isTranslucentMatting ? 'droplets'", self.canvas_js)
+        self.assertIn("if(isSmartTranslucentMattingNode(node)) return tr('smart.translucentProduct');", self.canvas_js)
+        self.assertIn("smart.translucentProductNodeHint", self.canvas_js)
+        self.assertIn("node?.translucentMatting ? tr('smart.translucentProductFailedTitle')", self.canvas_js)
+        for key in ("smart.translucentProduct\"", "smart.translucentProductHint\"",
+                    "smart.translucentProductRunning\"", "smart.translucentProductDone\"",
+                    "smart.translucentProductFailed\"", "smart.translucentProductFailedTitle\"",
+                    "smart.translucentProductNodeHint\""):
+            self.assertIn(key, self.i18n_js)
 
     def test_prompt_panel_guide_and_controls(self):
         panel_start = self.canvas_html.index('id="mattingPromptPanel"')
@@ -50,7 +88,7 @@ class MattingToolbarTests(unittest.TestCase):
 
     def test_menu_prompt_item_opens_panel(self):
         start = self.canvas_js.index('imageMattingMenu?.addEventListener(\'click\'')
-        body = self.canvas_js[start:start + 600]
+        body = self.canvas_js[start:start + 900]
         self.assertIn("option.dataset.mattingMode === 'prompt'", body)
         self.assertIn("openMattingPromptPanel(target)", body)
         self.assertIn("runSmartBackgroundRemoval(target.node, target.index)", body)
