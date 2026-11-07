@@ -233,6 +233,8 @@
         "smart.previewSource": { zh: "生成来源", en: "Generated with" },
         "smart.previewPrompt": { zh: "提示词", en: "Prompt" },
         "smart.previewReproduce": { zh: "一键复现", en: "Recreate" },
+        "smart.previewCopyPrompt": { zh: "复制提示词", en: "Copy prompt" },
+        "smart.previewPromptCopied": { zh: "已复制提示词", en: "Prompt copied" },
         "smart.previewUnknownSource": { zh: "未记录生成来源", en: "Generation source not recorded" },
         "smart.previewEmptyPrompt": { zh: "这张图片没有记录提示词", en: "No prompt was recorded for this image" },
         "smart.previewCannotReproduce": { zh: "缺少生成参数，无法复现工作流", en: "Generation settings are missing, so this workflow cannot be recreated" },

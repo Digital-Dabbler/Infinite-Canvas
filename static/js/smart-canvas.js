@@ -16660,6 +16660,7 @@ function updatePreviewGenerationPanel(){
     const panel = document.getElementById('previewGenerationPanel');
     const sourceEl = document.getElementById('previewGenerationSource');
     const promptEl = document.getElementById('previewGenerationPrompt');
+    const copyBtn = document.getElementById('previewPromptCopyBtn');
     const reproduceBtn = document.getElementById('previewReproduceBtn');
     if(!panel || !sourceEl || !promptEl || !reproduceBtn) return;
     const editing = currentEditImage();
@@ -16678,6 +16679,50 @@ function updatePreviewGenerationPanel(){
     promptEl.classList.toggle('is-empty', !prompt);
     reproduceBtn.disabled = !runValues.settings || !Object.keys(runValues.settings).length;
     reproduceBtn.title = reproduceBtn.disabled ? tr('smart.previewCannotReproduce') : tr('smart.previewReproduce');
+    if(copyBtn){
+        // The copy action mirrors what the panel shows, so it is only enabled
+        // when this specific image has a recorded prompt.
+        copyBtn.disabled = !prompt;
+        // Opening or navigating the preview always starts from the neutral label.
+        if(copyBtn.classList.contains('is-copied')) setPreviewPromptCopyState(false);
+        syncPreviewPromptCopyLabel(copyBtn);
+        copyBtn.title = copyBtn.disabled ? tr('smart.previewEmptyPrompt') : tr('smart.previewCopyPrompt');
+    }
+}
+function syncPreviewPromptCopyLabel(button){
+    const copyBtn = button || document.getElementById('previewPromptCopyBtn');
+    if(!copyBtn) return;
+    const copied = copyBtn.classList.contains('is-copied');
+    const label = copied ? tr('smart.copied') : tr('smart.previewCopyPrompt');
+    copyBtn.innerHTML = `<i data-lucide="${copied ? 'check' : 'copy'}"></i><span${copied ? '' : ' data-i18n="smart.previewCopyPrompt"'}>${escapeHtml(label)}</span>`;
+    copyBtn.setAttribute('aria-label', label);
+    refreshIcons();
+}
+function setPreviewPromptCopyState(copied){
+    const copyBtn = document.getElementById('previewPromptCopyBtn');
+    if(!copyBtn) return;
+    clearTimeout(copyBtn._copyResetTimer);
+    copyBtn.classList.toggle('is-copied', Boolean(copied));
+    syncPreviewPromptCopyLabel(copyBtn);
+    if(!copied) return;
+    toast(tr('smart.previewPromptCopied'));
+    copyBtn._copyResetTimer = setTimeout(() => setPreviewPromptCopyState(false), 1600);
+}
+async function copyPreviewGenerationPrompt(){
+    const copyBtn = document.getElementById('previewPromptCopyBtn');
+    if(!copyBtn || copyBtn.disabled) return;
+    const editing = currentEditImage();
+    // Copy exactly the prompt recorded for the previewed output (same source as
+    // the prompt line above the button), never the node's stale draft text.
+    const prompt = String(generationRunValuesFor(editing.node, editing.image).prompt || '').trim();
+    if(!prompt){
+        toast(tr('smart.copyEmpty'));
+        return;
+    }
+    // The label mirrors the result so the click is visibly confirmed.
+    const copied = await copyTextToClipboard(prompt);
+    if(copied) setPreviewPromptCopyState(true);
+    else toast(tr('smart.copyFailed'));
 }
 function previewWorkflowPlacement(width, height){
     const center = viewportCenter();

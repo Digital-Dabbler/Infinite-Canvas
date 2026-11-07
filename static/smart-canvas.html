@@ -554,8 +554,14 @@
                         <span id="previewGenerationSource" class="preview-generation-value">-</span>
                     </div>
                     <div class="preview-generation-prompt">
-                        <span class="preview-generation-label" data-i18n="smart.previewPrompt">提示词</span>
-                        <div id="previewGenerationPrompt" class="preview-generation-prompt-text"></div>
+                        <div class="preview-generation-prompt-body">
+                            <span class="preview-generation-label" data-i18n="smart.previewPrompt">提示词</span>
+                            <div id="previewGenerationPrompt" class="preview-generation-prompt-text"></div>
+                        </div>
+                        <button id="previewPromptCopyBtn" class="preview-prompt-copy-btn" type="button" onclick="copyPreviewGenerationPrompt()" title="复制提示词" disabled>
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                            <span data-i18n="smart.previewCopyPrompt">复制提示词</span>
+                        </button>
                     </div>
                     <button id="previewReproduceBtn" class="preview-reproduce-btn" type="button" onclick="reproducePreviewWorkflow()">
                         <i data-lucide="workflow" class="w-4 h-4"></i>
