@@ -114,7 +114,7 @@
   },
   "73": {
     "inputs": {
-      "lora_name": "Qwen 2.1\\心宝强化抠图.safetensors",
+      "lora_name": "Qwen 2.1\\心宝3S抠图.safetensors",
       "strength_model": 0.5,
       "model": [
         "2",
