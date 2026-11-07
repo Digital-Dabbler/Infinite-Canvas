@@ -27,6 +27,17 @@ const imageEditModal = document.getElementById('imageEditModal');
 const angleControlModal = document.getElementById('angleControlModal');
 let outpaintRunSettings = null;
 let outpaintFillColor = '#ffffff';
+const OUTPAINT_COMFY_WORKFLOW = 'system/Qwen Image 2.1 扩图_无限画布专用api.json';
+const OUTPAINT_COMFY_FILL_COLOR = '#808080';
+const OUTPAINT_RATIO_PRESETS = {
+    '1:1': [1, 1], '2:3': [2, 3], '3:2': [3, 2], '3:4': [3, 4], '4:3': [4, 3],
+    '5:7': [5, 7], '9:16': [9, 16], '16:9': [16, 9], '21:9': [21, 9], '1:2': [1, 2], '2:1': [2, 1],
+};
+let outpaintUnit = 'percent';
+let outpaintRatioPreset = 'free';
+let outpaintMaxLongEdge = 5120;
+let outpaintDivisorValue = 0;
+let outpaintRunBtnBaseDisabled = false;
 const imageActionToolbar = document.getElementById('imageActionToolbar');
 const imageUpscaleMenu = document.getElementById('imageUpscaleMenu');
 const imageMattingMenu = document.getElementById('imageMattingMenu');
@@ -16043,6 +16054,7 @@ function setImageEditMode(mode, userTouched=false){
     });
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
     document.getElementById('imageCropTools')?.classList.toggle('active', imageEditMode === 'crop');
+    document.getElementById('imageOutpaintTools')?.classList.toggle('active', imageEditMode === 'outpaint');
     const isLocalEdit = (imageEditMode === 'mask' && !imageEditEraseMode) || imageEditMode === 'brush';
     document.getElementById('imageLocalEditModeTools')?.classList.toggle('active', isLocalEdit);
     document.getElementById('imageMaskTools').classList.toggle('active', imageEditMode === 'mask');
@@ -16094,6 +16106,7 @@ function setImageEditMode(mode, userTouched=false){
         } else if(imageEditMode === 'outpaint'){
             requestAnimationFrame(() => {
                 resetOutpaintBox();
+                syncOutpaintEditorControls();
                 syncOutpaintRunControls();
                 syncImageEditOverflow();
             });
@@ -18516,11 +18529,294 @@ function updateOutpaintResolutionLabel(){
     const label = document.getElementById('outpaintResolution');
     const cropCanvasEl = document.getElementById('cropCanvas');
     if(!label || !cropState) return;
-    const size = outpaintNaturalSize();
+    const size = outpaintGeometry();
     cropCanvasEl?.classList.remove('outpaint-warning');
-    label.textContent = `${Math.round(size.w)} x ${Math.round(size.h)}`;
+    label.textContent = `${size.geometry.width} x ${size.geometry.height}`;
     const target = document.getElementById('outpaintTargetSize');
     if(target) target.textContent = label.textContent;
+    syncOutpaintPadInputs();
+    syncOutpaintRunButtonState();
+}
+function outpaintEditorIsComfy(){
+    return outpaintRunSettings?.engine === 'comfy';
+}
+function outpaintNearest(value){
+    return Math.floor(Number(value || 0) + 0.5);
+}
+function outpaintDisplayScale(){
+    const img = document.getElementById('cropImage');
+    const display = cropImageDisplaySize();
+    const scaleX = Math.max(1, Number(img?.naturalWidth || 1)) / Math.max(1, Number(display.w || img?.clientWidth || 1));
+    const scaleY = Math.max(1, Number(img?.naturalHeight || 1)) / Math.max(1, Number(display.h || img?.clientHeight || 1));
+    return { x: scaleX, y: scaleY };
+}
+function outpaintPadsNatural(){
+    const bounds = cropBounds();
+    const scale = outpaintDisplayScale();
+    const state = cropState || { x:0, y:0, w:bounds.w, h:bounds.h };
+    return {
+        left: Math.round(Math.max(0, state.x) * scale.x),
+        right: Math.round(Math.max(0, state.w - state.x - bounds.w) * scale.x),
+        top: Math.round(Math.max(0, state.y) * scale.y),
+        bottom: Math.round(Math.max(0, state.h - state.y - bounds.h) * scale.y),
+    };
+}
+function outpaintHasExtension(){
+    const pads = outpaintPadsNatural();
+    return pads.left > 0 || pads.right > 0 || pads.top > 0 || pads.bottom > 0;
+}
+// 移植 Goohaitools《外补画板（可视化）》_output_geometry：最大长边缩放 + 整除数只裁外补区。
+function outpaintOutputGeometry(width, height, pads, maximum, multiple){
+    width = Math.max(1, Math.round(width));
+    height = Math.max(1, Math.round(height));
+    pads = pads.map(value => Math.max(0, Math.round(value)));
+    maximum = Math.max(0, Math.round(Number(maximum) || 0));
+    multiple = Math.max(0, Math.round(Number(multiple) || 0));
+    const totalWidth = width + pads[0] + pads[1];
+    const totalHeight = height + pads[2] + pads[3];
+    let scale = maximum > 0 ? Math.min(1, maximum / Math.max(totalWidth, totalHeight)) : 1;
+    const horizontal = pads[0] + pads[1] > 0;
+    const vertical = pads[2] + pads[3] > 0;
+    if(multiple > 0 && horizontal !== vertical){
+        const base = horizontal ? totalHeight : totalWidth;
+        let target = Math.max(multiple, Math.max(1, outpaintNearest(base * scale / multiple)) * multiple);
+        if(maximum > 0 && (target / base) * Math.max(totalWidth, totalHeight) > maximum){
+            target = Math.max(multiple, Math.floor(base * scale / multiple) * multiple);
+        }
+        if(target > 0) scale = target / base;
+    } else if(multiple > 0 && !horizontal && !vertical){
+        scale = Math.max(scale, multiple / Math.max(1, Math.min(totalWidth, totalHeight)));
+    }
+    const scaledWidth = Math.max(1, outpaintNearest(totalWidth * scale));
+    const scaledHeight = Math.max(1, outpaintNearest(totalHeight * scale));
+    const adjustments = [0, 0, 0, 0];
+    if(multiple > 0){
+        [[0, 1, scaledWidth, totalWidth], [2, 3, scaledHeight, totalHeight]].forEach(([first, second, total, original]) => {
+            const padTotal = pads[first] + pads[second];
+            if(!padTotal){
+                if(!horizontal && !vertical){
+                    const delta = Math.max(multiple, Math.floor(total / multiple) * multiple) - total;
+                    adjustments[first] = -Math.floor(-delta / 2);
+                    adjustments[second] = delta - adjustments[first];
+                }
+                return;
+            }
+            const safeFirst = Math.floor(pads[first] * total / Math.max(1, original));
+            const safeSecond = Math.floor(pads[second] * total / Math.max(1, original));
+            const minimum = Math.ceil((total - safeFirst - safeSecond) / multiple) * multiple;
+            const target = Math.max(multiple, minimum, Math.max(1, outpaintNearest(total / multiple)) * multiple);
+            const delta = target - total;
+            let amount = outpaintNearest(Math.abs(delta) * pads[first] / padTotal);
+            if(delta < 0){
+                amount = Math.max(Math.abs(delta) - safeSecond, Math.min(safeFirst, amount));
+            }
+            adjustments[first] = delta < 0 ? -amount : amount;
+            adjustments[second] = delta - adjustments[first];
+        });
+    }
+    return {
+        width: scaledWidth + adjustments[0] + adjustments[1],
+        height: scaledHeight + adjustments[2] + adjustments[3],
+        scaledWidth, scaledHeight, adjustments,
+        totalWidth, totalHeight,
+    };
+}
+function outpaintGeometry(){
+    const img = document.getElementById('cropImage');
+    const srcW = Math.max(1, Number(img?.naturalWidth || 1));
+    const srcH = Math.max(1, Number(img?.naturalHeight || 1));
+    const pads = outpaintPadsNatural();
+    const geometry = outpaintOutputGeometry(srcW, srcH, [pads.left, pads.right, pads.top, pads.bottom], outpaintMaxLongEdge, outpaintDivisorValue);
+    const scaleX = geometry.scaledWidth / Math.max(1, geometry.totalWidth);
+    const scaleY = geometry.scaledHeight / Math.max(1, geometry.totalHeight);
+    const placement = {
+        x: Math.round(Math.max(0, geometry.adjustments[0]) + pads.left * scaleX - Math.max(0, -geometry.adjustments[0])),
+        y: Math.round(Math.max(0, geometry.adjustments[2]) + pads.top * scaleY - Math.max(0, -geometry.adjustments[2])),
+        w: Math.max(1, Math.round(srcW * scaleX)),
+        h: Math.max(1, Math.round(srcH * scaleY)),
+    };
+    return { srcW, srcH, pads, geometry, placement };
+}
+function buildOutpaintCompositeCanvas(img, options = {}){
+    const fill = String(options.fill || '#ffffff');
+    const { srcW, srcH, pads, geometry } = outpaintGeometry();
+    const canvasA = document.createElement('canvas');
+    canvasA.width = geometry.totalWidth;
+    canvasA.height = geometry.totalHeight;
+    const ctxA = canvasA.getContext('2d');
+    ctxA.fillStyle = fill;
+    ctxA.fillRect(0, 0, canvasA.width, canvasA.height);
+    ctxA.drawImage(img, 0, 0, srcW, srcH, pads.left, pads.top, srcW, srcH);
+    const canvasB = document.createElement('canvas');
+    canvasB.width = geometry.scaledWidth;
+    canvasB.height = geometry.scaledHeight;
+    const ctxB = canvasB.getContext('2d');
+    ctxB.imageSmoothingEnabled = true;
+    ctxB.imageSmoothingQuality = 'high';
+    ctxB.drawImage(canvasA, 0, 0, canvasA.width, canvasA.height, 0, 0, canvasB.width, canvasB.height);
+    const cropX = Math.max(0, -geometry.adjustments[0]);
+    const cropY = Math.max(0, -geometry.adjustments[2]);
+    const cropW = Math.max(1, geometry.scaledWidth - cropX - Math.max(0, -geometry.adjustments[1]));
+    const cropH = Math.max(1, geometry.scaledHeight - cropY - Math.max(0, -geometry.adjustments[3]));
+    const out = document.createElement('canvas');
+    out.width = geometry.width;
+    out.height = geometry.height;
+    const ctx = out.getContext('2d', { willReadFrequently: options.alpha === true });
+    ctx.fillStyle = fill;
+    ctx.fillRect(0, 0, out.width, out.height);
+    const destX = Math.max(0, geometry.adjustments[0]);
+    const destY = Math.max(0, geometry.adjustments[2]);
+    ctx.drawImage(canvasB, cropX, cropY, cropW, cropH, destX, destY, cropW, cropH);
+    if(options.alpha){
+        // ComfyUI LoadImage 约定：透明区=需要生成的外补区，不透明=保留的原图区。
+        const { placement } = outpaintGeometry();
+        const data = ctx.getImageData(0, 0, out.width, out.height);
+        const px = data.data;
+        const x0 = Math.max(0, placement.x);
+        const y0 = Math.max(0, placement.y);
+        const x1 = Math.min(out.width, placement.x + placement.w);
+        const y1 = Math.min(out.height, placement.y + placement.h);
+        for(let y = 0; y < out.height; y++){
+            const insideRow = y >= y0 && y < y1;
+            for(let x = 0; x < out.width; x++){
+                if(insideRow && x >= x0 && x < x1) continue;
+                px[(y * out.width + x) * 4 + 3] = 0;
+            }
+        }
+        ctx.putImageData(data, 0, 0);
+    }
+    return out;
+}
+function outpaintCompositeBlob(img, options = {}){
+    return new Promise((resolve, reject) => {
+        try{
+            buildOutpaintCompositeCanvas(img, options).toBlob(blob => blob ? resolve(blob) : reject(new Error('扩图合成失败')), 'image/png');
+        }catch(error){ reject(error); }
+    });
+}
+function syncOutpaintPadInputs(){
+    if(imageEditMode !== 'outpaint') return;
+    const nodes = {
+        left: document.getElementById('outpaintLeftInput'),
+        right: document.getElementById('outpaintRightInput'),
+        top: document.getElementById('outpaintTopInput'),
+        bottom: document.getElementById('outpaintBottomInput'),
+    };
+    if(!nodes.left) return;
+    const active = document.activeElement;
+    const pads = outpaintPadsNatural();
+    const img = document.getElementById('cropImage');
+    const srcW = Math.max(1, Number(img?.naturalWidth || 1));
+    const srcH = Math.max(1, Number(img?.naturalHeight || 1));
+    const write = (key, node, srcSize) => {
+        if(!node || node === active) return;
+        const value = outpaintUnit === 'percent'
+            ? Math.round(pads[key] / srcSize * 100)
+            : pads[key];
+        node.value = String(Math.max(0, value));
+    };
+    write('left', nodes.left, srcW);
+    write('right', nodes.right, srcW);
+    write('top', nodes.top, srcH);
+    write('bottom', nodes.bottom, srcH);
+}
+function outpaintPadDisplayValue(id, srcSize, scale){
+    const node = document.getElementById(id);
+    const raw = Math.max(0, Number(node?.value) || 0);
+    const natural = outpaintUnit === 'percent' ? raw / 100 * srcSize : raw;
+    return natural / Math.max(1e-6, scale);
+}
+function applyOutpaintPadInputs(){
+    if(imageEditMode !== 'outpaint' || !cropState) return;
+    const bounds = cropBounds();
+    const scale = outpaintDisplayScale();
+    const img = document.getElementById('cropImage');
+    const srcW = Math.max(1, Number(img?.naturalWidth || 1));
+    const srcH = Math.max(1, Number(img?.naturalHeight || 1));
+    const left = outpaintPadDisplayValue('outpaintLeftInput', srcW, scale.x);
+    const right = outpaintPadDisplayValue('outpaintRightInput', srcW, scale.x);
+    const top = outpaintPadDisplayValue('outpaintTopInput', srcH, scale.y);
+    const bottom = outpaintPadDisplayValue('outpaintBottomInput', srcH, scale.y);
+    cropState = {
+        x: Math.max(0, left),
+        y: Math.max(0, top),
+        w: bounds.w + left + right,
+        h: bounds.h + top + bottom,
+    };
+    clampOutpaint();
+    renderCropBox();
+}
+function applyOutpaintRatioPreset(ratio){
+    outpaintRatioPreset = ratio && OUTPAINT_RATIO_PRESETS[ratio] ? ratio : 'free';
+    if(outpaintRatioPreset === 'free'){
+        renderCropBox();
+        return;
+    }
+    const [rw0, rh0] = OUTPAINT_RATIO_PRESETS[outpaintRatioPreset];
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    const common = gcd(rw0, rh0) || 1;
+    const rw = Math.max(1, Math.round(rw0 / common));
+    const rh = Math.max(1, Math.round(rh0 / common));
+    const img = document.getElementById('cropImage');
+    const srcW = Math.max(1, Number(img?.naturalWidth || 1));
+    const srcH = Math.max(1, Number(img?.naturalHeight || 1));
+    const pads = outpaintPadsNatural();
+    const factor = Math.max(1, Math.ceil(Math.max((srcW + pads.left + pads.right) / rw, (srcH + pads.top + pads.bottom) / rh)));
+    const next = [pads.left, pads.right, pads.top, pads.bottom];
+    [[0, 1, rw * factor - srcW], [2, 3, rh * factor - srcH]].forEach(([start, end, total]) => {
+        const oldTotal = next[start] + next[end];
+        const first = oldTotal ? outpaintNearest(total * next[start] / oldTotal) : Math.floor(total / 2);
+        next[start] = Math.max(0, first);
+        next[end] = Math.max(0, total - first);
+    });
+    const scale = outpaintDisplayScale();
+    const bounds = cropBounds();
+    cropState = {
+        x: next[0] / scale.x,
+        y: next[2] / scale.y,
+        w: bounds.w + (next[0] + next[1]) / scale.x,
+        h: bounds.h + (next[2] + next[3]) / scale.y,
+    };
+    clampOutpaint();
+    renderCropBox();
+}
+function resetOutpaintEditor(){
+    outpaintRatioPreset = 'free';
+    const ratioSelect = document.getElementById('outpaintRatioSelect');
+    if(ratioSelect) ratioSelect.value = 'free';
+    ['outpaintLeftInput', 'outpaintRightInput', 'outpaintTopInput', 'outpaintBottomInput'].forEach(id => {
+        const node = document.getElementById(id);
+        if(node) node.value = '0';
+    });
+    resetOutpaintBox();
+    syncOutpaintRunControls();
+}
+function syncOutpaintEditorControls(){
+    if(imageEditMode !== 'outpaint') return;
+    const unitSelect = document.getElementById('outpaintUnitSelect');
+    if(unitSelect){
+        unitSelect.innerHTML = `<option value="percent">${escapeHtml(tr('canvas.outpaintUnitPercent'))}</option><option value="pixel">${escapeHtml(tr('canvas.outpaintUnitPixel'))}</option>`;
+        unitSelect.value = outpaintUnit;
+    }
+    const ratioSelect = document.getElementById('outpaintRatioSelect');
+    if(ratioSelect){
+        const options = [`<option value="free">${escapeHtml(tr('canvas.outpaintRatioFree'))}</option>`];
+        Object.keys(OUTPAINT_RATIO_PRESETS).forEach(ratio => options.push(`<option value="${escapeAttr(ratio)}">${escapeHtml(ratio)}</option>`));
+        ratioSelect.innerHTML = options.join('');
+        ratioSelect.value = OUTPAINT_RATIO_PRESETS[outpaintRatioPreset] ? outpaintRatioPreset : 'free';
+    }
+    const supplement = document.getElementById('outpaintSupplementInput');
+    if(supplement) supplement.placeholder = tr('canvas.outpaintSupplementPlaceholder');
+    const maxLong = document.getElementById('outpaintMaxLongInput');
+    if(maxLong && maxLong !== document.activeElement) maxLong.value = String(outpaintMaxLongEdge);
+    const divisor = document.getElementById('outpaintDivisorSelect');
+    if(divisor) divisor.value = String(outpaintDivisorValue);
+    syncOutpaintPadInputs();
+}
+function syncOutpaintRunButtonState(){
+    const runBtn = document.getElementById('outpaintRunBtn');
+    if(!runBtn || imageEditMode !== 'outpaint') return;
+    runBtn.disabled = (outpaintRunBtnBaseDisabled && !outpaintEditorIsComfy()) || !outpaintHasExtension();
 }
 function uploadResourceHeaderHtml(node){
     // 控件节点始终保留在 DOM 中，但仅通过 .selected 显示。选中变化走
@@ -18558,7 +18854,7 @@ function failedGenerationCellHtml(node, layout){
 function outpaintFillColorName(color=outpaintFillColor){
     return ({
         '#ef4444':'红色', '#22c55e':'绿色', '#3b82f6':'蓝色',
-        '#ffffff':'白色', '#94a3b8':'灰色', '#111827':'黑色'
+        '#ffffff':'白色', '#94a3b8':'灰色', '#808080':'灰色', '#111827':'黑色'
     })[String(color || '').toLowerCase()] || '白色';
 }
 function syncOutpaintFillColor(){
@@ -18569,7 +18865,7 @@ function syncOutpaintFillColor(){
     document.getElementById('cropCanvas')?.style.setProperty('--outpaint-fill', color);
 }
 function setOutpaintFillColor(color){
-    const allowed = new Set(['#ef4444','#22c55e','#3b82f6','#ffffff','#94a3b8','#111827']);
+    const allowed = new Set(['#ef4444','#22c55e','#3b82f6','#ffffff','#94a3b8','#111827','#808080']);
     outpaintFillColor = allowed.has(String(color || '').toLowerCase()) ? String(color).toLowerCase() : '#ffffff';
     syncOutpaintFillColor();
 }
@@ -18653,9 +18949,38 @@ function syncOutpaintRunControls(){
     const visible = imageEditMode === 'outpaint';
     controls.hidden = !visible;
     if(!visible) return;
+    const isComfy = outpaintEditorIsComfy();
+    document.querySelectorAll('[data-outpaint-color]').forEach(button => { button.disabled = isComfy; });
+    const lockNote = document.getElementById('outpaintColorLockNote');
+    if(lockNote) lockNote.hidden = !isComfy;
+    const maxSampleField = document.querySelector('.outpaint-max-sample-field');
+    if(maxSampleField) maxSampleField.hidden = !isComfy;
     const editorSettings = outpaintSettingsForEditor();
+    if(isComfy){
+        if(outpaintFillColor !== OUTPAINT_COMFY_FILL_COLOR) setOutpaintFillColor(OUTPAINT_COMFY_FILL_COLOR);
+        else syncOutpaintFillColor();
+        editorSettings.count = 1;
+        outpaintRunSettings = editorSettings;
+        countSelect.innerHTML = '<option value="1">1 张</option>';
+        countSelect.value = '1';
+        countSelect.disabled = true;
+        modelSelect.innerHTML = `<option value="">${escapeHtml(tr('canvas.outpaintComfyWorkflowName'))}</option>`;
+        modelSelect.disabled = true;
+        resolutionSelect.innerHTML = '';
+        resolutionField.hidden = true;
+        targetSize.hidden = false;
+        status.className = 'outpaint-capability-status';
+        status.textContent = tr('canvas.outpaintComfyMode');
+        outpaintRunBtnBaseDisabled = false;
+        const comfyRunBtn = document.getElementById('outpaintRunBtn');
+        if(comfyRunBtn) comfyRunBtn.disabled = !outpaintHasExtension();
+        updateOutpaintResolutionLabel();
+        return;
+    }
+    countSelect.disabled = false;
     const count = Math.max(1, Math.min(8, Number(editorSettings.count) || 1));
     countSelect.innerHTML = [1,2,3,4,5,6,7,8].map(n => `<option value="${n}" ${n === count ? 'selected' : ''}>${n} 张</option>`).join('');
+    if(outpaintFillColor === OUTPAINT_COMFY_FILL_COLOR) setOutpaintFillColor('#ffffff');
     const providerId = editorSettings.provider_id || '';
     const compatibility = isApiLikeEngine(editorSettings.engine) && providerId
         ? compatibleOutpaintModels(providerId)
@@ -18694,7 +19019,8 @@ function syncOutpaintRunControls(){
                 ? tr('canvas.outpaintAdaptiveMode')
                 : tr('canvas.outpaintNoCompatibleModel');
     const runBtn = document.getElementById('outpaintRunBtn');
-    if(runBtn) runBtn.disabled = !selectedModel || compatibility.loading;
+    outpaintRunBtnBaseDisabled = !selectedModel || compatibility.loading;
+    if(runBtn) runBtn.disabled = outpaintRunBtnBaseDisabled || !outpaintHasExtension();
     updateOutpaintResolutionLabel();
 }
 function clampOutpaint(){
@@ -18704,6 +19030,20 @@ function clampOutpaint(){
     cropState.h = Math.max(h, cropState.h);
     cropState.x = Math.min(cropState.w - w, Math.max(0, cropState.x));
     cropState.y = Math.min(cropState.h - h, Math.max(0, cropState.y));
+    // 钳位后按自然像素吸附四边外补，保证扩图框严格等于 原图+整数外补，
+    // 避免数值输入/比例联动的小数误差让输出尺寸偏移 1px。
+    const img = document.getElementById('cropImage');
+    const natW = Math.max(1, Number(img?.naturalWidth || 1));
+    const natH = Math.max(1, Number(img?.naturalHeight || 1));
+    const scale = outpaintDisplayScale();
+    const leftNat = Math.round(cropState.x * scale.x);
+    const rightNat = Math.max(0, Math.round((cropState.w - cropState.x - w) * scale.x));
+    const topNat = Math.round(cropState.y * scale.y);
+    const bottomNat = Math.max(0, Math.round((cropState.h - cropState.y - h) * scale.y));
+    cropState.x = leftNat / scale.x;
+    cropState.y = topNat / scale.y;
+    cropState.w = (leftNat + natW + rightNat) / scale.x;
+    cropState.h = (topNat + natH + bottomNat) / scale.y;
 }
 function resetOutpaintBox(){
     if(!cropState) return;
@@ -18989,13 +19329,14 @@ function beginCropDrag(event, mode){
     if(imageEditMode === 'outpaint' && mode === 'move') return;
     cropDrag = {mode, sx:event.clientX, sy:event.clientY, start:{...cropState}};
 }
-function resizeOutpaintFromDrag(dx, dy){
+function resizeOutpaintFromDrag(dx, dy, shift){
     const start = cropDrag?.start;
     if(!start) return;
     const mode = String(cropDrag.mode || '');
     const {w, h} = cropBounds();
     // 扩图框的 x/y 是原图在扩图画布中的位置：只扩被拖动的一侧，
     // 并让左/上扩展推动原图，而不是将画布强制从中心对称地放大。
+    // 按住 Shift 时对称扩展对侧（移植外补画板交互）。
     let nextW = start.w;
     let nextH = start.h;
     let nextX = start.x;
@@ -19004,15 +19345,19 @@ function resizeOutpaintFromDrag(dx, dy){
         const delta = Math.max(-start.x, -dx);
         nextW = Math.max(w, start.w + delta);
         nextX = start.x + (nextW - start.w);
+        if(shift) nextW = start.w + 2 * (nextW - start.w);
     } else if(mode.includes('right')){
         nextW = Math.max(w, start.w + dx);
+        if(shift){ nextX = start.x - (nextW - start.w); nextW = start.w + 2 * (nextW - start.w); }
     }
     if(mode.includes('top')){
         const delta = Math.max(-start.y, -dy);
         nextH = Math.max(h, start.h + delta);
         nextY = start.y + (nextH - start.h);
+        if(shift) nextH = start.h + 2 * (nextH - start.h);
     } else if(mode.includes('bottom')){
         nextH = Math.max(h, start.h + dy);
+        if(shift){ nextY = start.y - (nextH - start.h); nextH = start.h + 2 * (nextH - start.h); }
     }
     cropState.w = nextW;
     cropState.h = nextH;
@@ -19144,21 +19489,18 @@ async function applyImageOutpaint(){
     const img = document.getElementById('cropImage');
     if(!node || !image || !img.naturalWidth || !img.naturalHeight) return;
     clampOutpaint();
-    const scaleX = img.naturalWidth / (img.clientWidth || 1), scaleY = img.naturalHeight / (img.clientHeight || 1);
-    const outW = Math.max(img.naturalWidth, Math.round(cropState.w * scaleX));
-    const outH = Math.max(img.naturalHeight, Math.round(cropState.h * scaleY));
-    const dx = Math.round(cropState.x * scaleX);
-    const dy = Math.round(cropState.y * scaleY);
-    const canvasEl = document.createElement('canvas');
-    canvasEl.width = outW; canvasEl.height = outH;
-    const ctx = canvasEl.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, outW, outH);
-    ctx.drawImage(img, dx, dy, img.naturalWidth, img.naturalHeight);
+    if(!outpaintHasExtension()) return;
+    const composed = outpaintGeometry();
+    const canvasEl = buildOutpaintCompositeCanvas(img, {fill:outpaintFillColor, alpha:false});
     const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
     const base = (image.name || 'image').replace(/\.[^.]+$/, '');
     const file = blob ? await uploadCroppedBlob(blob, `${base}_outpaint.png`) : null;
-    if(file && replaceEditedImage(file)){
+    if(file && replaceEditedImage(file, {outpaintFrame:{
+        width:composed.geometry.width, height:composed.geometry.height,
+        sourceX:composed.placement.x, sourceY:composed.placement.y,
+        sourceWidth:composed.srcW, sourceHeight:composed.srcH,
+        fillColor:outpaintFillColor
+    }})){
         closeImageEditor();
         render();
         scheduleSave();
@@ -19171,40 +19513,40 @@ async function runImageOutpaint(){
     const runBtn = document.getElementById('outpaintRunBtn');
     if(!node || !image || !img?.naturalWidth || !img?.naturalHeight) return;
     const selectedSettings = outpaintSettingsForEditor();
-    selectedSettings.count = Math.max(1, Math.min(8, Number(document.getElementById('outpaintCountSelect')?.value) || 1));
-    const selectedModel = String(document.getElementById('outpaintModelSelect')?.value || '').trim();
-    if(selectedModel) selectedSettings.model = selectedModel;
-    const compatibility = isApiLikeEngine(selectedSettings.engine) && selectedSettings.provider_id
-        ? compatibleOutpaintModels(selectedSettings.provider_id)
-        : {models:[], loading:false};
-    const selected = compatibility.models.find(item => item.model === selectedModel);
-    if(!selected || compatibility.loading){
-        toast(tr('canvas.outpaintNoCompatibleModel'));
+    const isComfy = selectedSettings.engine === 'comfy';
+    const supplementPrompt = String(document.getElementById('outpaintSupplementInput')?.value || '').trim();
+    let onlineCapability = null;
+    clampOutpaint();
+    if(!outpaintHasExtension()){
+        toast(tr('canvas.outpaintNoExtension'));
         return;
     }
-    const capability = selected.capability;
-    if(capability?.discovered) applyImageCapabilityDefaultsTo(selectedSettings, capability, imageCapabilityCacheKey(selectedSettings.provider_id, selectedModel));
-    if(selected.mode === 'adaptive') selectedSettings.ratio = outpaintAdaptiveRatioSetting(capability);
-    const resolution = String(document.getElementById('outpaintResolutionSelect')?.value || selectedSettings.resolution || '');
-    const resolutionField = videoCapabilityField(capability, 'resolution');
-    const resolutionOptions = videoCapabilityOptions(resolutionField).map(option => option.value);
-    if(resolutionOptions.length && resolutionOptions.includes(resolution)) selectedSettings.resolution = resolution;
-    clampOutpaint();
-    const scaleX = img.naturalWidth / Math.max(1, img.clientWidth);
-    const scaleY = img.naturalHeight / Math.max(1, img.clientHeight);
-    const outW = Math.max(img.naturalWidth, Math.round(cropState.w * scaleX));
-    const outH = Math.max(img.naturalHeight, Math.round(cropState.h * scaleY));
-    const sourceX = Math.round(cropState.x * scaleX);
-    const sourceY = Math.round(cropState.y * scaleY);
-    applyOutpaintFrameToImageSettings(selectedSettings, capability, {width:outW, height:outH});
-    const canvasEl = document.createElement('canvas');
-    canvasEl.width = outW;
-    canvasEl.height = outH;
-    const ctx = canvasEl.getContext('2d');
-    ctx.fillStyle = outpaintFillColor;
-    ctx.fillRect(0, 0, outW, outH);
-    ctx.drawImage(img, sourceX, sourceY, img.naturalWidth, img.naturalHeight);
-    const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
+    if(isComfy){
+        selectedSettings.count = 1;
+    } else {
+        selectedSettings.count = Math.max(1, Math.min(8, Number(document.getElementById('outpaintCountSelect')?.value) || 1));
+        const selectedModel = String(document.getElementById('outpaintModelSelect')?.value || '').trim();
+        if(selectedModel) selectedSettings.model = selectedModel;
+        const compatibility = isApiLikeEngine(selectedSettings.engine) && selectedSettings.provider_id
+            ? compatibleOutpaintModels(selectedSettings.provider_id)
+            : {models:[], loading:false};
+        const selected = compatibility.models.find(item => item.model === selectedModel);
+        if(!selected || compatibility.loading){
+            toast(tr('canvas.outpaintNoCompatibleModel'));
+            return;
+        }
+        const capability = selected.capability;
+        onlineCapability = capability;
+        if(capability?.discovered) applyImageCapabilityDefaultsTo(selectedSettings, capability, imageCapabilityCacheKey(selectedSettings.provider_id, selectedModel));
+        if(selected.mode === 'adaptive') selectedSettings.ratio = outpaintAdaptiveRatioSetting(capability);
+        const resolution = String(document.getElementById('outpaintResolutionSelect')?.value || selectedSettings.resolution || '');
+        const resolutionOptions = videoCapabilityOptions(videoCapabilityField(capability, 'resolution')).map(option => option.value);
+        if(resolutionOptions.length && resolutionOptions.includes(resolution)) selectedSettings.resolution = resolution;
+    }
+    const fillColor = isComfy ? OUTPAINT_COMFY_FILL_COLOR : outpaintFillColor;
+    const composed = outpaintGeometry();
+    if(!isComfy) applyOutpaintFrameToImageSettings(selectedSettings, onlineCapability, {width:composed.geometry.width, height:composed.geometry.height});
+    const blob = await outpaintCompositeBlob(img, {fill:fillColor, alpha:isComfy});
     const base = safeExportFileName((image.name || 'image').replace(/\.[^.]+$/, ''), 'image');
     if(runBtn) runBtn.disabled = true;
     try {
@@ -19217,18 +19559,34 @@ async function runImageOutpaint(){
             {skipUndo:true, select:true, deferRender:true, deferSave:true, settingsMemory:false}
         );
         output.title = '扩图生成';
-        const colorName = outpaintFillColorName();
-        const outpaintPrompt = `在${colorName}色区域自然延展原有场景；保持主体位置、透视、光照与边缘衔接一致；不要修改原图中已有内容。`;
-        output.promptDraftText = outpaintPrompt;
-        output.promptDraftHtml = escapeHtml(outpaintPrompt);
-        output.promptDraftTouched = true;
-        output.runSettings = {...cloneSmartSettings(selectedSettings), apiKind:'image'};
+        if(isComfy){
+            const maxSample = Math.max(1024, Math.min(4096, Number(document.getElementById('outpaintMaxSampleInput')?.value) || 2048));
+            output.promptDraftText = supplementPrompt;
+            output.promptDraftHtml = escapeHtml(supplementPrompt);
+            output.promptDraftTouched = !!supplementPrompt;
+            output.runSettings = {
+                ...cloneSmartSettings(selectedSettings),
+                apiKind:'image',
+                comfyMode:'custom',
+                comfyWorkflow: OUTPAINT_COMFY_WORKFLOW,
+                comfyParams: {supplement_prompt: supplementPrompt, max_sample_size: maxSample},
+            };
+        } else {
+            const colorName = outpaintFillColorName(fillColor);
+            let outpaintPrompt = `移除图像中的${colorName}区域，无缝自然延展为完整图像。`;
+            if(supplementPrompt) outpaintPrompt += `\n${supplementPrompt}`;
+            output.promptDraftText = outpaintPrompt;
+            output.promptDraftHtml = escapeHtml(outpaintPrompt);
+            output.promptDraftTouched = true;
+            output.runSettings = {...cloneSmartSettings(selectedSettings), apiKind:'image'};
+        }
         output.manualInputRefs = [{url:file.url, name:file.name, kind:'image', imageIndex:0, role:'outpaint_source'}];
         // 仅保留浮窗布局的可追溯信息；真正的请求参数仍完全由标准图片节点生成。
         output.outpaintFrame = {
-            width:outW, height:outH, sourceX, sourceY,
-            sourceWidth:img.naturalWidth, sourceHeight:img.naturalHeight,
-            fillColor:outpaintFillColor
+            width:composed.geometry.width, height:composed.geometry.height,
+            sourceX:composed.placement.x, sourceY:composed.placement.y,
+            sourceWidth:composed.srcW, sourceHeight:composed.srcH,
+            fillColor
         };
         selectedId = output.id;
         selectedIds = [];
@@ -24713,7 +25071,7 @@ window.onmousemove = e => {
             cropState.x = cropDrag.start.x + dx;
             cropState.y = cropDrag.start.y + dy;
         } else if(String(cropDrag.mode || '').startsWith('outpaint-')){
-            resizeOutpaintFromDrag(dx, dy);
+            resizeOutpaintFromDrag(dx, dy, e.shiftKey);
         } else {
             resizeCropFromDrag(dx, dy);
         }
@@ -24955,6 +25313,10 @@ window.onmouseup = e => {
     if(cropDrag){
         document.getElementById('cropCanvas')?.classList.remove('dragging-image');
         cropDrag = null;
+        if(imageEditMode === 'outpaint'){
+            syncOutpaintPadInputs();
+            syncOutpaintRunButtonState();
+        }
     }
     if(resizeState){
         const node = nodes.find(n => n.id === resizeState.id);
@@ -25891,6 +26253,26 @@ document.getElementById('outpaintResolutionSelect')?.addEventListener('change', 
     const next = outpaintSettingsForEditor();
     next.resolution = String(event.target.value || '');
     outpaintRunSettings = next;
+});
+document.getElementById('outpaintUnitSelect')?.addEventListener('change', event => {
+    outpaintUnit = event.target.value === 'pixel' ? 'pixel' : 'percent';
+    syncOutpaintPadInputs();
+});
+['outpaintLeftInput', 'outpaintRightInput', 'outpaintTopInput', 'outpaintBottomInput'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', applyOutpaintPadInputs);
+});
+document.getElementById('outpaintRatioSelect')?.addEventListener('change', event => {
+    applyOutpaintRatioPreset(event.target.value);
+});
+document.getElementById('outpaintMaxLongInput')?.addEventListener('change', event => {
+    outpaintMaxLongEdge = Math.max(0, Math.min(8192, Math.round(Number(event.target.value) || 0)));
+    event.target.value = String(outpaintMaxLongEdge);
+    renderCropBox();
+});
+document.getElementById('outpaintDivisorSelect')?.addEventListener('change', event => {
+    const next = Number(event.target.value);
+    outpaintDivisorValue = [0, 8, 16, 32, 64].includes(next) ? next : 0;
+    renderCropBox();
 });
 imageEditModal.addEventListener('pointerdown', event => {
     event.stopPropagation();

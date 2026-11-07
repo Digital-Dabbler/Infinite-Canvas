@@ -21,10 +21,10 @@
     <script src="/static/js/touch-mouse.js?v=2026.07.29.c4f838ffc3"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.db80413bd4"></script>
     <link rel="stylesheet" href="/static/css/studio-theme-tokens.css?v=2026.07.29.2e97de3b67">
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.6953c4558e">
-    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.7a079fca30">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.c7dc14922d">
+    <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.be364659c7">
     <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.fa68196223">
-    <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.a8a31e0608">
+    <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.2e4d37ceda">
     <link rel="stylesheet" href="/static/css/prompt-presets.css?v=2026.07.29.78d7d43b57">
     <link rel="stylesheet" href="/static/css/workflow-library.css?v=2026.07.29.fc16a50ca2">
 </head>
@@ -359,6 +359,7 @@
                         <button type="button" data-outpaint-color="#3b82f6" aria-label="蓝色" title="蓝色" data-i18n-label="canvas.outpaintFillBlue" data-i18n-title="canvas.outpaintFillBlue"></button>
                         <button type="button" data-outpaint-color="#94a3b8" aria-label="灰色" title="灰色" data-i18n-label="canvas.outpaintFillGray" data-i18n-title="canvas.outpaintFillGray"></button>
                         <button type="button" data-outpaint-color="#111827" aria-label="黑色" title="黑色" data-i18n-label="canvas.outpaintFillBlack" data-i18n-title="canvas.outpaintFillBlack"></button>
+                        <span id="outpaintColorLockNote" class="outpaint-color-lock" hidden data-i18n="canvas.outpaintComfyFillLocked">ComfyUI 扩图按灰色训练，底色已锁定</span>
                     </div>
                     <button class="preview-icon-btn" type="button" onclick="closeImageEditor()" title="关闭" data-i18n-title="common.close"><i data-lucide="x" class="w-4 h-4"></i></button>
                 </div>
@@ -373,6 +374,21 @@
                     <button class="crop-ratio-btn" type="button" data-crop-ratio="9:16">9:16</button>
                     <button class="crop-ratio-btn" type="button" data-crop-ratio="3:2">3:2</button>
                     <button class="crop-ratio-btn" type="button" data-crop-ratio="2:3">2:3</button>
+                </div>
+                <div id="imageOutpaintTools" class="image-edit-tools outpaint-editor-tools">
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintUnit">单位</span><select id="outpaintUnitSelect" aria-label="扩图单位"></select></label>
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintPadLeft">左</span><input type="number" id="outpaintLeftInput" min="0" step="1" value="0" aria-label="扩图左侧" /></label>
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintPadRight">右</span><input type="number" id="outpaintRightInput" min="0" step="1" value="0" aria-label="扩图右侧" /></label>
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintPadTop">上</span><input type="number" id="outpaintTopInput" min="0" step="1" value="0" aria-label="扩图上方" /></label>
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintPadBottom">下</span><input type="number" id="outpaintBottomInput" min="0" step="1" value="0" aria-label="扩图下方" /></label>
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintRatio">比例</span><select id="outpaintRatioSelect" aria-label="扩图比例"></select></label>
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintMaxLong">最大输出长边</span><input type="number" id="outpaintMaxLongInput" min="0" max="8192" step="128" value="5120" aria-label="最大输出长边" /></label>
+                    <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintDivisor">整除数</span><select id="outpaintDivisorSelect" aria-label="整除数">
+                        <option value="0">0</option><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="64">64</option>
+                    </select></label>
+                    <label class="outpaint-tool-field outpaint-supplement-field"><span data-i18n="canvas.outpaintSupplement">补充提示词</span><input type="text" id="outpaintSupplementInput" value="" aria-label="补充提示词" /></label>
+                    <label class="outpaint-tool-field outpaint-max-sample-field" hidden><span data-i18n="canvas.outpaintMaxSample">最大采样尺寸</span><input type="number" id="outpaintMaxSampleInput" min="1024" max="4096" step="128" value="2048" aria-label="最大采样尺寸" /></label>
+                    <button type="button" class="image-edit-btn secondary" id="outpaintResetBtn" onclick="resetOutpaintEditor()"><i data-lucide="rotate-ccw" class="w-4 h-4"></i><span data-i18n="canvas.outpaintReset">复位</span></button>
                 </div>
                 <div id="imagePreviewTools" class="image-edit-tools">
                     <span id="previewMetaHint" class="image-edit-sub" style="margin-left:auto"></span>
@@ -638,11 +654,11 @@
         </section>
     </div>
     <script src="/static/js/resource-preview-panel.js?v=2026.07.29.0883cf0ea2"></script>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.f50e3b384a"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.24292ead50"></script>
     <script src="/static/js/prompt-presets.js?v=2026.07.29.b56cb7e5cb"></script>
     <script src="/static/js/library-shared.js?v=2026.07.29.333f28f867"></script>
     <script src="/static/js/asset-library.js?v=2026.07.29.9b3b754cd0"></script>
-    <script src="/static/js/prompt-library.js?v=2026.07.29.b79bc1e6d8"></script>
+    <script src="/static/js/prompt-library.js?v=2026.07.29.f3fe4a0ce6"></script>
     <script src="/static/js/workflow-library.js?v=2026.07.29.7db7c46b3f"></script>
 
     <!-- 资产库弹窗 -->
@@ -814,6 +830,6 @@
             </div>
         </div>
     </div>
-    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.bbcb6408ee"></script>
+    <script src="/static/js/smart-canvas-shell.js?v=2026.07.29.e715e21715"></script>
 </body>
 </html>

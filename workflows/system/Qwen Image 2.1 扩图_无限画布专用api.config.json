@@ -1,0 +1,54 @@
+{
+  "title": "Qwen Image 2.1 扩图",
+  "fields": [
+    {
+      "id": "source_image",
+      "label": "扩图合成图",
+      "type": "image",
+      "node": "56",
+      "input": "image"
+    },
+    {
+      "id": "supplement_prompt",
+      "label": "补充提示词",
+      "type": "text",
+      "node": "51",
+      "input": "value",
+      "default": ""
+    },
+    {
+      "id": "seed",
+      "label": "随机种子",
+      "type": "number",
+      "node": "18",
+      "input": "noise_seed",
+      "default": 211946919598339,
+      "min": 1,
+      "max": 4294967295,
+      "step": 1,
+      "random_enabled": true
+    },
+    {
+      "id": "max_sample_size",
+      "label": "最大采样尺寸（长边）",
+      "type": "number",
+      "node": "27",
+      "input": "值",
+      "default": 2048,
+      "min": 1024,
+      "max": 4096,
+      "step": 128
+    },
+    {
+      "id": "lora_strength",
+      "label": "扩图 LoRA 强度",
+      "type": "number",
+      "node": "17",
+      "input": "strength_model",
+      "default": 0.7,
+      "min": 0,
+      "max": 1,
+      "step": 0.05
+    }
+  ]
+}
