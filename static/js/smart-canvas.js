@@ -10950,15 +10950,15 @@ function updateImageActionToolbar(){
     }
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
 }
-// 「放大」双模式：jimeng 需要配置组内有即梦图片平台；comfy 走本地 ComfyUI 引擎，
+// 「放大」三模式：jimeng 需要配置组内有即梦图片平台；comfy（Flux2-Klein）与 vosr2 走本地 ComfyUI 引擎，
 // 引擎下拉始终可选，后端不可达时由任务本身报错，因此这里视为可用。
 function upscaleModeAvailable(mode){
     if(mode === 'jimeng') return Boolean(jimengImageProviderId());
-    if(mode === 'comfy') return true;
+    if(mode === 'comfy' || mode === 'vosr2') return true;
     return false;
 }
 function upscaleModesAvailable(){
-    return upscaleModeAvailable('jimeng') || upscaleModeAvailable('comfy');
+    return upscaleModeAvailable('jimeng') || upscaleModeAvailable('comfy') || upscaleModeAvailable('vosr2');
 }
 function defaultUpscaleMode(){
     return upscaleModeAvailable('jimeng') ? 'jimeng' : 'comfy';
@@ -11715,11 +11715,12 @@ function runImageToolbarAction(action, mode){
         return;
     }
     if(action === 'upscale'){
-        // 悬停菜单里选中的模式优先；直接点主按钮时退回默认模式（有即梦走即梦，否则走 ComfyUI）。
-        if(mode === 'comfy' || (mode !== 'jimeng' && defaultUpscaleMode() === 'comfy')){
-            runSmartComfyUpscaleAction(node, index);
-        } else {
+        // 悬停菜单里选中的模式优先；直接点主按钮时退回默认模式（有即梦走即梦，否则走 Flux2-Klein）。
+        const resolvedMode = ['jimeng','comfy','vosr2'].includes(mode) ? mode : defaultUpscaleMode();
+        if(resolvedMode === 'jimeng'){
             runJimengUpscale(node, index);
+        } else {
+            runSmartComfyUpscaleAction(node, index, resolvedMode);
         }
         return;
     }
@@ -12451,24 +12452,34 @@ async function runSmartPromptMatting(sourceNode, imageIndex, promptText){
         smartPromptMattingRequests.delete(requestKey);
     }
 }
-// ComfyUI 本地放大：使用 system/2K高清放大-Klein 9B-api.json 工作流。
-// 该工作流有两个 SaveImage 输出：162「高清放大」（主体）、199「真实皮肤增强」（叠加放大模型的增强版）。
+// 本地 ComfyUI 放大双工作流：
+// - comfy（菜单名 Flux2-Klein）：system/2K高清放大-Klein 9B-api.json，157 为 LoadImage 入口，
+//   两个 SaveImage 输出：162「高清放大」（主体）、199「真实皮肤增强」（叠加放大模型的增强版）。
+// - vosr2：system/高清修复-VOSR2_api.json，3 为 LoadImage 入口，5 为 SaveImage 输出。
 const SMART_COMFY_UPSCALE_WORKFLOW = 'system/2K高清放大-Klein 9B-api.json';
+const SMART_VOSR2_UPSCALE_WORKFLOW = 'system/高清修复-VOSR2_api.json';
+const SMART_UPSCALE_INPUT_NODES = {
+    [SMART_COMFY_UPSCALE_WORKFLOW]: '157',
+    [SMART_VOSR2_UPSCALE_WORKFLOW]: '3'
+};
 const SMART_COMFY_UPSCALE_OUTPUTS = {
     '162': () => tr('smart.comfyUpscaleOutputMain'),
     '199': () => tr('smart.comfyUpscaleOutputEnhance')
 };
-const smartComfyUpscaleRequests = new Set();
-function smartComfyUpscaleRequestKey(node, index, item){
-    return `${node?.id || ''}:${Number(index) || 0}:${item?.url || ''}`;
+function smartUpscaleWorkflowForMode(mode){
+    return mode === 'vosr2' ? SMART_VOSR2_UPSCALE_WORKFLOW : SMART_COMFY_UPSCALE_WORKFLOW;
 }
-function smartComfyUpscaleOutputs(result){
+const smartComfyUpscaleRequests = new Set();
+function smartComfyUpscaleRequestKey(node, index, item, workflow=SMART_COMFY_UPSCALE_WORKFLOW){
+    return `${workflow}:${node?.id || ''}:${Number(index) || 0}:${item?.url || ''}`;
+}
+function smartComfyUpscaleOutputs(result, outputNames=SMART_COMFY_UPSCALE_OUTPUTS){
     const sourceItems = Array.isArray(result?.items) ? result.items : [];
     return resultMediaUrls(result).map((output, index) => {
         const url = typeof output === 'string' ? output : output?.url || '';
         if(!url) return null;
         const source = sourceItems.find(item => String(item?.url || '') === url) || {};
-        const nameFor = SMART_COMFY_UPSCALE_OUTPUTS[String(source.node_id || '')] || (() => `Upscale ${index + 1}`);
+        const nameFor = outputNames[String(source.node_id || '')] || (() => `Upscale ${index + 1}`);
         return stripImageGenerationMeta(copyMediaSizeFields(source, {
             url,
             kind:'image',
@@ -12477,7 +12488,7 @@ function smartComfyUpscaleOutputs(result){
         }));
     }).filter(item => item?.url);
 }
-async function runSmartComfyUpscaleAction(sourceNode, imageIndex){
+async function runSmartComfyUpscaleAction(sourceNode, imageIndex, mode='comfy'){
     const source = liveSmartNode(sourceNode) || sourceNode;
     const index = Number.isFinite(Number(imageIndex)) ? Number(imageIndex) : smartNodeToolbarImageIndex(source);
     const item = imageForDisplay(source?.images?.[index]);
@@ -12485,7 +12496,10 @@ async function runSmartComfyUpscaleAction(sourceNode, imageIndex){
         toast(tr('smart.comfyUpscaleNeedImage'));
         return;
     }
-    const requestKey = smartComfyUpscaleRequestKey(source, index, item);
+    const workflow = smartUpscaleWorkflowForMode(mode);
+    const inputNode = SMART_UPSCALE_INPUT_NODES[workflow] || '157';
+    const outputNames = workflow === SMART_VOSR2_UPSCALE_WORKFLOW ? {} : SMART_COMFY_UPSCALE_OUTPUTS;
+    const requestKey = smartComfyUpscaleRequestKey(source, index, item, workflow);
     if(smartComfyUpscaleRequests.has(requestKey)) return;
     smartComfyUpscaleRequests.add(requestKey);
     pushUndo();
@@ -12498,9 +12512,9 @@ async function runSmartComfyUpscaleAction(sourceNode, imageIndex){
         settingsMemory:false
     });
     const sourceRef = {url:item.url, name:item.name || smartImageNameFromUrl(item.url), kind:'image', nodeId:source.id, imageIndex:index};
-    const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_COMFY_UPSCALE_WORKFLOW, apiKind:'image'};
+    const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:workflow, apiKind:'image'};
     created.title = tr('smart.comfyUpscaleRunning');
-    created.upscale = {engine:'comfy', workflow:SMART_COMFY_UPSCALE_WORKFLOW, sourceNodeId:source.id, sourceImageIndex:index, sourceUrl:item.url};
+    created.upscale = {engine:'comfy', workflow, mode:mode === 'vosr2' ? 'vosr2' : 'comfy', sourceNodeId:source.id, sourceImageIndex:index, sourceUrl:item.url};
     created.sourceNodeId = source.id;
     created.runInputRefs = [{...sourceRef}];
     created.runSettings = runSettings;
@@ -12520,12 +12534,12 @@ async function runSmartComfyUpscaleAction(sourceNode, imageIndex){
     try {
         const inputName = await comfyNameForRef(sourceRef);
         const result = await runQueuedSmartComfyGenerate({
-            workflow_json:SMART_COMFY_UPSCALE_WORKFLOW,
-            params:{'157':{image:inputName}},
+            workflow_json:workflow,
+            params:{[inputNode]:{image:inputName}},
             type:'upscale',
             client_id:smartClientId
         });
-        const outputs = smartComfyUpscaleOutputs(result);
+        const outputs = smartComfyUpscaleOutputs(result, outputNames);
         if(!outputs.length) throw new Error(tr('smart.errComfyEmpty'));
         const live = liveSmartNode(created) || created;
         live.images = outputs;

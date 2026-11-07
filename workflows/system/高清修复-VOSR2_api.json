@@ -1,0 +1,117 @@
+{
+  "1": {
+    "inputs": {
+      "scale": 2,
+      "seed": 809500448475992,
+      "model": [
+        "2",
+        0
+      ],
+      "images": [
+        "7",
+        0
+      ],
+      "settings": [
+        "4",
+        0
+      ]
+    },
+    "class_type": "TESpeedVOSR2Image",
+    "_meta": {
+      "title": "TE-Speed VOSR2 Image"
+    }
+  },
+  "2": {
+    "inputs": {
+      "model_bundle": "VOSR2",
+      "precision": "auto",
+      "memory_policy": "auto",
+      "torch_compile": false,
+      "vae_encode_amp": false
+    },
+    "class_type": "TESpeedVOSR2Loader",
+    "_meta": {
+      "title": "TE-Speed VOSR2 Loader"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "5c0fa5a0e012c562d9bdc762ed09d3d50f4af4783d0354bc7ac6d803a18abfcc.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "4": {
+    "inputs": {
+      "quality_profile": "speed",
+      "tile_strategy": "auto",
+      "tile_size": 512,
+      "tile_overlap": 32,
+      "vae_tile_size": 1024,
+      "vae_tile_overlap": 32,
+      "image_batch": 1,
+      "frame_batch": 2,
+      "dino_batch": 2,
+      "temporal_cache": false,
+      "cache_threshold": 0.003,
+      "cache_refresh": 4,
+      "memory_policy": "auto",
+      "color_alignment": "wavelet"
+    },
+    "class_type": "TESpeedVOSR2Settings",
+    "_meta": {
+      "title": "TE-Speed VOSR2 Settings"
+    }
+  },
+  "5": {
+    "inputs": {
+      "filename_prefix": "VOSR2",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "6": {
+    "inputs": {
+      "compare_view": {
+        "__value__": [
+          "",
+          ""
+        ]
+      },
+      "image_a": [
+        "3",
+        0
+      ],
+      "image_b": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "ImageCompare",
+    "_meta": {
+      "title": "图像对比"
+    }
+  },
+  "7": {
+    "inputs": {
+      "upscale_method": "bicubic",
+      "largest_size": 2048,
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "ImageScaleToMaxDimension",
+    "_meta": {
+      "title": "图像缩放到最大尺寸"
+    }
+  }
+}

@@ -18670,13 +18670,45 @@ def clean_comfy_staging_inputs(now: Optional[float] = None) -> Dict[str, int]:
             result["skipped"] += 1
     return result
 
+# 每个内置放大工作流的图片输入节点：提交时必须指向本次上传的 staging 文件。
+COMFY_UPSCALE_INPUT_NODES = {
+    "system/2K高清放大-Klein 9B-api.json": "157",
+    "system/高清修复-VOSR2_api.json": "3",
+}
+
 def require_comfy_upscale_input(req: GenerateRequest):
-    if normalized_workflow_name(req.workflow_json) != "system/2K高清放大-Klein 9B-api.json":
+    input_node = COMFY_UPSCALE_INPUT_NODES.get(normalized_workflow_name(req.workflow_json))
+    if not input_node:
         return
-    image_name = str((req.params.get("157") or {}).get("image") or "").replace("\\", "/")
+    image_name = str((req.params.get(input_node) or {}).get("image") or "").replace("\\", "/")
     prefix = f"{COMFY_STAGING_SUBDIR}/"
     if not image_name.startswith(prefix) or ".." in image_name.split("/"):
         raise HTTPException(status_code=400, detail="本地放大缺少本次提交的图片输入，请重新选择图片后重试。")
+
+# ComfyUI 前端专属节点（便签、Reroute、PrimitiveNode、图像对比等）不会进入 /prompt 执行，
+# 混在 API 工作流里会让整次提交报节点不存在。只在没有其它节点引用它（终端）时移除，
+# 保证不留下悬空连线。
+COMFY_FRONTEND_ONLY_CLASS_TYPES = {"Note", "MarkdownNote", "PrimitiveNode", "Reroute", "ImageCompare"}
+
+def prune_comfy_frontend_only_nodes(workflow) -> List[str]:
+    if not isinstance(workflow, dict):
+        return []
+    referenced = set()
+    for node in workflow.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for value in inputs.values():
+            if isinstance(value, list) and len(value) == 2 and isinstance(value[1], int) and not isinstance(value[1], bool):
+                referenced.add(str(value[0]))
+    removed = []
+    for node_id in list(workflow.keys()):
+        node = workflow.get(node_id)
+        class_type = str(node.get("class_type") or "") if isinstance(node, dict) else ""
+        if class_type in COMFY_FRONTEND_ONLY_CLASS_TYPES and str(node_id) not in referenced:
+            workflow.pop(node_id, None)
+            removed.append(str(node_id))
+    return removed
 
 @app.post("/api/upload")
 async def upload_image(request: Request, files: List[UploadFile] = File(...)):
@@ -28233,6 +28265,7 @@ def generate(req: GenerateRequest, request: Request = None, notification_user_id
 
         with open(workflow_path, 'r', encoding='utf-8') as f:
             workflow = json.load(f)
+        prune_comfy_frontend_only_nodes(workflow)
 
         seed = random.randint(1, 4294967295)
 
