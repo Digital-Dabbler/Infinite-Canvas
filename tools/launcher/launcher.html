@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>无限画布 · 启动器</title>
+<style>
+    :root {
+        --bg:#0d1117; --card:#161b22; --card2:#1c2330; --line:#2a3140;
+        --text:#e6edf3; --muted:#8b949e; --brand:#4ade80; --warn:#fbbf24; --danger:#f87171;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:var(--bg); color:var(--text); font:14px/1.6 "Microsoft YaHei", "Segoe UI", sans-serif; padding:18px 20px 40px; }
+    h1 { font-size:19px; display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+    h1 small { color:var(--muted); font-size:12px; font-weight:400; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px 16px; }
+    .card h2 { font-size:13px; color:var(--muted); font-weight:600; margin-bottom:10px; letter-spacing:1px; }
+    .row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:6px 0; }
+    .dot { width:10px; height:10px; border-radius:50%; background:#555; flex:none; }
+    .dot.on { background:var(--brand); box-shadow:0 0 6px var(--brand); }
+    .dot.off { background:#666; }
+    .dot.starting { background:var(--warn); box-shadow:0 0 6px var(--warn); }
+    .kv { color:var(--muted); }
+    .kv b { color:var(--text); font-weight:600; }
+    button { background:var(--card2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 16px; font-size:13px; cursor:pointer; }
+    button:hover:not(:disabled) { border-color:var(--brand); }
+    button:disabled { opacity:.4; cursor:not-allowed; }
+    button.primary { background:#14532d; border-color:#166534; }
+    button.danger { background:#7f1d1d; border-color:#991b1b; }
+    button.ghost { background:transparent; }
+    a.open-link { color:var(--brand); text-decoration:none; border:1px solid var(--line); border-radius:8px; padding:7px 16px; font-size:13px; }
+    .commits { max-height:150px; overflow:auto; margin-top:8px; border-top:1px dashed var(--line); padding-top:6px; }
+    .commits div { font-size:12px; color:var(--muted); padding:1px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .commits code { color:var(--warn); }
+    #conflictCard, #undoRow { display:none; }
+    .conflict-file { display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--line); padding:7px 0; }
+    .conflict-file span { flex:1; word-break:break-all; font-size:13px; }
+    .conflict-file button { padding:4px 10px; font-size:12px; }
+    #logBox { background:#0a0d12; border:1px solid var(--line); border-radius:8px; height:220px; overflow:auto; padding:10px 12px; font:12px/1.5 Consolas, monospace; color:#9fd3a8; white-space:pre-wrap; word-break:break-all; }
+    #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#000c; border:1px solid var(--line); padding:9px 20px; border-radius:10px; display:none; max-width:80%; }
+    .note { color:var(--muted); font-size:12px; }
+    .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--muted); border-top-color:transparent; border-radius:50%; animation:sp 0.8s linear infinite; vertical-align:-2px; margin-right:6px; }
+    @keyframes sp { to { transform:rotate(360deg); } }
+    @media (max-width:760px){ .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<h1>无限画布 · 启动器 <small id="appVersion"></small></h1>
+
+<div class="grid">
+    <div class="card">
+        <h2>服务状态</h2>
+        <div class="row"><i id="svcDot" class="dot off"></i><b id="svcText">检测中…</b><span class="kv" id="svcPid"></span></div>
+        <div class="row kv" id="svcAddr">地址：—</div>
+        <div class="row">
+            <button id="btnStart" class="primary">启动</button>
+            <button id="btnStop">停止</button>
+            <button id="btnRestart">重启</button>
+            <a id="btnOpen" class="open-link" href="http://127.0.0.1:3000" target="_blank">打开工作台</a>
+        </div>
+        <div class="row note" id="svcNote"></div>
+    </div>
+
+    <div class="card">
+        <h2>GitHub 同步（你自己的仓库）</h2>
+        <div class="row kv">分支 <b id="gitBranch">—</b> · 版本 <b id="gitVersion">—</b></div>
+        <div class="row"><b id="syncText">—</b></div>
+        <div class="commits" id="commitList"></div>
+        <div class="row">
+            <button id="btnFetch">检查更新</button>
+            <button id="btnUpdate" class="primary">一键更新</button>
+            <button id="btnPush">备份我的改动到 GitHub</button>
+            <button id="btnUndo" class="danger">撤销更新</button>
+        </div>
+        <div class="row note" id="gitNote"></div>
+    </div>
+</div>
+
+<div class="card" id="conflictCard" style="margin-top:14px">
+    <h2>更新冲突处理</h2>
+    <div class="note" id="conflictHint"></div>
+    <div id="conflictFiles"></div>
+    <div class="row" style="margin-top:10px">
+        <button id="btnAllOurs">全部保留我的</button>
+        <button id="btnAllTheirs">全部用新版</button>
+        <button id="btnAbortAll" class="danger">撤销整个更新</button>
+    </div>
+</div>
+
+<div class="card" style="margin-top:14px">
+    <h2>服务日志（最近输出）</h2>
+    <div id="logBox">（还没有日志）</div>
+</div>
+
+<div class="row" style="margin-top:16px; justify-content:space-between">
+    <span class="note">关闭本窗口不影响正在运行的服务；启动器在窗口关闭 2 分钟后自动退出。</span>
+    <button id="btnQuit" class="ghost">退出启动器</button>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let busy = false, logOffset = 0, firstState = true;
+
+function toast(msg, ms){
+    const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+    clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms || 4000);
+}
+async function api(path, body){
+    const res = await fetch(path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : undefined);
+    return res.json();
+}
+async function action(path, body, btn){
+    if (busy) return;
+    busy = true;
+    const old = btn ? btn.textContent : '';
+    if (btn){ btn.disabled = true; btn.innerHTML = '<span class="spin"></span>' + old; }
+    try {
+        const r = await api(path, body);
+        toast(r.message || (r.ok ? '完成' : '失败'));
+        refreshState();
+    } catch(e){ toast('请求失败：' + e); }
+    finally {
+        busy = false;
+        if (btn){ btn.disabled = false; btn.textContent = old; }
+    }
+}
+function setSvc(s){
+    const dot = $('svcDot'), text = $('svcText');
+    dot.className = 'dot ' + (s.running ? (s.ours ? 'on' : 'starting') : 'off');
+    text.textContent = s.running ? (s.ours ? '运行中' : '端口被外部程序占用') : '已停止';
+    $('svcPid').textContent = s.running && s.pid ? '（PID ' + s.pid + '）' : '';
+    $('svcAddr').textContent = s.running ? ('本机 http://127.0.0.1:' + s.port + (s.lan ? ' · 局域网 http://' + s.lan + ':' + s.port : '')) : '地址：—';
+    $('svcNote').textContent = s.running && !s.ours ? '停止/重启按钮只认本项目自己启动的进程，外部占用不会被误杀。' : '';
+    $('btnStart').disabled = s.running;
+    $('btnStop').disabled = !s.running || !s.ours;
+    $('btnRestart').disabled = !s.running || !s.ours;
+}
+function setGit(g, upd){
+    $('gitBranch').textContent = g.branch || '—';
+    $('gitVersion').textContent = g.version || '—';
+    $('gitNote').textContent = g.error || (g.dirty && g.dirty.length ? '本地有 ' + g.dirty.length + ' 个未提交改动（更新时会自动暂存放回）' : '');
+    let sync = '—', cls = '';
+    if (!g.error){
+        if (g.behind === null) { sync = '还没检查过远端'; }
+        else if (g.behind > 0) { sync = '落后远端 ' + g.behind + ' 个提交，可点【一键更新】'; cls = 'var(--warn)'; }
+        else if (g.ahead > 0) { sync = '领先远端 ' + g.ahead + ' 个提交，建议点【备份我的改动】'; cls = 'var(--brand)'; }
+        else { sync = '已与 GitHub 同步'; cls = 'var(--brand)'; }
+    }
+    const st = $('syncText'); st.textContent = sync; st.style.color = cls || 'var(--muted)';
+    $('commitList').innerHTML = (g.behind_commits || []).map(c => '<div><code>' + c.sha.slice(0,8) + '</code> ' + escapeHtml(c.subject) + '</div>').join('');
+    $('btnUpdate').disabled = !(g.behind > 0) || !!g.error;
+    $('btnPush').disabled = !(g.ahead > 0) || !!g.error;
+    $('btnUndo').disabled = !(upd && upd.backup_sha && ['merging','merge_conflict','stash_conflict','done'].includes(upd.phase));
+}
+function setConflicts(g){
+    const files = g.unmerged || [];
+    $('conflictCard').style.display = files.length ? 'block' : 'none';
+    if (!files.length) return;
+    $('conflictHint').textContent = '以下文件两边都有改动，逐个选择，或用底部批量按钮（会弹确认）：';
+    $('conflictFiles').innerHTML = files.map(f =>
+        '<div class="conflict-file"><span>' + escapeHtml(f) + '</span>' +
+        '<button data-f="' + escapeHtml(f) + '" data-s="ours">保留我的</button>' +
+        '<button data-f="' + escapeHtml(f) + '" data-s="theirs">用新版</button></div>').join('');
+    $('conflictFiles').querySelectorAll('button').forEach(b =>
+        b.addEventListener('click', () => action('/api/git/resolve', {file:b.dataset.f, side:b.dataset.s}, b)));
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+async function refreshState(){
+    try {
+        const d = await api('/api/state');
+        setSvc(d.service); setGit(d.git, d.update); setConflicts(d.git);
+        $('appVersion').textContent = 'v' + (d.git.version || '');
+        if (firstState){
+            firstState = false;
+            if (!d.service.running) action('/api/service/start', null, $('btnStart'));
+        }
+    } catch(e){ /* 启动器自身瞬时故障不打扰 */ }
+}
+async function refreshLogs(){
+    try {
+        const d = await api('/api/logs?offset=' + logOffset);
+        if (d.text){
+            const box = $('logBox');
+            const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+            box.textContent += d.text;
+            const lines = box.textContent.split('\n');
+            if (lines.length > 3000) box.textContent = lines.slice(-2000).join('\n');
+            if (atBottom) box.scrollTop = box.scrollHeight;
+        }
+        logOffset = d.offset;
+    } catch(e){}
+}
+$('btnStart').addEventListener('click', e => action('/api/service/start', null, e.target));
+$('btnStop').addEventListener('click', e => action('/api/service/stop', null, e.target));
+$('btnRestart').addEventListener('click', e => action('/api/service/restart', null, e.target));
+$('btnFetch').addEventListener('click', e => action('/api/git/fetch', null, e.target));
+$('btnUpdate').addEventListener('click', e => action('/api/git/update', null, e.target));
+$('btnPush').addEventListener('click', e => action('/api/git/push', null, e.target));
+$('btnUndo').addEventListener('click', e => { if (confirm('撤销更新：代码回到本次更新之前，你的未提交改动会原样放回。确定？')) action('/api/git/undo', null, e.target); });
+$('btnAbortAll').addEventListener('click', e => { if (confirm('撤销整个更新：放弃刚才的合并与冲突选择，回到更新前状态。确定？')) action('/api/git/undo', null, e.target); });
+$('btnAllOurs').addEventListener('click', e => { if (confirm('批量：所有冲突文件都【保留我的】版本？')) action('/api/git/resolve', {file:'__all__', side:'ours'}, e.target); });
+$('btnAllTheirs').addEventListener('click', e => { if (confirm('批量：所有冲突文件都【用新版】？')) action('/api/git/resolve', {file:'__all__', side:'theirs'}, e.target); });
+$('btnQuit').addEventListener('click', async () => { try { await api('/api/shutdown', {}); } catch(e){} window.close(); });
+
+refreshState(); refreshLogs();
+setInterval(refreshState, 2500);
+setInterval(refreshLogs, 2000);
+setInterval(() => api('/api/ping', {}).catch(() => {}), 5000);
+</script>
+</body>
+</html>
