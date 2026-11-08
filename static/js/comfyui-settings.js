@@ -260,7 +260,8 @@ async function saveComfyInstances(){
 async function loadList(){
     try {
         const data = await fetch('/api/workflows').then(r=>r.json());
-        workflows = data.workflows || [];
+        // 系统工作流不在设置页展示，避免误操作（画布内仍正常可用）
+        workflows = (data.workflows || []).filter(w => w.source !== 'system');
         renderList();
         // 自动加载：当前没选中 或 之前选中的已不存在 → 选第一个
         const stillExists = selectedName && workflows.some(w => w.name === selectedName);
@@ -286,10 +287,8 @@ function renderList(){
             ${source === 'system'?`<span class="builtin-badge">${tr('comfy.systemWorkflows')}</span>`:''}
         </button>
     `).join('');
-    const system = workflows.filter(w => w.source === 'system');
-    const custom = workflows.filter(w => w.source === 'custom');
+    const custom = workflows.filter(w => w.source !== 'system');
     listEl.innerHTML = `
-        ${system.length ? `<div class="workflow-group-title">${escapeHtml(tr('comfy.systemWorkflows'))}</div>${renderItems(system, 'system')}` : ''}
         ${custom.length ? `<div class="workflow-group-title">${escapeHtml(tr('comfy.customWorkflows'))}</div>${renderItems(custom, 'custom')}` : ''}
     `;
     refreshIcons();

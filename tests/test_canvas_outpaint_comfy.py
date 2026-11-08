@@ -191,6 +191,14 @@ class CanvasOutpaintComfyTests(unittest.TestCase):
         self.assertIn(".outpaint-color-control button:disabled", self.css)
         self.assertIn(".outpaint-color-lock", self.css)
 
+    def test_settings_page_hides_system_workflows(self):
+        settings_js = (ROOT / "static" / "js" / "comfyui-settings.js").read_text(encoding="utf-8")
+        main_py = (ROOT / "main.py").read_text(encoding="utf-8")
+        # 设置页只列自定义工作流；系统工作流在前端隐藏、后端 PUT 有守卫（画布 GET 不受影响）
+        self.assertIn("workflows = (data.workflows || []).filter(w => w.source !== 'system');", settings_js)
+        self.assertNotIn("${system.length ?", settings_js)
+        self.assertIn('raise HTTPException(status_code=400, detail="系统工作流配置不可修改")', main_py)
+
     def test_outpaint_geometry_matches_goohai_python_reference(self):
         js = "\n".join([
             extract_js_function(self.smart_canvas_js, "outpaintNearest"),

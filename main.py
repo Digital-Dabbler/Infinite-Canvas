@@ -29213,6 +29213,8 @@ def save_workflow_config(name: str, payload: WorkflowConfig):
     workflow_path = workflow_path_from_name(name)
     if not os.path.exists(workflow_path):
         raise HTTPException(status_code=404, detail="Workflow not found")
+    if workflow_source_from_name(name) == "system":
+        raise HTTPException(status_code=400, detail="系统工作流配置不可修改")
     cfg_path = workflow_config_path(name)
     with open(cfg_path, "w", encoding="utf-8") as f:
         json.dump(payload.dict(by_alias=True), f, ensure_ascii=False, indent=2)
