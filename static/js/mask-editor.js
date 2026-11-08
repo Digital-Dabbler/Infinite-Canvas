@@ -38,6 +38,7 @@
     const PAINT_ALPHA = 5;           // alpha 大于该值视为"已涂抹"
     const MASK_TINT = '#22d3ee';     // 仅遮罩模式的单色叠加色（青色，深浅底图都可见）
     const ROOT_Z_INDEX = '2147483000';
+    const IMAGE_LOAD_TIMEOUT = 30000; // 底图载入兜底超时（毫秒），超时按 loadFail 处理
 
     // 9 个叠加色；每个颜色是一张独立图层，任一像素只属于其中一层
     const COLORS = {
@@ -126,22 +127,58 @@
         return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
     }
 
+    /**
+     * 等待图片可解码。
+     * 只监听 load/error 在个别环境下会丢事件（图片已进入 complete 状态却没派发事件，
+     * 编辑器就会永远卡在"未就绪"），因此额外用轮询兜底，并给一个总超时。
+     */
     function waitForImage(image) {
         return new Promise(function (resolve, reject) {
-            if (image.complete) {
-                if (image.naturalWidth > 0) resolve(image);
-                else reject(new Error('image load failed'));
-                return;
-            }
-            image.addEventListener('load', function onLoad() {
-                image.removeEventListener('error', onError);
-                resolve(image);
-            });
-            function onError() {
+            let settled = false;
+            let pollTimer = 0;
+            let timeoutTimer = 0;
+
+            function cleanup() {
+                settled = true;
+                if (pollTimer) clearInterval(pollTimer);
+                if (timeoutTimer) clearTimeout(timeoutTimer);
+                pollTimer = 0;
+                timeoutTimer = 0;
                 image.removeEventListener('load', onLoad);
+                image.removeEventListener('error', onError);
+            }
+
+            function decide() {
+                if (settled || !image.complete) return;
+                if (image.naturalWidth > 0) {
+                    cleanup();
+                    resolve(image);
+                } else {
+                    cleanup();
+                    reject(new Error('image load failed'));
+                }
+            }
+
+            function onLoad() {
+                decide();
+            }
+
+            function onError() {
+                if (settled) return;
+                cleanup();
                 reject(new Error('image load failed'));
             }
+
+            image.addEventListener('load', onLoad);
             image.addEventListener('error', onError);
+            decide();
+            if (settled) return;
+            pollTimer = setInterval(decide, 60);
+            timeoutTimer = setTimeout(function () {
+                if (settled) return;
+                cleanup();
+                reject(new Error('image load timeout'));
+            }, IMAGE_LOAD_TIMEOUT);
         });
     }
 
