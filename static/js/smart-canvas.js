@@ -19748,18 +19748,33 @@ async function saveMaskEditorResult(node, index, base, result){
         if(!maskFile) throw new Error(tr('canvas.maskEditorSaveFail'));
     }
     let colorFile = null;
-    if(result.colorBlob){
-        colorFile = await uploadCroppedBlob(result.colorBlob, `${base}_maskcolor.png`);
+    // 颜色叠加：额外导出一张"带色块的原图"，像其它预处理结果一样放到右侧成为独立图片节点，
+    // 用户可以直接把它连成参考图使用；它不参与遮罩，遮罩仍是上面那张黑白图。
+    if(painted && result.colorBlob){
+        colorFile = await uploadCroppedBlob(result.colorBlob, `${base}_maskcolor.png`).catch(() => null);
     }
     pushUndo();
     const updated = {...(live.images[index] || {})};
     // 保存空遮罩 = 移除已有遮罩，与旧逻辑保持一致。
     if(maskFile) updated.mask = {url:maskFile.url, name:maskFile.name, kind:'image'};
     else delete updated.mask;
-    // 颜色叠加生成的彩色图是"参考图"，不是遮罩：单独存在 maskColor 上，生成时按普通参考图追加。
-    if(colorFile && maskFile) updated.maskColor = {url:colorFile.url, name:colorFile.name, kind:'image'};
-    else delete updated.maskColor;
+    delete updated.maskColor;
     live.images[index] = updated;
+    if(colorFile){
+        // 同一个引用图反复保存颜色叠加时，更新上次生成的那张图，避免越积越多。
+        const linked = updated.maskColorNodeId
+            ? nodes.find(n => n.id === updated.maskColorNodeId && Array.isArray(n.images) && n.images.length)
+            : null;
+        if(linked){
+            linked.images[0] = {...linked.images[0], url:colorFile.url, name:colorFile.name, kind:'image', natural_w:0, natural_h:0};
+        } else {
+            const rect = nodeRect(live);
+            const created = createImageNodeAt({x:rect.x + rect.width + 180, y:rect.y + rect.height / 2}, [colorFile], {skipUndo:true});
+            if(created?.id) updated.maskColorNodeId = created.id;
+        }
+    } else if(updated.maskColorNodeId){
+        delete updated.maskColorNodeId;
+    }
     render(); scheduleSave();
     toast(painted ? tr('canvas.maskSaved') : tr('canvas.maskRemoved'));
 }
@@ -21811,9 +21826,7 @@ function promptRequestRefs(refs){
         role:`image_${index + 1}`,
         // 画布上绘制的遮罩必须随引用图一起传给生成路径：ComfyUI 的 LoadImage
         // 会从图片 alpha 通道读取遮罩，前端据此把遮罩合成进 PNG 再上传。
-        mask:img.mask ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined,
-        // 颜色叠加导出的彩色参考图：随引用图一起送给生成路径，但只当普通参考图用。
-        mask_color:img.maskColor?.url ? {url:img.maskColor.url, name:img.maskColor.name || '', kind:'image'} : undefined
+        mask:img.mask ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined
     }));
 }
 function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=false, ctx=smartLoopContext){
@@ -23753,14 +23766,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, canvasBindin
     const requestSize = runSettings.imageCapabilitySize
         || dimensionSize
         || sizeForRun(runSettings);
-    const referenceImages = imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(({mask_color, ...ref}) => ({...ref, mask_url:ref.mask?.url || ''}));
-    // 遮罩编辑器的「颜色叠加」会另存一张带色块的原图：它的作用是为模型提供"改哪里、拆成几块"的
-    // 视觉提示，不是遮罩本身，所以只作为普通参考图追加，绝不参与 mask_url。
-    (refs || []).forEach(ref => {
-        const colorRef = ref?.mask_color;
-        if(!colorRef?.url || referenceImages.length >= SMART_REFERENCE_IMAGE_MAX) return;
-        referenceImages.push({url:colorRef.url, name:colorRef.name || 'color_mask.png', kind:'image'});
-    });
+    const referenceImages = imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(ref => ({...ref, mask_url:ref.mask?.url || ''}));
     const payload = {
         prompt,
         provider_id:runSettings.provider_id,

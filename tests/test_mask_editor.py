@@ -84,13 +84,15 @@ class MaskEditorFrontendTests(unittest.TestCase):
         self.assertIn("if(action === 'mask'){", self.canvas_js)
         self.assertIn("async function openMaskEditorForImage(node, index)", self.canvas_js)
         self.assertIn("async function saveMaskEditorResult(node, index, base, result)", self.canvas_js)
-        self.assertIn("updated.maskColor = {url:colorFile.url", self.canvas_js)
-        # 颜色叠加图只作为普通参考图追加，不参与 mask_url。
-        self.assertIn("mask_color:img.maskColor?.url ?", self.canvas_js)
-        # mask_color 只用于追加普通参考图，不能跟随引用对象发给服务端。
-        self.assertIn("map(({mask_color, ...ref}) => ({...ref, mask_url:ref.mask?.url || ''}))", self.canvas_js)
-        self.assertIn("referenceImages.push({url:colorRef.url", self.canvas_js)
-        self.assertIn("referenceImages.push({url:colorRef.url", self.canvas_js)
+        # 颜色叠加导出的彩色图落到右侧独立图片节点，供用户直接当参考图连线。
+        self.assertIn("uploadCroppedBlob(result.colorBlob, `${base}_maskcolor.png`)", self.canvas_js)
+        self.assertIn("createImageNodeAt({x:rect.x + rect.width + 180", self.canvas_js)
+        self.assertIn("delete updated.maskColor;", self.canvas_js)
+        # 重复保存时复用上次那张颜色叠加图，不重复建节点。
+        self.assertIn("updated.maskColorNodeId = created.id;", self.canvas_js)
+        # 不再有隐藏的自动追加参考图逻辑。
+        self.assertNotIn("mask_color", self.canvas_js)
+        self.assertNotIn("referenceImages.push({url:colorRef.url", self.canvas_js)
 
     def test_i18n_keys_present(self):
         for key in (
