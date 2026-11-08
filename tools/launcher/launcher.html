@@ -102,7 +102,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let busy = false, logOffset = 0, firstState = true;
+let busy = false, logOffset = 0, firstState = true, firstLogPaint = true;
 
 function toast(msg, ms){
     const t = $('toast'); t.textContent = msg; t.style.display = 'block';
@@ -112,13 +112,17 @@ async function api(path, body){
     const res = await fetch(path, body ? {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)} : undefined);
     return res.json();
 }
+async function post(path, body){
+    const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body || {})});
+    return res.json();
+}
 async function action(path, body, btn){
     if (busy) return;
     busy = true;
     const old = btn ? btn.textContent : '';
     if (btn){ btn.disabled = true; btn.innerHTML = '<span class="spin"></span>' + old; }
     try {
-        const r = await api(path, body);
+        const r = await post(path, body);
         toast(r.message || (r.ok ? '完成' : '失败'));
         refreshState();
     } catch(e){ toast('请求失败：' + e); }
@@ -184,11 +188,21 @@ async function refreshLogs(){
         const d = await api('/api/logs?offset=' + logOffset);
         if (d.text){
             const box = $('logBox');
+            // 用户手动往上翻看历史时不打断；否则始终贴底显示最新输出。
             const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-            box.textContent += d.text;
+            const keep = !atBottom && !firstLogPaint;
+            if (firstLogPaint || box.textContent === '（还没有日志）') box.textContent = d.text;
+            else box.textContent += d.text;
             const lines = box.textContent.split('\n');
             if (lines.length > 3000) box.textContent = lines.slice(-2000).join('\n');
-            if (atBottom) box.scrollTop = box.scrollHeight;
+            // 只在用户自己往上翻时保留位置
+            if (!keep) {
+                box.scrollTop = box.scrollHeight;
+                // 首次拼接大段历史时，浏览器要等一帧才完成排版；
+                // 只设一次 scrollTop 会被回弹到顶部，所以排版后再补一次。
+                requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
+            }
+            firstLogPaint = false;
         }
         logOffset = d.offset;
     } catch(e){}
@@ -206,9 +220,10 @@ $('btnAllTheirs').addEventListener('click', e => { if (confirm('批量：所有�
 $('btnQuit').addEventListener('click', async () => { try { await api('/api/shutdown', {}); } catch(e){} window.close(); });
 
 refreshState(); refreshLogs();
+post('/api/ping', {});
 setInterval(refreshState, 2500);
 setInterval(refreshLogs, 2000);
-setInterval(() => api('/api/ping', {}).catch(() => {}), 5000);
+setInterval(() => post('/api/ping', {}).catch(() => {}), 5000);
 </script>
 </body>
 </html>

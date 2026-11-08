@@ -9,32 +9,57 @@ import io
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.parse
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 SERVER_LOG = os.path.join(LOG_DIR, "launcher_server.log")
+LAUNCHER_LOG = os.path.join(LOG_DIR, "launcher.log")
 SERVICE_STATE = os.path.join(LOG_DIR, "launcher_server.json")
 PORT_FILE = os.path.join(LOG_DIR, "launcher_port.txt")
 HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.html")
 
 SERVICE_PORT = 3000
 PREFERRED_PORT = 3100
+
+# 启动器没有控制台，任何子进程（netstat/git/powershell/tasklist）都必须隐藏窗口。
+# 不带的后果：页面每 2.5 秒轮询状态时会在桌面弹出一排黑框，用户看到的就是"窗口一直闪"。
+if os.name == "nt":
+    SUBPROCESS_HIDDEN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+else:
+    SUBPROCESS_HIDDEN = {}
 GIT_IDENTITY = ["-c", "user.name=InfiniteCanvasLauncher", "-c", "user.email=launcher@local"]
 
 # ---------------------------------------------------------------- 工具函数
+
+def log_line(msg):
+    """启动器自身没有控制台，所有关键动作写 logs/launcher.log 便于排查。"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with io.open(LAUNCHER_LOG, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    except OSError:
+        pass
+
+
+def message_box(text, title="无限画布 · 启动器"):
+    try:
+        ctypes.windll.user32.MessageBoxW(0, text, title, 0x40)
+    except Exception:  # noqa: BLE001
+        pass
 
 def run_cmd(args, cwd=BASE_DIR, timeout=60):
     try:
         proc = subprocess.run(
             args, cwd=cwd, timeout=timeout,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            **SUBPROCESS_HIDDEN,
         )
         return {
             "code": proc.returncode,
@@ -66,6 +91,14 @@ def write_json(path, payload):
         pass
 
 
+def read_text(path):
+    try:
+        with io.open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def project_python():
     exe = os.path.join(BASE_DIR, "python", "python.exe")
     return exe if os.path.exists(exe) else sys.executable
@@ -90,13 +123,22 @@ def pid_image_path(pid):
     try:
         import ctypes.wintypes
         kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+        # QueryFullProcessImageNameW 在 kernel32（不是 advapi32）；restype 必须显式声明，
+        # 否则 64 位系统上句柄/返回值按 32 位 int 截断
+        kernel32.QueryFullProcessImageNameW.restype = ctypes.wintypes.BOOL
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            ctypes.wintypes.HANDLE, ctypes.wintypes.DWORD,
+            ctypes.wintypes.LPWSTR, ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
         handle = kernel32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
         if not handle:
             return ""
         try:
             buf = ctypes.create_unicode_buffer(4096)
             size = ctypes.wintypes.DWORD(4096)
-            if ctypes.windll.advapi32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
                 return buf.value
             return ""
         finally:
@@ -198,7 +240,8 @@ def start_service():
     logf = io.open(SERVER_LOG, "ab")
     flags = 0
     if os.name == "nt":
-        flags = 0x00000008 | 0x00000200  # DETACHED | CREATE_NEW_PROCESS_GROUP
+        # DETACHED | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+        flags = 0x00000008 | 0x00000200 | 0x08000000
     try:
         proc = subprocess.Popen(
             [exe, "main.py"], cwd=BASE_DIR,
@@ -209,10 +252,10 @@ def start_service():
         logf.close()
         return {"ok": False, "message": f"启动失败：{exc}", "state": current}
     write_json(SERVICE_STATE, {"pid": proc.pid, "started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "exe": exe})
-    ready = wait_port_ready(SERVICE_PORT, timeout=60)
+    ready = wait_port_ready(SERVICE_PORT, timeout=180)
     return {
         "ok": ready,
-        "message": "服务已就绪" if ready else "进程已启动，但 60 秒内端口未就绪，请查看日志",
+        "message": "服务已就绪" if ready else "进程已启动，但 3 分钟内端口未就绪，请查看日志",
         "state": service_status(),
     }
 
@@ -251,6 +294,9 @@ class GitSync:
     def __init__(self, cwd=BASE_DIR):
         self.cwd = cwd
         self.record_path = os.path.join(cwd, "logs", "launcher_update.json")
+        # 缓存按仓库路径隔离：不同 cwd 的实例（测试里的临时仓库）绝不能互相读到状态。
+        self._state_cache = None
+        self._state_at = 0.0
 
     def _record(self):
         return read_json(self.record_path, {})
@@ -282,6 +328,34 @@ class GitSync:
         return [line for line in res["out"].splitlines() if line.strip()]
 
     def state(self):
+        # 一次请求里可能被调多次（fetch/push/update 的返回值都带 state），
+        # 缓存到显式 invalidate() 为止，避免一次点击连跑几十条 git。
+        if self._state_cache is not None:
+            return self._state_cache
+        info = self._compute_state()
+        self._state_cache = info
+        return info
+
+    def invalidate(self):
+        self._state_cache = None
+
+    def _fresh(self, result):
+        """动作类方法统一收尾：丢掉旧缓存，再把返回值里的 state 换成动作之后的真实状态。
+
+        只在动作开始前偶尔 invalidate 是不够的——干净工作区做 ff 更新时全程不会触发
+        invalidate，页面就会拿"更新前 behind=1"的旧快照，误以为更新没生效。
+        """
+        self.invalidate()
+        if isinstance(result, dict):
+            result["state"] = self.state()
+        return result
+
+    def _current(self):
+        """返回值里的 state 一律现算：动作中途就拼好的 dict 不能把动作前的快照带出去。"""
+        self._state_cache = None
+        return self._compute_state()
+
+    def _compute_state(self):
         branch = self.branch()
         origin = self.git(["remote", "get-url", "origin"])["out"].strip()
         info = {
@@ -318,22 +392,23 @@ class GitSync:
         return info
 
     def fetch(self):
+        self.invalidate()
         res = self.git(["fetch", "origin", "--prune"], timeout=120)
         if res["code"] != 0:
-            return {"ok": False, "message": f"fetch 失败：{(res['err'] or res['out']).strip()[:300]}", "state": self.state()}
-        return {"ok": True, "message": "已获取远端最新状态", "state": self.state()}
+            return self._fresh({"ok": False, "message": f"fetch 失败：{(res['err'] or res['out']).strip()[:300]}"})
+        return self._fresh({"ok": True, "message": "已获取远端最新状态"})
 
     def push(self):
         branch = self.branch()
+        self.invalidate()
         res = self.git(["push", "origin", f"HEAD:{branch}"], timeout=180)
         ok = res["code"] == 0
         note = "" if not self.tracked_dirty() else "（注意：未提交的改动不在推送范围内）"
-        return {"ok": ok, "message": ("已推送 " if ok else "推送失败：") + (branch if ok else (res["err"] or res["out"]).strip()[:300]) + note,
-                "state": self.state()}
+        return self._fresh({"ok": ok, "message": ("已推送 " if ok else "推送失败：") + (branch if ok else (res["err"] or res["out"]).strip()[:300]) + note})
 
     def update(self):
         """一键更新：脏改动 stash → 记录备份点 → ff-only/merge origin/分支 → stash pop。"""
-        state = self.state()
+        state = self._current()
         if state["error"]:
             return {"ok": False, "message": state["error"], "state": state}
         if state["unmerged"]:
@@ -343,11 +418,12 @@ class GitSync:
         record = {"backup_sha": state["head"], "merge_sha": "", "stash_ref": "", "stash_popped": False, "phase": "merging"}
         self._save_record(record)
         if state["dirty"]:
+            self.invalidate()
             stash = self.git(["stash", "push", "-m", f"launcher-update-{time.strftime('%Y%m%d-%H%M%S')}"])
             if stash["code"] != 0:
                 record["phase"] = "none"
                 self._save_record(record)
-                return {"ok": False, "message": f"暂存本地改动失败：{(stash['err'] or stash['out']).strip()[:200]}", "state": self.state()}
+                return {"ok": False, "message": f"暂存本地改动失败：{(stash['err'] or stash['out']).strip()[:200]}", "state": self._current()}
             record["stash_ref"] = self.git(["rev-parse", "stash@{0}"])["out"].strip()
             self._save_record(record)
         ff = self.git(["merge", "--ff-only", f"origin/{state['branch']}"])
@@ -358,11 +434,11 @@ class GitSync:
             if self.unmerged():
                 record["phase"] = "merge_conflict"
                 self._save_record(record)
-                return {"ok": False, "conflicts": True, "message": "更新出现冲突，请逐文件选择保留哪边", "state": self.state()}
+                return {"ok": False, "conflicts": True, "message": "更新出现冲突，请逐文件选择保留哪边", "state": self._current()}
             record["phase"] = "failed"
             self._save_record(record)
-            return {"ok": False, "message": f"合并失败：{(ff['err'] or ff['out']).strip()[:300]}", "state": self.state()}
-        return self._finish(record, "更新完成，建议点【重启】让新代码生效")
+            return {"ok": False, "message": f"合并失败：{(ff['err'] or ff['out']).strip()[:300]}", "state": self._current()}
+        return self._fresh(self._finish(record, "更新完成，建议点【重启】让新代码生效"))
 
     def _finish(self, record, message):
         if record.get("stash_ref") and not record.get("stash_popped"):
@@ -371,12 +447,12 @@ class GitSync:
                 if self.unmerged():
                     record["phase"] = "stash_conflict"
                     self._save_record(record)
-                    return {"ok": False, "conflicts": True, "message": "更新本身成功，但放回本地未提交改动时出现冲突，请逐文件选择", "state": self.state()}
+                    return {"ok": False, "conflicts": True, "message": "更新本身成功，但放回本地未提交改动时出现冲突，请逐文件选择", "state": self._current()}
             else:
                 record["stash_popped"] = True
         record["phase"] = "done"
         self._save_record(record)
-        return {"ok": True, "message": message, "state": self.state()}
+        return {"ok": True, "message": message, "state": self._current()}
 
     def _drop_stash_by_sha(self, sha):
         """git stash drop 只认 stash@{n} 形式的 ref，不认裸 commit sha；按列表匹配后删。"""
@@ -389,51 +465,56 @@ class GitSync:
                 self.git(["stash", "drop", parts[0]])
                 return
 
+
     def resolve(self, name, side):
         """side: ours=保留我的 / theirs=用新版；name=__all__ 批量。"""
+        self.invalidate()
         record = self._record()
         files = self.unmerged()
         if not files:
-            return {"ok": False, "message": "当前没有冲突文件", "state": self.state()}
+            return {"ok": False, "message": "当前没有冲突文件", "state": self._current()}
         if name != "__all__":
             if name not in files:
-                return {"ok": False, "message": f"{name} 不在冲突列表中", "state": self.state()}
+                return {"ok": False, "message": f"{name} 不在冲突列表中", "state": self._current()}
             files = [name]
         # stash pop 的冲突里，"我的未提交改动"在 --theirs 一侧，语义要翻转
         real = {"ours": "ours", "theirs": "theirs"}
         if record.get("phase") == "stash_conflict":
             real = {"ours": "theirs", "theirs": "ours"}
         if side not in ("ours", "theirs"):
-            return {"ok": False, "message": "side 只能是 ours/theirs", "state": self.state()}
+            return {"ok": False, "message": "side 只能是 ours/theirs", "state": self._current()}
         for path in files:
+            self.invalidate()
             q = self.git(["checkout", f"--{real[side]}", "--", path])
             if q["code"] != 0:
-                return {"ok": False, "message": f"{path} 处理失败：{(q['err'] or q['out']).strip()[:200]}", "state": self.state()}
+                return {"ok": False, "message": f"{path} 处理失败：{(q['err'] or q['out']).strip()[:200]}", "state": self._current()}
             self.git(["add", "--", path])
         left = self.unmerged()
         if left:
-            return {"ok": True, "message": f"已处理 {len(files)} 个，还剩 {len(left)} 个", "state": self.state()}
+            return {"ok": True, "message": f"已处理 {len(files)} 个，还剩 {len(left)} 个", "state": self._current()}
         if record.get("phase") == "merge_conflict":
             commit = self.git(GIT_IDENTITY + ["commit", "--no-edit"])
             if commit["code"] != 0:
-                return {"ok": False, "message": f"冲突已选完但提交失败：{(commit['err'] or commit['out']).strip()[:200]}", "state": self.state()}
+                return {"ok": False, "message": f"冲突已选完但提交失败：{(commit['err'] or commit['out']).strip()[:200]}", "state": self._current()}
             record["merge_sha"] = self.head()
         elif record.get("phase") == "stash_conflict":
             record["stash_popped"] = True
             self._drop_stash_by_sha(record.get("stash_ref"))
-        return self._finish(record, "冲突全部处理完毕")
+        return self._fresh(self._finish(record, "冲突全部处理完毕"))
+
 
     def undo(self):
+        self.invalidate()
         record = self._record()
         backup = record.get("backup_sha") or ""
         if not backup or self.git(["rev-parse", "--verify", backup])["code"] != 0:
-            return {"ok": False, "message": "没有可撤销的更新备份点", "state": self.state()}
+            return {"ok": False, "message": "没有可撤销的更新备份点", "state": self._current()}
         phase = record.get("phase") or ""
         if phase == "merge_conflict":
             self.git(["merge", "--abort"])
         head = self.head()
         if head not in (backup, record.get("merge_sha")):
-            return {"ok": False, "message": "更新之后又有新的提交，不敢自动回退，请手动处理", "state": self.state()}
+            return {"ok": False, "message": "更新之后又有新的提交，不敢自动回退，请手动处理", "state": self._current()}
         carry_ref = ""
         restore_ref = ""
         stash_pending = record.get("stash_ref") and not record.get("stash_popped")
@@ -444,28 +525,29 @@ class GitSync:
                 self.git(["add", "--", path])
             restore_ref = record.get("stash_ref") or ""
         elif self.tracked_dirty():
+            self.invalidate()
             stash = self.git(["stash", "push", "-m", "launcher-undo"])
             if stash["code"] != 0:
-                return {"ok": False, "message": f"暂存当前改动失败：{(stash['err'] or stash['out']).strip()[:200]}", "state": self.state()}
+                return {"ok": False, "message": f"暂存当前改动失败：{(stash['err'] or stash['out']).strip()[:200]}", "state": self._current()}
             carry_ref = self.git(["rev-parse", "stash@{0}"])["out"].strip()
         elif stash_pending:
             restore_ref = record.get("stash_ref") or ""
         if head != backup:
             reset = self.git(["reset", "--hard", backup])
             if reset["code"] != 0:
-                return {"ok": False, "message": f"回退失败：{(reset['err'] or reset['out']).strip()[:200]}", "state": self.state()}
+                return {"ok": False, "message": f"回退失败：{(reset['err'] or reset['out']).strip()[:200]}", "state": self._current()}
         if carry_ref:
             pop = self.git(["stash", "pop"])
             if pop["code"] != 0:
-                return {"ok": False, "message": "代码已回退，但放回你的改动失败，请到 git stash 里手动找回", "state": self.state()}
+                return {"ok": False, "message": "代码已回退，但放回你的改动失败，请到 git stash 里手动找回", "state": self._current()}
         if restore_ref:
             apply = self.git(["stash", "apply", restore_ref])
             if apply["code"] != 0:
-                return {"ok": False, "message": "代码已回退，但放回你的改动出现冲突，stash 条目保留，请手动处理", "state": self.state()}
+                return {"ok": False, "message": "代码已回退，但放回你的改动出现冲突，stash 条目保留，请手动处理", "state": self._current()}
             self._drop_stash_by_sha(restore_ref)
         record["phase"] = "undone"
         self._save_record(record)
-        return {"ok": True, "message": "已撤销更新，回到更新前的状态", "state": self.state()}
+        return self._fresh({"ok": True, "message": "已撤销更新，回到更新前的状态"})
 
     def update_record(self):
         return self._record()
@@ -473,6 +555,51 @@ class GitSync:
 # ---------------------------------------------------------------- HTTP 控制台
 
 HEARTBEAT = {"last": time.time(), "loaded": False}
+
+# 页面轮询的状态快照：后台线程每 SNAPSHOT_INTERVAL 秒重采一次，页面只读它。
+STATE_CACHE = os.path.join(LOG_DIR, "launcher_state.json")
+SNAPSHOT_INTERVAL = 3.0
+SNAPSHOT_LOCK = threading.Lock()
+
+
+def build_snapshot():
+    """采集一次完整状态。只在后台线程按节奏调用，绝不在请求线程里调用。"""
+    with SNAPSHOT_LOCK:
+        git = GitSync()
+        try:
+            git_state = git.state()
+            update_record = git.update_record()
+        except Exception as exc:  # noqa: BLE001
+            log_line(f"snapshot: git 状态读取失败：{exc}")
+            git_state, update_record = {"error": str(exc)}, {}
+        return {
+            "service": service_status(),
+            "app": {"version": read_text(os.path.join(BASE_DIR, "VERSION")).strip()[:40]},
+            "git": git_state,
+            "update": update_record,
+            "sampled_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+
+def snapshot_worker():
+    """后台定时采集；出错也不退出，下一次继续。"""
+    while True:
+        try:
+            write_json(STATE_CACHE, build_snapshot())
+        except Exception as exc:  # noqa: BLE001
+            log_line(f"snapshot_worker: {exc}")
+        time.sleep(SNAPSHOT_INTERVAL)
+
+
+def refresh_snapshot():
+    """动作类接口（启停/更新/推拉）改完立刻刷新，页面不用等下一个采集点。"""
+    try:
+        snapshot = build_snapshot()
+        write_json(STATE_CACHE, snapshot)
+        return snapshot
+    except Exception as exc:  # noqa: BLE001
+        log_line(f"refresh_snapshot: {exc}")
+        return {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -500,18 +627,30 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     def _payload(self):
-        git = GitSync()
+        # 页面轮询只读缓存：git/netstat 由后台线程每 3 秒采集一次。
+        # 以前在这里直接跑 git，2.5 秒一轮会在桌面闪出一排黑框。
+        snapshot = read_json(STATE_CACHE, {})
+        if not snapshot:
+            snapshot = build_snapshot()
+            write_json(STATE_CACHE, snapshot)
+        snapshot = dict(snapshot)
+        snapshot.setdefault("service", {})["launcher_port"] = self.server.server_address[1]
         version_path = os.path.join(BASE_DIR, "VERSION")
-        return {
-            "service": service_status(),
-            "app": {"version": "", "launcher_port": self.server.server_address[1]},
-            "git": git.state(),
-            "update": git.update_record(),
-        }
+        snapshot.setdefault("app", {})["version"] = read_text(version_path).strip()[:40]
+        snapshot["app"]["launcher_port"] = self.server.server_address[1]
+        return snapshot
+
+    def _log_request(self, method, path):
+        # 排障用：每种路径只记首次，避免轮询刷屏
+        seen = Handler._seen_paths
+        if path not in seen:
+            seen.add(path)
+            log_line(f"request: {method} {path}")
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        self._log_request("GET", path)
         if path in ("/", "/index.html"):
             try:
                 with io.open(HTML_PATH, "r", encoding="utf-8") as f:
@@ -545,8 +684,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send(404, {"error": "not found"})
 
+    _seen_paths = set()
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        self._log_request("POST", path)
         body = self._json_body()
         git = GitSync()
         if path == "/api/ping":
@@ -559,58 +701,108 @@ class Handler(BaseHTTPRequestHandler):
             threading.Timer(0.4, lambda: os._exit(0)).start()
             return
         if path == "/api/service/start":
-            self._send(200, start_service())
+            result = start_service(); refresh_snapshot(); self._send(200, result)
             return
         if path == "/api/service/stop":
-            self._send(200, stop_service())
+            result = stop_service(); refresh_snapshot(); self._send(200, result)
             return
         if path == "/api/service/restart":
-            self._send(200, restart_service())
+            result = restart_service(); refresh_snapshot(); self._send(200, result)
             return
         if path == "/api/git/fetch":
-            self._send(200, git.fetch())
+            result = git.fetch(); refresh_snapshot(); self._send(200, result)
             return
         if path == "/api/git/update":
-            self._send(200, git.update())
+            result = git.update(); refresh_snapshot(); self._send(200, result)
             return
         if path == "/api/git/push":
-            self._send(200, git.push())
+            result = git.push(); refresh_snapshot(); self._send(200, result)
             return
         if path == "/api/git/undo":
-            self._send(200, git.undo())
+            result = git.undo(); refresh_snapshot(); self._send(200, result)
             return
         if path == "/api/git/resolve":
-            self._send(200, git.resolve(str(body.get("file") or ""), str(body.get("side") or "")))
+            result = git.resolve(str(body.get("file") or ""), str(body.get("side") or ""))
+            refresh_snapshot(); self._send(200, result)
             return
         self._send(404, {"error": "not found"})
 
 # ---------------------------------------------------------------- 入口
 
-def find_edge():
-    candidates = []
-    for env in ("ProgramFiles(x86)", "ProgramFiles", "LocalAppData"):
-        root = os.environ.get(env, "")
-        if root:
-            candidates.append(os.path.join(root, "Microsoft", "Edge", "Application", "msedge.exe"))
-            candidates.append(os.path.join(root, "Microsoft", "Edge", "msedge.exe"))
-    candidates.append(os.path.join(os.environ.get("PROGRAMFILES", "C:\\Program Files (x86)"), "Microsoft", "Edge", "Application", "msedge.exe"))
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return ""
+def launcher_script():
+    return os.path.join(BASE_DIR, "tools", "launcher", "launcher.py")
 
 
-def open_window(url):
-    edge = find_edge()
-    if edge:
+def window_script():
+    return os.path.join(BASE_DIR, "tools", "launcher", "window.py")
+
+
+def spawn_window(url):
+    """用同目录 pythonw 拉起原生窗口进程（不开任何浏览器）。
+
+    历史教训（本机实测，不要再走回头路）：
+    ① msedge/chrome --app=URL → 本机浏览器以管理员权限运行，普通权限进程拉 --app
+       会被系统拦截并反复弹"Edge 提权冲突"；
+    ② webbrowser.open()/os.startfile() → 默认浏览器 ProgId 残留指向已卸载的 msedge，
+       返回成功却什么都不发生；
+    ③ 结论：窗口必须由我们自己开（tools/launcher/window.py + 内置 WebView2 组件）。
+    """
+    exe = sys.executable if sys.executable.lower().endswith(".exe") else ""
+    if not exe.lower().endswith("pythonw.exe"):
+        candidate = os.path.join(BASE_DIR, "python", "pythonw.exe")
+        if os.path.exists(candidate):
+            exe = candidate
+    if not exe:
+        log_line("window: 找不到 pythonw.exe，无法打开窗口")
+        return False
+    try:
+        proc = subprocess.Popen(
+            [exe, window_script(), url],
+            cwd=BASE_DIR,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **SUBPROCESS_HIDDEN,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log_line(f"window: 拉起窗口进程失败：{exc}")
+        return False
+    log_line(f"window: 已拉起原生窗口 pid {proc.pid}")
+    return True
+
+def live_launcher():
+    """启动器单实例：返回已在运行的启动器端口；没有则返回 0。"""
+    data = read_json(PORT_FILE, {})
+    try:
+        port = int(data.get("port") or 0)
+        pid = int(data.get("pid") or 0)
+    except (TypeError, ValueError):
+        return 0
+    if not port or not pid or pid == os.getpid():
+        return 0
+    # 用 /api/ping 做探活：它不碰 git、不建快照，只在就是我们的服务时秒回。
+    ctypes.windll.winmm.timeBeginPeriod(1)
+    try:
         try:
-            subprocess.Popen([edge, f"--app={url}", "--window-size=1120,820"])
-            return "edge"
-        except Exception:  # noqa: BLE001
-            pass
-    webbrowser.open(url)
-    return "browser"
-
+            socket.create_connection(("127.0.0.1", port), timeout=2.0).close()
+        except OSError:
+            return 0  # 端口没人监听，说明旧启动器已经退出了
+        import urllib.request
+        body = b"{}"
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/ping",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            if resp.status == 200:
+                return port
+    except Exception as exc:  # noqa: BLE001
+        log_line(f"main: 单实例探测失败（端口 {port}）：{exc}")
+    finally:
+        ctypes.windll.winmm.timeEndPeriod(1)
+    return 0
 
 def bind_server():
     last_error = None
@@ -625,25 +817,37 @@ def bind_server():
 
 
 def watchdog(httpd):
+    """窗口关掉后启动器继续驻留 2 分钟（服务照常跑），之后自动退出。"""
     while True:
         time.sleep(5)
         now = time.time()
         if HEARTBEAT["loaded"]:
             if now - HEARTBEAT["last"] > 120:
+                log_line("watchdog: 窗口 120 秒无心跳，启动器自动退出")
                 os._exit(0)
-        elif now - httpd.started_at > 90:
+        elif now - httpd.started_at > 180:
+            log_line("watchdog: 窗口始终没有连上启动器，服务已退出（详见上方 window 日志）")
             os._exit(0)
 
 
 def main():
     os.makedirs(LOG_DIR, exist_ok=True)
+    # 已经在跑就只补开一个窗口，不再起第二个服务（避免重复窗口和端口漂移）
+    running = live_launcher()
+
+    if running:
+        url = f"http://127.0.0.1:{running}"
+        log_line(f"main: 启动器已在 {url} 运行，只重新打开窗口")
+        spawn_window(url)
+        return
     httpd = bind_server()
     httpd.started_at = time.time()
     port = httpd.server_address[1]
     write_json(PORT_FILE, {"port": port, "pid": os.getpid()})
     url = f"http://127.0.0.1:{port}"
+    log_line(f"main: 启动器已监听 {url} (pid {os.getpid()})")
     threading.Thread(target=watchdog, args=(httpd,), daemon=True).start()
-    open_window(url)
+    threading.Thread(target=spawn_window, args=(url,), daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

@@ -50,6 +50,33 @@ def read_file(path):
         return f.read()
 
 
+def _code_without_comments_and_strings(src):
+    """只留真正的可执行代码：注释、docstring、普通字符串常量全部剔除。
+
+    注释里写"① --app=URL 会被提权拦截"是有价值的踩坑记录，不应该被断言误伤；
+    但真正调用 --app= 的代码必须一个都不剩。
+    """
+    tree = ast.parse(src)
+    drop = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            body = getattr(node, "body", []) or []
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) \
+                    and isinstance(body[0].value.value, str):
+                drop.add(id(body[0].value))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            drop.add(id(node))
+    chunks = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            chunks.append(node.id)
+        elif isinstance(node, ast.Attribute):
+            chunks.append(node.attr)
+        elif isinstance(node, ast.Constant) and id(node) not in drop:
+            chunks.append(str(node.value))
+    return "\n".join(chunks)
+
+
 def snapshot_tree(root):
     out = {}
     for dirpath, dirnames, filenames in os.walk(root):
@@ -69,6 +96,7 @@ class RepoCase(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="launcher-git-")
+        self.addCleanup(force_rmtree, self.tmp)
         self.origin = os.path.join(self.tmp, "origin.git")
         subprocess.run(["git", "init", "--bare", "-b", "main", self.origin],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
@@ -133,6 +161,10 @@ class RepoCase(unittest.TestCase):
         gs.fetch()
         result = gs.update()
         self.assertTrue(result.get("conflicts"), result["message"])
+        # update 这次没有先跑一次 state()，缓存未被污染；冲突后必须立刻看到 f1 是冲突态
+        self.assertIn("f1.txt", gs.state()["unmerged"])
+        # 再把缓存预热一次：动作方法收尾必须丢弃旧缓存，不能拿冲突前的快照糊弄页面
+        gs.update()
         self.assertIn("f1.txt", gs.state()["unmerged"])
         # f1 保留我的；批量 f2 用新版
         resolved = gs.resolve("f1.txt", "ours")
@@ -217,8 +249,8 @@ class StaticSpecCase(unittest.TestCase):
     def test_launcher_py_stdlib_only(self):
         src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
         tree = ast.parse(src)
-        allowed = {"ctypes", "io", "json", "os", "re", "subprocess", "sys",
-                   "threading", "time", "urllib", "webbrowser", "http"}
+        allowed = {"ctypes", "io", "json", "os", "re", "socket", "subprocess", "sys",
+                   "threading", "time", "urllib", "http"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -230,6 +262,49 @@ class StaticSpecCase(unittest.TestCase):
     def test_launcher_binds_loopback_only(self):
         src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
         self.assertIn('ThreadingHTTPServer(("127.0.0.1", port), Handler)', src)
+
+    def test_window_is_spawned_not_browser(self):
+        src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
+        # 双击后"没有任何窗口"必须可见：日志 + 弹窗兜底 + 自己拉起原生窗口
+        self.assertIn("def log_line", src)
+        self.assertIn("launcher.log", src)
+        self.assertIn("def spawn_window", src)
+        self.assertIn('"window.py"', src)
+        self.assertIn("MessageBoxW", src)
+        self.assertIn("threading.Thread(target=spawn_window", src)
+        # 浏览器路线在本机实测不可用（--app 被提权拦截、webbrowser 打开已卸载的 msedge），
+        # 必须保持彻底移除，不能回退。注释与字符串里的历史教训说明不算实现。
+        body = _code_without_comments_and_strings(src)
+        for token in ("import webbrowser", "find_chrome", "find_edge", "open_window_with_fallback", "--app="):
+            self.assertNotIn(token, body)
+        # 主线程必须先 serve_forever，不能先阻塞等窗口
+        self.assertNotIn("\n    spawn_window(url)\n", src)
+
+    def test_window_host_has_no_console_and_remembers_geometry(self):
+        src = read_file(os.path.join(ROOT, "tools", "launcher", "window.py"))
+        self.assertIn("def run_window", src)
+        self.assertIn("launcher_window.json", src)
+        self.assertIn("Microsoft.Web.WebView2.WinForms", src)
+        self.assertIn("CREATE_NO_WINDOW", read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py")))
+        # WebView2 内核只能在 UI 线程取；绝不能直接 Wait 初始化任务（会死等）
+        self.assertNotIn(".Wait(15000)", src)
+        self.assertNotIn("core.Navigate", read_file(os.path.join(ROOT, "tools", "launcher", "window.py")).split("def _watch_webview_task")[0])
+
+    def test_webview2_components_bundled(self):
+        folder = os.path.join(ROOT, "tools", "launcher", "webview2")
+        for name in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll",
+                     "WebView2Loader.dll"):
+            path = os.path.join(folder, name)
+            self.assertTrue(os.path.exists(path), name)
+            self.assertGreater(os.path.getsize(path), 1000, name)
+
+    def test_live_launcher_single_instance_probe(self):
+        # 端口文件不存在/内容坏掉时必须安全返回 0，不能抛异常
+        self.assertEqual(launcher.live_launcher.__name__, "live_launcher")
+        src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
+        self.assertIn("def live_launcher", src)
+        self.assertIn("只重新打开窗口", src)
+        self.assertIn("/api/ping", src)
 
     def test_html_has_no_external_assets(self):
         src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.html"))
