@@ -114,7 +114,8 @@ class DailyRestartScriptTests(unittest.TestCase):
 
     def test_restarted_window_closes_itself(self):
         # cmd /c + 受 IC_NO_BROWSER 守卫的 pause：自动重启的窗口在服务停止后自己关闭，不累积黑窗。
-        self.assertIn("@('/c', ('call \"{0}\"' -f $Launcher))", self.ps1)
+        # 必须带 run 参数：启动服务.bat 无参数时会进入交互菜单而不是前台跑服务。
+        self.assertIn("@('/c', ('call \"{0}\" run' -f $Launcher))", self.ps1)
         self.assertIn("if not defined IC_NO_BROWSER pause", self.launcher)
 
     def test_bats_delegate_to_scripts(self):
