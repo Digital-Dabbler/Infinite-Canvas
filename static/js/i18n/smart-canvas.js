@@ -34,7 +34,7 @@
         "canvas.deleteLogMediaConfirm": { zh: "确认删除这条记录和原图？结果节点会保留并回退到生成前状态，提示词、参考图、设置和连线不会删除。", en: "Delete this record and original media? The result node will be kept and reset to its pre-generation state, preserving prompts, references, settings, and links." },
         "canvas.download": { zh: "下载", en: "Download" },
         "canvas.editImage": { zh: "编辑图片", en: "Edit Image" },
-        "canvas.editImageSub": { zh: "选择裁剪、局部编辑或其他工具", en: "Choose crop, local edit, or another tool" },
+        "canvas.editImageSub": { zh: "选择裁剪、遮罩、批注或其他工具", en: "Choose crop, mask, annotate, or another tool" },
         "canvas.failed": { zh: "失败", en: "Failed" },
         "canvas.generationLogs": { zh: "生成日志", en: "Generation Logs" },
         "canvas.gridClearLines": { zh: "清除所有自定义线", en: "Clear all custom lines" },
