@@ -4,18 +4,13 @@
 
 .DESCRIPTION
   1) 通过监听端口（默认 3000）找到服务进程，并校验它确实属于本项目，避免误杀 ComfyUI 等其它 python；
-  2) 按 -Action 执行：Start=未运行才拉起；Restart=结束旧进程并等待端口释放后拉起（默认）；
-     Stop=只结束本项目监听进程，不重新启动；
+  2) 结束旧进程并等待端口释放；
   3) 关掉旧实例遗留的「Server stopped / 请按任意键继续」窗口；
-  4) 用根目录「启动服务.bat run」在新控制台窗口拉起服务（默认带 IC_NO_BROWSER=1，静默不弹浏览器）；
+  4) 用根目录「启动服务.bat」在新控制台窗口拉起服务（默认带 IC_NO_BROWSER=1，静默不弹浏览器）；
   5) 轮询 http://127.0.0.1:<Port>/ 做健康检查，失败按 -Retries 重试；
   6) 全程追加写 logs\daily_restart.log。
 
-  -Action 默认 Restart：每日 06:00 计划任务与「每日重启服务.bat」不传该参数，行为不变。
-  根目录「启动服务.bat」无参数且无 IC_NO_BROWSER 时进入交互菜单（tools\launcher\launcher.ps1），
-  菜单通过 -Action Start/Restart/Stop 复用本脚本。
-
-  退出码：0 成功 / 1 环境或参数错误 / 2 端口被非本项目进程占用（拒绝操作）/ 3 操作后仍未就绪。
+  退出码：0 成功 / 1 环境或参数错误 / 2 端口被非本项目进程占用（拒绝操作）/ 3 重启后仍未就绪。
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools\daily-restart\restart-server.ps1 -NoBrowser
@@ -25,8 +20,6 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('Start', 'Restart', 'Stop')]
-    [string] $Action               = 'Restart',
     [int]    $Port                 = 3000,
     [string] $BaseDir              = '',
     [int]    $WaitPortSeconds      = 30,
@@ -161,9 +154,8 @@ function Start-Server {
         Remove-Item Env:IC_NO_BROWSER -ErrorAction SilentlyContinue
     }
     # 用 cmd /c：批处理结束时窗口会自己关闭，不会留下停留的黑窗。
-    # 传 run 参数：启动脚本无参数时会进入交互菜单，前台模式必须显式声明。
     # 自动重启的实例继承 IC_NO_BROWSER=1，启动脚本因此不打开浏览器、退出时也不 pause。
-    $cmdArgs = @('/c', ('call "{0}" run' -f $Launcher))
+    $cmdArgs = @('/c', ('call "{0}"' -f $Launcher))
     try {
         Start-Process -FilePath $env:ComSpec -ArgumentList $cmdArgs -WorkingDirectory $BaseDir -ErrorAction Stop
         Write-Log ('已在新窗口启动: {0} {1}' -f $env:ComSpec, ($cmdArgs -join ' '))
@@ -199,7 +191,7 @@ function Wait-ServerReady {
     return $null
 }
 
-Write-Log ('===== 服务操作开始 Action={0} (DryRun={1}, NoBrowser={2}) =====' -f $Action, [bool]$DryRun, [bool]$NoBrowser)
+Write-Log ('===== 每日重启开始 (DryRun={0}, NoBrowser={1}) =====' -f [bool]$DryRun, [bool]$NoBrowser)
 Write-Log ('项目目录: {0}' -f $BaseDir)
 
 if (-not (Test-Path -LiteralPath $Launcher)) {
@@ -208,76 +200,37 @@ if (-not (Test-Path -LiteralPath $Launcher)) {
 }
 
 $listenPids = @(Get-ListenPid -LocalPort $Port)
-$ours = @()
-foreach ($listenPid in $listenPids) {
-    $info = Get-ProcessInfo $listenPid
-    if (-not $info.Exists) {
-        Write-Log ('端口 {0} 的监听进程 {1} 已消失，跳过' -f $Port, $listenPid)
-        continue
+if ($listenPids.Count -eq 0) {
+    Write-Log ('端口 {0} 当前没有监听进程，判定服务未运行，直接启动' -f $Port)
+} else {
+    foreach ($listenPid in $listenPids) {
+        $info = Get-ProcessInfo $listenPid
+        if (-not $info.Exists) {
+            Write-Log ('端口 {0} 的监听进程 {1} 已消失，跳过' -f $Port, $listenPid)
+            continue
+        }
+        if (-not (Test-ProjectProcess $info.Path)) {
+            Write-Log ('端口 {0} 被非本项目进程占用: PID={1} {2} ({3}) —— 为避免误杀不执行重启' -f $Port, $listenPid, $info.Name, $info.Path) 'ERROR'
+            exit 2
+        }
+        Write-Log ('待结束进程: PID={0} {1} ({2})' -f $listenPid, $info.Name, $info.Path)
+        if (-not $DryRun) { Stop-ServerProcess $listenPid }
     }
-    if (-not (Test-ProjectProcess $info.Path)) {
-        Write-Log ('端口 {0} 被非本项目进程占用: PID={1} {2} ({3}) —— 为避免误杀不执行重启' -f $Port, $listenPid, $info.Name, $info.Path) 'ERROR'
-        exit 2
-    }
-    $ours += [pscustomobject]@{ Pid = $listenPid; Name = $info.Name; Path = $info.Path }
 }
 
-switch ($Action) {
-    'Stop' {
-        if ($ours.Count -eq 0) {
-            Write-Log ('服务未运行（端口 {0} 空闲），无需停止' -f $Port)
-            exit 0
-        }
-        foreach ($proc in $ours) {
-            Write-Log ('待结束进程: PID={0} {1} ({2})' -f $proc.Pid, $proc.Name, $proc.Path)
-        }
-        if ($DryRun) {
-            Write-Log 'DryRun：未做任何改动'
-            exit 0
-        }
-        foreach ($proc in $ours) { Stop-ServerProcess $proc.Pid }
-        if (-not (Wait-PortFree -LocalPort $Port -Seconds $WaitPortSeconds)) {
-            Write-Log ('等待端口 {0} 释放超时（{1} 秒）' -f $Port, $WaitPortSeconds) 'ERROR'
-            exit 3
-        }
-        Write-Log '===== 服务已停止 ====='
-        exit 0
+if ($DryRun) {
+    if ($listenPids.Count -eq 0) {
+        Write-Log ('DryRun：将启动 {0}' -f $Launcher)
+    } else {
+        Write-Log ('DryRun：将结束上面的进程，等待端口释放后用 {0} 重新启动' -f $Launcher)
     }
-    'Start' {
-        if ($ours.Count -gt 0) {
-            Write-Log ('服务已在运行（PID {0}），无需重复启动' -f (($ours | ForEach-Object { $_.Pid }) -join ','))
-            exit 0
-        }
-        if ($DryRun) {
-            Write-Log ('DryRun：将启动 {0}' -f $Launcher)
-            Write-Log 'DryRun：未做任何改动'
-            exit 0
-        }
-        Write-Log ('端口 {0} 空闲，启动服务' -f $Port)
-    }
-    'Restart' {
-        if ($ours.Count -eq 0) {
-            Write-Log ('端口 {0} 当前没有监听进程，判定服务未运行，直接启动' -f $Port)
-        } else {
-            foreach ($proc in $ours) {
-                Write-Log ('待结束进程: PID={0} {1} ({2})' -f $proc.Pid, $proc.Name, $proc.Path)
-            }
-        }
-        if ($DryRun) {
-            if ($ours.Count -eq 0) {
-                Write-Log ('DryRun：将启动 {0}' -f $Launcher)
-            } else {
-                Write-Log ('DryRun：将结束上面的进程，等待端口释放后用 {0} 重新启动' -f $Launcher)
-            }
-            Write-Log 'DryRun：未做任何改动'
-            exit 0
-        }
-        foreach ($proc in $ours) { Stop-ServerProcess $proc.Pid }
-        if (-not (Wait-PortFree -LocalPort $Port -Seconds $WaitPortSeconds)) {
-            Write-Log ('等待端口 {0} 释放超时（{1} 秒），放弃重启' -f $Port, $WaitPortSeconds) 'ERROR'
-            exit 3
-        }
-    }
+    Write-Log 'DryRun：未做任何改动'
+    exit 0
+}
+
+if (-not (Wait-PortFree -LocalPort $Port -Seconds $WaitPortSeconds)) {
+    Write-Log ('等待端口 {0} 释放超时（{1} 秒），放弃重启' -f $Port, $WaitPortSeconds) 'ERROR'
+    exit 3
 }
 
 $attempt = 0
@@ -288,7 +241,7 @@ while ($true) {
     $health = Wait-ServerReady -LocalPort $Port -Seconds $HealthTimeoutSeconds
     if ($health) {
         Write-Log ('服务已就绪: http://127.0.0.1:{0}/ ({1})' -f $Port, $health)
-        Write-Log '===== 操作完成：服务已就绪 ====='
+        Write-Log '===== 每日重启完成 ====='
         exit 0
     }
     Write-Log ('健康检查未通过（第 {0} 次启动）' -f $attempt) 'ERROR'
@@ -303,5 +256,5 @@ while ($true) {
     }
 }
 
-Write-Log '===== 操作失败：服务未能就绪 =====' 'ERROR'
+Write-Log '===== 每日重启失败：服务未能就绪 =====' 'ERROR'
 exit 3
