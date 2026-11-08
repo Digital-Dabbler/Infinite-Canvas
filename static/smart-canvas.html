@@ -21,7 +21,7 @@
     <script src="/static/js/touch-mouse.js?v=2026.07.29.c4f838ffc3"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.db80413bd4"></script>
     <link rel="stylesheet" href="/static/css/studio-theme-tokens.css?v=2026.07.29.2e97de3b67">
-    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.c7dc14922d">
+    <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.eea72983a2">
     <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.be364659c7">
     <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.fa68196223">
     <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.2e4d37ceda">
@@ -353,11 +353,11 @@
                     </div>
                     <div id="outpaintColorControl" class="outpaint-color-control" hidden role="group" aria-label="扩图底色" data-i18n-label="canvas.outpaintFillColor">
                         <span data-i18n="canvas.color">颜色</span>
-                        <button type="button" class="active" data-outpaint-color="#ffffff" aria-label="白色" title="白色" data-i18n-label="canvas.outpaintFillWhite" data-i18n-title="canvas.outpaintFillWhite"></button>
+                        <button type="button" class="active" data-outpaint-color="#808080" aria-label="灰色" title="灰色" data-i18n-label="canvas.outpaintFillGray" data-i18n-title="canvas.outpaintFillGray"></button>
+                        <button type="button" data-outpaint-color="#ffffff" aria-label="白色" title="白色" data-i18n-label="canvas.outpaintFillWhite" data-i18n-title="canvas.outpaintFillWhite"></button>
                         <button type="button" data-outpaint-color="#ef4444" aria-label="红色" title="红色" data-i18n-label="canvas.outpaintFillRed" data-i18n-title="canvas.outpaintFillRed"></button>
                         <button type="button" data-outpaint-color="#22c55e" aria-label="绿色" title="绿色" data-i18n-label="canvas.outpaintFillGreen" data-i18n-title="canvas.outpaintFillGreen"></button>
                         <button type="button" data-outpaint-color="#3b82f6" aria-label="蓝色" title="蓝色" data-i18n-label="canvas.outpaintFillBlue" data-i18n-title="canvas.outpaintFillBlue"></button>
-                        <button type="button" data-outpaint-color="#94a3b8" aria-label="灰色" title="灰色" data-i18n-label="canvas.outpaintFillGray" data-i18n-title="canvas.outpaintFillGray"></button>
                         <button type="button" data-outpaint-color="#111827" aria-label="黑色" title="黑色" data-i18n-label="canvas.outpaintFillBlack" data-i18n-title="canvas.outpaintFillBlack"></button>
                         <span id="outpaintColorLockNote" class="outpaint-color-lock" hidden data-i18n="canvas.outpaintComfyFillLocked">ComfyUI 扩图按灰色训练，底色已锁定</span>
                     </div>
@@ -387,7 +387,6 @@
                         <option value="0">0</option><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="64">64</option>
                     </select></label>
                     <label class="outpaint-tool-field outpaint-supplement-field"><span data-i18n="canvas.outpaintSupplement">补充提示词</span><input type="text" id="outpaintSupplementInput" value="" aria-label="补充提示词" /></label>
-                    <label class="outpaint-tool-field outpaint-max-sample-field" hidden><span data-i18n="canvas.outpaintMaxSample">最大采样尺寸</span><input type="number" id="outpaintMaxSampleInput" min="1024" max="4096" step="128" value="2048" aria-label="最大采样尺寸" /></label>
                     <button type="button" class="image-edit-btn secondary" id="outpaintResetBtn" onclick="resetOutpaintEditor()"><i data-lucide="rotate-ccw" class="w-4 h-4"></i><span data-i18n="canvas.outpaintReset">复位</span></button>
                 </div>
                 <div id="imagePreviewTools" class="image-edit-tools">
@@ -587,9 +586,15 @@
                 <div class="image-edit-actions">
                     <span id="imageEditZoomLabel" style="color:#94a3b8;font-size:11px;font-weight:800;padding:0 4px;margin-right:auto;cursor:pointer;user-select:none" title="双击重置缩放" ondblclick="resetImageEditZoom()">100%</span>
                     <div id="outpaintRunControls" class="outpaint-run-controls" hidden>
+                        <div id="outpaintEngineToggle" class="outpaint-engine-toggle" role="group" aria-label="扩图引擎" data-i18n-label="canvas.outpaintEngine">
+                            <span data-i18n="canvas.outpaintEngine">引擎</span>
+                            <button type="button" class="active" data-outpaint-engine="api" data-i18n="canvas.outpaintEngineApi">在线模型</button>
+                            <button type="button" data-outpaint-engine="comfy" data-i18n="canvas.outpaintEngineComfy">本机 ComfyUI</button>
+                        </div>
                         <span id="outpaintTargetSize" class="outpaint-target-size">-</span>
                         <span id="outpaintCapabilityStatus" class="outpaint-capability-status" role="status" aria-live="polite"></span>
                         <label id="outpaintResolutionField" class="outpaint-run-field"><span data-i18n="smart.resolution">分辨率</span><select id="outpaintResolutionSelect" aria-label="扩图分辨率"></select></label>
+                        <label id="outpaintMaxSampleField" class="outpaint-run-field outpaint-max-sample-field" hidden><span data-i18n="canvas.outpaintMaxSample">最大采样尺寸</span><input type="number" id="outpaintMaxSampleInput" min="1024" max="4096" step="128" value="2048" aria-label="最大采样尺寸" /></label>
                         <label class="outpaint-run-field"><span data-i18n="smart.count">张数</span><select id="outpaintCountSelect" aria-label="扩图张数"></select></label>
                         <label class="outpaint-run-field outpaint-model-field"><span data-i18n="smart.imageModel">模型</span><select id="outpaintModelSelect" aria-label="扩图模型"></select></label>
                         <button id="outpaintRunBtn" class="image-edit-btn primary outpaint-run-btn" type="button" onclick="runImageOutpaint()"><i data-lucide="play" class="w-4 h-4"></i><span data-i18n="canvas.runOutpaint">运行扩图</span></button>
@@ -654,7 +659,7 @@
         </section>
     </div>
     <script src="/static/js/resource-preview-panel.js?v=2026.07.29.0883cf0ea2"></script>
-    <script src="/static/js/smart-canvas.js?v=2026.07.29.24292ead50"></script>
+    <script src="/static/js/smart-canvas.js?v=2026.07.29.7fef99ffa4"></script>
     <script src="/static/js/prompt-presets.js?v=2026.07.29.b56cb7e5cb"></script>
     <script src="/static/js/library-shared.js?v=2026.07.29.333f28f867"></script>
     <script src="/static/js/asset-library.js?v=2026.07.29.9b3b754cd0"></script>

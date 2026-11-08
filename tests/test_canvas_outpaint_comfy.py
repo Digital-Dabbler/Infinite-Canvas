@@ -139,13 +139,38 @@ class CanvasOutpaintComfyTests(unittest.TestCase):
         self.assertIn("editorSettings.count = 1;", self.smart_canvas_js)
         self.assertIn("tr('canvas.outpaintComfyWorkflowName')", self.smart_canvas_js)
         self.assertIn("runBtn.disabled = outpaintRunBtnBaseDisabled || !outpaintHasExtension();", self.smart_canvas_js)
+        # 在线模式不再把灰色底色强改回白色（灰色是默认底色）
+        self.assertNotIn("if(outpaintFillColor === OUTPAINT_COMFY_FILL_COLOR) setOutpaintFillColor('#ffffff');", self.smart_canvas_js)
+
+    def test_engine_toggle_switches_outpaint_path_in_editor(self):
+        self.assertIn('data-outpaint-engine="api"', self.smart_canvas_html)
+        self.assertIn('data-outpaint-engine="comfy"', self.smart_canvas_html)
+        self.assertIn("document.querySelectorAll('[data-outpaint-engine]').forEach(button => button.addEventListener('click'", self.smart_canvas_js)
+        self.assertIn("base.comfyWorkflow = OUTPAINT_COMFY_WORKFLOW;", self.smart_canvas_js)
+        self.assertIn("button.classList.toggle('active', (button.dataset.outpaintEngine === 'comfy') === isComfy);", self.smart_canvas_js)
+
+    def test_gray_fill_is_default_and_first(self):
+        self.assertIn("let outpaintFillColor = '#808080';", self.smart_canvas_js)
+        color_row = self.smart_canvas_html.split('id="outpaintColorControl"', 1)[1].split("</div>", 1)[0]
+        first_button = color_row.split('data-outpaint-color="')[1]
+        self.assertTrue(first_button.startswith("#808080"), color_row[:200])
+        self.assertIn('.outpaint-color-control button[data-outpaint-color="#808080"]', self.css)
+
+    def test_max_sample_field_lives_in_run_controls_and_hides(self):
+        # 最大采样尺寸只属于 ComfyUI 路径：放在底排运行控件里，且 [hidden] 必须能压过 display:flex
+        self.assertIn('id="outpaintMaxSampleField" class="outpaint-run-field outpaint-max-sample-field" hidden', self.smart_canvas_html)
+        run_block = self.smart_canvas_html.split('id="outpaintRunControls"', 1)[1].split('id="videoFrameTools"', 1)[0]
+        self.assertIn("outpaintMaxSampleInput", run_block)
+        tools_block = self.smart_canvas_html.split('id="imageOutpaintTools"', 1)[1].split("</div>", 1)[0]
+        self.assertNotIn("outpaintMaxSampleInput", tools_block)
+        self.assertIn(".outpaint-tool-field[hidden], .outpaint-run-field[hidden] { display:none !important; }", self.css)
 
     def test_frontend_editor_controls_and_i18n_are_wired(self):
         for element_id in (
             "imageOutpaintTools", "outpaintUnitSelect", "outpaintLeftInput", "outpaintRightInput",
             "outpaintTopInput", "outpaintBottomInput", "outpaintRatioSelect", "outpaintMaxLongInput",
             "outpaintDivisorSelect", "outpaintSupplementInput", "outpaintMaxSampleInput",
-            "outpaintResetBtn", "outpaintColorLockNote",
+            "outpaintResetBtn", "outpaintColorLockNote", "outpaintEngineToggle", "outpaintMaxSampleField",
         ):
             self.assertIn(f'id="{element_id}"', self.smart_canvas_html)
         self.assertIn("document.getElementById('imageOutpaintTools')?.classList.toggle('active', imageEditMode === 'outpaint');", self.smart_canvas_js)
@@ -158,6 +183,9 @@ class CanvasOutpaintComfyTests(unittest.TestCase):
             "canvas.outpaintSupplement", "canvas.outpaintSupplementPlaceholder", "canvas.outpaintMaxSample",
             "canvas.outpaintReset", "canvas.outpaintComfyMode", "canvas.outpaintComfyWorkflowName",
             "canvas.outpaintComfyFillLocked", "canvas.outpaintNoExtension",
+            "canvas.outpaintImage", "canvas.outpaintHint",
+            "canvas.outpaintEngine", "canvas.outpaintEngineApi", "canvas.outpaintEngineComfy",
+            "canvas.cropImage", "canvas.cropHint",
         ):
             self.assertIn(f'"canvas.' in key and f'"{key}"' or f'"{key}"', self.i18n_js)
         self.assertIn(".outpaint-color-control button:disabled", self.css)

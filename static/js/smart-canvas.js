@@ -26,7 +26,7 @@ const smartArrangeBtn = document.getElementById('smartArrangeBtn');
 const imageEditModal = document.getElementById('imageEditModal');
 const angleControlModal = document.getElementById('angleControlModal');
 let outpaintRunSettings = null;
-let outpaintFillColor = '#ffffff';
+let outpaintFillColor = '#808080';
 const OUTPAINT_COMFY_WORKFLOW = 'system/Qwen Image 2.1 扩图_无限画布专用api.json';
 const OUTPAINT_COMFY_FILL_COLOR = '#808080';
 const OUTPAINT_RATIO_PRESETS = {
@@ -18950,6 +18950,7 @@ function syncOutpaintRunControls(){
     controls.hidden = !visible;
     if(!visible) return;
     const isComfy = outpaintEditorIsComfy();
+    document.querySelectorAll('[data-outpaint-engine]').forEach(button => { button.classList.toggle('active', (button.dataset.outpaintEngine === 'comfy') === isComfy); });
     document.querySelectorAll('[data-outpaint-color]').forEach(button => { button.disabled = isComfy; });
     const lockNote = document.getElementById('outpaintColorLockNote');
     if(lockNote) lockNote.hidden = !isComfy;
@@ -18980,7 +18981,6 @@ function syncOutpaintRunControls(){
     countSelect.disabled = false;
     const count = Math.max(1, Math.min(8, Number(editorSettings.count) || 1));
     countSelect.innerHTML = [1,2,3,4,5,6,7,8].map(n => `<option value="${n}" ${n === count ? 'selected' : ''}>${n} 张</option>`).join('');
-    if(outpaintFillColor === OUTPAINT_COMFY_FILL_COLOR) setOutpaintFillColor('#ffffff');
     const providerId = editorSettings.provider_id || '';
     const compatibility = isApiLikeEngine(editorSettings.engine) && providerId
         ? compatibleOutpaintModels(providerId)
@@ -26274,6 +26274,27 @@ document.getElementById('outpaintDivisorSelect')?.addEventListener('change', eve
     outpaintDivisorValue = [0, 8, 16, 32, 64].includes(next) ? next : 0;
     renderCropBox();
 });
+document.querySelectorAll('[data-outpaint-engine]').forEach(button => button.addEventListener('click', () => {
+    if(imageEditMode !== 'outpaint') return;
+    const wantComfy = button.dataset.outpaintEngine === 'comfy';
+    if(outpaintEditorIsComfy() === wantComfy) return;
+    const base = outpaintSettingsForEditor();
+    if(wantComfy){
+        base.engine = 'comfy';
+        base.comfyMode = 'custom';
+        base.comfyWorkflow = OUTPAINT_COMFY_WORKFLOW;
+        if(!base.comfyParams || typeof base.comfyParams !== 'object') base.comfyParams = {};
+    } else {
+        base.engine = 'api';
+        if(!base.provider_id && settings.apiKind === 'image' && settings.provider_id){
+            base.provider_id = settings.provider_id;
+            if(!base.model) base.model = settings.model;
+        }
+    }
+    base.apiKind = 'image';
+    outpaintRunSettings = base;
+    syncOutpaintRunControls();
+}));
 imageEditModal.addEventListener('pointerdown', event => {
     event.stopPropagation();
 });
