@@ -149,6 +149,14 @@ class CanvasOutpaintComfyTests(unittest.TestCase):
         self.assertIn("base.comfyWorkflow = OUTPAINT_COMFY_WORKFLOW;", self.smart_canvas_js)
         self.assertIn("button.classList.toggle('active', (button.dataset.outpaintEngine === 'comfy') === isComfy);", self.smart_canvas_js)
 
+    def test_comfy_is_default_engine_on_outpaint_entry(self):
+        entry_block = self.smart_canvas_js.split("outpaintRunSettings = imageEditMode === 'outpaint'", 1)[1].split("const outpaintControls", 1)[0]
+        self.assertIn("applyOutpaintComfyDefault(cloneSmartSettings(", entry_block)
+        helper_block = self.smart_canvas_js.split("function applyOutpaintComfyDefault(target){", 1)[1].split("\n}", 1)[0]
+        self.assertIn("target.engine = 'comfy';", helper_block)
+        self.assertIn("target.comfyWorkflow = OUTPAINT_COMFY_WORKFLOW;", helper_block)
+        self.assertIn("target.comfyMode = 'custom';", helper_block)
+
     def test_gray_fill_is_default_and_first(self):
         self.assertIn("let outpaintFillColor = '#808080';", self.smart_canvas_js)
         color_row = self.smart_canvas_html.split('id="outpaintColorControl"', 1)[1].split("</div>", 1)[0]

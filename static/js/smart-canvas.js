@@ -16014,7 +16014,9 @@ function setImageEditMode(mode, userTouched=false){
     const zoomLabel = document.getElementById('imageEditZoomLabel');
     const cancelBtn = document.getElementById('imageEditCancelBtn');
     const isPreview = imageEditMode === 'preview';
-    outpaintRunSettings = imageEditMode === 'outpaint' ? cloneSmartSettings(smartSettingsForNode(currentEditImage().node) || settings) : null;
+    outpaintRunSettings = imageEditMode === 'outpaint'
+        ? applyOutpaintComfyDefault(cloneSmartSettings(smartSettingsForNode(currentEditImage().node) || settings))
+        : null;
     const outpaintControls = document.getElementById('outpaintRunControls');
     const outpaintColorControl = document.getElementById('outpaintColorControl');
     if(outpaintControls) outpaintControls.hidden = imageEditMode !== 'outpaint';
@@ -18869,8 +18871,18 @@ function setOutpaintFillColor(color){
     outpaintFillColor = allowed.has(String(color || '').toLowerCase()) ? String(color).toLowerCase() : '#ffffff';
     syncOutpaintFillColor();
 }
+function applyOutpaintComfyDefault(target){
+    // 扩图默认走本机 ComfyUI 扩图工作流；底排引擎切换按钮仍可切回在线模型。
+    if(!target) return target;
+    target.engine = 'comfy';
+    target.comfyMode = 'custom';
+    target.comfyWorkflow = OUTPAINT_COMFY_WORKFLOW;
+    if(!target.comfyParams || typeof target.comfyParams !== 'object') target.comfyParams = {};
+    target.apiKind = 'image';
+    return target;
+}
 function outpaintSettingsForEditor(){
-    if(!outpaintRunSettings) outpaintRunSettings = cloneSmartSettings(smartSettingsForNode(currentEditImage().node) || settings);
+    if(!outpaintRunSettings) outpaintRunSettings = applyOutpaintComfyDefault(cloneSmartSettings(smartSettingsForNode(currentEditImage().node) || settings));
     const next = cloneSmartSettings(outpaintRunSettings);
     next.apiKind = 'image';
     return next;
