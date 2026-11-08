@@ -204,15 +204,6 @@
             document.getElementById('versionText').textContent = `Infinite Canvas ${data.version || ''}`;
         } catch(e){ document.getElementById('versionText').textContent='Infinite Canvas'; }
     }
-    async function checkUpdate(){
-        const label = document.getElementById('updateStatus');
-        label.textContent='检测中…';
-        try {
-            const res = await fetch('/api/check-update',{cache:'no-store'});
-            const data = await res.json();
-            label.textContent = data.has_update || data.update_available ? '发现新版本' : '已是最新';
-        } catch(e){ label.textContent='检测失败'; }
-    }
     async function logout(){
         try { await fetch('/api/auth/logout',{method:'POST'}); } finally { location.href='/static/login.html'; }
     }
@@ -281,8 +272,7 @@
         else if(action==='theme') toggleTheme();
         else if(action==='language') toggleLanguage();
         else if(action==='announcement'){ closeFloating(); window.openSiteAnnouncement?.(); }
-        else if(action==='github') window.open('https://github.com/hero8152/Infinite-Canvas','_blank','noopener');
-        else if(action==='update') checkUpdate();
+        else if(action==='github') window.open('https://github.com/Digital-Dabbler/Infinite-Canvas','_blank','noopener');
         else if(action==='logout') logout();
     }
     document.addEventListener('click', event => {
