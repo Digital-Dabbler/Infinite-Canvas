@@ -10134,6 +10134,44 @@ def output_file_from_url(url):
             return path
     return None
 
+_OPENAI_MASK_CACHE: dict[str, str] = {}
+
+
+def prepare_openai_mask_file(mask_path: str) -> str:
+    """把画布导出的黑白遮罩转换成 OpenAI /images/edits 的语义。
+
+    画布约定：白色 = 要改的区域，整张图全不透明。
+    OpenAI 约定：透明像素（alpha=0）= 要改的区域，其余保持不透明。
+    这里按亮度二值化后写入 alpha 通道；转换失败时退回原文件，绝不阻断生成。
+    """
+    if not mask_path:
+        return mask_path
+    try:
+        stat = os.stat(mask_path)
+    except OSError:
+        return mask_path
+    cache_key = f"{mask_path}|{stat.st_mtime_ns}|{stat.st_size}"
+    cached = _OPENAI_MASK_CACHE.get(cache_key)
+    if cached and os.path.exists(cached):
+        return cached
+    try:
+        with Image.open(mask_path) as source:
+            luma = source.convert("RGB").convert("L")
+        # 白色（要改）→ alpha 0；黑色（保留）→ alpha 255
+        alpha = luma.point(lambda value: 0 if value > 127 else 255)
+        opaque = Image.new("L", alpha.size, 255)
+        converted = Image.merge("RGBA", (opaque, opaque, opaque, alpha))
+        target_dir = os.path.join(OUTPUT_DIR, ".mask")
+        os.makedirs(target_dir, exist_ok=True)
+        target = os.path.join(target_dir, "openai_" + hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:16] + ".png")
+        converted.save(target, format="PNG")
+        _OPENAI_MASK_CACHE[cache_key] = target
+        return target
+    except Exception as exc:  # 遮罩格式异常不应让生成失败
+        print(f"⚠️ 遮罩透明化失败，改用原遮罩：{exc}")
+        return mask_path
+
+
 def local_media_content_hash(path):
     """Return a cached SHA-256 for a verified local media file."""
     if not path or not os.path.isfile(path):
@@ -17355,9 +17393,12 @@ async def generate_ai_image(prompt, size, quality, model, reference_images=None,
                 if mask_refs:
                     mask_path = output_file_from_url(mask_refs[0].get("url", ""))
                     if mask_path:
+                        # GPT-Image-2 走 OpenAI 官方语义（透明=要改），历史遮罩与新遮罩都在这里统一转换。
+                        mask_upload_name = os.path.basename(mask_path)
+                        mask_path = prepare_openai_mask_file(mask_path)
                         fh = open(mask_path, "rb")
                         opened.append(fh)
-                        files.append(("mask", (os.path.basename(mask_path), fh, content_type_for_path(mask_path))))
+                        files.append(("mask", (mask_upload_name, fh, content_type_for_path(mask_path))))
                 try:
                     response = await post_openai_edits(files)
                     if response.status_code >= 400:

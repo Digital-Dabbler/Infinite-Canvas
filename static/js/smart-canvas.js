@@ -11734,7 +11734,12 @@ function runImageToolbarAction(action, mode){
         }
         return;
     }
-    if(!['crop','outpaint','mask','brush','grid'].includes(action)) return;
+    if(action === 'mask'){
+        // 遮罩改为独立的全屏编辑器（对齐 Goohai 的绘制手感），不再进入图片编辑弹窗。
+        openMaskEditorForImage(node, index);
+        return;
+    }
+    if(!['crop','outpaint','brush','grid'].includes(action)) return;
     openImageEditor(node.id, index);
     setImageEditMode(action, true);
     if(action === 'grid' && canGridJoinCurrentNode()) setGridOperationMode('join');
@@ -19671,6 +19676,120 @@ async function applyImageMask(){
         closeImageEditor(); render(); scheduleSave();
     }
 }
+// —— 全屏遮罩编辑器（static/js/mask-editor.js）接入 ——
+// 画布只负责三件事：打开时给出原图/已有遮罩的地址，保存时把结果落成素材并写回节点，
+// 以及把"颜色叠加"导出的彩色参考图带进生成请求。绘制本身全部由编辑器模块负责。
+function maskEditorLabels(){
+    return {
+        title: tr('canvas.maskEditorTitle'),
+        toolBrush: tr('canvas.modeBrush'),
+        toolEraser: tr('canvas.maskEraser'),
+        toolMarquee: tr('canvas.maskEditorToolMarquee'),
+        sizeText: tr('canvas.maskEditorSize'),
+        hint: tr('canvas.maskEditorHint'),
+        undo: tr('canvas.maskEditorUndo'),
+        redo: tr('canvas.maskEditorRedo'),
+        invert: tr('canvas.maskEditorInvert'),
+        clear: tr('canvas.maskEditorClear'),
+        cancel: tr('canvas.maskEditorCancel'),
+        save: tr('canvas.maskEditorSave'),
+        saving: tr('canvas.maskEditorSaving'),
+        modeMask: tr('canvas.maskEditorModeMask'),
+        modeColor: tr('canvas.maskEditorModeColor'),
+        opacity: tr('canvas.maskEditorOpacity'),
+        fillHoles: tr('canvas.maskEditorFillHoles'),
+        emptyHint: tr('canvas.maskEditorEmpty'),
+        loadFail: tr('canvas.maskEditorLoadFail'),
+        saveFail: tr('canvas.maskEditorSaveFail'),
+        fit: tr('canvas.maskEditorFit'),
+        zoomIn: tr('canvas.maskEditorZoomIn'),
+        zoomOut: tr('canvas.maskEditorZoomOut'),
+        shortcutHint: tr('canvas.maskEditorShortcuts'),
+        colorWhite: tr('canvas.maskEditorColorWhite'),
+        colorRed: tr('canvas.maskEditorColorRed'),
+        colorOrange: tr('canvas.maskEditorColorOrange'),
+        colorYellow: tr('canvas.maskEditorColorYellow'),
+        colorGreen: tr('canvas.maskEditorColorGreen'),
+        colorCyan: tr('canvas.maskEditorColorCyan'),
+        colorBlue: tr('canvas.maskEditorColorBlue'),
+        colorPurple: tr('canvas.maskEditorColorPurple'),
+        colorGray: tr('canvas.maskEditorColorGray')
+    };
+}
+async function openMaskEditorForImage(node, index){
+    const item = node?.images?.[index];
+    if(!item?.url) return;
+    const editor = window.MaskEditor;
+    if(!editor || typeof editor.open !== 'function'){
+        toast(tr('canvas.maskEditorUnavailable'));
+        return;
+    }
+    const base = (item.name || 'image').replace(/\.[^.]+$/, '');
+    try {
+        await editor.open({
+            imageUrl: displayMediaUrl(item),
+            maskUrl: item.mask?.url ? displayMediaUrl(item.mask) : '',
+            labels: maskEditorLabels(),
+            onSave: result => saveMaskEditorResult(node, index, base, result)
+        });
+    } catch(error){
+        console.warn('遮罩编辑器打开失败：', error);
+        toast(tr('canvas.maskEditorLoadFail'));
+    }
+}
+async function saveMaskEditorResult(node, index, base, result){
+    const live = liveSmartNode(node) || node;
+    const maskBlob = result?.maskBlob;
+    if(!live?.images?.[index] || !maskBlob) throw new Error(tr('canvas.maskEditorSaveFail'));
+    const painted = await maskBlobHasPaintedArea(maskBlob);
+    let maskFile = null;
+    if(painted){
+        maskFile = await uploadCroppedBlob(maskBlob, `${base}_mask.png`);
+        if(!maskFile) throw new Error(tr('canvas.maskEditorSaveFail'));
+    }
+    let colorFile = null;
+    if(result.colorBlob){
+        colorFile = await uploadCroppedBlob(result.colorBlob, `${base}_maskcolor.png`);
+    }
+    pushUndo();
+    const updated = {...(live.images[index] || {})};
+    // 保存空遮罩 = 移除已有遮罩，与旧逻辑保持一致。
+    if(maskFile) updated.mask = {url:maskFile.url, name:maskFile.name, kind:'image'};
+    else delete updated.mask;
+    // 颜色叠加生成的彩色图是"参考图"，不是遮罩：单独存在 maskColor 上，生成时按普通参考图追加。
+    if(colorFile && maskFile) updated.maskColor = {url:colorFile.url, name:colorFile.name, kind:'image'};
+    else delete updated.maskColor;
+    live.images[index] = updated;
+    render(); scheduleSave();
+    toast(painted ? tr('canvas.maskSaved') : tr('canvas.maskRemoved'));
+}
+async function maskBlobHasPaintedArea(blob){
+    if(!blob) return false;
+    const url = URL.createObjectURL(blob);
+    try {
+        const img = await new Promise((resolve, reject) => {
+            const el = new Image();
+            el.onload = () => resolve(el);
+            el.onerror = () => reject(new Error('mask decode failed'));
+            el.src = url;
+        });
+        const size = 192;
+        const canvas = document.createElement('canvas');
+        canvas.width = size; canvas.height = size;
+        const ctx = canvas.getContext('2d', {willReadFrequently:true});
+        ctx.drawImage(img, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+        for(let i = 0; i < data.length; i += 4){
+            if(Math.max(data[i], data[i + 1], data[i + 2]) > 127) return true;
+        }
+        return false;
+    } catch(error){
+        console.warn('读取遮罩失败：', error);
+        return false;
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+}
 function maskCanvasFromDrawCanvas(src){
     const mask = document.createElement('canvas');
     mask.width = src.width;
@@ -21692,7 +21811,9 @@ function promptRequestRefs(refs){
         role:`image_${index + 1}`,
         // 画布上绘制的遮罩必须随引用图一起传给生成路径：ComfyUI 的 LoadImage
         // 会从图片 alpha 通道读取遮罩，前端据此把遮罩合成进 PNG 再上传。
-        mask:img.mask ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined
+        mask:img.mask ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined,
+        // 颜色叠加导出的彩色参考图：随引用图一起送给生成路径，但只当普通参考图用。
+        mask_color:img.maskColor?.url ? {url:img.maskColor.url, name:img.maskColor.name || '', kind:'image'} : undefined
     }));
 }
 function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=false, ctx=smartLoopContext){
@@ -23632,6 +23753,14 @@ async function runApiGeneration(prompt, refs, runSettings=settings, canvasBindin
     const requestSize = runSettings.imageCapabilitySize
         || dimensionSize
         || sizeForRun(runSettings);
+    const referenceImages = imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(({mask_color, ...ref}) => ({...ref, mask_url:ref.mask?.url || ''}));
+    // 遮罩编辑器的「颜色叠加」会另存一张带色块的原图：它的作用是为模型提供"改哪里、拆成几块"的
+    // 视觉提示，不是遮罩本身，所以只作为普通参考图追加，绝不参与 mask_url。
+    (refs || []).forEach(ref => {
+        const colorRef = ref?.mask_color;
+        if(!colorRef?.url || referenceImages.length >= SMART_REFERENCE_IMAGE_MAX) return;
+        referenceImages.push({url:colorRef.url, name:colorRef.name || 'color_mask.png', kind:'image'});
+    });
     const payload = {
         prompt,
         provider_id:runSettings.provider_id,
@@ -23641,7 +23770,7 @@ async function runApiGeneration(prompt, refs, runSettings=settings, canvasBindin
         resolution:hasDimensions && !runSettings.resolution ? '__custom_dimensions__' : (runSettings.resolution || ''),
         quality:runSettings.quality || 'auto',
         n:1,
-        reference_images:imageRefsOnly(refs).slice(0, SMART_REFERENCE_IMAGE_MAX).map(ref => ({...ref, mask_url:ref.mask?.url || ''})),
+        reference_images:referenceImages,
         model_params:runningHub && runSettings.imageModelParams && typeof runSettings.imageModelParams === 'object' ? runSettings.imageModelParams : {}
     };
     const tasks = await Promise.all(Array.from({length:count}, (_, batchIndex) => submitCanvasImageTask(canvasBinding ? {
