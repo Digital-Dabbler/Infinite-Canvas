@@ -9954,7 +9954,9 @@ function thumbMediaHtml(img, options={}){
         if(options.selectOnly) return `<div class="media-thumb video-thumb">${smartVideoPreviewHtml(img, 512, 'alt=""')}</div>`;
         return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     }
-    if(img?.mask?.url) return maskOverlayPreviewHtml(img, 'media-thumb');
+    if(img?.mask?.url) return img.maskMode === 'color' && img?.maskColor?.url
+        ? maskColorPreviewHtml(img, 'media-thumb')
+        : maskOverlayPreviewHtml(img, 'media-thumb');
     return smartPreviewImgHtml(img, 512, 'draggable="false"');
 }
 function imageResolutionLabel(img){
@@ -10026,8 +10028,16 @@ function singleMediaHtml(img, w, h){
     if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i></div><div class="media-card-title">${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</div><div class="media-card-sub">${isTextMediaItem(img) ? 'TEXT' : 'FILE'}</div></div>`;
     if(isAudioMediaItem(img)) return `<div class="node-img media-card media-audio-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file-audio"></i></div><div class="media-card-title">${escapeHtml(img.name || 'Audio')}</div><div class="media-card-sub">AUDIO</div><audio src="${escapeAttr(img.url || '')}" data-url="${escapeAttr(img.url || '')}" controls preload="metadata"></audio></div>`;
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card" style="width:${w}px;height:${h}px">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 768, 'alt=""')}<button class="smart-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
-    if(img?.mask?.url) return maskOverlayPreviewHtml(img, 'node-img', w, h);
+    if(img?.mask?.url) return img.maskMode === 'color' && img?.maskColor?.url
+        ? maskColorPreviewHtml(img, 'node-img', w, h)
+        : maskOverlayPreviewHtml(img, 'node-img', w, h);
     return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
+}
+function maskColorPreviewHtml(img, className='', w=0, h=0){
+    // 颜色叠加：节点上直接显示"原图 + 色块"的结果，和 ComfyUI 里那张输出一致
+    const source = escapeAttr(displayMediaUrl(img.maskColor));
+    const size = w && h ? `width:${w}px;height:${h}px;` : '';
+    return `<div class="${escapeAttr(className)} mask-overlay-preview mask-color-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><span class="mask-overlay-label">${escapeHtml(tr('canvas.maskColorLabel'))}</span></div>`;
 }
 function maskOverlayPreviewHtml(img, className='', w=0, h=0){
     const source = escapeAttr(displayMediaUrl(img));
@@ -19729,6 +19739,10 @@ async function openMaskEditorForImage(node, index){
         await editor.open({
             imageUrl: displayMediaUrl(item),
             maskUrl: item.mask?.url ? displayMediaUrl(item.mask) : '',
+            colorUrl: item.maskColor?.url ? displayMediaUrl(item.maskColor) : '',
+            paintUrl: item.maskPaint?.url ? displayMediaUrl(item.maskPaint) : '',
+            mode: item.maskMode === 'color' ? 'color' : 'mask',
+            opacity: Number.isFinite(Number(item.maskOpacity)) ? Number(item.maskOpacity) : undefined,
             labels: maskEditorLabels(),
             onSave: result => saveMaskEditorResult(node, index, base, result)
         });
@@ -19747,34 +19761,36 @@ async function saveMaskEditorResult(node, index, base, result){
         maskFile = await uploadCroppedBlob(maskBlob, `${base}_mask.png`);
         if(!maskFile) throw new Error(tr('canvas.maskEditorSaveFail'));
     }
+    const colorMode = painted && result?.mode === 'color' && result.colorBlob;
     let colorFile = null;
-    // 颜色叠加：额外导出一张"带色块的原图"，像其它预处理结果一样放到右侧成为独立图片节点，
-    // 用户可以直接把它连成参考图使用；它不参与遮罩，遮罩仍是上面那张黑白图。
-    if(painted && result.colorBlob){
+    let paintFile = null;
+    // 颜色叠加：节点本身显示、以及向下传递的，都是"原图上带色块"的那张结果图；
+    // paint 小图只用来下次打开编辑器时还原每块的颜色，不参与生成。
+    if(colorMode){
         colorFile = await uploadCroppedBlob(result.colorBlob, `${base}_maskcolor.png`).catch(() => null);
+        if(result.paintBlob){
+            paintFile = await uploadCroppedBlob(result.paintBlob, `${base}_maskpaint.png`).catch(() => null);
+        }
     }
     pushUndo();
     const updated = {...(live.images[index] || {})};
     // 保存空遮罩 = 移除已有遮罩，与旧逻辑保持一致。
     if(maskFile) updated.mask = {url:maskFile.url, name:maskFile.name, kind:'image'};
     else delete updated.mask;
-    delete updated.maskColor;
-    live.images[index] = updated;
-    if(colorFile){
-        // 同一个引用图反复保存颜色叠加时，更新上次生成的那张图，避免越积越多。
-        const linked = updated.maskColorNodeId
-            ? nodes.find(n => n.id === updated.maskColorNodeId && Array.isArray(n.images) && n.images.length)
-            : null;
-        if(linked){
-            linked.images[0] = {...linked.images[0], url:colorFile.url, name:colorFile.name, kind:'image', natural_w:0, natural_h:0};
-        } else {
-            const rect = nodeRect(live);
-            const created = createImageNodeAt({x:rect.x + rect.width + 180, y:rect.y + rect.height / 2}, [colorFile], {skipUndo:true});
-            if(created?.id) updated.maskColorNodeId = created.id;
-        }
-    } else if(updated.maskColorNodeId){
-        delete updated.maskColorNodeId;
+    if(colorFile && maskFile){
+        updated.maskColor = {url:colorFile.url, name:colorFile.name, kind:'image'};
+        updated.maskMode = 'color';
+        updated.maskOpacity = Number.isFinite(Number(result.opacity)) ? Number(result.opacity) : undefined;
+        if(typeof updated.maskOpacity !== 'number') delete updated.maskOpacity;
+        if(paintFile) updated.maskPaint = {url:paintFile.url, name:paintFile.name, kind:'image'};
+        else delete updated.maskPaint;
+    } else {
+        delete updated.maskColor;
+        delete updated.maskPaint;
+        delete updated.maskMode;
+        delete updated.maskOpacity;
     }
+    live.images[index] = updated;
     render(); scheduleSave();
     toast(painted ? tr('canvas.maskSaved') : tr('canvas.maskRemoved'));
 }
@@ -21818,7 +21834,8 @@ function originalPromptTextFromParts(parts){
 }
 function promptRequestRefs(refs){
     return (refs || []).map((img, index) => ({
-        url:img.url,
+        // 颜色叠加模式：向下传递的就是"原图上带色块"的那张结果图，遮罩照旧随行
+        url:(img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url,
         name:img.name || `图${index + 1}`,
         mediaInstanceId:img.mediaInstanceId || '',
         kind:img.kind || mediaKindForItem(img),

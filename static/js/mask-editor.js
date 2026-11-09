@@ -338,6 +338,10 @@
             this.labels = this.opts.labels || {};
             this.imageUrl = this.opts.imageUrl;
             this.maskUrl = this.opts.maskUrl || '';
+            // 颜色叠加产物：colorUrl 是"原图 + 色块"的效果图，paintUrl 是只含纯色块的小图，
+            // 重新打开时用 paintUrl 精确还原每个像素属于哪种颜色（并用于回显上次的叠加设置）。
+            this.colorUrl = this.opts.colorUrl || '';
+            this.paintUrl = this.opts.paintUrl || '';
             this.onSave = typeof this.opts.onSave === 'function' ? this.opts.onSave : null;
 
             // 尺寸
@@ -360,8 +364,10 @@
             this.tool = 'brush';
             this.brushSize = DEFAULT_BRUSH;
             this.colorName = 'red';
-            this.mode = 'mask';
-            this.opacity = DEFAULT_OPACITY;
+            this.mode = this.opts.mode === 'color' ? 'color' : 'mask';
+            this.opacity = Number.isFinite(Number(this.opts.opacity))
+                ? clamp(Number(this.opts.opacity), 0, 100)
+                : DEFAULT_OPACITY;
             this.fillHoles = true;
             this.inverted = false;
 
@@ -719,10 +725,21 @@
                 tempCtx.imageSmoothingEnabled = false;
                 tempCtx.drawImage(image, 0, 0, this.editWidth, this.editHeight);
                 const source = tempCtx.getImageData(0, 0, this.editWidth, this.editHeight);
-                const baseline = createCanvas(this.editWidth, this.editHeight);
-                const baselineCtx = baseline.getContext('2d');
-                const output = baselineCtx.createImageData(this.editWidth, this.editHeight);
-                const rgb = hexToRgb(COLORS[this.colorName]);
+                // 颜色叠加保存的纯色块小图：用它精确还原"每个像素是哪种颜色"，
+                // 不用去猜已经和原图混在一起的彩色效果图。
+                const paintData = await this.loadPaintData();
+                const palettes = COLOR_ORDER.map((name) => ({ name: name, rgb: hexToRgb(COLORS[name]) }));
+                const layers = new Map();
+                const layerForBaseline = (name) => {
+                    let entry = layers.get(name);
+                    if (!entry) {
+                        const canvas = createCanvas(this.editWidth, this.editHeight);
+                        const ctx = canvas.getContext('2d');
+                        entry = { canvas: canvas, ctx: ctx, image: ctx.createImageData(this.editWidth, this.editHeight) };
+                        layers.set(name, entry);
+                    }
+                    return entry;
+                };
                 let painted = false;
                 for (let offset = 0; offset < source.data.length; offset += 4) {
                     const alpha = source.data[offset + 3];
@@ -732,20 +749,60 @@
                         source.data[offset + 1] * 0.587 +
                         source.data[offset + 2] * 0.114;
                     if (luma <= 128) continue;
-                    output.data[offset] = rgb[0];
-                    output.data[offset + 1] = rgb[1];
-                    output.data[offset + 2] = rgb[2];
-                    output.data[offset + 3] = 255;
+                    let name = this.colorName;
+                    if (paintData && paintData[offset + 3] > 8) {
+                        const red = paintData[offset];
+                        const green = paintData[offset + 1];
+                        const blue = paintData[offset + 2];
+                        let best = null;
+                        let bestDistance = Infinity;
+                        palettes.forEach((candidate) => {
+                            const dr = red - candidate.rgb[0];
+                            const dg = green - candidate.rgb[1];
+                            const db = blue - candidate.rgb[2];
+                            const distance = dr * dr + dg * dg + db * db;
+                            if (distance < bestDistance) {
+                                bestDistance = distance;
+                                best = candidate;
+                            }
+                        });
+                        if (best) name = best.name;
+                    }
+                    const rgb = hexToRgb(COLORS[name]);
+                    const entry = layerForBaseline(name);
+                    entry.image.data[offset] = rgb[0];
+                    entry.image.data[offset + 1] = rgb[1];
+                    entry.image.data[offset + 2] = rgb[2];
+                    entry.image.data[offset + 3] = 255;
                     painted = true;
                 }
                 if (!painted) return;
-                baselineCtx.putImageData(output, 0, 0);
-                // 基线作为一个 op 放回操作列表：撤销到底会回到旧遮罩，而不是空画布
-                const op = { kind: 'baseline', color: this.colorName, canvas: baseline };
-                this.ops.push(op);
-                this.applyOp(op);
+                // 基线按颜色分成若干个 op 放回操作列表：撤销到底会回到旧遮罩，而不是空画布
+                layers.forEach((entry, name) => {
+                    entry.ctx.putImageData(entry.image, 0, 0);
+                    const op = { kind: 'baseline', color: name, canvas: entry.canvas };
+                    this.ops.push(op);
+                    this.applyOp(op);
+                });
             } catch (error) {
                 if (window.console && console.warn) console.warn('MaskEditor: 旧遮罩载入失败', error);
+            }
+        }
+
+        // 读取保存时留下的纯色块小图；没有或者读不到就当没有（退回单色遮罩）。
+        async loadPaintData() {
+            if (!this.paintUrl) return null;
+            try {
+                const image = new Image();
+                image.src = this.paintUrl;
+                await waitForImage(image);
+                const temp = createCanvas(this.editWidth, this.editHeight);
+                const ctx = temp.getContext('2d', { willReadFrequently: true });
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(image, 0, 0, this.editWidth, this.editHeight);
+                return ctx.getImageData(0, 0, this.editWidth, this.editHeight).data;
+            } catch (error) {
+                return null;
             }
         }
 
@@ -904,7 +961,10 @@
 
         // ---- 操作列表 ----
         baselineCount() {
-            return this.ops.length && this.ops[0].kind === 'baseline' ? 1 : 0;
+            // 颜色叠加的旧结果会按颜色拆成多个基线 op，全部都在撤销保护范围内
+            let count = 0;
+            while (count < this.ops.length && this.ops[count].kind === 'baseline') count += 1;
+            return count;
         }
 
         pushOp(op) {
@@ -2092,12 +2152,16 @@
             const maskCanvas = this.buildMaskCanvas();
             const maskBlob = await canvasToBlob(maskCanvas);
             let colorBlob = null;
+            let paintBlob = null;
             if (this.mode === 'color') {
                 colorBlob = await canvasToBlob(this.buildColorCanvas());
+                // 纯色块小图：只为了下次打开编辑器时能原样恢复每种颜色，不参与生成
+                paintBlob = await canvasToBlob(this.buildPaintCanvas());
             }
             return {
                 maskBlob: maskBlob,
                 colorBlob: colorBlob,
+                paintBlob: paintBlob,
                 mode: this.mode,
                 colorName: this.colorName,
                 opacity: this.opacity,
@@ -2132,6 +2196,32 @@
                     data[offset + 1] = value;
                     data[offset + 2] = value;
                     data[offset + 3] = 255;
+                }
+                ctx.putImageData(image, 0, y);
+            }
+            return canvas;
+        }
+
+        /**
+         * 导出纯色块小图：编辑分辨率下，涂抹区是所选颜色的纯色，其余透明。
+         * 仅用于重新打开编辑器时还原"哪块是哪一色"，不会被当成图片素材使用。
+         */
+        buildPaintCanvas() {
+            const canvas = createCanvas(this.editWidth, this.editHeight);
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.imageSmoothingEnabled = false;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            // 直接取当前叠加视图：它已经把自动填充漏洞、反选都算进去了，
+            // 重新打开时按这里记录的颜色还原，和保存前看到的完全一致。
+            ctx.drawImage(this.paint, 0, 0);
+            const band = 256;
+            for (let y = 0; y < canvas.height; y += band) {
+                const height = Math.min(band, canvas.height - y);
+                const image = ctx.getImageData(0, y, canvas.width, height);
+                const data = image.data;
+                for (let offset = 0; offset < data.length; offset += 4) {
+                    if (data[offset + 3] > 8) data[offset + 3] = 255;
+                    else data[offset + 3] = 0;
                 }
                 ctx.putImageData(image, 0, y);
             }

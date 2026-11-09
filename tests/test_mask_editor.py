@@ -24,12 +24,13 @@ class MaskEditorFrontendTests(unittest.TestCase):
         cls.i18n_js = read_text("static/js/i18n/smart-canvas.js")
 
     def test_page_loads_editor_assets(self):
-        self.assertIn('href="/static/css/mask-editor.css"', self.canvas_html)
-        self.assertIn('src="/static/js/mask-editor.js"', self.canvas_html)
+        # 缓存戳由服务端维护，这里只认资源路径与加载顺序。
+        self.assertIn('/static/css/mask-editor.css', self.canvas_html)
+        self.assertIn('/static/js/mask-editor.js', self.canvas_html)
         # 编辑器必须先于 smart-canvas.js 加载，打开遮罩时才拿得到 window.MaskEditor。
         self.assertLess(
-            self.canvas_html.index('src="/static/js/mask-editor.js"'),
-            self.canvas_html.index('src="/static/js/smart-canvas.js'),
+            self.canvas_html.index('/static/js/mask-editor.js'),
+            self.canvas_html.index('/static/js/smart-canvas.js'),
         )
 
     def test_editor_public_contract(self):
@@ -80,19 +81,38 @@ class MaskEditorFrontendTests(unittest.TestCase):
         self.assertIn(".me-root {", self.editor_css)
         self.assertIn(".me-paint", self.editor_css)
 
+    def test_editor_restores_color_layers(self):
+        # 重新打开颜色叠加结果时，按纯色块小图还原每种颜色，并回显上次的叠加设置。
+        self.assertIn("this.paintUrl = this.opts.paintUrl || '';", self.editor_js)
+        self.assertIn("this.mode = this.opts.mode === 'color' ? 'color' : 'mask';", self.editor_js)
+        self.assertIn("async loadPaintData()", self.editor_js)
+        self.assertIn("kind: 'baseline', color: name", self.editor_js)
+        self.assertIn("baselineCount() {", self.editor_js)
+        self.assertIn("paintBlob: paintBlob", self.editor_js)
+        self.assertIn("buildPaintCanvas()", self.editor_js)
+
     def test_canvas_wires_editor_and_color_reference(self):
         self.assertIn("if(action === 'mask'){", self.canvas_js)
         self.assertIn("async function openMaskEditorForImage(node, index)", self.canvas_js)
         self.assertIn("async function saveMaskEditorResult(node, index, base, result)", self.canvas_js)
-        # 颜色叠加导出的彩色图落到右侧独立图片节点，供用户直接当参考图连线。
+        # 颜色叠加：彩色结果存在同一个图片上，节点直接显示它、生成时也传它。
         self.assertIn("uploadCroppedBlob(result.colorBlob, `${base}_maskcolor.png`)", self.canvas_js)
-        self.assertIn("createImageNodeAt({x:rect.x + rect.width + 180", self.canvas_js)
+        self.assertIn("updated.maskColor = {url:colorFile.url", self.canvas_js)
+        self.assertIn("updated.maskMode = 'color';", self.canvas_js)
         self.assertIn("delete updated.maskColor;", self.canvas_js)
-        # 重复保存时复用上次那张颜色叠加图，不重复建节点。
-        self.assertIn("updated.maskColorNodeId = created.id;", self.canvas_js)
-        # 不再有隐藏的自动追加参考图逻辑。
+        # 不再新建图片节点，也不再偷偷追加参考图。
+        save_start = self.canvas_js.index("async function saveMaskEditorResult(node, index, base, result)")
+        save_body = self.canvas_js[save_start:]
+        save_body = save_body[:save_body.index("\nasync function maskBlobHasPaintedArea")]
+        self.assertNotIn("createImageNodeAt(", save_body)
+        self.assertNotIn("maskColorNodeId", self.canvas_js)
         self.assertNotIn("mask_color", self.canvas_js)
-        self.assertNotIn("referenceImages.push({url:colorRef.url", self.canvas_js)
+        # 节点预览与生成请求都用带色块的结果图。
+        self.assertIn("img.maskMode === 'color' && img?.maskColor?.url", self.canvas_js)
+        self.assertIn("url:(img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url", self.canvas_js)
+        # 纯色块小图用于重新打开编辑器时还原颜色。
+        self.assertIn("uploadCroppedBlob(result.paintBlob, `${base}_maskpaint.png`)", self.canvas_js)
+        self.assertIn("paintUrl: item.maskPaint?.url", self.canvas_js)
 
     def test_i18n_keys_present(self):
         for key in (
@@ -101,6 +121,7 @@ class MaskEditorFrontendTests(unittest.TestCase):
             '"canvas.maskEditorModeColor"',
             '"canvas.maskEditorColorCyan"',
             '"canvas.maskSaved"',
+            '"canvas.maskColorLabel"',
         ):
             self.assertIn(key, self.i18n_js)
 

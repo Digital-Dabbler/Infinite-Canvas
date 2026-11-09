@@ -77,6 +77,7 @@
         "canvas.maskColorWhite": { zh: "白色", en: "White" },
         "canvas.maskRemoved": { zh: "已移除遮罩", en: "Mask removed" },
         "canvas.maskSaved": { zh: "遮罩已保存", en: "Mask saved" },
+        "canvas.maskColorLabel": { zh: "色块", en: "Colors" },
         "canvas.maskEditorTitle": { zh: "遮罩编辑器", en: "Mask editor" },
         "canvas.maskEditorUnavailable": { zh: "遮罩编辑器未加载，请刷新页面重试", en: "Mask editor is not loaded. Refresh the page and try again." },
         "canvas.maskEditorToolMarquee": { zh: "选框", en: "Marquee" },
