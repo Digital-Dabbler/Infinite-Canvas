@@ -22735,7 +22735,11 @@ def photoshop_bridge_source(canvas, node_id, image_index):
     if image_index < 0 or image_index >= len(images):
         raise HTTPException(status_code=400, detail="当前图片索引无效，请重新选择图片。")
     image = photoshop_bridge_image_value(images[image_index])
+    # 裁切是"就地"语义：节点里存的仍是原图，送出去的是裁切成品图。
+    crop = image.get("crop") if isinstance(image.get("crop"), dict) else {}
+    crop_result = crop.get("result") if isinstance(crop.get("result"), dict) else {}
     candidates = [
+        crop_result.get("url"),
         image.get("originalLocalUrl"), image.get("localUrl"), image.get("sourceUrl"),
         image.get("local_url"), image.get("source_url"), image.get("url"),
     ]
@@ -22752,7 +22756,7 @@ def photoshop_bridge_source(canvas, node_id, image_index):
     content_type = content_type_for_path(path)
     if not str(content_type or "").lower().startswith("image/"):
         raise HTTPException(status_code=400, detail="当前素材不是图片，无法发送到 Photoshop。")
-    name = str(image.get("name") or os.path.basename(path) or "canvas-image")[:120]
+    name = str(crop_result.get("name") or image.get("name") or os.path.basename(path) or "canvas-image")[:120]
     return node, image, url, name
 
 def photoshop_bridge_return_item(url, name):
@@ -23268,7 +23272,11 @@ def system_clipboard_node_image(canvas, node_id, image_index):
     if image_index < 0 or image_index >= len(images):
         raise HTTPException(status_code=400, detail="当前图片索引无效，请重新选择图片。")
     image = photoshop_bridge_image_value(images[image_index])
+    # 裁切是"就地"语义：节点里存的仍是原图，送出去的是裁切成品图。
+    crop = image.get("crop") if isinstance(image.get("crop"), dict) else {}
+    crop_result = crop.get("result") if isinstance(crop.get("result"), dict) else {}
     candidates = [
+        crop_result.get("url"),
         image.get("originalLocalUrl"), image.get("localUrl"), image.get("sourceUrl"),
         image.get("local_url"), image.get("source_url"), image.get("url"),
     ]

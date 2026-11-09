@@ -206,6 +206,19 @@ class CropEditorFrontendTests(unittest.TestCase):
         self.assertIn(".map(flattenCropForWorkflowExport)", self._function_body(
             self.canvas_js, "function workflowGroupPayload(group){"))
 
+    def test_server_side_send_paths_prefer_cropped_result(self):
+        # 发到 Photoshop、复制到系统剪贴板都是"服务端按 node_id + image_index 取图"，
+        # 前端传的是裁切图也没用，服务端必须自己也优先用 crop.result。
+        source = read_text("main.py")
+        for signature in (
+            "def photoshop_bridge_source(canvas, node_id, image_index):",
+            "def system_clipboard_node_image(canvas, node_id, image_index):",
+        ):
+            body = self._function_body(source, signature)
+            self.assertIn('crop = image.get("crop") if isinstance(image.get("crop"), dict) else {}', body)
+            self.assertIn('crop_result = crop.get("result") if isinstance(crop.get("result"), dict) else {}', body)
+            self.assertIn("crop_result.get(\"url\"),", body)
+
     # ---- i18n ----
     def test_i18n_keys_present(self):
         for key in (
