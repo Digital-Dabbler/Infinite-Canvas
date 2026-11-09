@@ -145,7 +145,7 @@
         "canvas.outpaintMaxLong": { zh: "最大输出长边", en: "Max long edge" },
         "canvas.outpaintDivisor": { zh: "整除数", en: "Divisible by" },
         "canvas.outpaintSupplement": { zh: "补充提示词", en: "Extra prompt" },
-        "canvas.outpaintSupplementPlaceholder": { zh: "可选。想额外告诉 AI 扩出来的部分该有什么内容或延续什么氛围时再填，留空则只做无缝延展。", en: "Optional. Tell the AI what the expanded area should contain; leave empty for seamless extension." },
+        "canvas.outpaintSupplementPlaceholder": { zh: "可选，留空则只做无缝延展", en: "Optional; empty = seamless" },
         "canvas.outpaintMaxSample": { zh: "最大采样尺寸", en: "Max sample size" },
         "canvas.outpaintReset": { zh: "复位", en: "Reset" },
         "canvas.outpaintComfyMode": { zh: "本机 ComfyUI · Qwen 扩图工作流", en: "Local ComfyUI · Qwen outpaint workflow" },
