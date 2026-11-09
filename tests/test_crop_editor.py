@@ -266,6 +266,7 @@ class PreviewCropIntegrationTests(unittest.TestCase):
         cls.canvas_html = read_text("static/smart-canvas.html")
         cls.canvas_js = read_text("static/js/smart-canvas.js")
         cls.canvas_css = read_text("static/css/smart-canvas.css")
+        cls.editor_js = read_text("static/js/crop-editor.js")
 
     def _function_body(self, source, signature):
         start = source.index(signature)
@@ -363,6 +364,20 @@ class PreviewCropIntegrationTests(unittest.TestCase):
             body.index("closeImageEditor();"),
             body.index("} finally {"),
         )
+
+    def test_ratio_preset_takes_largest_box_instead_of_shrinking(self):
+        # 连续点 1:1 → 2:3 → 3:2 → … 时框会越切越小，是因为内联 setRatio
+        # 调了「只缩不放」的 fitRectToAspect：每换一次比例只收一轴。
+        # 现在的语义是"选比例 = 该比例在图片内最大的框"，且只保留中心、越界推回。
+        start = self.editor_js.rindex("setRatio(name) {")
+        body = self.editor_js[start:self.editor_js.index("syncRatioButtons() {", start)]
+        self.assertIn("Math.min(width, height * aspect)", body)
+        self.assertNotIn("this.fitRectToAspect(", body)
+        self.assertIn("this.clampRect();", body)
+        # 恢复已保存的框仍走只缩不放的 fitRectToAspect（整窗 + 内联各一处），
+        # 避免把旧框放大；这些调用只能出现在 applyInitialRect 里。
+        self.assertEqual(self.editor_js.count("this.fitRectToAspect(aspect);"), 2)
+        self.assertEqual(self.editor_js.count("Math.min(rect.w, rect.h * aspect)"), 2)
 
     def test_preview_crop_follows_zoom_and_pan(self):
         zoom = self._function_body(self.canvas_js, "function applyPreviewTransform(")

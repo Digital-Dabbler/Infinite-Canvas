@@ -1673,7 +1673,8 @@
             if (aspect) this.fitRectToAspect(aspect);
         }
 
-        // 与整窗一致：以当前框中心为基准收成指定比例，只缩小不放大
+        // 只在「恢复已保存的裁切框」时用：按比例小幅收拢，保证旧数据里的框比例一致。
+        // 注意不要拿它处理比例按钮 —— 那需要「取最大框」，否则连续切换会越缩越小。
         fitRectToAspect(aspect) {
             const rect = this.rect;
             if (!rect || !aspect || !(aspect > 0)) return;
@@ -2114,10 +2115,21 @@
             if (RATIOS.indexOf(name) < 0) return;
             this.ratioName = name;
             const aspect = this.aspectOf(name);
-            if (aspect && this.natW && this.natH) {
-                // 契约要求「把当前框按新比例居中夹紧」：保留当前框中心，
-                // 只按新比例收拢并夹回图片内，不换成居中的最大框。
-                this.fitRectToAspect(aspect);
+            if (aspect && this.rect && this.natW && this.natH) {
+                // 选比例 = 换成该比例在图片内最大的框（保留当前框中心，越界就整体推回）。
+                // 旧实现走 fitRectToAspect 的「只缩不放」，连续点 1:1 → 2:3 → 3:2……
+                // 每换一次都只缩一轴，框会越点越小，所以这里必须是「取最大」。
+                const width = this.natW;
+                const height = this.natH;
+                const w = Math.min(width, height * aspect);
+                const h = w / aspect;
+                const cx = this.rect.x + this.rect.w / 2;
+                const cy = this.rect.y + this.rect.h / 2;
+                this.rect.w = w;
+                this.rect.h = h;
+                this.rect.x = cx - w / 2;
+                this.rect.y = cy - h / 2;
+                this.clampRect();
             }
             this.ensureMinRect();
             this.userAdjusted = true;
