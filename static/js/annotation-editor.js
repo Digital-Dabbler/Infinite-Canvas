@@ -146,6 +146,9 @@
             this.labels = this.opts.labels || {};
             this.imageUrl = this.opts.imageUrl || '';
             this.overlayUrl = this.opts.overlayUrl || '';
+            // 归一化裁切范围（0–1）。只用来在整图上画一圈虚线提示，
+            // 让用户知道哪些内容已经在裁切之外，不会被画进最终结果。
+            this.cropRect = this.opts.cropRect || null;
             this.onSave = typeof this.opts.onSave === 'function' ? this.opts.onSave : null;
 
             this.root = null;
@@ -790,10 +793,37 @@
             ctx.restore();
         }
 
+        // 裁切范围提示：整图坐标里的归一化矩形，映射到舞台后画虚线框。
+        // 只提示、不裁剪——批注永远作用在整张原图上，保存后画布会按这个范围重新烘焙裁切结果。
+        drawCropScope(ctx) {
+            const rect = this.cropRect;
+            if (!rect || !this.editWidth || !this.editHeight) return;
+            const x = clamp(Number(rect.x) || 0, 0, 1);
+            const y = clamp(Number(rect.y) || 0, 0, 1);
+            const w = clamp(Number(rect.w) || 0, 0, 1 - x);
+            const h = clamp(Number(rect.h) || 0, 0, 1 - y);
+            if (w <= 0 || h <= 0) return;
+            const tl = this.stagePoint(x * this.editWidth, y * this.editHeight);
+            const br = this.stagePoint((x + w) * this.editWidth, (y + h) * this.editHeight);
+            const width = Math.max(0, br.x - tl.x);
+            const height = Math.max(0, br.y - tl.y);
+            if (width < 2 || height < 2) return;
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255,255,255,.92)';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([7, 5]);
+            ctx.beginPath();
+            ctx.rect(tl.x, tl.y, width, height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+        }
+
         drawSelection() {
             if (!this.marqueeCtx || !this.stageWidth) return;
             const ctx = this.marqueeCtx;
             ctx.clearRect(0, 0, this.stageWidth, this.stageHeight);
+            this.drawCropScope(ctx);
             if (!this.selectedTextId) return;
             const item = this.textItems.get(this.selectedTextId);
             if (!item) return;

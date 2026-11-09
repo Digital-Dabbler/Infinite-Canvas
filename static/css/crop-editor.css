@@ -1,0 +1,264 @@
+/* 裁切编辑器增量样式：外壳（根节点、顶栏、底栏、按钮、toast、错误框）全部复用
+   mask-editor.css 的 .me- 令牌，这里只补裁切独有的比例按钮、选框、手柄与尺寸读数。
+   手柄尺寸用 --ce-inv（= 1 / 舞台缩放）反向补偿，所以缩放舞台时手柄在屏幕上大小不变。 */
+
+/* ===== 顶栏：比例预设 ===== */
+.ce-root .me-toolbar {
+    gap: 10px;
+}
+
+.ce-ratios {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    padding: 3px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid #232833;
+    border-radius: 10px;
+    background: #0e1116;
+    scrollbar-width: none;
+}
+
+.ce-ratios::-webkit-scrollbar {
+    height: 0;
+}
+
+.ce-ratios-label {
+    flex: 0 0 auto;
+    padding: 0 8px 0 4px;
+    color: #6f7a8b;
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+/* 空词条时不留下多余间距 */
+.ce-ratios-label:empty {
+    display: none;
+}
+
+.ce-root .ce-ratio {
+    flex: 0 0 auto;
+    height: 26px;
+    padding: 0 9px;
+    font-size: 12px;
+}
+
+.ce-zoom-value {
+    flex: 0 0 auto;
+    min-width: 48px;
+    color: #cbd5e1;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+
+/* ===== 舞台：选框层 ===== */
+.ce-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+}
+
+/* 选框外压暗。用四块独立遮罩而不是一条 evenodd 多边形：
+   polygon 的"连接边"会自交，在选框外侧留下一条可见的对角亮缝 */
+.ce-masks {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.ce-mask {
+    position: absolute;
+    background: rgba(6, 9, 14, 0.58);
+    transition: opacity 0.12s ease;
+}
+
+.ce-selection {
+    position: absolute;
+    box-sizing: border-box;
+    border: calc(1.5px * var(--ce-inv, 1)) solid rgba(255, 255, 255, 0.95);
+    box-shadow:
+        0 0 0 calc(1px * var(--ce-inv, 1)) rgba(0, 0, 0, 0.45),
+        0 0 calc(12px * var(--ce-inv, 1)) rgba(0, 0, 0, 0.35);
+}
+
+/* 三分线：4 根独立细线，比背景渐变更精确，也能跟着缩放保持 1 屏幕像素 */
+.ce-third {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.38);
+}
+
+.ce-third-v {
+    top: 0;
+    bottom: 0;
+    width: calc(1px * var(--ce-inv, 1));
+    transform: translateX(-50%);
+}
+
+.ce-third-h {
+    left: 0;
+    right: 0;
+    height: calc(1px * var(--ce-inv, 1));
+    transform: translateY(-50%);
+}
+
+/* 中心辅助标记：颜色由 JS 按取样亮度写成 currentColor */
+.ce-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: calc(26px * var(--ce-inv, 1));
+    height: calc(26px * var(--ce-inv, 1));
+    color: #ffffff;
+    transform: translate(-50%, -50%);
+    filter: drop-shadow(0 0 calc(2px * var(--ce-inv, 1)) rgba(0, 0, 0, 0.55));
+    transition: color 0.15s ease;
+}
+
+.ce-handle {
+    position: absolute;
+    box-sizing: border-box;
+    width: calc(11px * var(--ce-inv, 1));
+    height: calc(11px * var(--ce-inv, 1));
+    border: calc(2px * var(--ce-inv, 1)) solid #0b0f14;
+    border-radius: calc(2.5px * var(--ce-inv, 1));
+    background: #ffffff;
+    box-shadow: 0 0 calc(4px * var(--ce-inv, 1)) rgba(0, 0, 0, 0.45);
+    transform: translate(-50%, -50%);
+}
+
+.ce-h-nw { top: 0; left: 0; }
+.ce-h-n { top: 0; left: 50%; }
+.ce-h-ne { top: 0; left: 100%; }
+.ce-h-e { top: 50%; left: 100%; }
+.ce-h-se { top: 100%; left: 100%; }
+.ce-h-s { top: 100%; left: 50%; }
+.ce-h-sw { top: 100%; left: 0; }
+.ce-h-w { top: 50%; left: 0; }
+
+/* 重画过程中只留选框轮廓：遮罩和手柄会挡住正在拖出来的区域 */
+.ce-root.is-drawing .ce-mask,
+.ce-root.is-drawing .ce-handle,
+.ce-root.is-drawing .ce-third,
+.ce-root.is-drawing .ce-center {
+    opacity: 0;
+}
+
+/* 图片就绪前不显示任何选框，避免在 0×0 图上闪一下 */
+.ce-root:not(.is-ready) .ce-mask,
+.ce-root:not(.is-ready) .ce-selection {
+    display: none;
+}
+
+.ce-root .me-image {
+    -webkit-user-drag: none;
+}
+
+/* ===== 底栏：尺寸读数 + 三个动作 ===== */
+.ce-footer {
+    gap: 12px;
+    padding: 9px 16px;
+}
+
+/* 快捷键提示留在左侧，把自动外边距让给尺寸读数，读数就不会被推到最右 */
+.ce-footer .me-footer-shortcut {
+    margin-left: 0;
+    color: #6b7687;
+}
+
+.ce-size {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-left: auto;
+    color: #8b95a6;
+    font-size: 11.5px;
+    white-space: nowrap;
+}
+
+.ce-size-label:empty {
+    display: none;
+}
+
+.ce-size-value {
+    color: #e8eef7;
+    font-size: 12.5px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.3px;
+}
+
+.ce-footer .me-text-btn,
+.ce-footer .me-primary-btn {
+    flex: 0 0 auto;
+    height: 30px;
+}
+
+.ce-footer .me-primary-btn {
+    padding: 0 14px;
+}
+
+/* ===== 保存中 ===== */
+.ce-root.is-busy .ce-ratios {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.ce-root.is-busy .ce-selection {
+    opacity: 0.85;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 1120px) {
+    .ce-ratios-label {
+        display: none;
+    }
+
+    .ce-root .ce-ratio {
+        padding: 0 7px;
+    }
+}
+
+@media (max-width: 900px) {
+    .ce-footer .me-footer-hint,
+    .ce-footer .me-footer-shortcut {
+        display: none;
+    }
+
+    .ce-size {
+        margin-left: 0;
+        margin-right: auto;
+    }
+
+    .ce-root .me-title {
+        display: none;
+    }
+}
+
+@media (max-width: 720px) {
+    .ce-footer {
+        gap: 8px;
+        padding: 8px 10px;
+    }
+
+    .ce-zoom-value {
+        min-width: 40px;
+    }
+
+    .ce-root .ce-ratio {
+        padding: 0 6px;
+        font-size: 11.5px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ce-mask,
+    .ce-center {
+        transition: none;
+    }
+}

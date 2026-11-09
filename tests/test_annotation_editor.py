@@ -115,26 +115,33 @@ class AnnotationEditorFrontendTests(unittest.TestCase):
         return source[start:end if end != -1 else len(source)]
 
     def test_display_uses_annotation_image(self):
-        # 节点图与缩略图都要显示批注结果，且批注优先于遮罩。
+        # 节点图与缩略图都要显示批注结果，且批注优先于遮罩（裁切结果已在批注之上烘焙）。
         thumb = self._function_body(self.canvas_js, "function thumbMediaHtml(img, options={}){")
-        self.assertIn("if(img?.annotation?.url) return annotationPreviewHtml(img, 'media-thumb');", thumb)
+        self.assertIn("if(!cropped && view?.annotation?.url) return annotationPreviewHtml(view, 'media-thumb');", thumb)
         single = self._function_body(self.canvas_js, "function singleMediaHtml(img, w, h){")
-        self.assertIn("if(img?.annotation?.url) return annotationPreviewHtml(img, 'node-img', w, h);", single)
+        self.assertIn("if(!cropped && view?.annotation?.url) return annotationPreviewHtml(view, 'node-img', w, h);", single)
         self.assertIn("function annotationPreviewHtml(img, className='', w=0, h=0){", self.canvas_js)
         self.assertIn("tr('canvas.annotationLabel')", self.canvas_js)
         # 批注分支必须排在遮罩分支之前。
         self.assertLess(
-            thumb.index("img?.annotation?.url"),
-            thumb.index("if(img?.mask?.url)"),
+            thumb.index("view?.annotation?.url"),
+            thumb.index("if(view?.mask?.url)"),
         )
-        # 预览、放大、抠图、裁剪等统一经 imageForDisplay 取到批注后的图。
+        # 预览、放大、抠图、裁剪等统一经 imageForDisplay 取到批注后的图；
+        # 批注本身的烘焙收口在 imageBaseForDisplay。
         display = self._function_body(self.canvas_js, "function imageForDisplay(img){")
-        self.assertIn("if(img.annotation?.url){", display)
-        self.assertIn("url:displayMediaUrl(img.annotation)", display)
+        self.assertIn("const base = imageBaseForDisplay(img);", display)
+        base_display = self._function_body(self.canvas_js, "function imageBaseForDisplay(img){")
+        self.assertIn("if(img.annotation?.url){", base_display)
+        self.assertIn("url:displayMediaUrl(img.annotation)", base_display)
 
     def test_downstream_uses_annotation_image_without_mask(self):
         refs = self._function_body(self.canvas_js, "function promptRequestRefs(refs){")
-        self.assertIn("url:annotated ? displayMediaUrl(img.annotation) :", refs)
+        # 裁切结果（已烘焙批注）优先级最高，其余仍以批注图优先。
+        self.assertIn("url:cropped", refs)
+        self.assertIn("? displayMediaUrl(img.crop.result)", refs)
+        self.assertIn(": annotated", refs)
+        self.assertIn("? displayMediaUrl(img.annotation)", refs)
         self.assertIn("mask:(!annotated && img.mask)", refs)
 
     def test_derived_images_do_not_inherit_annotation(self):

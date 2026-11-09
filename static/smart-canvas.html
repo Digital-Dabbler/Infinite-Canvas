@@ -24,6 +24,7 @@
     <link rel="stylesheet" href="/static/css/smart-canvas.css?v=2026.07.29.eea72983a2">
     <link rel="stylesheet" href="/static/css/mask-editor.css">
     <link rel="stylesheet" href="/static/css/annotation-editor.css?v=2026.07.29.2fa966ffb8">
+    <link rel="stylesheet" href="/static/css/crop-editor.css?v=2026.07.29.croppeditor">
     <link rel="stylesheet" href="/static/css/smart-canvas-shell.css?v=2026.07.29.be364659c7">
     <link rel="stylesheet" href="/static/css/library-shared.css?v=2026.07.29.fa68196223">
     <link rel="stylesheet" href="/static/css/prompt-library.css?v=2026.07.29.2e4d37ceda">
@@ -348,7 +349,6 @@
                     </div>
                     <div class="image-edit-mode" role="toolbar" aria-label="图片编辑模式">
                         <button type="button" data-image-edit-mode="preview" class="active"><i data-lucide="eye" class="w-3.5 h-3.5"></i><span data-i18n="smart.modePreview">预览</span></button>
-                        <button type="button" data-image-edit-mode="crop"><i data-lucide="crop" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeCrop">裁剪</span></button>
                         <button type="button" data-image-edit-mode="outpaint"><i data-lucide="expand" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeOutpaint">Expand</span></button>
                         <button type="button" data-image-edit-mode="resize"><i data-lucide="minimize-2" class="w-3.5 h-3.5"></i><span>缩放</span></button>
                         <button type="button" data-image-edit-mode="grid"><i data-lucide="grid-3x3" class="w-3.5 h-3.5"></i><span data-i18n="canvas.modeGrid">宫格切分</span></button>
@@ -364,18 +364,6 @@
                         <span id="outpaintColorLockNote" class="outpaint-color-lock" hidden data-i18n="canvas.outpaintComfyFillLocked">ComfyUI 扩图按灰色训练，底色已锁定</span>
                     </div>
                     <button class="preview-icon-btn" type="button" onclick="closeImageEditor()" title="关闭" data-i18n-title="common.close"><i data-lucide="x" class="w-4 h-4"></i></button>
-                </div>
-                <div id="imageCropTools" class="image-edit-tools crop-ratio-tools">
-                    <span class="image-edit-sub">比例</span>
-                    <button class="crop-ratio-btn active" type="button" data-crop-ratio="free">自由</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="source">原图</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="1:1">1:1</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="4:3">4:3</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="3:4">3:4</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="16:9">16:9</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="9:16">9:16</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="3:2">3:2</button>
-                    <button class="crop-ratio-btn" type="button" data-crop-ratio="2:3">2:3</button>
                 </div>
                 <div id="imageOutpaintTools" class="image-edit-tools outpaint-editor-tools">
                     <label class="outpaint-tool-field"><span data-i18n="canvas.outpaintUnit">单位</span><select id="outpaintUnitSelect" aria-label="扩图单位"></select></label>
@@ -520,16 +508,6 @@
                             <canvas id="editDrawCanvas" class="edit-draw-canvas"></canvas>
                             <canvas id="editTextCanvas" class="edit-text-canvas"></canvas>
                             <div id="editBrushCursor" class="edit-brush-cursor" aria-hidden="true"></div>
-                            <div id="cropBox" class="crop-box">
-                                <div class="crop-handle" data-crop-handle="nw"></div>
-                                <div class="crop-handle" data-crop-handle="n"></div>
-                                <div class="crop-handle" data-crop-handle="ne"></div>
-                                <div class="crop-handle" data-crop-handle="e"></div>
-                                <div id="cropHandle" class="crop-handle" data-crop-handle="se"></div>
-                                <div class="crop-handle" data-crop-handle="s"></div>
-                                <div class="crop-handle" data-crop-handle="sw"></div>
-                                <div class="crop-handle" data-crop-handle="w"></div>
-                            </div>
                             <div id="outpaintFrame" class="outpaint-frame">
                                 <div class="outpaint-handle" data-outpaint-handle="top"></div>
                                 <div class="outpaint-handle" data-outpaint-handle="right"></div>
@@ -655,6 +633,7 @@
     <script src="/static/js/resource-preview-panel.js?v=2026.07.29.0883cf0ea2"></script>
     <script src="/static/js/mask-editor.js"></script>
     <script src="/static/js/annotation-editor.js?v=2026.07.29.ddbfdf545f"></script>
+    <script src="/static/js/crop-editor.js?v=2026.07.29.croppeditor"></script>
     <script src="/static/js/smart-canvas.js?v=2026.07.29.7fef99ffa4"></script>
     <script src="/static/js/prompt-presets.js?v=2026.07.29.b56cb7e5cb"></script>
     <script src="/static/js/library-shared.js?v=2026.07.29.333f28f867"></script>

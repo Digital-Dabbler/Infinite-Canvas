@@ -304,9 +304,7 @@ function performUndo(){
 let comfyWorkflowCache = {};
 let cropState = null;
 let cropDrag = null;
-let cropAspectPreset = 'free';
-let cropAspectRatio = null;
-let imageEditMode = 'crop';
+let imageEditMode = 'preview';
 let angleControlState = {nodeId:'', imageIndex:0, target:'online', azimuth:0, elevation:0, distance:1};
 let angleCubeDrag = null;
 let imageEditModeTouched = false;
@@ -2377,6 +2375,10 @@ function arrangeSmartGroupMembers(group, options={}){
     return true;
 }
 function mediaLayoutSize(img){
+    // 裁切后版式按裁切结果的长宽比走（节点宽度不跳，但空框贴合裁切图）。
+    const cropW = Number(img?.crop?.width || img?.crop?.result?.natural_w || 0);
+    const cropH = Number(img?.crop?.height || img?.crop?.result?.natural_h || 0);
+    if(cropW > 0 && cropH > 0) return {width:cropW, height:cropH};
     const width = Number(img?.natural_w || img?.width || img?.w || img?.layout_w || img?.preview_w || 0);
     const height = Number(img?.natural_h || img?.height || img?.h || img?.layout_h || img?.preview_h || 0);
     return width > 0 && height > 0 ? {width, height} : {width:0, height:0};
@@ -9862,7 +9864,11 @@ function localDisplayUrlForMediaItem(img){
     const local = candidates.find(url => url && !/^https?:\/\//i.test(String(url)));
     return local || img.url || '';
 }
-function imageForDisplay(img){
+// 显示层分两级，避免"裁切结果"污染编辑底图：
+// - imageBaseForDisplay：编辑底图（批注烘焙后的整图，不含裁切）。裁切/批注编辑器都以它为源，
+//   否则在裁切图上再做裁切会变成两次裁切、扩图也会只拿到剩下一小块。
+// - imageForDisplay：画布节点、缩略图、下游引用看到的最终图（先烘焙批注，再套裁切结果）。
+function imageBaseForDisplay(img){
     if(!img || typeof img !== 'object') return img;
     if(img.annotation?.url){
         return {...img, url:displayMediaUrl(img.annotation)};
@@ -9874,6 +9880,57 @@ function imageForDisplay(img){
         url:localUrl,
         originalLocalUrl:img.originalLocalUrl || localUrl
     };
+}
+function imageForDisplay(img){
+    const base = imageBaseForDisplay(img);
+    const crop = img && typeof img === 'object' ? img.crop : null;
+    if(!crop?.result?.url) return base;
+    const width = Number(crop.width) || Number(crop.result.natural_w) || 0;
+    const height = Number(crop.height) || Number(crop.result.natural_h) || 0;
+    const view = {...base, url:displayMediaUrl(crop.result), crop};
+    if(width > 0) view.natural_w = width;
+    if(height > 0) view.natural_h = height;
+    // 批注已经烘焙进裁切结果；保留字段会让预览/下游叠加两次。
+    delete view.annotation;
+    delete view.annotationPaint;
+    return view;
+}
+function imageCropRect(crop){
+    const rect = crop?.rect;
+    if(!rect) return null;
+    const x = Number(rect.x), y = Number(rect.y), w = Number(rect.w), h = Number(rect.h);
+    if(![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
+    return {x, y, w, h};
+}
+function imageCropCoversWhole(crop){
+    const rect = imageCropRect(crop);
+    if(!rect) return false;
+    return rect.x <= 0.0005 && rect.y <= 0.0005 && rect.w >= 0.999 && rect.h >= 0.999;
+}
+// 从任意图片 URL 按归一化 rect 裁出原像素 PNG；裁切结果、重新烘焙批注后都走这里，
+// 保证"原图精度、不做缩放"这一点只有一处实现。
+async function cropImageBlobByRect(imageUrl, rect){
+    const src = String(imageUrl || '');
+    if(!src || !rect) return null;
+    const target = typeof src === 'string' ? src : displayMediaUrl(src);
+    const el = await new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('crop source load failed'));
+        image.src = target;
+    });
+    const naturalW = el.naturalWidth || el.width;
+    const naturalH = el.naturalHeight || el.height;
+    const sx = Math.max(0, Math.min(naturalW - 1, Math.round(rect.x * naturalW)));
+    const sy = Math.max(0, Math.min(naturalH - 1, Math.round(rect.y * naturalH)));
+    const sw = Math.max(1, Math.min(naturalW - sx, Math.round(rect.w * naturalW)));
+    const sh = Math.max(1, Math.min(naturalH - sy, Math.round(rect.h * naturalH)));
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = sw;
+    canvasEl.height = sh;
+    canvasEl.getContext('2d').drawImage(el, sx, sy, sw, sh, 0, 0, sw, sh);
+    const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
+    return blob ? {blob, width:sw, height:sh, naturalW, naturalH} : null;
 }
 function resultMediaUrls(result){
     const urls = [];
@@ -9957,15 +10014,22 @@ function thumbMediaHtml(img, options={}){
         if(options.selectOnly) return `<div class="media-thumb video-thumb">${smartVideoPreviewHtml(img, 512, 'alt=""')}</div>`;
         return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     }
-    if(img?.annotation?.url) return annotationPreviewHtml(img, 'media-thumb');
-    if(img?.mask?.url) return img.maskMode === 'color' && img?.maskColor?.url
-        ? maskColorPreviewHtml(img, 'media-thumb')
-        : maskOverlayPreviewHtml(img, 'media-thumb');
-    return smartPreviewImgHtml(img, 512, 'draggable="false"');
+    // 裁切后预览一律用裁切结果：遮罩/色块已经在保存裁切时跟着重映射到裁切坐标系，
+    // 所以这里只需要把底图换成裁切图，遮罩分支逻辑保持不动。
+    const cropped = Boolean(img?.crop?.result?.url);
+    const view = cropped ? imageForDisplay(img) : img;
+    if(!cropped && view?.annotation?.url) return annotationPreviewHtml(view, 'media-thumb');
+    if(view?.mask?.url) return view.maskMode === 'color' && view?.maskColor?.url
+        ? maskColorPreviewHtml(view, 'media-thumb')
+        : maskOverlayPreviewHtml(view, 'media-thumb');
+    if(cropped) return cropPreviewHtml(view, 'media-thumb');
+    return smartPreviewImgHtml(view, 512, 'draggable="false"');
 }
 function imageResolutionLabel(img){
-    const w = Number(img?.natural_w || img?.width || img?.w || 0);
-    const h = Number(img?.natural_h || img?.height || img?.h || 0);
+    // 有裁切时角标显示裁切结果的真实尺寸，而不是原图尺寸。
+    const crop = img?.crop;
+    const w = Number(crop?.width || crop?.result?.natural_w || img?.natural_w || img?.width || img?.w || 0);
+    const h = Number(crop?.height || crop?.result?.natural_h || img?.natural_h || img?.height || img?.h || 0);
     return w > 0 && h > 0 ? `${Math.round(w)} x ${Math.round(h)}` : '';
 }
 function imageResolutionBadgeHtml(img){
@@ -10032,11 +10096,22 @@ function singleMediaHtml(img, w, h){
     if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i></div><div class="media-card-title">${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</div><div class="media-card-sub">${isTextMediaItem(img) ? 'TEXT' : 'FILE'}</div></div>`;
     if(isAudioMediaItem(img)) return `<div class="node-img media-card media-audio-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file-audio"></i></div><div class="media-card-title">${escapeHtml(img.name || 'Audio')}</div><div class="media-card-sub">AUDIO</div><audio src="${escapeAttr(img.url || '')}" data-url="${escapeAttr(img.url || '')}" controls preload="metadata"></audio></div>`;
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card" style="width:${w}px;height:${h}px">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 768, 'alt=""')}<button class="smart-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
-    if(img?.annotation?.url) return annotationPreviewHtml(img, 'node-img', w, h);
-    if(img?.mask?.url) return img.maskMode === 'color' && img?.maskColor?.url
-        ? maskColorPreviewHtml(img, 'node-img', w, h)
-        : maskOverlayPreviewHtml(img, 'node-img', w, h);
-    return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
+    const cropped = Boolean(img?.crop?.result?.url);
+    const view = cropped ? imageForDisplay(img) : img;
+    if(!cropped && view?.annotation?.url) return annotationPreviewHtml(view, 'node-img', w, h);
+    if(view?.mask?.url) return view.maskMode === 'color' && view?.maskColor?.url
+        ? maskColorPreviewHtml(view, 'node-img', w, h)
+        : maskOverlayPreviewHtml(view, 'node-img', w, h);
+    if(cropped) return cropPreviewHtml(view, 'node-img', w, h);
+    return smartPreviewImgHtml(view, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
+}
+function cropPreviewHtml(img, className='', w=0, h=0){
+    // 裁切结果的预览：图已经是裁切后的真实像素，角标同时给出"已裁切"和裁切尺寸。
+    const source = escapeAttr(displayMediaUrl(img));
+    const size = w && h ? `width:${w}px;height:${h}px;` : '';
+    const dims = imageResolutionLabel(img);
+    const label = dims ? `${tr('canvas.cropLabel')} · ${dims}` : tr('canvas.cropLabel');
+    return `<div class="${escapeAttr(className)} mask-overlay-preview crop-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><span class="mask-overlay-label">${escapeHtml(label)}</span></div>`;
 }
 function annotationPreviewHtml(img, className='', w=0, h=0){
     // 批注结果已烘焙进整张图，节点上直接显示这张"原图 + 批注"的结果
@@ -10246,12 +10321,12 @@ function previewDownloadGroupItems(){
     // 分组预览：整组所有成员图片按阅读顺序打包。
     if(previewNavState.groupId){
         const group = nodes.find(n => n.id === previewNavState.groupId && isSmartGroupNode(n));
-        if(group) return smartGroupImageRefs(group).map((r, index) => ({...r.item, __index:index}));
+        if(group) return smartGroupImageRefs(group).map((r, index) => ({...imageForDisplay(r.item), __index:index}));
     }
     const node = nodes.find(n => n.id === previewNavState.nodeId);
     return (node?.images || [])
         .filter(item => item?.url)
-        .map((item, index) => ({...item, __index:index}))
+        .map((item, index) => ({...imageForDisplay(item), __index:index}))
         .sort((a, b) => {
             const ga = a.grid || {};
             const gb = b.grid || {};
@@ -11564,6 +11639,11 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
     if(kind === 'image'){
         menuItems.push(`<button type="button" role="menuitem" data-send-photoshop><i data-lucide="panels-top-left"></i><span>${escapeHtml(tr('smart.sendToPhotoshop'))}</span></button>`);
         menuItems.push(`<button type="button" role="menuitem" data-copy-image><i data-lucide="copy"></i><span>${escapeHtml(tr('smart.copyImage'))}</span></button>`);
+        // 裁切是"就地"语义，导出成独立素材得单独给一个入口。
+        if(node.images?.[imageIndex]?.crop?.result?.url){
+            menuItems.push(`<button type="button" role="menuitem" data-crop-save-as-node><i data-lucide="file-image"></i><span>${escapeHtml(tr('canvas.cropSaveAsNode'))}</span></button>`);
+            menuItems.push(`<button type="button" role="menuitem" data-crop-clear><i data-lucide="undo-2"></i><span>${escapeHtml(tr('canvas.cropEditorClear'))}</span></button>`);
+        }
     }
     menuItems.push(`<button type="button" role="menuitem" data-add-my-assets><i data-lucide="library-big"></i><span>${escapeHtml(tr('library.addToMyAssets'))}</span></button>`);
     menuItems.push('<button type="button" role="menuitem" data-set-canvas-cover><i data-lucide="panel-top"></i><span>设为封面</span></button>');
@@ -11584,6 +11664,18 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
         event.stopPropagation();
         closePhotoshopContextMenu();
         copyImageToClipboard(nodeId, imageIndex);
+    });
+    photoshopContextMenu.querySelector('[data-crop-save-as-node]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        closePhotoshopContextMenu();
+        saveCropAsNewNode(node, imageIndex);
+    });
+    photoshopContextMenu.querySelector('[data-crop-clear]')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        closePhotoshopContextMenu();
+        clearImageCrop(node, imageIndex);
     });
     photoshopContextMenu.querySelector('[data-add-my-assets]')?.addEventListener('click', event => {
         event.preventDefault();
@@ -11738,7 +11830,7 @@ function runImageToolbarAction(action, mode){
         return;
     }
     if(action === 'download'){
-        downloadPreviewFile(item);
+        downloadPreviewFile(imageForDisplay(item) || item);
         return;
     }
     if(action === 'delete'){
@@ -11765,7 +11857,12 @@ function runImageToolbarAction(action, mode){
         openAnnotationEditorForImage(node, index);
         return;
     }
-    if(!['crop','outpaint','grid'].includes(action)) return;
+    if(action === 'crop'){
+        // 裁切改为独立的全屏编辑器：就地写回裁切结果，原图保留以便反复编辑。
+        openCropEditorForImage(node, index);
+        return;
+    }
+    if(!['outpaint','grid'].includes(action)) return;
     openImageEditor(node.id, index);
     setImageEditMode(action, true);
     if(action === 'grid' && canGridJoinCurrentNode()) setGridOperationMode('join');
@@ -16030,7 +16127,7 @@ function setImageEditMode(mode, userTouched=false){
     const switchedLocalKind = (prev === 'mask' || prev === 'brush') && enteringLocal && prev !== mode;
     if(switchedLocalKind || ((prev === 'mask' || prev === 'brush') && !enteringLocal)) saveLocalEditDraft(prev);
     if(mode !== 'brush') removeEditTextInlineEditor(true);
-    imageEditMode = ['preview','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';
+    imageEditMode = ['preview','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';
     const cropCanvasEl = document.getElementById('cropCanvas');
     const previewStageEl = document.getElementById('previewStage');
     const editStageEl = document.getElementById('imageEditStage');
@@ -16076,7 +16173,6 @@ function setImageEditMode(mode, userTouched=false){
         btn.classList.toggle('active', btn.dataset.imageEditMode === imageEditMode);
     });
     document.getElementById('imagePreviewTools').classList.toggle('active', isPreview && !isVideoPreview);
-    document.getElementById('imageCropTools')?.classList.toggle('active', imageEditMode === 'crop');
     document.getElementById('imageOutpaintTools')?.classList.toggle('active', imageEditMode === 'outpaint');
     document.getElementById('imageMaskTools').classList.toggle('active', imageEditMode === 'mask');
     document.getElementById('imageBrushTools').classList.toggle('active', imageEditMode === 'brush');
@@ -16106,21 +16202,16 @@ function setImageEditMode(mode, userTouched=false){
             applyBtn.innerHTML = `<i data-lucide="minimize-2" class="w-4 h-4"></i><span>应用缩放</span>`;
         } else {
             const isErase = imageEditMode === 'mask' && imageEditEraseMode;
-            const icon = isErase ? 'eraser' : imageEditMode === 'crop' ? 'crop' : imageEditMode === 'outpaint' ? 'expand' : imageEditMode === 'mask' ? 'brush' : imageEditMode === 'brush' ? 'paintbrush' : 'grid-3x3';
-            const labelKey = isErase ? 'smart.erase' : imageEditMode === 'crop' ? 'canvas.applyCrop' : imageEditMode === 'outpaint' ? 'canvas.applyOutpaint' : imageEditMode === 'mask' ? 'canvas.applyMask' : imageEditMode === 'brush' ? 'canvas.applyBrush' : 'canvas.applyGrid';
-            const titleKey = isErase ? 'smart.erase' : imageEditMode === 'crop' ? 'canvas.cropImage' : imageEditMode === 'outpaint' ? 'canvas.outpaintImage' : imageEditMode === 'mask' ? 'canvas.modeMask' : imageEditMode === 'brush' ? 'canvas.modeAnnotate' : 'canvas.modeGrid';
-            const subKey = isErase ? 'smart.eraseHint' : imageEditMode === 'crop' ? 'canvas.cropHint' : imageEditMode === 'outpaint' ? 'canvas.outpaintHint' : imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : imageEditMode === 'brush' ? 'canvas.localEditAnnotateStatus' : 'canvas.gridHint';
+            const icon = isErase ? 'eraser' : imageEditMode === 'outpaint' ? 'expand' : imageEditMode === 'mask' ? 'brush' : imageEditMode === 'brush' ? 'paintbrush' : 'grid-3x3';
+            const labelKey = isErase ? 'smart.erase' : imageEditMode === 'outpaint' ? 'canvas.applyOutpaint' : imageEditMode === 'mask' ? 'canvas.applyMask' : imageEditMode === 'brush' ? 'canvas.applyBrush' : 'canvas.applyGrid';
+            const titleKey = isErase ? 'smart.erase' : imageEditMode === 'outpaint' ? 'canvas.outpaintImage' : imageEditMode === 'mask' ? 'canvas.modeMask' : imageEditMode === 'brush' ? 'canvas.modeAnnotate' : 'canvas.modeGrid';
+            const subKey = isErase ? 'smart.eraseHint' : imageEditMode === 'outpaint' ? 'canvas.outpaintHint' : imageEditMode === 'mask' ? 'canvas.localEditMaskStatus' : imageEditMode === 'brush' ? 'canvas.localEditAnnotateStatus' : 'canvas.gridHint';
             document.getElementById('imageEditTitle').textContent = tr(titleKey);
             document.getElementById('imageEditSub').textContent = tr(subKey);
             const applyLabel = imageEditMode === 'grid' && gridOperationMode === 'join' ? '输出拼接' : tr(labelKey);
             applyBtn.innerHTML = `<i data-lucide="${icon}" class="w-4 h-4"></i><span>${applyLabel}</span>`;
         }
-        if(imageEditMode === 'crop'){
-            requestAnimationFrame(() => {
-                resetCropBox();
-                syncImageEditOverflow();
-            });
-        } else if(imageEditMode === 'outpaint'){
+        if(imageEditMode === 'outpaint'){
             requestAnimationFrame(() => {
                 resetOutpaintBox();
                 // 复位只清外补；已选的比例仍然保留在下拉里，这里要按它把四边补齐，
@@ -16136,7 +16227,7 @@ function setImageEditMode(mode, userTouched=false){
     }
     resizeEditDrawCanvas();
     if(imageEditMode === 'grid') refreshGridSplitPreview();
-    else if(imageEditMode === 'crop' || imageEditMode === 'resize' || imageEditMode === 'outpaint' || prev === 'grid') clearEditDrawing(true);
+    if(imageEditMode === 'resize' || imageEditMode === 'outpaint' || prev === 'grid') clearEditDrawing(true);
     if(switchedLocalKind) restoreLocalEditDraft(imageEditMode);
     // 从非局部编辑模式（裁剪/扩图等会清空画布）回到遮罩模式时，若已有会话草稿则恢复，
     // 避免已画未保存的遮罩被清空后丢失。
@@ -17876,7 +17967,6 @@ function drawNumberLabel(point){
     ctx.strokeStyle = 'rgba(255,255,255,0.92)'; ctx.strokeText(text, point.x, point.y); ctx.fillStyle = brushColor(); ctx.fillText(text, point.x, point.y); ctx.restore();
 }
 function beginEditDraw(event){
-    if(imageEditMode === 'crop') return;
     event.preventDefault(); event.stopPropagation();
     const canvasEl = editDrawCanvas();
     canvasEl.setPointerCapture?.(event.pointerId);
@@ -17902,7 +17992,7 @@ function beginEditDraw(event){
 function moveEditDraw(event){
     if(imageEditMode === 'grid' && gridOperationMode === 'join') return;
     if(imageEditMode === 'grid' && gridCustomMode && gridCustomDrag){ event.preventDefault(); event.stopPropagation(); setGridCustomLinePos(gridCustomDrag.index, editDrawPoint(event)); refreshGridSplitPreview(); return; }
-    if(!editDrawState || imageEditMode === 'crop' || imageEditMode === 'grid') return;
+    if(!editDrawState || imageEditMode === 'grid') return;
     event.preventDefault(); event.stopPropagation();
     const ctx = editDrawCanvas().getContext('2d');
     const p = editDrawPoint(event);
@@ -18523,10 +18613,6 @@ function renderCropBox(){
             textCanvas.style.left = '';
             textCanvas.style.top = '';
         }
-    }
-    const box = document.getElementById('cropBox');
-    if(box){
-        box.style.left = `${boxX}px`; box.style.top = `${boxY}px`; box.style.width = `${cropState.w}px`; box.style.height = `${cropState.h}px`;
     }
     const outpaintFrame = document.getElementById('outpaintFrame');
     if(outpaintFrame){
@@ -19231,61 +19317,6 @@ function resetOutpaintBox(){
     clampOutpaint();
     renderCropBox();
 }
-function cropRatioFromPreset(preset){
-    if(!preset || preset === 'free') return null;
-    if(preset === 'source'){
-        const {w, h} = cropBounds();
-        return w > 0 && h > 0 ? w / h : null;
-    }
-    const parts = String(preset).split(':').map(v => Math.max(0, Number(v)));
-    return parts.length === 2 && parts[0] > 0 && parts[1] > 0 ? parts[0] / parts[1] : null;
-}
-function syncCropRatioButtons(){
-    document.querySelectorAll('[data-crop-ratio]').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.cropRatio === cropAspectPreset);
-    });
-}
-function fitCropRectToAspect(ratio, sourceRect=null){
-    const {w:boundsW, h:boundsH} = cropBounds();
-    const rect = sourceRect || cropState || {x:0, y:0, w:boundsW, h:boundsH};
-    const minSize = 24;
-    let nextW = Math.max(minSize, Number(rect.w || boundsW));
-    let nextH = Math.max(minSize, Number(rect.h || boundsH));
-    if(ratio){
-        if(nextW / nextH > ratio) nextW = nextH * ratio;
-        else nextH = nextW / ratio;
-        if(nextW > boundsW){ nextW = boundsW; nextH = nextW / ratio; }
-        if(nextH > boundsH){ nextH = boundsH; nextW = nextH * ratio; }
-    } else {
-        nextW = Math.min(nextW, boundsW);
-        nextH = Math.min(nextH, boundsH);
-    }
-    const cx = Number(rect.x || 0) + Number(rect.w || nextW) / 2;
-    const cy = Number(rect.y || 0) + Number(rect.h || nextH) / 2;
-    cropState.w = Math.round(nextW);
-    cropState.h = Math.round(nextH);
-    cropState.x = Math.round(cx - cropState.w / 2);
-    cropState.y = Math.round(cy - cropState.h / 2);
-    clampCrop();
-}
-function setCropAspectPreset(preset='free'){
-    cropAspectPreset = preset || 'free';
-    cropAspectRatio = cropRatioFromPreset(cropAspectPreset);
-    syncCropRatioButtons();
-    if(cropState && imageEditMode === 'crop' && cropAspectRatio){
-        fitCropRectToAspect(cropAspectRatio);
-        renderCropBox();
-    }
-}
-function resetCropBox(){
-    if(!cropState) return;
-    if(imageEditMode === 'outpaint') return resetOutpaintBox();
-    const {w, h} = cropBounds();
-    const rect = {x:Math.round(w * 0.08), y:Math.round(h * 0.08), w:Math.round(w * 0.84), h:Math.round(h * 0.84)};
-    cropState.x = rect.x; cropState.y = rect.y; cropState.w = rect.w; cropState.h = rect.h;
-    if(cropAspectRatio) fitCropRectToAspect(cropAspectRatio, rect);
-    renderCropBox();
-}
 function updatePreviewNavButtons(){
     let count;
     if(previewNavState.groupId && Array.isArray(previewNavState.seq)){
@@ -19370,7 +19401,6 @@ function openImageEditor(nodeId, imageIndex=0){
     gridOperationMode = 'split'; gridJoinLayout = null; gridJoinDrag = null; gridJoinImageCache = new Map(); gridJoinUserMoved = false; gridJoinGroupId = '';
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
     localEditDrafts = {mask:null, brush:null}; maskTool = 'brush'; brushTool = 'free'; existingMaskLoadPromise = null; imageEditEraseMode = false;
-    cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     editTextItems = []; editTextSelectedId = ''; editTextDrag = null; editTextResize = null; editTextDirty = false;
     const toggle = document.getElementById('gridCustomToggle');
     if(toggle){ toggle.classList.add('secondary'); toggle.classList.remove('primary'); }
@@ -19419,7 +19449,8 @@ function openImageEditor(nodeId, imageIndex=0){
             scheduleSave();
         }
         imageEditBaseW = img.clientWidth; imageEditBaseH = img.clientHeight;
-        updateZoomLabel(); syncImageResizeControls(); resizeEditDrawCanvas(); resetEditDrawingHistory(); clearEditDrawing(true); resetCropBox();
+        updateZoomLabel(); syncImageResizeControls(); resizeEditDrawCanvas(); resetEditDrawingHistory(); clearEditDrawing(true);
+        if(imageEditMode === 'outpaint') resetOutpaintBox();
         // 快速预览→原图切换会清空绘制层，若正处于遮罩模式则重新载入已保存的遮罩。
         if(imageEditMode === 'mask' && !imageEditEraseMode && !localEditDrafts.mask && !editCanvasHasPixels()) loadExistingMaskForEdit();
         if(!imageEditModeTouched) setImageEditMode('preview');
@@ -19475,7 +19506,6 @@ function closeImageEditor(){
     previewNavState = {nodeId:'', index:0, count:0};
     videoTrimState = {source:'', start:0, end:0, mute:false, previewing:false, speed:1};
     imageEditZoom = 1.0; imageEditBaseW = 0; imageEditBaseH = 0; imageResizeScale = 0.5; imageEditModeTouched = false;
-    cropAspectPreset = 'free'; cropAspectRatio = null; syncCropRatioButtons();
     disposePanoramaPreview();
     previewPanDrag = null; previewCompareDrag = false; imageEditPanDrag = null; resetPreviewTransform();
     document.getElementById('imageEditStage')?.classList.remove('overflow-x', 'overflow-y', 'preview-mode');
@@ -19562,83 +19592,22 @@ function resizeOutpaintFromDrag(dx, dy, shift){
     cropState.y = nextY;
     clampOutpaint();
 }
-function clampAspectCropToBounds(anchorX, anchorY, movingX, movingY, ratio, handle){
-    const {w:boundsW, h:boundsH} = cropBounds();
-    const minSize = 24;
-    let width = Math.max(minSize, Math.abs(movingX - anchorX));
-    let height = Math.max(minSize, Math.abs(movingY - anchorY));
-    if(width / height > ratio) width = height * ratio;
-    else height = width / ratio;
-    const dirX = handle.includes('w') ? -1 : 1;
-    const dirY = handle.includes('n') ? -1 : 1;
-    width = Math.min(width, dirX < 0 ? anchorX : boundsW - anchorX);
-    height = Math.min(height, dirY < 0 ? anchorY : boundsH - anchorY);
-    if(width / height > ratio) width = height * ratio;
-    else height = width / ratio;
-    return {
-        x:dirX < 0 ? anchorX - width : anchorX,
-        y:dirY < 0 ? anchorY - height : anchorY,
-        w:width,
-        h:height
-    };
-}
 function resizeCropFromDrag(dx, dy){
     const start = cropDrag?.start;
     if(!start) return;
     const handle = String(cropDrag.mode || 'resize').replace(/^crop-/, '') || 'se';
-    if(!cropAspectRatio){
-        let left = start.x;
-        let top = start.y;
-        let right = start.x + start.w;
-        let bottom = start.y + start.h;
-        if(handle.includes('w')) left += dx;
-        if(handle.includes('e') || handle === 'resize') right += dx;
-        if(handle.includes('n')) top += dy;
-        if(handle.includes('s') || handle === 'resize') bottom += dy;
-        cropState.x = Math.min(left, right - 24);
-        cropState.y = Math.min(top, bottom - 24);
-        cropState.w = Math.max(24, right - cropState.x);
-        cropState.h = Math.max(24, bottom - cropState.y);
-        return;
-    }
-    const normalized = handle === 'resize' ? 'se' : handle;
-    const centerX = start.x + start.w / 2;
-    const centerY = start.y + start.h / 2;
-    if(normalized === 'e' || normalized === 'w'){
-        const {w:boundsW, h:boundsH} = cropBounds();
-        let width = Math.max(24, normalized === 'e' ? start.w + dx : start.w - dx);
-        const maxW = normalized === 'e' ? boundsW - start.x : start.x + start.w;
-        const maxH = Math.max(24, 2 * Math.min(centerY, boundsH - centerY));
-        width = Math.min(width, maxW, maxH * cropAspectRatio);
-        const height = width / cropAspectRatio;
-        cropState.x = Math.round(normalized === 'e' ? start.x : start.x + start.w - width);
-        cropState.y = Math.round(centerY - height / 2);
-        cropState.w = Math.round(width);
-        cropState.h = Math.round(height);
-        return;
-    }
-    if(normalized === 'n' || normalized === 's'){
-        const {w:boundsW, h:boundsH} = cropBounds();
-        let height = Math.max(24, normalized === 's' ? start.h + dy : start.h - dy);
-        const maxH = normalized === 's' ? boundsH - start.y : start.y + start.h;
-        const maxW = Math.max(24, 2 * Math.min(centerX, boundsW - centerX));
-        height = Math.min(height, maxH, maxW / cropAspectRatio);
-        const width = height * cropAspectRatio;
-        cropState.x = Math.round(centerX - width / 2);
-        cropState.y = Math.round(normalized === 's' ? start.y : start.y + start.h - height);
-        cropState.w = Math.round(width);
-        cropState.h = Math.round(height);
-        return;
-    }
-    const anchorX = normalized.includes('w') ? start.x + start.w : start.x;
-    const anchorY = normalized.includes('n') ? start.y + start.h : start.y;
-    const movingX = normalized.includes('w') ? start.x + dx : start.x + start.w + dx;
-    const movingY = normalized.includes('n') ? start.y + dy : start.y + start.h + dy;
-    const next = clampAspectCropToBounds(anchorX, anchorY, movingX, movingY, cropAspectRatio, normalized);
-    cropState.x = Math.round(next.x);
-    cropState.y = Math.round(next.y);
-    cropState.w = Math.round(next.w);
-    cropState.h = Math.round(next.h);
+    let left = start.x;
+    let top = start.y;
+    let right = start.x + start.w;
+    let bottom = start.y + start.h;
+    if(handle.includes('w')) left += dx;
+    if(handle.includes('e') || handle === 'resize') right += dx;
+    if(handle.includes('n')) top += dy;
+    if(handle.includes('s') || handle === 'resize') bottom += dy;
+    cropState.x = Math.min(left, right - 24);
+    cropState.y = Math.min(top, bottom - 24);
+    cropState.w = Math.max(24, right - cropState.x);
+    cropState.h = Math.max(24, bottom - cropState.y);
 }
 async function uploadCroppedBlob(blob, name){
     const form = new FormData();
@@ -19658,30 +19627,15 @@ function replaceEditedImage(file, extra={}){
     pushUndo();
     const rect = nodeRect(node);
     const image = {...(node.images[index] || {}), url:file.url, name:file.name, kind:file.kind || mediaKindForItem(file), natural_w:0, natural_h:0, ...extra};
-    // 裁剪/扩图等派生图不再继承批注结果（源图已烘焙，避免新旧批注叠加），需要时重新批注。
+    // 派生图不再继承批注/裁切等"源图状态"（源图已烘焙，避免新旧叠加），需要时重新编辑。
     delete image.annotation;
     delete image.annotationPaint;
+    delete image.crop;
     // 预处理永远保留原素材：输出为右侧新的单图上传节点。
     const created = createImageNodeAt({x:rect.x + rect.width + 180, y:rect.y + rect.height / 2}, [image], {skipUndo:true, select:true});
     selectedIds = [];
     selectedImage = {nodeId:created.id, index:0};
     return created;
-}
-async function applyImageCrop(){
-    if(!cropState) return;
-    const {node, image} = currentEditImage();
-    const img = document.getElementById('cropImage');
-    if(!node || !image || !img.naturalWidth || !img.naturalHeight) return;
-    const scaleX = img.naturalWidth / (img.clientWidth || 1), scaleY = img.naturalHeight / (img.clientHeight || 1);
-    const sx = Math.max(0, Math.round(cropState.x * scaleX)), sy = Math.max(0, Math.round(cropState.y * scaleY));
-    const sw = Math.max(1, Math.round(cropState.w * scaleX)), sh = Math.max(1, Math.round(cropState.h * scaleY));
-    const canvasEl = document.createElement('canvas');
-    canvasEl.width = sw; canvasEl.height = sh;
-    canvasEl.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-    const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
-    const base = (image.name || 'image').replace(/\.[^.]+$/, '');
-    const file = blob ? await uploadCroppedBlob(blob, `${base}_crop.png`) : null;
-    if(file && replaceEditedImage(file)){ closeImageEditor(); render(); scheduleSave(); }
 }
 async function applyImageOutpaint(){
     if(!cropState) return;
@@ -19875,6 +19829,311 @@ async function applyImageMask(){
         closeImageEditor(); render(); scheduleSave();
     }
 }
+// —— 全屏裁切编辑器（static/js/crop-editor.js）接入 ——
+// 与遮罩/批注一致：编辑器只负责交互与导出 blob，画布负责"传什么进去、结果怎么落回节点"。
+// 关键语义：裁切是就地属性 image.crop，原图始终保留，所以可以反复编辑、可以清除。
+function cropEditorLabels(){
+    return {
+        title: tr('canvas.cropEditorTitle'),
+        hint: tr('canvas.cropEditorHint'),
+        ratioLabel: tr('canvas.cropEditorRatio'),
+        ratioFree: tr('canvas.cropEditorFree'),
+        ratioSource: tr('canvas.cropEditorOriginal'),
+        ratioLabels: {
+            '1:1': '1:1', '2:3': '2:3', '3:2': '3:2', '3:4': '3:4', '4:3': '4:3',
+            '9:16': '9:16', '16:9': '16:9', '21:9': '21:9', '1:2': '1:2', '2:1': '2:1'
+        },
+        fit: tr('canvas.cropEditorFit'),
+        zoomIn: tr('canvas.maskEditorZoomIn'),
+        zoomOut: tr('canvas.maskEditorZoomOut'),
+        sizeText: tr('canvas.cropEditorSize'),
+        clear: tr('canvas.cropEditorClear'),
+        apply: tr('canvas.cropEditorApply'),
+        applying: tr('canvas.cropEditorSaving'),
+        cancel: tr('canvas.cropEditorCancel'),
+        shortcutHint: tr('canvas.cropEditorShortcuts'),
+        loadFail: tr('canvas.cropEditorLoadFail'),
+        saveFail: tr('canvas.cropEditorSaveFail'),
+        emptyHint: tr('canvas.cropEditorEmptyHint')
+    };
+}
+function cropSourcePixelSize(item, crop){
+    const rect = imageCropRect(crop);
+    if(rect){
+        const width = Number(crop.width) || Number(crop.result?.natural_w) || 0;
+        const height = Number(crop.height) || Number(crop.result?.natural_h) || 0;
+        if(width > 0 && height > 0) return {width, height};
+    }
+    const source = crop?.source || {};
+    const naturalW = Number(source.natural_w) || Number(item?.natural_w) || Number(item?.annotation?.natural_w) || 0;
+    const naturalH = Number(source.natural_h) || Number(item?.natural_h) || Number(item?.annotation?.natural_h) || 0;
+    if(naturalW > 0 && naturalH > 0) return {width:naturalW, height:naturalH};
+    if(rect) return {width:Math.round((Number(crop.width) || 0) / rect.w), height:Math.round((Number(crop.height) || 0) / rect.h)};
+    return {width:0, height:0};
+}
+function loadCropImageElement(url){
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('crop image load failed'));
+        image.src = url;
+    });
+}
+// 把一个位图（遮罩/色块/笔迹）从旧裁切空间搬到新裁切空间。
+// 只做一次 drawImage：整块按新旧 rect 的偏移与缩放贴过去，不做逐像素重采样，
+// 关掉平滑以免缩放产生半透明灰边（遮罩是二值图，灰边会被当成"部分选中"）。
+function remapCropSpaceBitmap(source, fromRect, toRect, targetW, targetH, options = {}){
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = Math.max(1, Math.round(targetW));
+    canvasEl.height = Math.max(1, Math.round(targetH));
+    const ctx = canvasEl.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    if(options.fill){
+        ctx.fillStyle = options.fill;
+        ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+    }
+    const sourceW = source.naturalWidth || source.width;
+    const sourceH = source.naturalHeight || source.height;
+    const sx = ((toRect.x - fromRect.x) / fromRect.w) * sourceW;
+    const sy = ((toRect.y - fromRect.y) / fromRect.h) * sourceH;
+    const sw = (toRect.w / fromRect.w) * sourceW;
+    const sh = (toRect.h / fromRect.h) * sourceH;
+    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvasEl.width, canvasEl.height);
+    return canvasEl;
+}
+async function uploadCropSpaceBitmap(canvasEl, url, name){
+    const blob = await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
+    if(!blob) return null;
+    return uploadCroppedBlob(blob, name);
+}
+// 改裁切时把遮罩一起搬家：遮罩是"这块区域要重绘"的位图，错位就等于画错地方。
+// 全部按旧 rect → 新 rect 的几何映射；映射后一个白区都不剩就整体清掉，避免留下空遮罩。
+async function remapMaskForCrop(item, fromCrop, toCrop, baseName){
+    const maskUrl = item?.mask?.url ? displayMediaUrl(item.mask) : '';
+    if(!maskUrl) return null;
+    const fromRect = imageCropRect(fromCrop) || {x:0, y:0, w:1, h:1};
+    const toRect = imageCropRect(toCrop) || {x:0, y:0, w:1, h:1};
+    const target = toCrop ? cropSourcePixelSize(item, toCrop) : cropSourcePixelSize(item, null);
+    if(!(target.width > 0 && target.height > 0)) return null;
+    const source = await loadCropImageElement(maskUrl);
+    const maskCanvas = remapCropSpaceBitmap(source, fromRect, toRect, target.width, target.height);
+    const maskBlob = await new Promise(resolve => maskCanvas.toBlob(resolve, 'image/png'));
+    if(!maskBlob || !await maskBlobHasPaintedArea(maskBlob)) return null;
+    const maskFile = await uploadCroppedBlob(maskBlob, `${baseName}_mask.png`);
+    if(!maskFile) return null;
+    const next = {mask:{url:maskFile.url, name:maskFile.name, kind:'image'}};
+    if(item.maskColor?.url){
+        const color = await loadCropImageElement(displayMediaUrl(item.maskColor));
+        const colorFile = await uploadCropSpaceBitmap(
+            remapCropSpaceBitmap(color, fromRect, toRect, target.width, target.height),
+            '', `${baseName}_maskcolor.png`
+        ).catch(() => null);
+        if(colorFile) next.maskColor = {url:colorFile.url, name:colorFile.name, kind:'image'};
+    }
+    if(item.maskPaint?.url){
+        const paint = await loadCropImageElement(displayMediaUrl(item.maskPaint));
+        const paintFile = await uploadCropSpaceBitmap(
+            remapCropSpaceBitmap(paint, fromRect, toRect, target.width, target.height),
+            '', `${baseName}_maskpaint.png`
+        ).catch(() => null);
+        if(paintFile) next.maskPaint = {url:paintFile.url, name:paintFile.name, kind:'image'};
+    }
+    return next;
+}
+// 节点尺寸跟随裁切：按"面积相近"折算，长宽比跟着裁切结果走。
+// 不然裁成竖条会变成一个又宽又空的框，裁掉一半面积节点又会突然膨胀。
+function fitNodeSizeToCrop(node, nextCrop, prevCrop){
+    const images = Array.isArray(node?.images) ? node.images : [];
+    if(images.length !== 1) return; // 多图节点翻页时尺寸不能跟着某一张跳
+    const item = images[0];
+    const prevSize = cropSourcePixelSize(item, prevCrop);
+    const nextSize = cropSourcePixelSize(item, nextCrop);
+    if(!(prevSize.width > 0 && prevSize.height > 0 && nextSize.width > 0 && nextSize.height > 0)) return;
+    const rect = nodeRect(node);
+    const width = Number(rect.width) || 0;
+    const height = Number(rect.height) || 0;
+    if(!(width > 24 && height > 24)) return; // 还没显式定尺寸的节点保持自动布局
+    const k = Math.sqrt((prevSize.width * prevSize.height) / (nextSize.width * nextSize.height));
+    if(!Number.isFinite(k) || k <= 0) return;
+    const nextW = Math.max(96, Math.round(nextSize.width * k));
+    const nextH = Math.max(96, Math.round(nextSize.height * k));
+    const centerX = (Number(node.x) || 0) + width / 2;
+    const centerY = (Number(node.y) || 0) + height / 2;
+    node.x = Math.round(centerX - nextW / 2);
+    node.y = Math.round(centerY - nextH / 2);
+    node.w = nextW;
+    node.h = nextH;
+}
+function cropBaseName(item){
+    return (item?.name || 'image').replace(/\.[^.]+$/, '');
+}
+// 批注改动后，裁切结果要按新底图重新烘一次；否则会出现"批注改了、下游拿到的还是旧图"。
+async function refreshCropResultForImage(node, index){
+    const live = liveSmartNode(node) || node;
+    const item = live?.images?.[index];
+    const rect = imageCropRect(item?.crop);
+    if(!item?.url || !rect) return false;
+    const base = imageBaseForDisplay(item);
+    const cropped = await cropImageBlobByRect(displayMediaUrl(base), rect);
+    if(!cropped) return false;
+    const file = await uploadCroppedBlob(cropped.blob, `${cropBaseName(item)}_crop.png`).catch(() => null);
+    if(!file) return false;
+    const current = live.images[index];
+    live.images[index] = {
+        ...current,
+        crop:{
+            ...current.crop,
+            width:cropped.width,
+            height:cropped.height,
+            source:{
+                url:item.url,
+                annotationUrl:item.annotation?.url || '',
+                natural_w:cropped.naturalW,
+                natural_h:cropped.naturalH
+            },
+            result:{url:file.url, name:file.name, kind:'image', natural_w:cropped.width, natural_h:cropped.height}
+        }
+    };
+    return true;
+}
+async function openCropEditorForImage(node, index){
+    const item = node?.images?.[index];
+    if(!item?.url || mediaKindForItem(item) !== 'image') return;
+    const editor = window.CropEditor;
+    if(!editor || typeof editor.open !== 'function'){
+        toast(tr('canvas.cropEditorUnavailable'));
+        return;
+    }
+    // 底图是"批注后、未裁切"的整图：二次裁切必须仍然裁原图坐标系。
+    const baseImage = imageBaseForDisplay(item);
+    try {
+        await editor.open({
+            imageUrl: displayMediaUrl(baseImage),
+            rect: imageCropRect(item.crop),
+            ratio: item.crop?.ratio || 'free',
+            labels: cropEditorLabels(),
+            onSave: result => saveCropEditorResult(node, index, result)
+        });
+    } catch(error){
+        console.warn('裁切编辑器打开失败：', error);
+        toast(tr('canvas.cropEditorLoadFail'));
+    }
+}
+async function saveCropEditorResult(node, index, result){
+    const live = liveSmartNode(node) || node;
+    const item = live?.images?.[index];
+    const rect = imageCropRect({rect:result?.rect});
+    if(!item || !rect || !result?.blob) throw new Error(tr('canvas.cropEditorSaveFail'));
+    // 选满整张图 = 用户想清除裁切，不要存一个 100% 的裁切框。
+    if(imageCropCoversWhole({rect})){
+        await clearImageCrop(live, index);
+        return;
+    }
+    const baseName = cropBaseName(item);
+    const file = await uploadCroppedBlob(result.blob, `${baseName}_crop.png`).catch(() => null);
+    if(!file) throw new Error(tr('canvas.cropEditorSaveFail'));
+    const prevCrop = item.crop || null;
+    const width = Math.round(Number(result.width) || Number(file.width) || 0);
+    const height = Math.round(Number(result.height) || Number(file.height) || 0);
+    pushUndo();
+    const updated = {...item};
+    updated.crop = {
+        rect,
+        ratio: result.ratio || 'free',
+        width,
+        height,
+        source:{
+            url:item.url,
+            annotationUrl:item.annotation?.url || '',
+            natural_w:Number(item.natural_w) || width,
+            natural_h:Number(item.natural_h) || height
+        },
+        result:{url:file.url, name:file.name || `${baseName}_crop.png`, kind:'image', natural_w:width, natural_h:height}
+    };
+    if(item.mask?.url){
+        // 遮罩跟着裁切框搬家；搬不过去（没有可见白区/加载失败）就整体清掉并明确提示，
+        // 绝不保留一张和裁切框错位的遮罩。
+        const moved = await remapMaskForCrop(item, prevCrop, updated.crop, baseName).catch(error => {
+            console.warn('遮罩重映射失败：', error);
+            return null;
+        });
+        if(moved){
+            delete updated.maskColor;
+            delete updated.maskPaint;
+            Object.assign(updated, moved);
+        } else {
+            delete updated.mask;
+            delete updated.maskColor;
+            delete updated.maskPaint;
+            delete updated.maskMode;
+            delete updated.maskOpacity;
+            toast(tr('canvas.cropMaskRemapFailed'));
+        }
+    }
+    live.images[index] = updated;
+    fitNodeSizeToCrop(live, updated.crop, prevCrop);
+    render(); scheduleSave();
+    toast(tr('canvas.cropSaved'));
+}
+async function clearImageCrop(node, index){
+    const live = liveSmartNode(node) || node;
+    const item = live?.images?.[index];
+    if(!item?.crop) return;
+    const prevCrop = item.crop;
+    const baseName = cropBaseName(item);
+    pushUndo();
+    const updated = {...item};
+    delete updated.crop;
+    if(item.mask?.url){
+        // 遮罩按原 rect 贴回整图坐标；贴不回去就清掉，理由同上。
+        const restored = await remapMaskForCrop(item, prevCrop, null, baseName).catch(error => {
+            console.warn('遮罩还原失败：', error);
+            return null;
+        });
+        if(restored){
+            delete updated.maskColor;
+            delete updated.maskPaint;
+            Object.assign(updated, restored);
+        } else {
+            delete updated.mask;
+            delete updated.maskColor;
+            delete updated.maskPaint;
+            delete updated.maskMode;
+            delete updated.maskOpacity;
+            toast(tr('canvas.cropMaskRemapFailed'));
+        }
+    }
+    live.images[index] = updated;
+    fitNodeSizeToCrop(live, null, prevCrop);
+    render(); scheduleSave();
+    toast(tr('canvas.cropCleared'));
+}
+// 右键"裁切结果另存为新节点"：导出的是一张独立成品图，
+// 不带 crop / mask / annotation —— 否则新节点会二次裁切、把批注再叠一遍。
+function saveCropAsNewNode(node, index){
+    const live = liveSmartNode(node) || node;
+    const item = live?.images?.[index];
+    if(!item?.crop?.result?.url){
+        toast(tr('canvas.cropNoResult'));
+        return;
+    }
+    const view = imageForDisplay(item);
+    const rect = nodeRect(live);
+    pushUndo();
+    createImageNodeAt(
+        {x:(Number(rect.x) || 0) + (Number(rect.width) || 260) + 180, y:Number(rect.y) || 0},
+        [{
+            url:view.url,
+            name:item.crop.result.name || `${cropBaseName(item)}_crop.png`,
+            kind:'image',
+            natural_w:Number(item.crop.width) || Number(view.natural_w) || 0,
+            natural_h:Number(item.crop.height) || Number(view.natural_h) || 0
+        }],
+        {skipUndo:true, select:true}
+    );
+    render(); scheduleSave();
+    toast(tr('canvas.cropSavedAsNode'));
+}
 // —— 全屏遮罩编辑器（static/js/mask-editor.js）接入 ——
 // 画布只负责三件事：打开时给出原图/已有遮罩的地址，保存时把结果落成素材并写回节点，
 // 以及把"颜色叠加"导出的彩色参考图带进生成请求。绘制本身全部由编辑器模块负责。
@@ -19926,7 +20185,8 @@ async function openMaskEditorForImage(node, index){
     const base = (item.name || 'image').replace(/\.[^.]+$/, '');
     try {
         await editor.open({
-            imageUrl: displayMediaUrl(item),
+            // 有裁切时，遮罩也活在裁切后的像素空间里，编辑底图必须同样是裁切结果。
+            imageUrl: displayMediaUrl(imageForDisplay(item)),
             maskUrl: item.mask?.url ? displayMediaUrl(item.mask) : '',
             colorUrl: item.maskColor?.url ? displayMediaUrl(item.maskColor) : '',
             paintUrl: item.maskPaint?.url ? displayMediaUrl(item.maskPaint) : '',
@@ -20058,8 +20318,10 @@ async function openAnnotationEditorForImage(node, index){
     }
     try{
         await editor.open({
+            // 批注永远画在整张原图上（不是裁切结果），否则裁切会丢掉框外笔迹。
             imageUrl: displayMediaUrl(item),
             overlayUrl: item.annotationPaint?.url ? displayMediaUrl(item.annotationPaint) : '',
+            cropRect: imageCropRect(item.crop),
             labels: annotationEditorLabels(),
             onSave: result => saveAnnotationEditorResult(node, index, base, result)
         });
@@ -20096,6 +20358,14 @@ async function saveAnnotationEditorResult(node, index, base, result){
         delete updated.annotationPaint;
     }
     live.images[index] = updated;
+    // 批注改了，已烘焙的裁切图就过期了：按原裁切范围重新裁一遍，节点与下游都拿到最新结果。
+    if(live.images[index]?.crop?.result?.url){
+        try {
+            await refreshCropResultForImage(live, index);
+        } catch(error){
+            console.warn('批注后刷新裁切结果失败：', error);
+        }
+    }
     render(); scheduleSave();
     toast(hasMarks ? tr('canvas.annotationEditorApplied') : tr('canvas.annotationEditorRemoved'));
 }
@@ -20286,7 +20556,7 @@ function applyImageEdit(){
     if(imageEditMode === 'brush') return applyImageBrush();
     if(imageEditMode === 'resize') return applyImageResize();
     if(imageEditMode === 'grid') return applyImageGridSplit();
-    return applyImageCrop();
+    return false;
 }
 let lastComposerNodeId = '';
 let activeComposerSubject = null;
@@ -22113,10 +22383,16 @@ function originalPromptTextFromParts(parts){
 function promptRequestRefs(refs){
     return (refs || []).map((img, index) => {
         const annotated = Boolean(img.annotation?.url);
+        // 裁切结果的优先级最高：它已经烘焙了批注/色块，且是用户明确选定的画面范围。
+        const cropped = Boolean(img.crop?.result?.url);
         return {
             // 批注已烘焙进图片，优先向下游传批注后的图，且不再随行遮罩
             // 颜色叠加模式：向下传递的就是"原图上带色块"的那张结果图，遮罩照旧随行
-            url:annotated ? displayMediaUrl(img.annotation) : (img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url,
+            url:cropped
+                ? displayMediaUrl(img.crop.result)
+                : annotated
+                    ? displayMediaUrl(img.annotation)
+                    : (img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url,
             name:img.name || `图${index + 1}`,
             mediaInstanceId:img.mediaInstanceId || '',
             kind:img.kind || mediaKindForItem(img),
@@ -26604,40 +26880,6 @@ document.addEventListener('click', event => {
 document.addEventListener('keydown', event => {
     if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); imageMattingMenuClose(); closeMattingPromptPanel(); }
 });
-function cropDragModeFromPointer(event){
-    const explicit = event.target.closest?.('[data-crop-handle]')?.dataset?.cropHandle;
-    if(explicit) return `crop-${explicit}`;
-    if(imageEditMode !== 'crop') return 'move';
-    const box = document.getElementById('cropBox');
-    const rect = box?.getBoundingClientRect?.();
-    if(!rect) return 'move';
-    const slop = 16;
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const nearL = x <= slop;
-    const nearR = rect.width - x <= slop;
-    const nearT = y <= slop;
-    const nearB = rect.height - y <= slop;
-    if(nearT && nearL) return 'crop-nw';
-    if(nearT && nearR) return 'crop-ne';
-    if(nearB && nearL) return 'crop-sw';
-    if(nearB && nearR) return 'crop-se';
-    if(nearT) return 'crop-n';
-    if(nearR) return 'crop-e';
-    if(nearB) return 'crop-s';
-    if(nearL) return 'crop-w';
-    return 'move';
-}
-document.getElementById('cropBox').addEventListener('mousedown', event => beginCropDrag(event, cropDragModeFromPointer(event)));
-document.querySelectorAll('[data-crop-handle]').forEach(handle => {
-    handle.addEventListener('mousedown', event => beginCropDrag(event, `crop-${handle.dataset.cropHandle || 'se'}`));
-});
-document.querySelectorAll('[data-crop-ratio]').forEach(btn => {
-    btn.addEventListener('click', event => {
-        event.stopPropagation();
-        setCropAspectPreset(btn.dataset.cropRatio || 'free');
-    });
-});
 document.getElementById('outpaintFrame').addEventListener('mousedown', event => {
     if(event.target.closest('[data-outpaint-handle]')) return;
     beginCropDrag(event, 'image');
@@ -26653,7 +26895,7 @@ document.getElementById('cropImage').addEventListener('mousedown', event => {
 document.querySelectorAll('[data-image-edit-mode]').forEach(btn => {
     btn.addEventListener('click', event => {
         event.stopPropagation();
-        setImageEditMode(btn.dataset.imageEditMode || 'crop', true);
+        setImageEditMode(btn.dataset.imageEditMode || 'preview', true);
     });
 });
 document.querySelectorAll('[data-outpaint-color]').forEach(button => {
@@ -26760,8 +27002,8 @@ document.getElementById('previewStage').addEventListener('mousedown', event => {
 });
 document.getElementById('imageEditStage').addEventListener('mousedown', event => {
     if(imageEditMode === 'preview' || event.button !== 0) return;
-    if(event.target.closest('.image-edit-actions, .preview-tools-overlay, .preview-download-overlay, .crop-box, .crop-handle')) return;
-    if(event.target.closest('#editDrawCanvas, #editTextCanvas, .edit-text-inline') && imageEditMode !== 'crop') return;
+    if(event.target.closest('.image-edit-actions, .preview-tools-overlay, .preview-download-overlay')) return;
+    if(event.target.closest('#editDrawCanvas, #editTextCanvas, .edit-text-inline')) return;
     const stage = event.currentTarget;
     if(stage.scrollWidth <= stage.clientWidth && stage.scrollHeight <= stage.clientHeight) return;
     event.preventDefault();

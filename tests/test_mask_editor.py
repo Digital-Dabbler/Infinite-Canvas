@@ -107,11 +107,16 @@ class MaskEditorFrontendTests(unittest.TestCase):
         self.assertNotIn("createImageNodeAt(", save_body)
         self.assertNotIn("maskColorNodeId", self.canvas_js)
         self.assertNotIn("mask_color", self.canvas_js)
-        # 节点预览与生成请求都用带色块的结果图。
-        self.assertIn("img.maskMode === 'color' && img?.maskColor?.url", self.canvas_js)
-        # 批注结果优先于遮罩结果；没有批注时仍按遮罩颜色模式取结果图。
+        # 节点预览与生成请求都用带色块的结果图（裁切后遮罩已重映射到裁切坐标系，
+        # 因此预览统一取 view，即 imageForDisplay 之后的底图）。
+        self.assertIn("view.maskMode === 'color' && view?.maskColor?.url", self.canvas_js)
+        # 裁切结果优先；其次是批注结果；没有批注时仍按遮罩颜色模式取结果图。
         self.assertIn(
-            "url:annotated ? displayMediaUrl(img.annotation) : (img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url",
+            "? displayMediaUrl(img.crop.result)",
+            self.canvas_js,
+        )
+        self.assertIn(
+            ": (img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url",
             self.canvas_js,
         )
         # 纯色块小图用于重新打开编辑器时还原颜色。
