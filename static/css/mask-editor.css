@@ -406,8 +406,9 @@
     transition: opacity 0.18s ease;
 }
 
+/* 仅遮罩模式：所有色层统一压成单色显示，色板没有意义，直接隐藏 */
 .me-root[data-mode='mask'] .me-swatches {
-    opacity: 0.55;
+    display: none;
 }
 
 .me-swatch {

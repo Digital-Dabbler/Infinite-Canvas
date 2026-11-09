@@ -91,6 +91,20 @@ class MaskEditorFrontendTests(unittest.TestCase):
         self.assertIn("paintBlob: paintBlob", self.editor_js)
         self.assertIn("buildPaintCanvas()", self.editor_js)
 
+    def test_mask_mode_hides_color_palette(self):
+        # 仅遮罩模式的笔迹统一压成单色，色板（9 个颜色层）在该模式下没有作用，整块隐藏；
+        # 颜色叠加模式仍要露出色板。切换靠 root 的 data-mode，由 updatePanel() 维护。
+        self.assertIn("this.root.dataset.mode = this.mode;", self.editor_js)
+
+        start = self.editor_css.index(".me-root[data-mode='mask'] .me-swatches")
+        mask_block = self.editor_css[start:self.editor_css.index("}", start)]
+        self.assertIn("display: none;", mask_block)
+
+        base_start = self.editor_css.index(".me-swatches {")
+        base_block = self.editor_css[base_start:self.editor_css.index("}", base_start)]
+        self.assertIn("display: grid;", base_block)
+        self.assertNotIn(".me-root[data-mode='color'] .me-swatches", self.editor_css)
+
     def test_canvas_wires_editor_and_color_reference(self):
         self.assertIn("if(action === 'mask'){", self.canvas_js)
         self.assertIn("async function openMaskEditorForImage(node, index)", self.canvas_js)
