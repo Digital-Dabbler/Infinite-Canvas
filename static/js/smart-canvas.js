@@ -19922,23 +19922,64 @@ async function remapMaskForCrop(item, fromCrop, toCrop, baseName){
     const maskFile = await uploadCroppedBlob(maskBlob, `${baseName}_mask.png`);
     if(!maskFile) return null;
     const next = {mask:{url:maskFile.url, name:maskFile.name, kind:'image'}};
-    if(item.maskColor?.url){
-        const color = await loadCropImageElement(displayMediaUrl(item.maskColor));
-        const colorFile = await uploadCropSpaceBitmap(
-            remapCropSpaceBitmap(color, fromRect, toRect, target.width, target.height),
-            '', `${baseName}_maskcolor.png`
-        ).catch(() => null);
-        if(colorFile) next.maskColor = {url:colorFile.url, name:colorFile.name, kind:'image'};
-    }
+    // 笔迹层是纯几何信息（每种颜色的涂抹位置），跟着裁切框一起搬。
+    let paintCanvas = null;
     if(item.maskPaint?.url){
         const paint = await loadCropImageElement(displayMediaUrl(item.maskPaint));
+        paintCanvas = remapCropSpaceBitmap(paint, fromRect, toRect, target.width, target.height);
         const paintFile = await uploadCropSpaceBitmap(
-            remapCropSpaceBitmap(paint, fromRect, toRect, target.width, target.height),
-            '', `${baseName}_maskpaint.png`
+            paintCanvas, '', `${baseName}_maskpaint.png`
         ).catch(() => null);
         if(paintFile) next.maskPaint = {url:paintFile.url, name:paintFile.name, kind:'image'};
     }
+    if(item.maskColor?.url){
+        // 色块图是"底图 + 半透明笔迹"的成品图，会作为颜色叠加模式的参考图向下传递。
+        // 裁切框扩到旧框之外时，直接按几何搬运会留下透明缺口，所以优先用
+        // "新底图 + 搬过来的笔迹"重新合成；笔迹缺失时才退回几何搬运。
+        let colorCanvas = null;
+        if(paintCanvas){
+            colorCanvas = await rebuildCropColorLayer(item, toCrop, target, paintCanvas).catch(() => null);
+        }
+        if(!colorCanvas){
+            const color = await loadCropImageElement(displayMediaUrl(item.maskColor));
+            colorCanvas = remapCropSpaceBitmap(color, fromRect, toRect, target.width, target.height);
+        }
+        const colorFile = await uploadCropSpaceBitmap(
+            colorCanvas, '', `${baseName}_maskcolor.png`
+        ).catch(() => null);
+        if(colorFile) next.maskColor = {url:colorFile.url, name:colorFile.name, kind:'image'};
+    }
     return next;
+}
+// 用"裁切后的底图 + 重映射后的笔迹"重新合成色块图，语义与 mask-editor 的
+// buildColorCanvas 一致：底图打底，笔迹按 maskOpacity 叠上去，最后把 alpha 收成
+// 全不透明（旧版本地格式，见 saveMaskEditorResult 的注释）。
+async function rebuildCropColorLayer(item, toCrop, target, paintCanvas){
+    const baseItem = imageBaseForDisplay(item);
+    const baseUrl = baseItem?.url ? displayMediaUrl(baseItem) : '';
+    if(!baseUrl) return null;
+    const base = await loadCropImageElement(baseUrl);
+    const naturalW = base.naturalWidth || base.width;
+    const naturalH = base.naturalHeight || base.height;
+    if(!(naturalW > 0 && naturalH > 0)) return null;
+    const rect = imageCropRect(toCrop) || {x:0, y:0, w:1, h:1};
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = Math.max(1, Math.round(target.width));
+    canvasEl.height = Math.max(1, Math.round(target.height));
+    const ctx = canvasEl.getContext('2d', {willReadFrequently:true});
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(
+        base,
+        rect.x * naturalW, rect.y * naturalH, rect.w * naturalW, rect.h * naturalH,
+        0, 0, canvasEl.width, canvasEl.height
+    );
+    const opacity = Number(item.maskOpacity);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(100, Number.isFinite(opacity) ? opacity : 100)) / 100;
+    ctx.drawImage(paintCanvas, 0, 0, canvasEl.width, canvasEl.height);
+    ctx.restore();
+    // 底图本身不透明，叠完笔迹后整张画布 alpha 已是 255，不需要再做阈值化。
+    return canvasEl;
 }
 // 节点尺寸跟随裁切：按"面积相近"折算，长宽比跟着裁切结果走。
 // 不然裁成竖条会变成一个又宽又空的框，裁掉一半面积节点又会突然膨胀。

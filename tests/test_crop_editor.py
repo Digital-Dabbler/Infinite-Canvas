@@ -153,6 +153,12 @@ class CropEditorFrontendTests(unittest.TestCase):
         self.assertIn("imageSmoothingEnabled = false", self.canvas_js)
         self.assertIn("maskBlobHasPaintedArea", body)
         self.assertIn("remapMaskForCrop(item, prevCrop, updated.crop, baseName)", self.canvas_js)
+        # 色块图会作为参考图向下传递，裁切范围变化时必须按"新底图 + 搬过来的笔迹"重合成，
+        # 否则扩框后会留下透明缺口。
+        rebuild = self._function_body(self.canvas_js, "async function rebuildCropColorLayer(")
+        self.assertIn("imageBaseForDisplay(item)", rebuild)
+        self.assertIn("ctx.globalAlpha", rebuild)
+        self.assertIn("rebuildCropColorLayer(item, toCrop, target, paintCanvas)", body)
         # 映射失败要清空遮罩并提示，绝不留下与裁切框错位的遮罩。
         save_start = self.canvas_js.index("async function saveCropEditorResult(node, index, result){")
         save_body = self.canvas_js[save_start:save_start + 4200]
