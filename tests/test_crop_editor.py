@@ -351,6 +351,19 @@ class PreviewCropIntegrationTests(unittest.TestCase):
         self.assertIn("closeImageEditor();", body)
         self.assertNotIn("createImageNodeAt(", body, "")
 
+    def test_apply_preview_crop_resets_busy_in_finally(self):
+        # 成功路径也要复位：曾经只在 catch 里复位，导致应用过一次后
+        # 再次双击进预览，条上还挂着 is-busy（pointer-events:none）且
+        # previewCropApplying 仍为 true，按钮点了没反应。
+        body = self._function_body(self.canvas_js, "async function applyPreviewCrop(")
+        self.assertIn("} finally {", body)
+        self.assertEqual(body.count("previewCropApplying = false;"), 1)
+        self.assertIn("previewCropBar()?.classList.remove('is-busy');", body)
+        self.assertLess(
+            body.index("closeImageEditor();"),
+            body.index("} finally {"),
+        )
+
     def test_preview_crop_follows_zoom_and_pan(self):
         zoom = self._function_body(self.canvas_js, "function applyPreviewTransform(")
         self.assertIn("previewCropHandle?.refresh?.();", zoom)

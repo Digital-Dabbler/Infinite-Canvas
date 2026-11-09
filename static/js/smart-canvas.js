@@ -20291,6 +20291,9 @@ async function applyPreviewCrop(){
     } catch(error){
         console.warn('预览内裁切应用失败：', error);
         toast(tr('canvas.cropEditorSaveFail'));
+    } finally {
+        // 成功也要复位：否则下一次双击进预览时 busy 标志还挂着，
+        // 「应用裁切」会被开头的 previewCropApplying 守卫直接 return 掉。
         previewCropApplying = false;
         previewCropHandle?.setBusy?.(false);
         previewCropBar()?.classList.remove('is-busy');
