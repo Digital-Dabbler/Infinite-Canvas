@@ -527,6 +527,15 @@
                         <button id="previewDownloadAllBtn" class="compare-toggle" type="button" onclick="downloadPreviewGroup()" style="display:none"><i data-lucide="archive" class="w-4 h-4"></i><span>下载全部</span></button>
                     </div>
                     <div class="preview-tools-overlay">
+                        <!-- 预览态直接从图片上拖框裁切：比例条 + 尺寸读数 + 取消/应用 -->
+                        <div id="previewCropBar" class="preview-crop-bar" hidden>
+                            <div id="previewCropRatios" class="ce-inline-ratio"></div>
+                            <span id="previewCropSize" class="preview-crop-size"></span>
+                            <div class="preview-crop-actions">
+                                <button type="button" class="compare-toggle" onclick="closeImageEditor()" data-i18n="canvas.cropEditorCancel">取消</button>
+                                <button type="button" class="compare-toggle primary" data-preview-crop-apply onclick="applyPreviewCrop()" data-i18n="canvas.cropEditorApply">应用裁切</button>
+                            </div>
+                        </div>
                         <div id="compareThumbs" class="compare-thumbs" style="display:none"></div>
                         <div class="preview-action-row">
                             <button id="panoramaToggleBtn" class="compare-toggle" type="button" onclick="togglePanoramaPreview()" style="display:none"><i data-lucide="globe-2" class="w-4 h-4"></i><span data-i18n="smart.panorama360">360全景</span></button>

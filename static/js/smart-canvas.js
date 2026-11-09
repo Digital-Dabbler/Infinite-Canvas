@@ -10302,7 +10302,8 @@ function downloadNameForMediaItem(item, fallbackPrefix='canvas-output'){
 }
 function downloadPreviewImage(){
     const node = nodes.find(n => n.id === previewNavState.nodeId);
-    const image = node?.images?.[previewNavState.index];
+    // 预览里看到的是批注/裁切后的结果，下载也跟着走同一条显示链，不能退回原图。
+    const image = imageForDisplay(node?.images?.[previewNavState.index]);
     if(!image?.url) return;
     const name = downloadNameForMediaItem(image, 'image');
     const link = document.createElement('a');
@@ -15611,7 +15612,9 @@ async function renameSmartNodeImage(nodeId, imageIndex){
 function currentEditImage(){
     const node = nodes.find(n => n.id === cropState?.nodeId);
     const index = Number(cropState?.imageIndex || 0);
-    return {node, index, image:imageForDisplay(node?.images?.[index])};
+    // baseImage 是"批注后、未裁切"的整图：预览里直接裁切时要拿它当底图，
+    // 否则二次裁切会在已经裁过的结果上再裁一次，坐标系就丢了。
+    return {node, index, image:imageForDisplay(node?.images?.[index]), baseImage:imageBaseForDisplay(node?.images?.[index])};
 }
 function cropImageDisplaySize(){
     const img = document.getElementById('cropImage');
@@ -16261,6 +16264,9 @@ function setImageEditMode(mode, userTouched=false){
     refreshMaskOverlayHint();
     syncTextToolState(true);
     updatePreviewNavButtons();
+    // 预览态自带裁切层：进入预览就挂上，切到别的模式就拆掉。
+    if(imageEditMode === 'preview') syncPreviewCrop();
+    else destroyPreviewCrop();
     refreshIcons();
 }
 let previewCompareOn = false;
@@ -16271,6 +16277,9 @@ function applyPreviewTransform(){
     if(frame){
         frame.style.transform = panoramaState.enabled ? '' : `translate(${previewPan.x}px, ${previewPan.y}px) scale(${previewZoom})`;
     }
+    // 裁切覆盖层和图片是同一套布局坐标，缩放/平移只改外层 transform，
+    // 所以这里只需让覆盖层重算一次有效缩放，框就始终贴着图走。
+    previewCropHandle?.refresh?.();
     updateZoomLabel();
 }
 function resetPreviewTransform(){
@@ -16650,6 +16659,8 @@ function syncPreviewFrameSize(){
         compareImg.style.width = `${w}px`;
         compareImg.style.height = `${h}px`;
     }
+    // 框贴在图片上，图片显示尺寸一变（换图/加载完成/旋转）就要重新对位。
+    previewCropHandle?.refresh?.();
 }
 function previewResolutionText(){
     const editing = currentEditImage();
@@ -16973,6 +16984,9 @@ function refreshComparePanel(){
     const panoramaToggle = document.getElementById('panoramaToggleBtn');
     const editing = currentEditImage();
     updatePreviewGenerationPanel();
+    // 预览态要直接裁切：展示"批注后、未裁切"的整图，裁切框才对应原图坐标；
+    // 其它模式（扩图/缩放/宫格）仍按当前显示图工作。
+    const previewItem = (imageEditMode === 'preview' && editing.baseImage?.url) ? editing.baseImage : (editing.image || {});
     const curUrl = editing.image?.url || '';
     const isVideoPreview = mediaKindForItem(editing.image || {}) === 'video';
     const isPreviewMode = imageEditMode === 'preview';
@@ -16997,6 +17011,7 @@ function refreshComparePanel(){
         if(isVideoPreview && currentVideo) initializeVideoTrimState(currentVideo);
         if(currentImg.dataset.previewQuick !== '1') rememberPreviewImageResolution();
         syncPreviewFrameSize();
+        syncPreviewCrop();
         updatePreviewMetaHint();
     };
     if(isVideoPreview){
@@ -17048,8 +17063,8 @@ function refreshComparePanel(){
         currentImg.dataset.proxyFallbackTried = '1';
         currentImg.src = fallback;
     };
-    const previewSrc = displayMediaUrl(editing.image || curUrl);
-    const quickPreviewSrc = smartMediaPreviewUrl(editing.image || curUrl, 1536);
+    const previewSrc = displayMediaUrl(previewItem || curUrl);
+    const quickPreviewSrc = smartMediaPreviewUrl(previewItem || curUrl, 1536);
     const previewToken = `${editing.node?.id || ''}:${editing.index ?? 0}:${Date.now()}`;
     currentImg.dataset.previewSrcToken = previewToken;
     const loadFullPreview = () => {
@@ -19505,6 +19520,8 @@ function openImageEditor(nodeId, imageIndex=0){
 }
 function closeImageEditor(){
     cleanupSmartLogPreviewNode();
+    // 预览内裁切层先拆掉，再清舞台，避免覆盖层读到已经重置的图片尺寸。
+    destroyPreviewCrop();
     imageEditModal.classList.remove('open');
     document.querySelector('.image-edit-panel')?.classList.remove('video-preview-mode');
     const img = document.getElementById('cropImage');
@@ -20169,6 +20186,113 @@ function saveCropAsNewNode(node, index){
     );
     render(); scheduleSave();
     toast(tr('canvas.cropSavedAsNode'));
+}
+// —— 预览内直接裁切（static/js/crop-editor.js 的 attach 模式） ——
+// 双击图片进的就是预览；进去即可拖框裁切，不需要再点一次"裁剪"。
+// 框画在"批注后、未裁切"的整图上（预览态展示整图），跟随预览的缩放/平移一起走；
+// 应用后写回同一张图，并直接关掉预览回画布。
+let previewCropHandle = null;
+let previewCropDraft = null;
+let previewCropApplying = false;
+
+function previewCropBar(){ return document.getElementById('previewCropBar'); }
+
+function previewCropShouldShow(){
+    if(imageEditMode !== 'preview') return false;
+    if(panoramaState.enabled) return false;
+    const editing = currentEditImage();
+    return mediaKindForItem(editing?.image || {}) === 'image' && Boolean(editing?.baseImage?.url);
+}
+
+function destroyPreviewCrop(){
+    if(previewCropHandle){
+        try { previewCropHandle.destroy(); } catch(error){ console.warn('预览裁切层销毁失败：', error); }
+    }
+    previewCropHandle = null;
+    previewCropDraft = null;
+    previewCropApplying = false;
+    const bar = previewCropBar();
+    if(bar) bar.hidden = true;
+    const ratios = document.getElementById('previewCropRatios');
+    if(ratios) ratios.replaceChildren();
+    const size = document.getElementById('previewCropSize');
+    if(size) size.textContent = '';
+}
+
+function syncPreviewCrop(){
+    const editor = window.CropEditor;
+    const host = document.getElementById('previewFrame');
+    const imageEl = document.getElementById('previewCurrentImage');
+    if(!previewCropShouldShow() || !editor || typeof editor.attach !== 'function' || !host || !imageEl){
+        destroyPreviewCrop();
+        return;
+    }
+    if(!imageEl.getAttribute('src')) return;
+    const editing = currentEditImage();
+    const item = editing.node?.images?.[editing.index] || editing.image || {};
+    const key = `${editing.node?.id || ''}:${editing.index}`;
+    if(previewCropHandle && previewCropHandle.__previewKey === key){
+        previewCropHandle.refresh?.();
+        return;
+    }
+    destroyPreviewCrop();
+    // 没有已保存的裁切时给一个居中的 80% 初始框：满幅框的手柄压在图片边缘上不好抓，
+    // 而且预览里"进来就能裁"，不该先让用户自己拉一个框出来。
+    const rect = imageCropRect(item.crop) || {x:.1, y:.1, w:.8, h:.8};
+    const ratio = item.crop?.ratio || 'free';
+    previewCropDraft = {rect, ratio, width:0, height:0};
+    try{
+        previewCropHandle = editor.attach({
+            host,
+            imageEl,
+            ratioHost: document.getElementById('previewCropRatios'),
+            sizeHost: document.getElementById('previewCropSize'),
+            rect,
+            ratio,
+            labels: cropEditorLabels(),
+            onRectChange: state => { previewCropDraft = state; },
+            onApply: () => { applyPreviewCrop(); },
+            onCancel: () => { closeImageEditor(); }
+        });
+        previewCropHandle.__previewKey = key;
+        previewCropDraft = previewCropHandle.getState?.() || previewCropDraft;
+    } catch(error){
+        console.warn('预览裁切层挂载失败：', error);
+        previewCropHandle = null;
+        return;
+    }
+    const bar = previewCropBar();
+    if(bar) bar.hidden = false;
+}
+
+async function applyPreviewCrop(){
+    if(previewCropApplying) return;
+    const editing = currentEditImage();
+    const live = liveSmartNode(editing.node) || editing.node;
+    const item = live?.images?.[editing.index];
+    const rect = imageCropRect({rect:previewCropDraft?.rect});
+    if(!item || !rect) return;
+    previewCropApplying = true;
+    previewCropHandle?.setBusy?.(true);
+    previewCropBar()?.classList.add('is-busy');
+    try{
+        const shot = await cropImageBlobByRect(displayMediaUrl(imageBaseForDisplay(item)), rect);
+        await saveCropEditorResult(live, editing.index, {
+            rect,
+            ratio: previewCropDraft?.ratio || 'free',
+            width:shot.width,
+            height:shot.height,
+            blob:shot.blob
+        });
+        // 按约定：应用完直接回画布，不停在预览。
+        closeImageEditor();
+    } catch(error){
+        console.warn('预览内裁切应用失败：', error);
+        toast(tr('canvas.cropEditorSaveFail'));
+        previewCropApplying = false;
+        previewCropHandle?.setBusy?.(false);
+        previewCropBar()?.classList.remove('is-busy');
+    }
 }
 // —— 全屏遮罩编辑器（static/js/mask-editor.js）接入 ——
 // 画布只负责三件事：打开时给出原图/已有遮罩的地址，保存时把结果落成素材并写回节点，

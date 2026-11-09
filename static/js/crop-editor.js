@@ -5,6 +5,12 @@
  *   options = { imageUrl, rect, ratio, labels, onSave }
  *   result  = { rect:{x,y,w,h}, ratio, width, height, blob }
  *
+ * 另有可嵌入模式：window.CropEditor.attach(options) -> 同步句柄
+ *   options = { host, imageEl, ratioHost, sizeHost, rect, ratio, labels,
+ *               onRectChange, onApply, onCancel }
+ *   只画「覆盖层 + 手柄 + 比例条 + 尺寸读数」，不接管滚轮/缩放/平移，
+ *   覆盖层对齐 host 内既有 <img> 的显示区域，外层 transform 缩放时跟着一起缩放。
+ *
  * 设计取舍：
  * - 舞台上只做 CSS 缩放（transform: scale），交互永远不碰原图像素；只有确认时才用自然像素
  *   画到 canvas 导出，所以 8000×8000 的图也能打开、能拖。
@@ -1369,6 +1375,1082 @@
         }
     }
 
+    // ---- 可嵌入模式（attach） ----
+    // 与整窗模式的差异：不接管滚轮、不做自己的缩放/平移，只把「遮罩 + 手柄 + 三分线 + 比例条 +
+    // 尺寸读数」对齐到 host 内既有 <img> 的显示区域（contain 留黑边时也不能铺到黑边上）。
+    // 内部 rect 仍用原图自然像素，几何语义与整窗模式完全一致；指针换算时先除以
+    // 「显示宽 / offsetWidth」得到的有效缩放，再折算成自然像素，因此外层 transform: scale()
+    // 不会把位移放大或缩小两次。
+    class CropInlineSession {
+        constructor(opts) {
+            this.opts = opts || {};
+            this.host = this.opts.host || null;
+            this.imageEl = this.opts.imageEl || null;
+            this.ratioHost = this.opts.ratioHost || null;
+            this.sizeHost = this.opts.sizeHost || null;
+            this.labels = this.opts.labels || {};
+            this.initialRect = this.opts.rect || null;
+            this.ratioName = RATIOS.indexOf(this.opts.ratio) >= 0 ? this.opts.ratio : 'free';
+            this.onRectChange = typeof this.opts.onRectChange === 'function' ? this.opts.onRectChange : null;
+            this.onApply = typeof this.opts.onApply === 'function' ? this.opts.onApply : null;
+            this.onCancel = typeof this.opts.onCancel === 'function' ? this.opts.onCancel : null;
+
+            this.root = null;
+            this.frameEl = null;
+            this.selection = null;
+            this.masks = null;
+            this.ratioBar = null;
+
+            this.natW = 0;
+            this.natH = 0;
+            this.rect = null;
+            this.display = { x: 0, y: 0, w: 1, h: 1 };
+            this.scale = 1;
+            this.scaleY = 1;
+            this.frameBox = { left: 0, top: 0, width: 0, height: 0 };
+
+            this.drag = null;
+            this.spaceDown = false;
+            this.pointerId = null;
+            this.raf = 0;
+            this.pendingEmit = false;
+            this.ready = false;
+            this.busy = false;
+            this.destroyed = false;
+            this.cancelled = false;
+            this.engaged = false;
+            this.userAdjusted = false;
+
+            this.hostPositionChanged = false;
+            this.hostPositionBefore = '';
+            this.sizeTextBefore = '';
+            this.resizeObserver = null;
+            this.bound = {};
+
+            this.start();
+        }
+
+        // ---- 生命周期 ----
+        start() {
+            if (!this.host || !this.imageEl) {
+                // 接线错误不抛异常：调用方拿到的 handle 是安全的空壳，避免整个裁剪流程崩掉。
+                if (window.console && console.warn) {
+                    console.warn('CropEditor.attach: options.host 与 options.imageEl 为必填');
+                }
+                return;
+            }
+            this.makeHostPositioned();
+            this.buildDom();
+            this.bindEvents();
+            this.mountRatioBar();
+            if (this.sizeHost) this.sizeTextBefore = this.sizeHost.textContent;
+            this.syncNaturalSize();
+            this.applyInitialRect();
+            const measured = this.measure();
+            this.ready = measured && this.natW > 0 && this.natH > 0;
+            if (this.root) this.root.classList.toggle('is-ready', this.ready);
+            this.syncRatioButtons();
+            this.render();
+        }
+
+        // 覆盖层用 position:absolute; inset:0 挂在 host 上，host 必须是定位祖先；
+        // 静态定位时临时改成 relative（记住原值，destroy 时精确还原）。
+        makeHostPositioned() {
+            let position = '';
+            try {
+                position = window.getComputedStyle(this.host).position;
+            } catch (error) {
+                position = this.host.style.position || '';
+            }
+            if (!position || position === 'static') {
+                this.hostPositionBefore = this.host.style.position;
+                this.hostPositionChanged = true;
+                this.host.style.position = 'relative';
+            }
+        }
+
+        destroy() {
+            if (this.destroyed) return;
+            this.destroyed = true;
+            if (this.raf) {
+                cancelAnimationFrame(this.raf);
+                this.raf = 0;
+            }
+            const bound = this.bound || {};
+            document.removeEventListener('keydown', bound.keyDown, true);
+            document.removeEventListener('keyup', bound.keyUp, true);
+            window.removeEventListener('resize', bound.resize);
+            window.removeEventListener('blur', bound.blur);
+            if (this.imageEl) {
+                this.imageEl.removeEventListener('load', bound.imageLoad);
+                this.imageEl.removeEventListener('dragstart', bound.dragStart);
+            }
+            if (this.root) {
+                this.root.removeEventListener('pointerdown', bound.pointerDown);
+                this.root.removeEventListener('dblclick', bound.dblclick);
+            }
+            if (this.frameEl) {
+                this.frameEl.removeEventListener('pointermove', bound.pointerMove);
+                this.frameEl.removeEventListener('pointerup', bound.pointerUp);
+                this.frameEl.removeEventListener('pointercancel', bound.pointerUp);
+            }
+            if (this.ratioBar) {
+                this.ratioBar.removeEventListener('click', bound.ratioClick);
+            }
+            if (this.resizeObserver) {
+                this.resizeObserver.disconnect();
+                this.resizeObserver = null;
+            }
+            this.releasePointerSafely();
+            if (this.ratioBar && this.ratioBar.parentNode) {
+                this.ratioBar.parentNode.removeChild(this.ratioBar);
+            }
+            if (this.root && this.root.parentNode) this.root.parentNode.removeChild(this.root);
+            if (this.sizeHost) this.sizeHost.textContent = this.sizeTextBefore;
+            if (this.hostPositionChanged && this.host) {
+                this.host.style.position = this.hostPositionBefore;
+                this.hostPositionChanged = false;
+            }
+            this.root = null;
+            this.frameEl = null;
+            this.selection = null;
+            this.masks = null;
+            this.ratioBar = null;
+            this.drag = null;
+            this.ready = false;
+            this.bound = {};
+        }
+
+        label(key) {
+            const value = this.labels ? this.labels[key] : '';
+            return value == null ? '' : String(value);
+        }
+
+        ratioText(name) {
+            if (name === 'free') return this.label('ratioFree') || name;
+            if (name === 'source') return this.label('ratioSource') || name;
+            const map = this.labels ? this.labels.ratioLabels : null;
+            const text = map ? map[name] : null;
+            return text == null ? name : String(text);
+        }
+
+        // ---- DOM ----
+        buildDom() {
+            const session = this;
+            const handles = HANDLE_ORDER.map(function (name) {
+                return '<span class="ce-handle ce-h-' + name + '" data-handle="' + name + '"></span>';
+            }).join('');
+            const root = document.createElement('div');
+            root.className = 'ce-inline';
+            root.tabIndex = -1;
+            // 只画覆盖层：没有 .me-root / .ce-root，也没有 role=dialog，不能锁 body 滚动
+            root.innerHTML =
+                '<div class="ce-inline-frame">' +
+                    '<div class="ce-masks">' +
+                        '<span class="ce-mask ce-mask-t"></span>' +
+                        '<span class="ce-mask ce-mask-b"></span>' +
+                        '<span class="ce-mask ce-mask-l"></span>' +
+                        '<span class="ce-mask ce-mask-r"></span>' +
+                    '</div>' +
+                    '<div class="ce-selection">' +
+                        '<span class="ce-third ce-third-v" style="left:33.3333%"></span>' +
+                        '<span class="ce-third ce-third-v" style="left:66.6667%"></span>' +
+                        '<span class="ce-third ce-third-h" style="top:33.3333%"></span>' +
+                        '<span class="ce-third ce-third-h" style="top:66.6667%"></span>' +
+                        CENTER_MARK +
+                        handles +
+                    '</div>' +
+                '</div>';
+            this.host.appendChild(root);
+            this.root = root;
+            this.frameEl = root.querySelector('.ce-inline-frame');
+            this.selection = root.querySelector('.ce-selection');
+            this.masks = {
+                top: root.querySelector('.ce-mask-t'),
+                bottom: root.querySelector('.ce-mask-b'),
+                left: root.querySelector('.ce-mask-l'),
+                right: root.querySelector('.ce-mask-r')
+            };
+        }
+
+        bindEvents() {
+            const session = this;
+            this.bound = {
+                pointerDown: function (event) { session.handlePointerDown(event); },
+                pointerMove: function (event) { session.handlePointerMove(event); },
+                pointerUp: function (event) { session.handlePointerUp(event); },
+                dblclick: function (event) { session.handleDoubleClick(event); },
+                ratioClick: function (event) { session.handleRatioClick(event); },
+                keyDown: function (event) { session.handleKeyDown(event); },
+                keyUp: function (event) { session.handleKeyUp(event); },
+                resize: function () { session.refresh(); },
+                blur: function () { session.handleWindowBlur(); },
+                imageLoad: function () { session.handleImageLoad(); },
+                dragStart: function (event) { event.preventDefault(); }
+            };
+
+            this.root.addEventListener('pointerdown', this.bound.pointerDown);
+            this.root.addEventListener('dblclick', this.bound.dblclick);
+            // 移动/抬起挂在本层，拖拽时用 pointer capture 保证拖出图片也能继续
+            this.frameEl.addEventListener('pointermove', this.bound.pointerMove);
+            this.frameEl.addEventListener('pointerup', this.bound.pointerUp);
+            this.frameEl.addEventListener('pointercancel', this.bound.pointerUp);
+
+            // 键盘挂在 document 捕获阶段：焦点可能落在画布节点或比例按钮上
+            document.addEventListener('keydown', this.bound.keyDown, true);
+            document.addEventListener('keyup', this.bound.keyUp, true);
+            window.addEventListener('resize', this.bound.resize);
+            window.addEventListener('blur', this.bound.blur);
+            this.imageEl.addEventListener('load', this.bound.imageLoad);
+            this.imageEl.addEventListener('dragstart', this.bound.dragStart);
+
+            // 外层容器尺寸变化（窗口、面板折叠）后自动重算；transform 变化不会触发 RO，
+            // 那种情况由调用方在缩放/平移后显式调用 refresh()。
+            if (typeof ResizeObserver === 'function') {
+                this.resizeObserver = new ResizeObserver(function () {
+                    if (!session.destroyed) session.refresh();
+                });
+                this.resizeObserver.observe(this.host);
+                this.resizeObserver.observe(this.imageEl);
+            }
+        }
+
+        mountRatioBar() {
+            if (!this.ratioHost) return;
+            const session = this;
+            const bar = document.createElement('div');
+            bar.className = 'ce-inline-ratio';
+            bar.setAttribute('role', 'group');
+            const groupLabel = this.label('ratioLabel');
+            if (groupLabel) bar.setAttribute('aria-label', groupLabel);
+            bar.innerHTML = RATIOS.map(function (name) {
+                const text = session.ratioText(name);
+                return '<button type="button" class="me-seg-btn ce-ratio" data-ratio="' + name + '" ' +
+                    'aria-pressed="false" title="' + escapeHtml(text) + '">' +
+                    escapeHtml(text) + '</button>';
+            }).join('');
+            bar.addEventListener('click', this.bound.ratioClick);
+            this.ratioHost.appendChild(bar);
+            this.ratioBar = bar;
+        }
+
+        // ---- 尺寸与布局 ----
+        syncNaturalSize() {
+            if (!this.imageEl) return;
+            const w = this.imageEl.naturalWidth || this.imageEl.width || this.imageEl.offsetWidth || 0;
+            const h = this.imageEl.naturalHeight || this.imageEl.height || this.imageEl.offsetHeight || 0;
+            if (w > 0 && h > 0) {
+                this.natW = w;
+                this.natH = h;
+            } else {
+                this.natW = this.natW || 1;
+                this.natH = this.natH || 1;
+            }
+        }
+
+        applyInitialRect() {
+            const width = this.natW;
+            const height = this.natH;
+            const source = this.initialRect;
+            let rect = null;
+            if (source) {
+                const rx = clamp(Number(source.x) || 0, 0, 1);
+                const ry = clamp(Number(source.y) || 0, 0, 1);
+                const rw = clamp(Number(source.w) || 0, 0, 1 - rx);
+                const rh = clamp(Number(source.h) || 0, 0, 1 - ry);
+                if (rw > 0 && rh > 0) {
+                    rect = {
+                        x: rx * width,
+                        y: ry * height,
+                        w: Math.max(1, rw * width),
+                        h: Math.max(1, rh * height)
+                    };
+                }
+            }
+            this.rect = rect || { x: 0, y: 0, w: width, h: height };
+            this.clampRect();
+            const aspect = this.aspectOf(this.ratioName);
+            if (aspect) this.fitRectToAspect(aspect);
+        }
+
+        // 与整窗一致：以当前框中心为基准收成指定比例，只缩小不放大
+        fitRectToAspect(aspect) {
+            const rect = this.rect;
+            if (!rect || !aspect || !(aspect > 0)) return;
+            const width = this.natW;
+            const height = this.natH;
+            const cx = rect.x + rect.w / 2;
+            const cy = rect.y + rect.h / 2;
+            let w = Math.min(rect.w, rect.h * aspect);
+            let h = w / aspect;
+            if (!(w > 0) || !(h > 0)) {
+                h = Math.max(1, Math.min(height, MIN_CROP_PIXELS));
+                w = h * aspect;
+            }
+            if (w > width) {
+                w = width;
+                h = w / aspect;
+            }
+            if (h > height) {
+                h = height;
+                w = h * aspect;
+            }
+            rect.w = w;
+            rect.h = h;
+            rect.x = cx - w / 2;
+            rect.y = cy - h / 2;
+            this.clampRect();
+            this.ensureMinRect();
+        }
+
+        // 图片按 contain 显示时，元素盒子里还有留黑边的部分；这里算出真正显示图片的
+        // 内盒（相对 <img> 布局盒），覆盖层只盖这块，不铺到黑边上。
+        displayBoxOf(ew, eh) {
+            const natW = this.natW || ew;
+            const natH = this.natH || eh;
+            let fit = 'contain';
+            try {
+                const style = window.getComputedStyle(this.imageEl);
+                fit = style ? String(style.objectFit || 'contain') : 'contain';
+            } catch (error) {
+                fit = 'contain';
+            }
+            if (fit === 'fill' || fit === 'cover' || fit === 'none') {
+                // cover/none 的可见范围就是元素盒子本身；裁切按盒子定位，避免出现偏移
+                return { x: 0, y: 0, w: ew, h: eh };
+            }
+            const scale = Math.min(ew / natW, eh / natH);
+            const w = natW * scale;
+            const h = natH * scale;
+            if (Math.abs(w - ew) < 0.5 && Math.abs(h - eh) < 0.5) {
+                return { x: 0, y: 0, w: ew, h: eh };
+            }
+            return { x: (ew - w) / 2, y: (eh - h) / 2, w: w, h: h };
+        }
+
+        // 重算「图片显示区域 → 覆盖层内布局坐标」。所有值都是布局像素（未受外层
+        // transform 影响），覆盖层跟着外层一起被缩放，不需要自己改 transform。
+        measure() {
+            if (!this.root || !this.frameEl || !this.imageEl) return false;
+            const rootRect = this.root.getBoundingClientRect();
+            const imgRect = this.imageEl.getBoundingClientRect();
+            const ew = this.imageEl.offsetWidth;
+            const eh = this.imageEl.offsetHeight;
+            if (!ew || !eh || !rootRect.width || !rootRect.height) return false;
+
+            // 有效缩放 = 显示宽 / 布局宽；指针位移必须除以它，否则会二次缩放
+            const scale = imgRect.width / ew;
+            const scaleY = imgRect.height / eh;
+            this.scale = scale > 0 ? scale : 1;
+            this.scaleY = scaleY > 0 ? scaleY : this.scale;
+
+            let left = 0;
+            let top = 0;
+            if (this.imageEl.offsetParent === this.host) {
+                // 常规情况：offsetLeft/Top 就是相对 host 内边距的布局坐标
+                left = this.imageEl.offsetLeft;
+                top = this.imageEl.offsetTop;
+            } else {
+                // offsetParent 不是 host（例如 host 只是外层容器）时，用两者的
+                // getBoundingClientRect 差值除以覆盖层自身的有效缩放换算回布局坐标
+                const rootScale = this.root.clientWidth ? rootRect.width / this.root.clientWidth : this.scale;
+                const k = rootScale > 0 ? rootScale : 1;
+                left = (imgRect.left - rootRect.left) / k;
+                top = (imgRect.top - rootRect.top) / k;
+            }
+
+            this.display = this.displayBoxOf(ew, eh);
+            const box = {
+                left: left + this.display.x,
+                top: top + this.display.y,
+                width: Math.max(1, this.display.w),
+                height: Math.max(1, this.display.h)
+            };
+            this.frameBox = box;
+            const style = this.frameEl.style;
+            style.left = box.left.toFixed(3) + 'px';
+            style.top = box.top.toFixed(3) + 'px';
+            style.width = box.width.toFixed(3) + 'px';
+            style.height = box.height.toFixed(3) + 'px';
+            // 手柄/描边按 1/外层缩放 反向补偿，屏幕上大小恒定。
+            // 这里要用「覆盖层自身的 CSS 缩放」（纯外层 transform），而不是
+            // 图片显示缩放：contain 留黑边时两者不同，用后者会让手柄忽大忽小。
+            const cssScale = this.root.clientWidth ? rootRect.width / this.root.clientWidth : scale;
+            style.setProperty('--ce-inv', String(1 / (cssScale > 0 ? cssScale : 1)));
+            return true;
+        }
+
+        // 外层 transform 缩放/平移、容器尺寸或图片尺寸变化后由调用方显式调用。
+        refresh() {
+            if (this.destroyed || !this.root) return;
+            const prevNorm = this.rect ? this.normalizedRectValue() : null;
+            const prevW = this.natW;
+            const prevH = this.natH;
+            this.syncNaturalSize();
+            if (!this.rect) {
+                this.applyInitialRect();
+            } else if (this.natW !== prevW || this.natH !== prevH) {
+                // 图片被替换：按归一化框还原到新尺寸，避免选框跳到旧像素位置
+                this.rect = this.rectFromNormalized(prevNorm) || { x: 0, y: 0, w: this.natW, h: this.natH };
+                this.clampRect();
+            } else {
+                this.clampRect();
+            }
+            const measured = this.measure();
+            this.ready = measured && this.natW > 0 && this.natH > 0;
+            if (this.root) this.root.classList.toggle('is-ready', this.ready);
+            this.syncRatioButtons();
+            this.render();
+        }
+
+        handleImageLoad() {
+            if (this.destroyed) return;
+            if (!this.userAdjusted) {
+                const prevNorm = this.rect ? this.normalizedRectValue() : null;
+                const prevW = this.natW;
+                const prevH = this.natH;
+                this.syncNaturalSize();
+                // 图片加载前用的是 offsetWidth 估计值，加载后按自然尺寸换算同一个归一化框
+                if (this.rect && (prevW !== this.natW || prevH !== this.natH)) {
+                    this.rect = this.rectFromNormalized(prevNorm) || this.rect;
+                }
+                if (!this.rect) this.applyInitialRect();
+            }
+            this.refresh();
+        }
+
+        // ---- 坐标与几何 ----
+        // 指针坐标换算：屏幕位移 ÷ 有效缩放 = 布局位移；再扣掉 contain 黑边、除以
+        // 显示内盒尺寸得到 0–1，最后乘自然尺寸。整窗模式只做一次比例换算，这里是
+        // 同一个思路，多出来的只是外层 transform 的补偿。
+        imagePoint(event) {
+            if (!this.imageEl) return null;
+            const bounds = this.imageEl.getBoundingClientRect();
+            const ew = this.imageEl.offsetWidth;
+            const eh = this.imageEl.offsetHeight;
+            if (!bounds.width || !bounds.height || !ew || !eh) return null;
+            const sx = bounds.width / ew;
+            const sy = bounds.height / eh;
+            const layoutX = (event.clientX - bounds.left) / (sx > 0 ? sx : 1);
+            const layoutY = (event.clientY - bounds.top) / (sy > 0 ? sy : 1);
+            const nx = (layoutX - this.display.x) / (this.display.w || 1);
+            const ny = (layoutY - this.display.y) / (this.display.h || 1);
+            return {
+                x: clamp(nx, 0, 1) * this.natW,
+                y: clamp(ny, 0, 1) * this.natH
+            };
+        }
+
+        // 自然像素位移折算成屏幕像素的倍率，用于点击/拖拽阈值判定
+        screenPerNatural() {
+            const dispW = this.display ? this.display.w : this.natW;
+            return (dispW / (this.natW || 1)) * (this.scale || 1);
+        }
+
+        isOverImage(event) {
+            if (!this.frameEl) return false;
+            const bounds = this.frameEl.getBoundingClientRect();
+            return event.clientX >= bounds.left && event.clientX <= bounds.right &&
+                event.clientY >= bounds.top && event.clientY <= bounds.bottom;
+        }
+
+        rectContains(point) {
+            const rect = this.rect;
+            if (!rect || !point) return false;
+            return point.x >= rect.x && point.x <= rect.x + rect.w &&
+                point.y >= rect.y && point.y <= rect.y + rect.h;
+        }
+
+        aspectOf(name) {
+            if (!name || name === 'free') return 0;
+            if (name === 'source') return this.natH ? this.natW / this.natH : 0;
+            const parts = String(name).split(':');
+            const w = Number(parts[0]);
+            const h = Number(parts[1]);
+            if (!w || !h || !Number.isFinite(w) || !Number.isFinite(h)) return 0;
+            return w / h;
+        }
+
+        handleAt(event) {
+            const rect = this.rect;
+            if (!rect || !this.frameEl) return '';
+            const bounds = this.frameEl.getBoundingClientRect();
+            if (!bounds.width || !bounds.height) return '';
+            const left = bounds.left + rect.x / this.natW * bounds.width;
+            const top = bounds.top + rect.y / this.natH * bounds.height;
+            const right = left + rect.w / this.natW * bounds.width;
+            const bottom = top + rect.h / this.natH * bounds.height;
+            const x = event.clientX;
+            const y = event.clientY;
+            if (x < left - HANDLE_REACH || x > right + HANDLE_REACH ||
+                y < top - HANDLE_REACH || y > bottom + HANDLE_REACH) return '';
+            const nearLeft = Math.abs(x - left) <= HANDLE_REACH;
+            const nearRight = Math.abs(x - right) <= HANDLE_REACH;
+            const nearTop = Math.abs(y - top) <= HANDLE_REACH;
+            const nearBottom = Math.abs(y - bottom) <= HANDLE_REACH;
+            if (nearTop && nearLeft) return 'nw';
+            if (nearTop && nearRight) return 'ne';
+            if (nearBottom && nearLeft) return 'sw';
+            if (nearBottom && nearRight) return 'se';
+            if (nearTop) return 'n';
+            if (nearBottom) return 's';
+            if (nearLeft) return 'w';
+            if (nearRight) return 'e';
+            return '';
+        }
+
+        clampRect() {
+            const rect = this.rect;
+            if (!rect) return;
+            const width = this.natW;
+            const height = this.natH;
+            rect.w = clamp(rect.w, 1, width);
+            rect.h = clamp(rect.h, 1, height);
+            rect.x = clamp(rect.x, 0, Math.max(0, width - rect.w));
+            rect.y = clamp(rect.y, 0, Math.max(0, height - rect.h));
+        }
+
+        ensureMinRect() {
+            const rect = this.rect;
+            if (!rect) return;
+            const width = this.natW;
+            const height = this.natH;
+            const min = Math.min(MIN_CROP_PIXELS, width, height);
+            const aspect = this.aspectOf(this.ratioName);
+            if (aspect) {
+                if (rect.w < 0.5 || rect.h < 0.5) {
+                    let w = Math.min(width, height * aspect);
+                    let h = w / aspect;
+                    rect.w = w;
+                    rect.h = h;
+                    rect.x = (width - w) / 2;
+                    rect.y = (height - h) / 2;
+                } else if (rect.w < min || rect.h < min) {
+                    const grow = Math.max(min / rect.w, min / rect.h);
+                    const fit = Math.min(1, width / (rect.w * grow), height / (rect.h * grow));
+                    const cx = rect.x + rect.w / 2;
+                    const cy = rect.y + rect.h / 2;
+                    rect.w = rect.w * grow * fit;
+                    rect.h = rect.h * grow * fit;
+                    rect.x = cx - rect.w / 2;
+                    rect.y = cy - rect.h / 2;
+                }
+            } else {
+                if (rect.w < min) {
+                    rect.x -= (min - rect.w) / 2;
+                    rect.w = min;
+                }
+                if (rect.h < min) {
+                    rect.y -= (min - rect.h) / 2;
+                    rect.h = min;
+                }
+            }
+            this.clampRect();
+        }
+
+        // 导出/读数共用的整数像素矩形（与整窗 buildResult 完全一致）
+        cropRect() {
+            const width = this.natW;
+            const height = this.natH;
+            const rect = this.rect || { x: 0, y: 0, w: width, h: height };
+            const left = clamp(Math.round(rect.x), 0, Math.max(0, width - 1));
+            const top = clamp(Math.round(rect.y), 0, Math.max(0, height - 1));
+            const right = clamp(Math.round(rect.x + rect.w), left + 1, width);
+            const bottom = clamp(Math.round(rect.y + rect.h), top + 1, height);
+            return {
+                x: left,
+                y: top,
+                width: right - left,
+                height: bottom - top
+            };
+        }
+
+        normalizedRectValue() {
+            if (!this.rect || !this.natW || !this.natH) return null;
+            return {
+                x: clamp(this.rect.x / this.natW, 0, 1),
+                y: clamp(this.rect.y / this.natH, 0, 1),
+                w: clamp(this.rect.w / this.natW, 0, 1),
+                h: clamp(this.rect.h / this.natH, 0, 1)
+            };
+        }
+
+        rectFromNormalized(norm) {
+            if (!norm || !this.natW || !this.natH) return null;
+            const rx = clamp(Number(norm.x) || 0, 0, 1);
+            const ry = clamp(Number(norm.y) || 0, 0, 1);
+            const rw = clamp(Number(norm.w) || 0, 0, 1 - rx);
+            const rh = clamp(Number(norm.h) || 0, 0, 1 - ry);
+            if (!(rw > 0) || !(rh > 0)) return null;
+            return {
+                x: rx * this.natW,
+                y: ry * this.natH,
+                w: rw * this.natW,
+                h: rh * this.natH
+            };
+        }
+
+        getState() {
+            if (!this.natW || !this.natH) {
+                return {
+                    rect: { x: 0, y: 0, w: 0, h: 0 },
+                    ratio: this.ratioName,
+                    width: 0,
+                    height: 0,
+                    naturalW: 0,
+                    naturalH: 0
+                };
+            }
+            const crop = this.cropRect();
+            const width = this.natW;
+            const height = this.natH;
+            const nx = clamp(crop.x / width, 0, 1);
+            const ny = clamp(crop.y / height, 0, 1);
+            return {
+                rect: {
+                    x: nx,
+                    y: ny,
+                    w: clamp(crop.width / width, 0, 1 - nx),
+                    h: clamp(crop.height / height, 0, 1 - ny)
+                },
+                ratio: this.ratioName,
+                width: crop.width,
+                height: crop.height,
+                naturalW: width,
+                naturalH: height
+            };
+        }
+
+        // ---- 渲染 ----
+        scheduleRender(emit) {
+            if (emit) this.pendingEmit = true;
+            if (this.raf || this.destroyed) return;
+            const session = this;
+            this.raf = requestAnimationFrame(function () {
+                session.raf = 0;
+                if (session.destroyed) return;
+                session.render();
+                if (session.pendingEmit) {
+                    session.pendingEmit = false;
+                    session.emitChange();
+                }
+            });
+        }
+
+        render() {
+            if (!this.root || !this.rect || !this.natW) return;
+            const rect = this.rect;
+            const width = this.natW;
+            const height = this.natH;
+            if (this.selection) {
+                this.selection.style.left = percent(rect.x / width);
+                this.selection.style.top = percent(rect.y / height);
+                this.selection.style.width = percent(rect.w / width);
+                this.selection.style.height = percent(rect.h / height);
+            }
+            const masks = this.masks;
+            if (masks && masks.top) {
+                // 四块独立遮罩：evenodd 多边形的连接边会自交，留下对角亮缝
+                const x = rect.x / width;
+                const y = rect.y / height;
+                const right = (rect.x + rect.w) / width;
+                const bottom = (rect.y + rect.h) / height;
+                masks.top.style.left = '0%';
+                masks.top.style.top = '0%';
+                masks.top.style.width = '100%';
+                masks.top.style.height = percent(y);
+                masks.bottom.style.left = '0%';
+                masks.bottom.style.top = percent(bottom);
+                masks.bottom.style.width = '100%';
+                masks.bottom.style.height = percent(Math.max(0, 1 - bottom));
+                masks.left.style.left = '0%';
+                masks.left.style.top = percent(y);
+                masks.left.style.width = percent(x);
+                masks.left.style.height = percent(Math.max(0, bottom - y));
+                masks.right.style.left = percent(right);
+                masks.right.style.top = percent(y);
+                masks.right.style.width = percent(Math.max(0, 1 - right));
+                masks.right.style.height = percent(Math.max(0, bottom - y));
+            }
+            this.updateSizeLabel();
+        }
+
+        updateSizeLabel() {
+            if (!this.sizeHost) return;
+            if (this.busy) {
+                const applying = this.label('applying') || '…';
+                if (this.sizeHost.textContent !== applying) this.sizeHost.textContent = applying;
+                return;
+            }
+            const crop = this.cropRect();
+            const text = this.sizeTextFor(crop);
+            if (this.sizeHost.textContent !== text) this.sizeHost.textContent = text;
+        }
+
+        // labels.sizeText 既可能是纯标签（"尺寸"），也可能带 {w}/{h} 占位符；
+        // 前者回退成与整窗底栏一致的 "792 × 792"，后者按模板替换。
+        sizeTextFor(crop) {
+            const raw = this.label('sizeText');
+            if (raw.indexOf('{w}') >= 0 || raw.indexOf('{h}') >= 0) {
+                return raw.replace(/\{w\}/g, String(crop.width)).replace(/\{h\}/g, String(crop.height));
+            }
+            return crop.width + ' × ' + crop.height;
+        }
+
+        emitChange() {
+            if (!this.onRectChange || this.destroyed) return;
+            let state;
+            try {
+                state = this.getState();
+                this.onRectChange(state);
+            } catch (error) {
+                if (window.console && console.warn) console.warn('CropEditor.attach: onRectChange 抛错', error);
+            }
+        }
+
+        // ---- 公开动作 ----
+        setRatio(name) {
+            if (this.destroyed || this.busy) return;
+            if (RATIOS.indexOf(name) < 0) return;
+            this.ratioName = name;
+            const aspect = this.aspectOf(name);
+            if (aspect && this.natW && this.natH) {
+                // 契约要求「把当前框按新比例居中夹紧」：保留当前框中心，
+                // 只按新比例收拢并夹回图片内，不换成居中的最大框。
+                this.fitRectToAspect(aspect);
+            }
+            this.ensureMinRect();
+            this.userAdjusted = true;
+            this.syncRatioButtons();
+            this.render();
+            this.emitChange();
+        }
+
+        syncRatioButtons() {
+            if (!this.ratioBar) return;
+            const buttons = this.ratioBar.querySelectorAll('[data-ratio]');
+            for (let i = 0; i < buttons.length; i += 1) {
+                const active = buttons[i].dataset.ratio === this.ratioName;
+                buttons[i].classList.toggle('is-active', active);
+                buttons[i].setAttribute('aria-pressed', active ? 'true' : 'false');
+            }
+        }
+
+        setRect(rect) {
+            if (this.destroyed || this.busy || !this.rect) return;
+            const next = this.rectFromNormalized(rect);
+            if (!next) return;
+            this.rect = next;
+            this.userAdjusted = true;
+            this.clampRect();
+            this.ensureMinRect();
+            this.render();
+            this.emitChange();
+        }
+
+        setBusy(busy) {
+            this.busy = !!busy;
+            if (this.root) this.root.classList.toggle('is-busy', this.busy);
+            if (this.busy) {
+                this.drag = null;
+                if (this.raf) {
+                    cancelAnimationFrame(this.raf);
+                    this.raf = 0;
+                }
+                this.pendingEmit = false;
+                this.releasePointerSafely();
+                if (this.root) this.root.classList.remove('is-dragging', 'is-drawing');
+            }
+            if (this.ratioBar) {
+                const buttons = this.ratioBar.querySelectorAll('[data-ratio]');
+                for (let i = 0; i < buttons.length; i += 1) buttons[i].disabled = this.busy;
+            }
+            this.updateSizeLabel();
+        }
+
+        apply() {
+            if (this.destroyed || this.busy || this.cancelled || !this.ready) return;
+            if (!this.onApply) return;
+            let result;
+            try {
+                result = this.onApply(this.getState());
+            } catch (error) {
+                if (window.console && console.warn) console.warn('CropEditor.attach: onApply 抛错', error);
+                return;
+            }
+            if (result && typeof result.then === 'function' && typeof result.catch === 'function') {
+                result.catch(function (error) {
+                    if (window.console && console.warn) console.warn('CropEditor.attach: onApply 异步失败', error);
+                });
+            }
+        }
+
+        cancel() {
+            if (this.destroyed || this.busy || this.cancelled) return;
+            this.cancelled = true;
+            // cancel 只通知不拆 DOM：真正的移除由调用方的 destroy() 负责
+            if (this.root) this.root.classList.add('is-cancelled');
+            if (this.frameEl) this.frameEl.style.pointerEvents = 'none';
+            this.drag = null;
+            if (this.onCancel) {
+                try {
+                    this.onCancel();
+                } catch (error) {
+                    if (window.console && console.warn) console.warn('CropEditor.attach: onCancel 抛错', error);
+                }
+            }
+        }
+
+        // ---- 交互 ----
+        handleRatioClick(event) {
+            if (this.destroyed || this.busy) return;
+            const target = event.target;
+            if (!target || !target.closest) return;
+            const button = target.closest('[data-ratio]');
+            if (!button || !this.ratioBar || !this.ratioBar.contains(button)) return;
+            event.preventDefault();
+            this.setRatio(button.dataset.ratio);
+        }
+
+        handlePointerDown(event) {
+            if (this.destroyed || this.busy || this.cancelled || !this.ready) return;
+            // 中键 / 空格：不接管、不 preventDefault，事件继续冒泡给外层做平移
+            if (event.button === 1 || (event.button === 0 && this.spaceDown)) return;
+            if (event.button !== 0) return;
+            // 双击的第二次按下交给 dblclick，否则会先触发一次移动/重画
+            if (event.detail > 1) {
+                event.preventDefault();
+                return;
+            }
+            if (!this.isOverImage(event)) return;
+            const point = this.imagePoint(event);
+            if (!point) return;
+            event.preventDefault();
+            this.engaged = true;
+            try { this.root.focus({ preventScroll: true }); } catch (error) { /* 忽略 */ }
+            this.capturePointer(event);
+            const handle = this.handleAt(event);
+            const mode = handle ? 'resize' : (this.rectContains(point) ? 'move' : 'draw');
+            this.drag = {
+                mode: mode,
+                handle: handle,
+                start: point,
+                point: point,
+                rect: {
+                    x: this.rect.x,
+                    y: this.rect.y,
+                    w: this.rect.w,
+                    h: this.rect.h
+                },
+                moved: false
+            };
+            this.root.classList.add('is-dragging');
+            if (mode === 'draw') {
+                this.root.classList.add('is-drawing');
+                this.rect = { x: point.x, y: point.y, w: 0, h: 0 };
+                this.scheduleRender();
+            }
+        }
+
+        handlePointerMove(event) {
+            if (this.destroyed || this.busy || this.cancelled) return;
+            if (this.drag) {
+                event.preventDefault();
+                const point = this.imagePoint(event);
+                if (!point) return;
+                this.updateDrag(point, event.shiftKey, event.altKey);
+                return;
+            }
+            this.updateCursor(event);
+        }
+
+        updateCursor(event) {
+            if (!this.frameEl) return;
+            if (this.spaceDown) {
+                this.frameEl.style.cursor = 'grab';
+                return;
+            }
+            const handle = this.handleAt(event);
+            if (handle) {
+                this.frameEl.style.cursor = HANDLE_CURSORS[handle] || 'crosshair';
+                return;
+            }
+            const point = this.imagePoint(event);
+            this.frameEl.style.cursor = this.rectContains(point) ? 'move' : 'crosshair';
+        }
+
+        handlePointerUp(event) {
+            if (this.destroyed) return;
+            const drag = this.drag;
+            if (!drag) return;
+            this.drag = null;
+            if (this.root) this.root.classList.remove('is-dragging', 'is-drawing');
+            this.releasePointer(event);
+            if (drag.mode === 'draw' && !drag.moved) {
+                // 只是点了一下图内空白：还原原选框，不要把它缩成 16px
+                this.rect = drag.rect;
+            } else {
+                this.ensureMinRect();
+            }
+            if (drag.moved) {
+                this.userAdjusted = true;
+                this.pendingEmit = false;
+                if (this.raf) {
+                    cancelAnimationFrame(this.raf);
+                    this.raf = 0;
+                }
+                // 收尾同步渲染 + 通知，调用方拿到的是最终框（不必等下一帧）
+                this.render();
+                this.emitChange();
+            } else {
+                this.scheduleRender();
+            }
+        }
+
+        updateDrag(point, shiftKey, altKey) {
+            const drag = this.drag;
+            if (!drag) return;
+            drag.point = point;
+            const width = this.natW;
+            const height = this.natH;
+            const dx = point.x - drag.start.x;
+            const dy = point.y - drag.start.y;
+            const screen = this.screenPerNatural();
+            if (!drag.moved && Math.abs(dx) * screen < CLICK_SLOP && Math.abs(dy) * screen < CLICK_SLOP) {
+                return;
+            }
+            drag.moved = true;
+            // 预设比例优先于 Shift；自由模式才允许 Shift 临时锁 1:1
+            const locked = this.aspectOf(this.ratioName);
+            const aspect = locked || (shiftKey ? 1 : 0);
+            const symmetric = !!altKey;
+            if (drag.mode === 'move') {
+                this.rect = {
+                    x: clamp(drag.rect.x + dx, 0, Math.max(0, width - drag.rect.w)),
+                    y: clamp(drag.rect.y + dy, 0, Math.max(0, height - drag.rect.h)),
+                    w: drag.rect.w,
+                    h: drag.rect.h
+                };
+            } else if (drag.mode === 'resize') {
+                this.rect = resizeRect(drag.rect, drag.handle, point, aspect, width, height, symmetric);
+            } else {
+                this.rect = drawRect(drag.start, point, aspect, width, height, symmetric);
+            }
+            this.scheduleRender(true);
+        }
+
+        handleDoubleClick(event) {
+            if (this.destroyed || this.busy || this.cancelled || !this.ready) return;
+            const point = this.imagePoint(event);
+            if (!point || !this.rectContains(point)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            this.apply();
+        }
+
+        capturePointer(event) {
+            this.pointerId = event.pointerId;
+            try {
+                this.frameEl.setPointerCapture(event.pointerId);
+            } catch (error) { /* 合成事件/旧浏览器不支持捕获，退回普通事件流 */ }
+        }
+
+        releasePointer(event) {
+            const id = this.pointerId;
+            this.pointerId = null;
+            if (id == null || id === undefined || !this.frameEl) return;
+            try {
+                this.frameEl.releasePointerCapture(id);
+            } catch (error) { /* 忽略 */ }
+        }
+
+        releasePointerSafely() {
+            const id = this.pointerId;
+            this.pointerId = null;
+            if (id == null || id === undefined || !this.frameEl) return;
+            try {
+                this.frameEl.releasePointerCapture(id);
+            } catch (error) { /* 忽略 */ }
+        }
+
+        isEditableTarget(target) {
+            if (!target || !target.tagName) return false;
+            const tag = target.tagName.toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button' || tag === 'a') {
+                return true;
+            }
+            return !!target.isContentEditable;
+        }
+
+        hasFocus() {
+            const active = document.activeElement;
+            if (!active) return false;
+            return active === this.root || (!!this.root && this.root.contains(active)) ||
+                (!!this.host && this.host.contains(active));
+        }
+
+        handleKeyDown(event) {
+            if (this.destroyed || event.isComposing) return;
+            const key = event.key;
+            const editable = this.isEditableTarget(event.target);
+            // 比例按钮属于本功能自己的控件：焦点在按钮上时 Esc 仍应取消，
+            // 只有真正的文本输入才让出 Esc。
+            const textEntry = editable && !(event.target &&
+                /^(BUTTON|A)$/i.test(event.target.tagName || ''));
+            if (key === 'Escape') {
+                if (textEntry) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (!this.busy) this.cancel();
+                return;
+            }
+            if (editable) return;
+            if (key === ' ' || key === 'Spacebar' || event.code === 'Space') {
+                // 只记录状态，不 preventDefault：空格平移要留给外层，指针按下时我们也直接放行
+                this.spaceDown = true;
+                if (this.frameEl && !this.drag) this.frameEl.style.cursor = 'grab';
+                return;
+            }
+            if (this.busy || this.cancelled) return;
+            const direction = {
+                ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]
+            }[key];
+            if (!direction || !this.rect) return;
+            // 只有焦点确实落在裁剪层/宿主里才响应方向键；不能凭「曾经拖过」就一直
+            // 抢画布的方向键（用户点去别处后应恢复外层快捷键）。
+            if (!this.hasFocus()) return;
+            event.preventDefault();
+            const step = event.shiftKey ? 10 : 1;
+            this.rect.x = clamp(this.rect.x + direction[0] * step, 0,
+                Math.max(0, this.natW - this.rect.w));
+            this.rect.y = clamp(this.rect.y + direction[1] * step, 0,
+                Math.max(0, this.natH - this.rect.h));
+            this.userAdjusted = true;
+            this.render();
+            this.emitChange();
+        }
+
+        handleKeyUp(event) {
+            if (this.destroyed) return;
+            if (event.key === ' ' || event.key === 'Spacebar' || event.code === 'Space') {
+                this.spaceDown = false;
+                if (this.frameEl && !this.drag) this.frameEl.style.cursor = '';
+            }
+        }
+
+        handleWindowBlur() {
+            this.spaceDown = false;
+            if (this.frameEl && !this.drag) this.frameEl.style.cursor = '';
+            // 失焦时 pointerup 可能永远收不到，就地收尾，避免选框卡在中间态
+            if (this.drag) {
+                this.drag = null;
+                if (this.root) this.root.classList.remove('is-dragging', 'is-drawing');
+                if (this.rect) this.ensureMinRect();
+                this.scheduleRender();
+            }
+        }
+    }
+
     // 单实例：重复 open 时先关掉旧实例，避免两个全屏层叠在一起
     let activeSession = null;
 
@@ -1394,6 +2476,21 @@
             };
             promise.then(release, release);
             return promise;
+        },
+        // 可嵌入模式：只回一个同步句柄，不接管滚轮/缩放/平移，也不创建对话框根节点。
+        // 调用方负责关闭自己的弹层；这里的 destroy() 只拆覆盖层与事件。
+        attach: function (opts) {
+            const session = new CropInlineSession(opts);
+            return {
+                setRatio: function (name) { session.setRatio(name); },
+                getState: function () { return session.getState(); },
+                setRect: function (rect) { session.setRect(rect); },
+                apply: function () { session.apply(); },
+                cancel: function () { session.cancel(); },
+                setBusy: function (busy) { session.setBusy(busy); },
+                refresh: function () { session.refresh(); },
+                destroy: function () { session.destroy(); }
+            };
         }
     };
 

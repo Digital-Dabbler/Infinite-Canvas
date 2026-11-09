@@ -262,3 +262,103 @@
         transition: none;
     }
 }
+
+/* ===== 可嵌入模式（CropEditor.attach） ===== */
+/* 覆盖层铺满 host（position:absolute; inset:0），但只有对齐图片显示区域的
+   .ce-inline-frame 接收指针；因此图片外的区域（黑边、面板留白）仍然可以点到外层。 */
+.ce-inline {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+}
+
+.ce-inline-frame {
+    position: absolute;
+    box-sizing: border-box;
+    pointer-events: auto;
+    touch-action: none;
+    cursor: crosshair;
+}
+
+/* 选框里的手柄/描边只做视觉，命中判定由 JS 在 frame 上统一做 */
+.ce-inline-frame .ce-selection,
+.ce-inline-frame .ce-masks {
+    pointer-events: none;
+}
+
+/* 图片就绪前不显示选框，避免在 0×0 / 未加载图上闪一下 */
+.ce-inline:not(.is-ready) .ce-mask,
+.ce-inline:not(.is-ready) .ce-selection {
+    display: none;
+}
+
+/* 重画过程中只留选框轮廓：遮罩和手柄会挡住正在拖出来的区域 */
+.ce-inline.is-drawing .ce-mask,
+.ce-inline.is-drawing .ce-handle,
+.ce-inline.is-drawing .ce-third,
+.ce-inline.is-drawing .ce-center {
+    opacity: 0;
+}
+
+/* 应用中等状态：禁止继续拖拽；取消后同样不再接收指针 */
+.ce-inline.is-busy .ce-inline-frame,
+.ce-inline.is-cancelled .ce-inline-frame {
+    pointer-events: none;
+}
+
+.ce-inline.is-busy .ce-inline-frame {
+    cursor: progress;
+}
+
+/* ===== 可嵌入模式：比例条（渲染进调用方提供的 ratioHost） ===== */
+.ce-inline-ratio {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+/* 独立兜底样式：即使页面没有加载 mask-editor.css，比例条也不会是一排裸按钮 */
+.ce-inline-ratio .ce-ratio {
+    box-sizing: border-box;
+    height: 26px;
+    padding: 0 9px;
+    border: 1px solid #2a3140;
+    border-radius: 8px;
+    background: #151a22;
+    color: #aeb8c8;
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.ce-inline-ratio .ce-ratio:hover {
+    border-color: #3a4356;
+    background: #1c222c;
+    color: #e6edf7;
+}
+
+.ce-inline-ratio .ce-ratio.is-active {
+    border-color: #3d7bff;
+    background: #2f6df6;
+    color: #ffffff;
+}
+
+.ce-inline-ratio .ce-ratio:focus-visible {
+    outline: 2px solid rgba(96, 165, 250, 0.9);
+    outline-offset: 1px;
+}
+
+.ce-inline-ratio .ce-ratio:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.ce-inline.is-busy .ce-inline-ratio {
+    opacity: 0.6;
+    pointer-events: none;
+}

@@ -258,5 +258,105 @@ class CropEditorFrontendTests(unittest.TestCase):
         self.assertIn("裁切编辑器", self.i18n_js)
 
 
+class PreviewCropIntegrationTests(unittest.TestCase):
+    """双击图片进大图预览后，直接在图上拖框裁切（与顶栏裁剪共用同一套内核）。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.canvas_html = read_text("static/smart-canvas.html")
+        cls.canvas_js = read_text("static/js/smart-canvas.js")
+        cls.canvas_css = read_text("static/css/smart-canvas.css")
+
+    def _function_body(self, source, signature):
+        start = source.index(signature)
+        tail = start + len(signature)
+        boundaries = [pos for pos in (
+            source.find("\nfunction ", tail),
+            source.find("\nasync function ", tail),
+        ) if pos != -1]
+        end = min(boundaries) if boundaries else len(source)
+        return source[start:end]
+
+    # ---- 页面结构 ----
+    def test_preview_crop_bar_markup(self):
+        self.assertIn('id="previewCropBar"', self.canvas_html)
+        self.assertIn('id="previewCropRatios"', self.canvas_html)
+        self.assertIn('id="previewCropSize"', self.canvas_html)
+        self.assertIn("data-preview-crop-apply", self.canvas_html)
+        self.assertIn('onclick="applyPreviewCrop()"', self.canvas_html)
+        # 裁切条挂在预览右下角工具区里，跟着预览一起出现/消失。
+        self.assertLess(
+            self.canvas_html.index('class="preview-tools-overlay"'),
+            self.canvas_html.index('id="previewCropBar"'),
+        )
+        self.assertLess(
+            self.canvas_html.index('id="previewCropBar"'),
+            self.canvas_html.index('id="compareThumbs"'),
+        )
+
+    def test_preview_crop_bar_styles(self):
+        self.assertIn(".preview-crop-bar {", self.canvas_css)
+        self.assertIn(".preview-crop-bar[hidden] { display:none; }", self.canvas_css)
+        self.assertIn(".preview-crop-bar.is-busy", self.canvas_css)
+        self.assertIn(".ce-inline-ratio {", self.canvas_css)
+
+    # ---- 接入逻辑 ----
+    def test_preview_crop_layer_uses_embedded_attach(self):
+        body = self._function_body(self.canvas_js, "function syncPreviewCrop(")
+        self.assertIn("editor.attach({", body)
+        for token in (
+            "host,",
+            "imageEl,",
+            "ratioHost:",
+            "sizeHost:",
+            "rect,",
+            "ratio,",
+            "labels:",
+            "onRectChange:",
+            "onApply:",
+            "onCancel:",
+        ):
+            self.assertIn(token, body)
+        # 同一条图片重复调用只刷新，不重复挂载，避免叠出两层覆盖层。
+        self.assertIn("previewCropHandle.refresh?.();", body)
+
+    def test_preview_mode_mounts_and_other_modes_destroy(self):
+        body = self._function_body(self.canvas_js, "function setImageEditMode(")
+        self.assertIn("if(imageEditMode === 'preview') syncPreviewCrop();", body)
+        self.assertIn("else destroyPreviewCrop();", body)
+        closing = self._function_body(self.canvas_js, "function closeImageEditor(")
+        self.assertIn("destroyPreviewCrop();", closing)
+        self.assertLess(
+            closing.index("destroyPreviewCrop();"),
+            closing.index("imageEditModal.classList.remove('open');"),
+        )
+
+    def test_preview_shows_uncropped_base_image(self):
+        body = self._function_body(self.canvas_js, "function refreshComparePanel(")
+        self.assertIn(
+            "const previewItem = (imageEditMode === 'preview' && editing.baseImage?.url) ? editing.baseImage : (editing.image || {});",
+            body,
+        )
+        # 预览态必须展示"批注后、未裁切"的整图，否则裁切框坐标与看到的图不对应。
+        self.assertIn("displayMediaUrl(previewItem", body)
+
+    def test_current_edit_image_exposes_base_image(self):
+        body = self._function_body(self.canvas_js, "function currentEditImage(")
+        self.assertIn("baseImage:imageBaseForDisplay(", body)
+
+    def test_apply_preview_crop_writes_same_node(self):
+        body = self._function_body(self.canvas_js, "async function applyPreviewCrop(")
+        self.assertIn("cropImageBlobByRect(", body)
+        self.assertIn("saveCropEditorResult(live, editing.index, {", body)
+        self.assertIn("closeImageEditor();", body)
+        self.assertNotIn("createImageNodeAt(", body, "")
+
+    def test_preview_crop_follows_zoom_and_pan(self):
+        zoom = self._function_body(self.canvas_js, "function applyPreviewTransform(")
+        self.assertIn("previewCropHandle?.refresh?.();", zoom)
+        sizing = self._function_body(self.canvas_js, "function syncPreviewFrameSize(")
+        self.assertIn("previewCropHandle?.refresh?.();", sizing)
+
+
 if __name__ == "__main__":
     unittest.main()
