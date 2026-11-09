@@ -16562,6 +16562,8 @@ function setPanoramaEnabled(enabled){
         if(frame){ frame.style.width = ''; frame.style.height = ''; }
         refreshComparePanel();
     }
+    // 全景模式下不裁切：进全景拆掉裁切层，退回普通预览再挂回来。
+    syncPreviewCrop();
     refreshPanoramaControls();
     updateZoomLabel();
 }
