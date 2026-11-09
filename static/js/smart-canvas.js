@@ -10977,7 +10977,7 @@ function imageTaskRecoverBodyHtml(node, task, layout){
 }
 function failedGenerationOverlayHtml(node){
     const error = String(node?.lastRunError || tr('smart.errRunFailed')).replace(/\s+/g, ' ').trim();
-    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : node?.translucentMatting ? tr('smart.translucentProductFailedTitle') : node?.erase ? tr('smart.eraseFailedTitle') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleFailedTitle') : tr('smart.errRunFailed');
+    const title = node?.backgroundRemoval ? tr('smart.removeBackgroundFailedTitle') : node?.translucentMatting ? tr('smart.translucentProductFailedTitle') : node?.erase ? (isSmartRemoveRedrawNode(node) ? tr('smart.removeRedrawFailedTitle') : tr('smart.eraseFailedTitle')) : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleFailedTitle') : tr('smart.errRunFailed');
     return `<div class="generation-failed-overlay" role="status"><i data-lucide="circle-alert"></i><span>${escapeHtml(title)}</span><small title="${escapeAttr(error)}">${escapeHtml(error)}</small></div>`;
 }
 function smartNodeToolbarImageIndex(node){
@@ -11829,6 +11829,11 @@ function runImageToolbarAction(action, mode){
         openImageEditor(node.id, index);
         imageEditEraseMode = true;
         setImageEditMode('mask', true);
+        return;
+    }
+    if(action === 'remove-redraw'){
+        // 移除重绘：全屏遮罩编辑器（无颜色叠加模式），涂抹区域交给 Qwen 移除/局部重绘工作流。
+        openRemoveRedrawEditorForImage(node, index);
         return;
     }
     if(action === 'preview'){
@@ -12810,6 +12815,153 @@ async function applyImageErase(){
         smartEraseRequests.delete(requestKey);
     }
 }
+// ===== 移除重绘（Qwen 2.1：提示词为空=移除，非空=局部重绘）=====
+const SMART_REMOVE_REDRAW_WORKFLOW = 'system/Qwen-2.1-移除、局部重绘_Turbo_api.json';
+// 采样长边固定 2560（工作流 288 号节点自带默认 2048，这里按需求抬高，不做成滑块）。
+const SMART_REMOVE_REDRAW_MAX_SIZE = 2560;
+const smartRemoveRedrawRequests = new Set();
+function isSmartRemoveRedrawNode(node){
+    return Boolean(node?.erase && node.erase.kind === 'removeRedraw');
+}
+function smartRemoveRedrawLabels(){
+    const labels = maskEditorLabels();
+    labels.title = tr('smart.removeRedrawEditorTitle');
+    labels.save = tr('smart.removeRedrawRun');
+    labels.saving = tr('smart.removeRedrawRunning');
+    labels.hint = tr('smart.removeRedrawEditorHint');
+    labels.saveFail = tr('smart.removeRedrawSubmitFail');
+    // 这个场景不需要颜色叠加，面板里也不该出现色板/不透明度
+    delete labels.modeColor;
+    return labels;
+}
+async function openRemoveRedrawEditorForImage(node, index){
+    const item = node?.images?.[index];
+    if(!item?.url) return;
+    const editor = window.MaskEditor;
+    if(!editor || typeof editor.open !== 'function'){
+        toast(tr('canvas.maskEditorUnavailable'));
+        return;
+    }
+    const base = (item.name || 'image').replace(/\.[^.]+$/, '');
+    try {
+        await editor.open({
+            // 底图与遮罩都活在当前可见像素空间（有裁切时用裁切结果）
+            imageUrl: displayMediaUrl(imageForDisplay(item)),
+            // 每次从空白遮罩开始：这是一次性的“涂抹后处理”，不沿用图片已有遮罩
+            hideColorMode: true,
+            labels: smartRemoveRedrawLabels(),
+            promptBox: {
+                guide: tr('smart.removeRedrawPromptGuide'),
+                placeholder: tr('smart.removeRedrawPromptPlaceholder')
+            },
+            onSave: result => submitRemoveRedraw(node, index, base, result)
+        });
+    } catch(error){
+        console.warn('移除重绘编辑器打开失败：', error);
+        toast(tr('smart.removeRedrawLoadFail'));
+    }
+}
+async function submitRemoveRedraw(node, index, base, result){
+    const live = liveSmartNode(node) || node;
+    const maskBlob = result?.maskBlob;
+    if(!live?.images?.[index] || !maskBlob) throw new Error(tr('smart.removeRedrawSubmitFail'));
+    const painted = await maskBlobHasPaintedArea(maskBlob);
+    if(!painted) throw new Error(tr('smart.removeRedrawNeedMask'));
+    const prompt = String(result?.prompt || '').trim();
+    const item = live.images[index];
+    const sourceImage = imageForDisplay(item) || item;
+    const requestKey = `${live.id}:${index}:${sourceImage.url || ''}:${prompt}`;
+    if(smartRemoveRedrawRequests.has(requestKey)) return;
+    smartRemoveRedrawRequests.add(requestKey);
+    let created = null;
+    try {
+        const maskFile = await uploadCroppedBlob(maskBlob, `${base}_removeredraw_mask.png`);
+        if(!maskFile) throw new Error(tr('smart.removeRedrawSubmitFail'));
+        const sourceRef = {url:sourceImage.url, name:sourceImage.name || smartImageNameFromUrl(sourceImage.url), kind:'image', nodeId:live.id, imageIndex:index};
+        const maskRef = {url:maskFile.url, name:maskFile.name, kind:'image'};
+        const runSettings = {engine:'comfy', comfyMode:'custom', comfyWorkflow:SMART_REMOVE_REDRAW_WORKFLOW, apiKind:'image'};
+        pushUndo();
+        const rect = nodeRect(live);
+        created = createImageGenerationNode({x:rect.x + rect.width + 200, y:rect.y + 118}, {
+            skipUndo:true,
+            select:true,
+            deferRender:true,
+            deferSave:true,
+            settingsMemory:false
+        });
+        created.title = prompt ? tr('smart.removeRedrawRunningRedraw') : tr('smart.removeRedrawRunningRemove');
+        // 沿用擦除的结果元数据（标题/图标/失败样式都靠它识别），额外标出本次是移除还是重绘
+        created.erase = {workflow:SMART_REMOVE_REDRAW_WORKFLOW, kind:'removeRedraw', prompt, sourceNodeId:live.id, sourceImageIndex:index, sourceUrl:sourceImage.url};
+        created.sourceNodeId = live.id;
+        created.runInputRefs = [{...sourceRef}];
+        created.runSettings = runSettings;
+        created.runStartedAt = nowMs();
+        created.running = true;
+        created.pending = 1;
+        selectedId = created.id;
+        selectedIds = [];
+        selectedImage = {nodeId:'', index:-1};
+        render();
+        updateComposer();
+        scheduleSave();
+        const run = {nodeId:created.id, nodeType:created.type, kind:'image', settings:runSettings, prompt, refs:[sourceRef]};
+        // 提交后立刻让遮罩编辑页退出，画布上留一张“运行中”的结果节点
+        void finishRemoveRedraw({created, run, sourceRef, maskRef, requestKey});
+        return;
+    } catch(error){
+        smartRemoveRedrawRequests.delete(requestKey);
+        throw error;
+    }
+}
+async function finishRemoveRedraw({created, run, sourceRef, maskRef, requestKey}){
+    const runSettings = created.runSettings;
+    const startedAt = Number(created.runStartedAt) || nowMs();
+    try {
+        // 遮罩合成进图片 alpha 后交给 310 LoadImage；303 为空串时工作流内部走移除分支。
+        const inputName = await comfyNameForMaskedRef(sourceRef, maskRef);
+        const params = {
+            '310': {image: inputName},
+            '303': {value: String(run.prompt || '')},
+            '267': {noise_seed: Math.floor(Math.random() * 4294967295)},
+            '288': {'值': SMART_REMOVE_REDRAW_MAX_SIZE}
+        };
+        const generated = await runQueuedSmartComfyGenerate({
+            workflow_json:SMART_REMOVE_REDRAW_WORKFLOW,
+            params,
+            type:'remove-redraw',
+            client_id:smartClientId
+        });
+        const outputs = resultMediaUrls(generated);
+        if(!outputs.length) throw new Error(tr('smart.errComfyEmpty'));
+        const done = liveSmartNode(created) || created;
+        done.images = outputs;
+        done.activeImageIndex = 0;
+        done.title = tr('smart.removeRedraw');
+        done.outputKind = 'image';
+        done.runFinishedAt = nowMs();
+        markSmartNodeComplete(done);
+        addSmartGenerationLog({run, outputs, runMs:nowMs() - startedAt});
+        selectedId = done.id;
+        selectedImage = {nodeId:done.id, index:0};
+        render();
+        scheduleSave();
+        toast(tr('smart.removeRedrawDone'));
+    } catch(error){
+        const detail = String(error?.message || error || tr('smart.errRunFailed')).slice(0, 600);
+        const failed = liveSmartNode(created) || created;
+        if(failed){
+            failed.title = tr('smart.removeRedrawFailedTitle');
+            failed.lastRunError = detail;
+            markSmartNodeFailedIfIdle(failed, detail);
+            addSmartGenerationLog({run:{nodeId:failed.id, nodeType:failed.type, kind:'image', settings:runSettings, prompt:String(run.prompt || ''), refs:[]}, runMs:nowMs() - startedAt, error:detail});
+            render();
+            scheduleSave();
+        }
+        toast(trf('smart.removeRedrawFailed', {error:detail}).slice(0, 180));
+    } finally {
+        smartRemoveRedrawRequests.delete(requestKey);
+    }
+}
 // 智能分组顶部小菜单：整理排列 / 预览（整组左右切换）/ 宫格拼接 / 批量下载 / 解散分组。
 // 与多图节点的 smart-node-floating-menu 同款样式与定位（选中分组时浮在卡片上方）。
 function smartGroupToolbarHtml(node){
@@ -13166,7 +13318,7 @@ function render(){
         const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
         const isTranslucentMatting = isSmartTranslucentMattingNode(node);
         const isErase = isSmartEraseNode(node);
-        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted') : isTranslucentMatting ? tr('smart.translucentProduct') : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? tr('smart.erase') : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted') : isTranslucentMatting ? tr('smart.translucentProduct') : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? (isSmartRemoveRedrawNode(node) ? tr('smart.removeRedraw') : tr('smart.erase')) : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -13180,7 +13332,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isSmartPromptMattingNode(node) ? 'wand-sparkles' : isTranslucentMatting ? 'droplets' : isBackgroundRemoval ? 'scan' : isErase ? 'eraser' : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isSmartPromptMattingNode(node) ? 'wand-sparkles' : isTranslucentMatting ? 'droplets' : isBackgroundRemoval ? 'scan' : isErase ? (isSmartRemoveRedrawNode(node) ? 'wand-2' : 'eraser') : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -13190,7 +13342,7 @@ function render(){
         // anchored to that card.
         const renderedNodeHeight = layout.height;
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isTranslucentMatting ? escapeHtml(tr('smart.translucentProductNodeHint')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr('smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isTranslucentMatting ? escapeHtml(tr('smart.translucentProductNodeHint')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr(isSmartRemoveRedrawNode(node) ? 'smart.removeRedrawHintNode' : 'smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
         const html = `<div class="image-node ${isSmart3dDirectorNode(node) ? 'director3d-node' : ''} ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
@@ -15193,7 +15345,7 @@ function smartConnectionNodeLabel(node){
     if(isSmartPromptMattingNode(node)) return tr('smart.mattingTargeted');
     if(isSmartTranslucentMattingNode(node)) return tr('smart.translucentProduct');
     if(isSmartBackgroundRemovalNode(node)) return tr('smart.removeBackground');
-    if(isSmartEraseNode(node)) return tr('smart.erase');
+    if(isSmartEraseNode(node)) return isSmartRemoveRedrawNode(node) ? tr('smart.removeRedraw') : tr('smart.erase');
     if(isSmartComfyUpscaleNode(node)) return tr('smart.comfyUpscaleOutputMain');
     if(isSmartImageGenerationNode(node)) return '图片生成';
     if(isSmartUploadNode(node)) return uploadNodeLabel(uploadMediaKindForNode(node));

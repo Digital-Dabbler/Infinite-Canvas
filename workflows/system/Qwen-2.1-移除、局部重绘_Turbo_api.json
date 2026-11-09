@@ -1,0 +1,647 @@
+{
+  "8": {
+    "inputs": {
+      "unet_name": "qwen_image_2.1_turbo_int8_convrot.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "9": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+      "type": "qwen_image",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "10": {
+    "inputs": {
+      "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "38": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "308",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "保存图像"
+    }
+  },
+  "118": {
+    "inputs": {
+      "prompt": "移除图像中的绿色区域",
+      "negative_prompt": "",
+      "latent_width": [
+        "209",
+        1
+      ],
+      "latent_height": [
+        "209",
+        2
+      ],
+      "mode": "填充",
+      "ref_image_size": "自动",
+      "clip": [
+        "9",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ],
+      "image_01": [
+        "209",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21GH",
+    "_meta": {
+      "title": "Qwen Image 2.1 文本编码 GH"
+    }
+  },
+  "179": {
+    "inputs": {
+      "用户提示词": [
+        "303",
+        0
+      ],
+      "文生图模型": "Qwen-Image-2.1-PE-T2I.Q5_K_S.gguf",
+      "图生图模型": "Qwen-Image-2.1-PE-I2I.Q5_K_S.gguf",
+      "视觉模型": "Qwen-Image-2.1-PE-I2I.mmproj-bf16.gguf",
+      "输出语言": "自动",
+      "透明背景": false,
+      "种子值": 666,
+      "种子模式": "固定",
+      "卸载模型": "自动",
+      "图像_01": [
+        "250",
+        0
+      ]
+    },
+    "class_type": "QwenImagePromptOptimizer",
+    "_meta": {
+      "title": "Qwen image 2.1 提示词优化"
+    }
+  },
+  "201": {
+    "inputs": {
+      "遮罩填充": true,
+      "扩展系数上": 1.3,
+      "扩展系数下": 1.4,
+      "扩展系数左": 1.4,
+      "扩展系数右": 1.4,
+      "输出尺寸": "原像素",
+      "自定义宽": 1024,
+      "自定义高": 1024,
+      "倍数取整": 0,
+      "图像": [
+        "310",
+        0
+      ],
+      "遮罩": [
+        "310",
+        1
+      ]
+    },
+    "class_type": "GH_MaskCropV2",
+    "_meta": {
+      "title": "孤海-遮罩裁剪V2"
+    }
+  },
+  "204": {
+    "inputs": {
+      "透明度": 0.4,
+      "遮罩扩展": 0,
+      "模糊半径": 0,
+      "匹配图像大小": true,
+      "背景图": [
+        "201",
+        1
+      ],
+      "覆盖图": [
+        "205",
+        0
+      ],
+      "遮罩": [
+        "201",
+        2
+      ]
+    },
+    "class_type": "GulfSeaImageMergeMask",
+    "_meta": {
+      "title": "孤海-图像合并（遮罩）"
+    }
+  },
+  "205": {
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "color": "#00ff00"
+    },
+    "class_type": "LayerUtility: ColorImage",
+    "_meta": {
+      "title": "图层工具：纯色图像"
+    }
+  },
+  "207": {
+    "inputs": {
+      "限制模式": "长边",
+      "最小尺寸": 768,
+      "最大尺寸": [
+        "288",
+        0
+      ],
+      "整除数": 32,
+      "图像": [
+        "204",
+        0
+      ]
+    },
+    "class_type": "图像缩放范围孤海",
+    "_meta": {
+      "title": "图像缩放（范围）孤海"
+    }
+  },
+  "209": {
+    "inputs": {
+      "宽度": [
+        "305",
+        0
+      ],
+      "高度": [
+        "305",
+        1
+      ],
+      "缩放方法": "自定义宽高",
+      "将边缩放到": 1024,
+      "缩放插值": "Lanczos",
+      "缩放模式": "拉伸",
+      "固定方向": "居中",
+      "执行条件": "总是",
+      "填充颜色": "#364254",
+      "整除数": 32,
+      "图像": [
+        "204",
+        0
+      ],
+      "遮罩": [
+        "201",
+        2
+      ]
+    },
+    "class_type": "图像缩放V2_孤海",
+    "_meta": {
+      "title": "图像缩放V2 孤海"
+    }
+  },
+  "212": {
+    "inputs": {
+      "遮罩扩展百分比": 4,
+      "遮罩羽化百分比": 5,
+      "颜色还原强度": 1,
+      "接缝": [
+        "201",
+        0
+      ],
+      "裁剪图像": [
+        "272",
+        0
+      ]
+    },
+    "class_type": "GH_CropRestore",
+    "_meta": {
+      "title": "孤海-裁剪恢复"
+    }
+  },
+  "217": {
+    "inputs": {
+      "lora_name": "Qwen 2.1\\Qwen2.1_万物移除Remove_GH.safetensors",
+      "strength_model": 1,
+      "model": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoRA加载器（仅模型）"
+    }
+  },
+  "247": {
+    "inputs": {
+      "限制模式": "长边",
+      "最小尺寸": 768,
+      "最大尺寸": [
+        "288",
+        0
+      ],
+      "整除数": 32,
+      "图像": [
+        "249",
+        1
+      ]
+    },
+    "class_type": "图像缩放范围孤海",
+    "_meta": {
+      "title": "图像缩放（范围）孤海"
+    }
+  },
+  "249": {
+    "inputs": {
+      "遮罩填充": true,
+      "扩展系数上": 1.3,
+      "扩展系数下": 1.4,
+      "扩展系数左": 1.4,
+      "扩展系数右": 1.4,
+      "输出尺寸": "原像素",
+      "自定义宽": 1024,
+      "自定义高": 1024,
+      "倍数取整": 0,
+      "图像": [
+        "310",
+        0
+      ],
+      "遮罩": [
+        "310",
+        1
+      ]
+    },
+    "class_type": "GH_MaskCropV2",
+    "_meta": {
+      "title": "孤海-遮罩裁剪V2"
+    }
+  },
+  "250": {
+    "inputs": {
+      "宽度": [
+        "306",
+        0
+      ],
+      "高度": [
+        "306",
+        1
+      ],
+      "缩放方法": "自定义宽高",
+      "将边缩放到": 1024,
+      "缩放插值": "Lanczos",
+      "缩放模式": "拉伸",
+      "固定方向": "居中",
+      "执行条件": "总是",
+      "填充颜色": "#364254",
+      "整除数": 32,
+      "图像": [
+        "249",
+        1
+      ],
+      "遮罩": [
+        "249",
+        2
+      ]
+    },
+    "class_type": "图像缩放V2_孤海",
+    "_meta": {
+      "title": "图像缩放V2 孤海"
+    }
+  },
+  "252": {
+    "inputs": {
+      "遮罩扩展百分比": 4,
+      "遮罩羽化百分比": 5,
+      "颜色还原强度": 1,
+      "接缝": [
+        "249",
+        0
+      ],
+      "裁剪图像": [
+        "256",
+        0
+      ]
+    },
+    "class_type": "GH_CropRestore",
+    "_meta": {
+      "title": "孤海-裁剪恢复"
+    }
+  },
+  "255": {
+    "inputs": {
+      "prompt": [
+        "277",
+        0
+      ],
+      "negative_prompt": "",
+      "latent_width": [
+        "250",
+        1
+      ],
+      "latent_height": [
+        "250",
+        2
+      ],
+      "mode": "填充",
+      "ref_image_size": "自动",
+      "clip": [
+        "9",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ],
+      "image_01": [
+        "250",
+        0
+      ]
+    },
+    "class_type": "TextEncodeQwenImage21GH",
+    "_meta": {
+      "title": "Qwen Image 2.1 文本编码 GH"
+    }
+  },
+  "256": {
+    "inputs": {
+      "samples": [
+        "274",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "258": {
+    "inputs": {
+      "lora_name": "Qwen 2.1\\Qwen2.1 一致性无偏移_GH_V1.0.safetensors",
+      "strength_model": 0.48,
+      "model": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "LoRA加载器（仅模型）"
+    }
+  },
+  "260": {
+    "inputs": {
+      "gh_input_type": "STRING",
+      "Any": [
+        "303",
+        0
+      ]
+    },
+    "class_type": "GoohaiAnyExists",
+    "_meta": {
+      "title": "万能是否存在(GH)"
+    }
+  },
+  "267": {
+    "inputs": {
+      "noise_seed": 819378330982543
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "随机噪波"
+    }
+  },
+  "268": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "K采样器选择"
+    }
+  },
+  "269": {
+    "inputs": {
+      "model": [
+        "217",
+        0
+      ],
+      "conditioning": [
+        "118",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "基本引导器"
+    }
+  },
+  "270": {
+    "inputs": {
+      "noise": [
+        "267",
+        0
+      ],
+      "guider": [
+        "269",
+        0
+      ],
+      "sampler": [
+        "268",
+        0
+      ],
+      "sigmas": [
+        "271",
+        0
+      ],
+      "latent_image": [
+        "118",
+        2
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "自定义采样器（高级）"
+    }
+  },
+  "271": {
+    "inputs": {
+      "sigmas": "1.0, 0.978453, 0.954180, 0.926626, 0.895080, 0.845148, 0.704534, 0.414568, 0.150000,0"
+    },
+    "class_type": "ManualSigmas",
+    "_meta": {
+      "title": "自定义Sigmas"
+    }
+  },
+  "272": {
+    "inputs": {
+      "samples": [
+        "270",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "274": {
+    "inputs": {
+      "noise": [
+        "267",
+        0
+      ],
+      "guider": [
+        "275",
+        0
+      ],
+      "sampler": [
+        "268",
+        0
+      ],
+      "sigmas": [
+        "271",
+        0
+      ],
+      "latent_image": [
+        "255",
+        2
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "自定义采样器（高级）"
+    }
+  },
+  "275": {
+    "inputs": {
+      "model": [
+        "258",
+        0
+      ],
+      "conditioning": [
+        "255",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "基本引导器"
+    }
+  },
+  "277": {
+    "inputs": {
+      "gh_input_type": "STRING",
+      "Any": [
+        "179",
+        0
+      ]
+    },
+    "class_type": "GoohaiDisplayAny",
+    "_meta": {
+      "title": "展示任意 GH"
+    }
+  },
+  "288": {
+    "inputs": {
+      "值": 2048,
+      "output_type": "int",
+      "ghs_dom": "2048"
+    },
+    "class_type": "GoohaiUniversalSlider",
+    "_meta": {
+      "title": "最大采样尺寸（长边）"
+    }
+  },
+  "303": {
+    "inputs": {
+      "value": ""
+    },
+    "class_type": "PrimitiveStringMultiline",
+    "_meta": {
+      "title": "清空提示词或禁用本节点为移除；非空提示词为局部重绘"
+    }
+  },
+  "305": {
+    "inputs": {
+      "image": [
+        "207",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "获取图像尺寸"
+    }
+  },
+  "306": {
+    "inputs": {
+      "image": [
+        "247",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "获取图像尺寸"
+    }
+  },
+  "308": {
+    "inputs": {
+      "switch": [
+        "260",
+        1
+      ],
+      "on_false": [
+        "212",
+        0
+      ],
+      "on_true": [
+        "252",
+        0
+      ]
+    },
+    "class_type": "ComfySwitchNode",
+    "_meta": {
+      "title": "切换"
+    }
+  },
+  "309": {
+    "inputs": {
+      "images": [
+        "204",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "预览图像"
+    }
+  },
+  "310": {
+    "inputs": {
+      "image": "clipspace-painted-masked-1794238180277.png [input]"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  }
+}

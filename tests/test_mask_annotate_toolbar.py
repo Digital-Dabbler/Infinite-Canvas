@@ -45,9 +45,10 @@ class MaskAnnotateToolbarTests(unittest.TestCase):
         self.assertIn("openMaskEditorForImage(node, index);", self.canvas_js)
         self.assertIn("if(action === 'brush'){", self.canvas_js)
         self.assertIn("openAnnotationEditorForImage(node, index);", self.canvas_js)
-        self.assertIn("if(!['crop','outpaint','grid'].includes(action)) return;", self.canvas_js)
+        # 裁切已迁到独立编辑器，弹窗通用分发只剩扩图与宫格。
+        self.assertIn("if(!['outpaint','grid'].includes(action)) return;", self.canvas_js)
         # setImageEditMode 不再有 'local' 伞模式，擦除仍复用内部 mask 模式。
-        self.assertIn("imageEditMode = ['preview','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';", self.canvas_js)
+        self.assertIn("imageEditMode = ['preview','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';", self.canvas_js)
         self.assertNotIn("mode === 'local'", self.canvas_js)
         self.assertNotIn("localEditKind", self.canvas_js)
         # 弹窗标题仍保留批注词条映射（擦除之外的旧入口复用）。

@@ -10,13 +10,16 @@
  *       imageUrl,        // 必填：原图地址（同源 /assets、/output 或 blob:）
  *       maskUrl,         // 可选：旧遮罩（不透明黑白 PNG，白色 = 已涂抹）
  *       labels,          // 必填：全部界面文案，由调用方传入
+ *       hideColorMode,   // 可选：true = 只做遮罩，不渲染「仅遮罩 / 颜色叠加」模式切换
+ *       promptBox,       // 可选：{ guide, placeholder, value }，在底部中央放一个提示词输入框
  *       onSave           // async (result) => {}，被 await；抛错则留在编辑器
  *   }) → Promise<boolean>，true = 已保存，false = 取消 / 关闭
  *
  * result = {
  *   maskBlob,   // 与原图同尺寸的 PNG，涂抹区 RGB=255 其余 0，alpha 恒 255
  *   colorBlob,  // 'color' 模式必有：原图 + 半透明色块，全不透明
- *   mode, colorName, opacity, filled, inverted, width, height
+ *   mode, colorName, opacity, filled, inverted, width, height,
+ *   prompt      // 只有传了 promptBox 才有：输入框内容（已 trim）
  * }
  *
  * 撤销/重做使用"矢量操作列表 + 重放"，不保存整幅 ImageData 快照，
@@ -343,6 +346,10 @@
             this.colorUrl = this.opts.colorUrl || '';
             this.paintUrl = this.opts.paintUrl || '';
             this.onSave = typeof this.opts.onSave === 'function' ? this.opts.onSave : null;
+            // 特化场景（如「移除重绘」）只需要遮罩，不提供颜色叠加模式，也不渲染模式切换。
+            this.hideColorMode = this.opts.hideColorMode === true;
+            // 可选：底部居中的提示词输入框 { guide, placeholder, value }，提交时随结果回传给调用方。
+            this.promptBox = this.opts.promptBox && typeof this.opts.promptBox === 'object' ? this.opts.promptBox : null;
 
             // 尺寸
             this.naturalWidth = 0;
@@ -364,7 +371,7 @@
             this.tool = 'brush';
             this.brushSize = DEFAULT_BRUSH;
             this.colorName = 'red';
-            this.mode = this.opts.mode === 'color' ? 'color' : 'mask';
+            this.mode = this.hideColorMode ? 'mask' : (this.opts.mode === 'color' ? 'color' : 'mask');
             this.opacity = Number.isFinite(Number(this.opts.opacity))
                 ? clamp(Number(this.opts.opacity), 0, 100)
                 : DEFAULT_OPACITY;
@@ -453,6 +460,24 @@
                     'aria-label="' + escapeHtml(labels[COLOR_LABEL_KEYS[name]]) + '"></button>';
             }).join('');
 
+            // 「移除重绘」这类只需遮罩的场景：不渲染颜色叠加模式切换
+            const modeSeg = this.hideColorMode ? '' :
+                '<div class="me-seg">' +
+                    '<button type="button" class="me-seg-btn" data-mode="mask">' +
+                        escapeHtml(labels.modeMask) + '</button>' +
+                    '<button type="button" class="me-seg-btn" data-mode="color">' +
+                        escapeHtml(labels.modeColor) + '</button>' +
+                '</div>';
+
+            // 底部居中的提示词输入框（调用方决定是否出现，以及文案）
+            const promptMarkup = this.promptBox
+                ? '<div class="me-prompt">' +
+                    '<div class="me-prompt-guide">' + escapeHtml(this.promptBox.guide) + '</div>' +
+                    '<textarea class="me-prompt-input" rows="3" spellcheck="false" placeholder="' +
+                        escapeHtml(this.promptBox.placeholder) + '"></textarea>' +
+                  '</div>'
+                : '';
+
             root.innerHTML =
                 '<div class="me-toolbar">' +
                     '<div class="me-title">' + escapeHtml(labels.title) + '</div>' +
@@ -490,12 +515,7 @@
                         '<canvas class="me-marquee-canvas"></canvas>' +
                         '<div class="me-cursor" aria-hidden="true"></div>' +
                         '<aside class="me-panel">' +
-                            '<div class="me-seg">' +
-                                '<button type="button" class="me-seg-btn" data-mode="mask">' +
-                                    escapeHtml(labels.modeMask) + '</button>' +
-                                '<button type="button" class="me-seg-btn" data-mode="color">' +
-                                    escapeHtml(labels.modeColor) + '</button>' +
-                            '</div>' +
+                            modeSeg +
                             '<div class="me-swatches">' + swatches + '</div>' +
                             '<div class="me-opacity-row">' +
                                 '<div class="me-row-head">' +
@@ -524,7 +544,8 @@
                                 '</div>' +
                             '</div>' +
                         '</aside>' +
-                        '<div class="me-empty-hint">' + escapeHtml(labels.emptyHint) + '</div>' +
+                        promptMarkup +
+                        (this.promptBox ? '' : '<div class="me-empty-hint">' + escapeHtml(labels.emptyHint) + '</div>') +
                         '<div class="me-error-box" hidden>' +
                             '<div class="me-error-text"></div>' +
                             '<button type="button" class="me-text-btn me-error-close">' +
@@ -565,6 +586,8 @@
             this.undoBtn = root.querySelector('[data-act="undo"]');
             this.redoBtn = root.querySelector('[data-act="redo"]');
             this.invertBtn = root.querySelector('[data-act="invert"]');
+            this.promptInput = root.querySelector('.me-prompt-input');
+            if (this.promptInput) this.promptInput.value = this.promptBox && this.promptBox.value ? String(this.promptBox.value) : '';
 
             COLOR_ORDER.forEach((name) => {
                 const button = root.querySelector('[data-color="' + name + '"]');
@@ -578,7 +601,11 @@
         bindEvents() {
             this.onRootClick = (event) => this.handleClick(event);
             this.onRootContextMenu = (event) => event.preventDefault();
-            this.onRootWheel = (event) => event.preventDefault();
+            this.onRootWheel = (event) => {
+                // 提示词输入框内允许正常滚动文本
+                if (event.target && event.target.closest && event.target.closest('.me-prompt')) return;
+                event.preventDefault();
+            };
             this.onStagePointerDown = (event) => this.handlePointerDown(event);
             this.onStagePointerMove = (event) => this.handlePointerMove(event);
             this.onStagePointerUp = (event) => this.handlePointerUp(event);
@@ -1441,6 +1468,8 @@
 
         handleWheel(event) {
             if (this.busy) return;
+            // 提示词输入框区域交还给浏览器处理滚动
+            if (event.target && event.target.closest && event.target.closest('.me-prompt')) return;
             event.preventDefault();
             event.stopPropagation();
             // Ctrl（macOS 上也可用 Cmd）+ 滚轮快速调画笔大小，普通滚轮保持缩放。
@@ -1491,7 +1520,7 @@
             if (this.busy || this.closed || !this.editWidth) return;
             if (this.activePointerId !== null) return;
             const target = event.target;
-            if (target && target.closest && target.closest('.me-panel, .me-error-box')) return;
+            if (target && target.closest && target.closest('.me-panel, .me-error-box, .me-prompt')) return;
             this.closeColorMenu();
             this.hover = { x: event.clientX, y: event.clientY };
             this.altDown = !!event.altKey;
@@ -2155,7 +2184,9 @@
             } catch (error) {
                 if (window.console && console.warn) console.warn('MaskEditor: 保存失败', error);
                 this.setBusy(false);
-                this.showToast(this.label('saveFail'));
+                // 调用方若给了具体原因就显示出来，比统一的“保存失败”更有用
+                const message = error && error.message ? String(error.message) : '';
+                this.showToast(message || this.label('saveFail'));
             }
         }
 
@@ -2179,7 +2210,9 @@
                 filled: this.fillHoles,
                 inverted: this.inverted,
                 width: this.naturalWidth,
-                height: this.naturalHeight
+                height: this.naturalHeight,
+                // 只有调用方给了 promptBox 才回传提示词
+                prompt: this.promptInput ? String(this.promptInput.value || '').trim() : ''
             };
         }
 
