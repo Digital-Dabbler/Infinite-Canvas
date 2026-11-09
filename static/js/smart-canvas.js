@@ -16107,6 +16107,11 @@ function setImageEditMode(mode, userTouched=false){
         } else if(imageEditMode === 'outpaint'){
             requestAnimationFrame(() => {
                 resetOutpaintBox();
+                // 复位只清外补；已选的比例仍然保留在下拉里，这里要按它把四边补齐，
+                // 避免「下拉显示 3:2、框却是自由尺寸」的不一致。
+                if(OUTPAINT_RATIO_PRESETS[outpaintRatioPreset]){
+                    applyOutpaintRatioPreset(outpaintRatioPreset);
+                }
                 syncOutpaintEditorControls();
                 syncOutpaintRunControls();
                 syncImageEditOverflow();
@@ -18721,28 +18726,31 @@ function syncOutpaintPadInputs(){
     write('top', nodes.top, srcH);
     write('bottom', nodes.bottom, srcH);
 }
-function outpaintPadDisplayValue(id, srcSize, scale){
+function outpaintPadInputNatural(id, srcSize){
     const node = document.getElementById(id);
     const raw = Math.max(0, Number(node?.value) || 0);
-    const natural = outpaintUnit === 'percent' ? raw / 100 * srcSize : raw;
-    return natural / Math.max(1e-6, scale);
+    return Math.max(0, Math.round(outpaintUnit === 'percent' ? raw / 100 * srcSize : raw));
 }
-function applyOutpaintPadInputs(){
+function applyOutpaintPadInputs(anchor){
     if(imageEditMode !== 'outpaint' || !cropState) return;
     const bounds = cropBounds();
     const scale = outpaintDisplayScale();
     const img = document.getElementById('cropImage');
     const srcW = Math.max(1, Number(img?.naturalWidth || 1));
     const srcH = Math.max(1, Number(img?.naturalHeight || 1));
-    const left = outpaintPadDisplayValue('outpaintLeftInput', srcW, scale.x);
-    const right = outpaintPadDisplayValue('outpaintRightInput', srcW, scale.x);
-    const top = outpaintPadDisplayValue('outpaintTopInput', srcH, scale.y);
-    const bottom = outpaintPadDisplayValue('outpaintBottomInput', srcH, scale.y);
+    let pads = {
+        left: outpaintPadInputNatural('outpaintLeftInput', srcW),
+        right: outpaintPadInputNatural('outpaintRightInput', srcW),
+        top: outpaintPadInputNatural('outpaintTopInput', srcH),
+        bottom: outpaintPadInputNatural('outpaintBottomInput', srcH),
+    };
+    const ratio = OUTPAINT_RATIO_PRESETS[outpaintRatioPreset];
+    if(ratio) pads = outpaintRatioPadInputPads(srcW, srcH, pads, anchor, ratio[0], ratio[1]);
     cropState = {
-        x: Math.max(0, left),
-        y: Math.max(0, top),
-        w: bounds.w + left + right,
-        h: bounds.h + top + bottom,
+        x: Math.max(0, pads.left / scale.x),
+        y: Math.max(0, pads.top / scale.y),
+        w: bounds.w + (pads.left + pads.right) / scale.x,
+        h: bounds.h + (pads.top + pads.bottom) / scale.y,
     };
     clampOutpaint();
     renderCropBox();
@@ -18780,6 +18788,145 @@ function applyOutpaintRatioPreset(ratio){
     };
     clampOutpaint();
     renderCropBox();
+}
+// 比例锁定：把「拖拽后的四边外补」修正成严格符合比例的最小整数解。
+// base = 拖拽起点的四边外补（自然像素），dx/dy = 本次拖拽的自然像素增量，
+// mode = 被拖动的把手（left/right/top/bottom 组合），shift = 对称扩展。
+// 返回 {left,right,top,bottom}：原图+外补 的宽高比精确等于 ratio，且四边都不小于 0。
+function outpaintRatioLockedPads(srcW, srcH, base, mode, dx, dy, shift, ratioW, ratioH){
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    srcW = Math.max(1, Math.round(srcW));
+    srcH = Math.max(1, Math.round(srcH));
+    const common = gcd(Math.max(1, Math.round(ratioW)), Math.max(1, Math.round(ratioH))) || 1;
+    const rw = Math.max(1, Math.round(Math.max(1, Math.round(ratioW)) / common));
+    const rh = Math.max(1, Math.round(Math.max(1, Math.round(ratioH)) / common));
+    const startLeft = Math.max(0, Math.round(Number(base?.left) || 0));
+    const startRight = Math.max(0, Math.round(Number(base?.right) || 0));
+    const startTop = Math.max(0, Math.round(Number(base?.top) || 0));
+    const startBottom = Math.max(0, Math.round(Number(base?.bottom) || 0));
+    const axis = String(mode || '');
+    const growsX = axis.includes('left') || axis.includes('right');
+    const growsY = axis.includes('top') || axis.includes('bottom');
+    let left = startLeft;
+    let right = startRight;
+    let top = startTop;
+    let bottom = startBottom;
+    if(growsX){
+        const dragging = axis.includes('left') ? 'left' : 'right';
+        const startValue = dragging === 'left' ? startLeft : startRight;
+        const extension = Math.max(-startValue, Math.round(dragging === 'left' ? -dx : dx));
+        if(shift){
+            left = Math.max(0, startLeft + extension);
+            right = Math.max(0, startRight + extension);
+        } else if(dragging === 'left'){
+            left = Math.max(0, startLeft + extension);
+        } else {
+            right = Math.max(0, startRight + extension);
+        }
+    }
+    if(growsY){
+        const dragging = axis.includes('top') ? 'top' : 'bottom';
+        const startValue = dragging === 'top' ? startTop : startBottom;
+        const extension = Math.max(-startValue, Math.round(dragging === 'top' ? -dy : dy));
+        if(shift){
+            top = Math.max(0, startTop + extension);
+            bottom = Math.max(0, startBottom + extension);
+        } else if(dragging === 'top'){
+            top = Math.max(0, startTop + extension);
+        } else {
+            bottom = Math.max(0, startBottom + extension);
+        }
+    }
+    const desired = growsX && growsY
+        ? Math.max((srcW + left + right) / rw, (srcH + top + bottom) / rh)
+        : growsX
+            ? (srcW + left + right) / rw
+            : (srcH + top + bottom) / rh;
+    const factor = Math.max(Math.ceil(srcW / rw), Math.ceil(srcH / rh), Math.ceil(desired - 1e-6));
+    const extraX = rw * factor - srcW;
+    const extraY = rh * factor - srcH;
+    if(growsX){
+        if(shift){
+            left = Math.round(extraX / 2);
+            right = extraX - left;
+        } else if(axis.includes('left')){
+            right = Math.min(right, extraX);
+            left = extraX - right;
+        } else {
+            left = Math.min(left, extraX);
+            right = extraX - left;
+        }
+    } else {
+        const total = left + right;
+        left = total > 0 ? Math.round(extraX * left / total) : Math.floor(extraX / 2);
+        right = extraX - left;
+    }
+    if(growsY){
+        if(shift){
+            top = Math.round(extraY / 2);
+            bottom = extraY - top;
+        } else if(axis.includes('top')){
+            bottom = Math.min(bottom, extraY);
+            top = extraY - bottom;
+        } else {
+            top = Math.min(top, extraY);
+            bottom = extraY - top;
+        }
+    } else {
+        const total = top + bottom;
+        top = total > 0 ? Math.round(extraY * top / total) : Math.floor(extraY / 2);
+        bottom = extraY - top;
+    }
+    return {left, right, top, bottom};
+}
+// 比例锁定：数值框编辑。以本次改动的那条边为准，其余边按比例补齐。
+// anchor = 'left'|'right'|'top'|'bottom'；缺省时两侧一起按比例分配。
+function outpaintRatioPadInputPads(srcW, srcH, pads, anchor, ratioW, ratioH){
+    const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+    srcW = Math.max(1, Math.round(srcW));
+    srcH = Math.max(1, Math.round(srcH));
+    const common = gcd(Math.max(1, Math.round(ratioW)), Math.max(1, Math.round(ratioH))) || 1;
+    const rw = Math.max(1, Math.round(Math.max(1, Math.round(ratioW)) / common));
+    const rh = Math.max(1, Math.round(Math.max(1, Math.round(ratioH)) / common));
+    let left = Math.max(0, Math.round(Number(pads?.left) || 0));
+    let right = Math.max(0, Math.round(Number(pads?.right) || 0));
+    let top = Math.max(0, Math.round(Number(pads?.top) || 0));
+    let bottom = Math.max(0, Math.round(Number(pads?.bottom) || 0));
+    const horizontalDriven = anchor === 'left' || anchor === 'right';
+    const verticalDriven = anchor === 'top' || anchor === 'bottom';
+    const desiredW = (srcW + left + right) / rw;
+    const desiredH = (srcH + top + bottom) / rh;
+    const desired = horizontalDriven ? desiredW : verticalDriven ? desiredH : Math.max(desiredW, desiredH);
+    const factor = Math.max(Math.ceil(srcW / rw), Math.ceil(srcH / rh), Math.ceil(desired - 1e-6));
+    const extraX = rw * factor - srcW;
+    const extraY = rh * factor - srcH;
+    if(horizontalDriven){
+        if(anchor === 'left'){
+            right = Math.min(right, extraX);
+            left = extraX - right;
+        } else {
+            left = Math.min(left, extraX);
+            right = extraX - left;
+        }
+    } else {
+        const total = left + right;
+        left = total > 0 ? Math.round(extraX * left / total) : Math.floor(extraX / 2);
+        right = extraX - left;
+    }
+    if(verticalDriven){
+        if(anchor === 'top'){
+            bottom = Math.min(bottom, extraY);
+            top = extraY - bottom;
+        } else {
+            top = Math.min(top, extraY);
+            bottom = extraY - top;
+        }
+    } else {
+        const total = top + bottom;
+        top = total > 0 ? Math.round(extraY * top / total) : Math.floor(extraY / 2);
+        bottom = extraY - top;
+    }
+    return {left, right, top, bottom};
 }
 function resetOutpaintEditor(){
     outpaintRatioPreset = 'free';
@@ -19345,6 +19492,27 @@ function resizeOutpaintFromDrag(dx, dy, shift){
     if(!start) return;
     const mode = String(cropDrag.mode || '');
     const {w, h} = cropBounds();
+    const ratio = OUTPAINT_RATIO_PRESETS[outpaintRatioPreset];
+    if(ratio){
+        // 选了固定比例时，拖动只决定方向与幅度，四边外补由比例统一补齐。
+        const scale = outpaintDisplayScale();
+        const img = document.getElementById('cropImage');
+        const srcW = Math.max(1, Number(img?.naturalWidth || 1));
+        const srcH = Math.max(1, Number(img?.naturalHeight || 1));
+        const base = {
+            left: Math.max(0, Math.round(start.x * scale.x)),
+            right: Math.max(0, Math.round((start.w - start.x - w) * scale.x)),
+            top: Math.max(0, Math.round(start.y * scale.y)),
+            bottom: Math.max(0, Math.round((start.h - start.y - h) * scale.y)),
+        };
+        const pads = outpaintRatioLockedPads(srcW, srcH, base, mode, dx * scale.x, dy * scale.y, shift, ratio[0], ratio[1]);
+        cropState.w = w + (pads.left + pads.right) / scale.x;
+        cropState.h = h + (pads.top + pads.bottom) / scale.y;
+        cropState.x = pads.left / scale.x;
+        cropState.y = pads.top / scale.y;
+        clampOutpaint();
+        return;
+    }
     // 扩图框的 x/y 是原图在扩图画布中的位置：只扩被拖动的一侧，
     // 并让左/上扩展推动原图，而不是将画布强制从中心对称地放大。
     // 按住 Shift 时对称扩展对侧（移植外补画板交互）。
@@ -26400,8 +26568,8 @@ document.getElementById('outpaintUnitSelect')?.addEventListener('change', event 
     outpaintUnit = event.target.value === 'pixel' ? 'pixel' : 'percent';
     syncOutpaintPadInputs();
 });
-['outpaintLeftInput', 'outpaintRightInput', 'outpaintTopInput', 'outpaintBottomInput'].forEach(id => {
-    document.getElementById(id)?.addEventListener('change', applyOutpaintPadInputs);
+[['outpaintLeftInput', 'left'], ['outpaintRightInput', 'right'], ['outpaintTopInput', 'top'], ['outpaintBottomInput', 'bottom']].forEach(([id, anchor]) => {
+    document.getElementById(id)?.addEventListener('change', () => applyOutpaintPadInputs(anchor));
 });
 document.getElementById('outpaintRatioSelect')?.addEventListener('change', event => {
     applyOutpaintRatioPreset(event.target.value);
