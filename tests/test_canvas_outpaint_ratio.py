@@ -1,4 +1,4 @@
-"""扩图固定比例的联动测试：拖动把手、改数值框后四边仍严格保持所选比例。"""
+"""扩图把手联动测试：拖动/改数值框后四边仍严格保持所选比例，按住 Shift 时两侧对称外扩。"""
 
 import json
 import random
@@ -232,6 +232,41 @@ class CanvasOutpaintRatioTests(unittest.TestCase):
         self.assertEqual(result["state"]["w"], 900)
         self.assertEqual(result["state"]["h"], 600)
         self.assertEqual(result["pads"], {"left": 0, "right": 200, "top": 0, "bottom": 0})
+
+    def test_shift_drag_expands_both_sides_equally(self):
+        """按住 Shift 拖右/下/右下角把手时，对侧必须同步外扩，不能把宽度全涨在被拖的一侧。"""
+        # 右侧：拖 100 显示像素 = 200 自然像素，左右各加 200。
+        result = self.run_drag("free", "outpaint-right", 100, 0, shift=True)
+        self.assertEqual(result["pads"], {"left": 200, "right": 200, "top": 0, "bottom": 0})
+        self.assertEqual(result["state"], {"x": 100, "y": 0, "w": 1000, "h": 600})
+        # 下方：上下各加 300。
+        result = self.run_drag("free", "outpaint-bottom", 0, 150, shift=True)
+        self.assertEqual(result["pads"], {"left": 0, "right": 0, "top": 300, "bottom": 300})
+        # 右下角：两轴同时对称外扩。
+        result = self.run_drag("free", "outpaint-bottom-right", 100, 150, shift=True)
+        self.assertEqual(result["pads"], {"left": 200, "right": 200, "top": 300, "bottom": 300})
+        self.assertEqual(result["state"], {"x": 100, "y": 150, "w": 1000, "h": 900})
+        # 左/上把手是对称扩展的既有参照，一并锁住防止回退。
+        result = self.run_drag("free", "outpaint-left", -100, 0, shift=True)
+        self.assertEqual(result["pads"], {"left": 200, "right": 200, "top": 0, "bottom": 0})
+        result = self.run_drag("free", "outpaint-top", 0, -150, shift=True)
+        self.assertEqual(result["pads"], {"left": 0, "right": 0, "top": 300, "bottom": 300})
+
+    def test_shift_drag_grows_existing_pads_on_both_sides(self):
+        # 起点：左 140 / 右 60 / 上 60 / 下 140（自然像素），右侧 Shift 拖动各加 200。
+        start = {"x": 70, "y": 30, "w": 900, "h": 700}
+        result = self.run_drag("free", "outpaint-right", 100, 0, shift=True, start=start)
+        self.assertEqual(result["pads"], {"left": 340, "right": 260, "top": 60, "bottom": 140})
+
+    def test_shift_drag_with_ratio_keeps_ratio_and_symmetry(self):
+        result = self.run_drag("3:2", "outpaint-bottom-right", 100, 150, shift=True)
+        pads = result["pads"]
+        self.assertLessEqual(abs(pads["left"] - pads["right"]), 1)
+        self.assertLessEqual(abs(pads["top"] - pads["bottom"]), 1)
+        self.assertGreaterEqual(pads["left"] + pads["right"], 400)
+        self.assertGreaterEqual(pads["top"] + pads["bottom"], 600)
+        total_w, total_h = 1600 + pads["left"] + pads["right"], 1200 + pads["top"] + pads["bottom"]
+        self.assertEqual(total_w * 2, total_h * 3)
 
     def test_editor_reapplies_ratio_after_reset_on_entry(self):
         block = self.js_source.split("} else if(imageEditMode === 'outpaint'){", 1)[1].split("}", 1)[0]

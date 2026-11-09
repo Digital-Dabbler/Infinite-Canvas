@@ -19527,7 +19527,9 @@ function resizeOutpaintFromDrag(dx, dy, shift){
         if(shift) nextW = start.w + 2 * (nextW - start.w);
     } else if(mode.includes('right')){
         nextW = Math.max(w, start.w + dx);
-        if(shift){ nextX = start.x - (nextW - start.w); nextW = start.w + 2 * (nextW - start.w); }
+        // Shift 对称扩展对侧：对侧也要让出同样宽度，所以原图位置同样向内移动，
+        // 否则左侧被压掉、宽度全涨在右边（拖右侧/右下角时看着像没对称）。
+        if(shift){ nextX = start.x + (nextW - start.w); nextW = start.w + 2 * (nextW - start.w); }
     }
     if(mode.includes('top')){
         const delta = Math.max(-start.y, -dy);
@@ -19536,7 +19538,7 @@ function resizeOutpaintFromDrag(dx, dy, shift){
         if(shift) nextH = start.h + 2 * (nextH - start.h);
     } else if(mode.includes('bottom')){
         nextH = Math.max(h, start.h + dy);
-        if(shift){ nextY = start.y - (nextH - start.h); nextH = start.h + 2 * (nextH - start.h); }
+        if(shift){ nextY = start.y + (nextH - start.h); nextH = start.h + 2 * (nextH - start.h); }
     }
     cropState.w = nextW;
     cropState.h = nextH;
