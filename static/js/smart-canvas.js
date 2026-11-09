@@ -1161,7 +1161,12 @@ async function exportSelectedSmartWorkflow(includeResources=false){
         const res = await fetch('/api/canvas-workflows/export', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({...payload, include_resources:true, filename})
+            body:JSON.stringify({
+                ...payload,
+                nodes:payload.nodes.map(flattenCropForWorkflowExport),
+                include_resources:true,
+                filename
+            })
         });
         if(!res.ok) throw new Error(await responseErrorMessage(res, '导出工作流失败'));
         downloadBlob(await res.blob(), filename);
@@ -13036,7 +13041,21 @@ function openWorkflowGroupContextMenu(id, clientX, clientY){
     positionPhotoshopContextMenu(clientX, clientY);
 }
 function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
-function workflowGroupPayload(group){const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));return {nodes:members.map(n=>{const c=serializableSmartNode(n);delete c.workflowGroupId;if(Array.isArray(c.inputNodeIds))c.inputNodeIds=c.inputNodeIds.filter(id=>ids.has(id));return c;}),connections:(canvas?.connections||[]).filter(c=>ids.has(c.from)&&ids.has(c.to)),include_resources:true,filename:`${group.title||'workflow'}.zip`};}
+// ZIP 导出是"换台机器也能导入"的自包含包：图片要换成裁切后的成品图，并去掉裁切框。
+// 否则包里带的是原图，而 crop.result 仍指向包外的 URL，导入后裁切就断了。
+function flattenCropForWorkflowExport(node){
+    const copy = {...node};
+    if(Array.isArray(copy.images)){
+        copy.images = copy.images.map(img => {
+            if(!img?.crop?.result?.url) return img;
+            const flat = {...imageForDisplay(img)};
+            delete flat.crop;
+            return flat;
+        });
+    }
+    return copy;
+}
+function workflowGroupPayload(group){const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));return {nodes:members.map(n=>{const c=serializableSmartNode(n);delete c.workflowGroupId;if(Array.isArray(c.inputNodeIds))c.inputNodeIds=c.inputNodeIds.filter(id=>ids.has(id));return c;}).map(flattenCropForWorkflowExport),connections:(canvas?.connections||[]).filter(c=>ids.has(c.from)&&ids.has(c.to)),include_resources:true,filename:`${group.title||'workflow'}.zip`};}
 function workflowGroupCoverUrl(group){return workflowGroupOrderedMembers(group).flatMap(n=>n.images||[]).map(imageForDisplay).find(i=>i?.url&&mediaKindForItem(i)==='image')?.url||'';}
 function openWorkflowCreateDialog(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n)),modal=document.getElementById('workflowCreateModal');if(!group||!modal)return;pendingWorkflowCreateGroupId=id;const name=document.getElementById('workflowCreateName'),cover=document.getElementById('workflowCreateCover');if(name)name.value=String(group.title||'').slice(0,20);if(cover)cover.innerHTML=workflowGroupCoverUrl(group)?`<img src="${escapeAttr(workflowGroupCoverUrl(group))}" alt="">`:'<i data-lucide="workflow"></i>';document.getElementById('workflowCreateCount').textContent=`${Array.from(name?.value||'').length}/20`;modal.classList.add('open');refreshIcons();name?.focus();}
 function closeWorkflowCreateDialog(){document.getElementById('workflowCreateModal')?.classList.remove('open');pendingWorkflowCreateGroupId='';}

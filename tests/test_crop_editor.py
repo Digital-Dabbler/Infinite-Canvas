@@ -199,6 +199,12 @@ class CropEditorFrontendTests(unittest.TestCase):
         self.assertIn("downloadPreviewFile(imageForDisplay(item) || item);", self.canvas_js)
         group = self._function_body(self.canvas_js, "function previewDownloadGroupItems(){")
         self.assertIn("imageForDisplay(item)", group)
+        # ZIP 导出必须换成裁切成品图并摘掉裁切框，否则导入端拿到的是原图 + 包外 URL。
+        flatten = self._function_body(self.canvas_js, "function flattenCropForWorkflowExport(node){")
+        self.assertIn("delete flat.crop;", flatten)
+        self.assertIn("nodes:payload.nodes.map(flattenCropForWorkflowExport)", self.canvas_js)
+        self.assertIn(".map(flattenCropForWorkflowExport)", self._function_body(
+            self.canvas_js, "function workflowGroupPayload(group){"))
 
     # ---- i18n ----
     def test_i18n_keys_present(self):
