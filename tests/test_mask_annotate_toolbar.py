@@ -34,21 +34,23 @@ class MaskAnnotateToolbarTests(unittest.TestCase):
         self.assertNotIn('data-local-edit-kind', self.canvas_html)
         self.assertNotIn('id="localEditStatus"', self.canvas_html)
 
-    def test_mode_bar_no_longer_offers_mask(self):
-        # 遮罩已迁到独立的全屏编辑器，弹窗模式条只保留批注。
+    def test_mode_bar_no_longer_offers_mask_or_brush(self):
+        # 遮罩与批注都已迁到独立的全屏编辑器，弹窗模式条不再提供这两个入口。
         self.assertNotIn('data-image-edit-mode="mask"', self.canvas_html)
-        self.assertIn('data-image-edit-mode="brush"', self.canvas_html)
+        self.assertNotIn('data-image-edit-mode="brush"', self.canvas_html)
 
     def test_js_dispatch_accepts_mask_and_brush_without_local(self):
-        # 顶栏「遮罩」直接打开全屏遮罩编辑器，不再进入弹窗的通用分发。
+        # 顶栏「遮罩」「批注」直接打开各自的全屏编辑器，不再进入弹窗的通用分发。
         self.assertIn("if(action === 'mask'){", self.canvas_js)
         self.assertIn("openMaskEditorForImage(node, index);", self.canvas_js)
-        self.assertIn("if(!['crop','outpaint','brush','grid'].includes(action)) return;", self.canvas_js)
+        self.assertIn("if(action === 'brush'){", self.canvas_js)
+        self.assertIn("openAnnotationEditorForImage(node, index);", self.canvas_js)
+        self.assertIn("if(!['crop','outpaint','grid'].includes(action)) return;", self.canvas_js)
         # setImageEditMode 不再有 'local' 伞模式，擦除仍复用内部 mask 模式。
         self.assertIn("imageEditMode = ['preview','crop','outpaint','mask','brush','resize','grid'].includes(mode) ? mode : 'preview';", self.canvas_js)
         self.assertNotIn("mode === 'local'", self.canvas_js)
         self.assertNotIn("localEditKind", self.canvas_js)
-        # 批注模式的弹窗标题用批注词条。
+        # 弹窗标题仍保留批注词条映射（擦除之外的旧入口复用）。
         self.assertIn("imageEditMode === 'mask' ? 'canvas.modeMask' : imageEditMode === 'brush' ? 'canvas.modeAnnotate'", self.canvas_js)
 
     def test_erase_still_reuses_mask_mode(self):

@@ -109,7 +109,11 @@ class MaskEditorFrontendTests(unittest.TestCase):
         self.assertNotIn("mask_color", self.canvas_js)
         # 节点预览与生成请求都用带色块的结果图。
         self.assertIn("img.maskMode === 'color' && img?.maskColor?.url", self.canvas_js)
-        self.assertIn("url:(img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url", self.canvas_js)
+        # 批注结果优先于遮罩结果；没有批注时仍按遮罩颜色模式取结果图。
+        self.assertIn(
+            "url:annotated ? displayMediaUrl(img.annotation) : (img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url",
+            self.canvas_js,
+        )
         # 纯色块小图用于重新打开编辑器时还原颜色。
         self.assertIn("uploadCroppedBlob(result.paintBlob, `${base}_maskpaint.png`)", self.canvas_js)
         self.assertIn("paintUrl: item.maskPaint?.url", self.canvas_js)

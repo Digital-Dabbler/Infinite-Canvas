@@ -1,0 +1,83 @@
+/* 批注编辑器增量样式：外壳、工具栏、面板与画布沿用 mask-editor.css 的 .me- 设计令牌，
+   这里只补充批注独有的文字编辑层、面板提示与更紧凑的工具条。 */
+
+.ae-root .me-toolbar {
+    gap: 10px;
+}
+
+.ae-root .me-tool {
+    padding: 0 9px;
+}
+
+.ae-panel {
+    width: 196px;
+}
+
+.ae-panel-note {
+    margin: 0;
+    color: #9aa3b2;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+.ae-root .me-swatches {
+    grid-template-columns: repeat(5, 1fr);
+}
+
+/* 行内文字编辑层：与导出时的白描边、居中排版保持一致 */
+.ae-text-editor {
+    position: absolute;
+    z-index: 6;
+    min-width: 1.2em;
+    max-width: 70%;
+    padding: 2px 4px;
+    border: 1px dashed rgba(125, 211, 252, 0.72);
+    border-radius: 6px;
+    outline: none;
+    background: rgba(8, 11, 16, 0.42);
+    color: #ffffff;
+    font-family: Arial, 'Microsoft YaHei', sans-serif;
+    font-weight: 900;
+    line-height: 1.25;
+    text-align: center;
+    white-space: pre-wrap;
+    word-break: break-word;
+    caret-color: #7dd3fc;
+    transform: translate(-50%, -50%);
+    cursor: text;
+}
+
+.ae-text-editor:empty::before {
+    content: attr(data-placeholder);
+    color: rgba(226, 232, 240, 0.6);
+    font-weight: 600;
+}
+
+/* 文字选中框的提示不遮挡画面，交给画布绘制 */
+.ae-root.is-busy .me-panel {
+    opacity: 0.75;
+}
+
+@media (max-width: 1120px) {
+    .ae-root .me-tool-text {
+        display: none;
+    }
+
+    .ae-root .me-tool {
+        padding: 0 8px;
+    }
+}
+
+@media (max-width: 860px) {
+    .ae-panel {
+        width: 168px;
+    }
+
+    .ae-panel-note {
+        display: none;
+    }
+
+    .ae-root .me-size-range {
+        width: 92px;
+    }
+}

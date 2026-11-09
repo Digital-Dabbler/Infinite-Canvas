@@ -9864,6 +9864,9 @@ function localDisplayUrlForMediaItem(img){
 }
 function imageForDisplay(img){
     if(!img || typeof img !== 'object') return img;
+    if(img.annotation?.url){
+        return {...img, url:displayMediaUrl(img.annotation)};
+    }
     const localUrl = localDisplayUrlForMediaItem(img);
     if(!localUrl || localUrl === img.url) return img;
     return {
@@ -9954,6 +9957,7 @@ function thumbMediaHtml(img, options={}){
         if(options.selectOnly) return `<div class="media-thumb video-thumb">${smartVideoPreviewHtml(img, 512, 'alt=""')}</div>`;
         return `<div class="media-thumb video-thumb">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 512, 'alt=""')}<button class="smart-video-play thumb-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     }
+    if(img?.annotation?.url) return annotationPreviewHtml(img, 'media-thumb');
     if(img?.mask?.url) return img.maskMode === 'color' && img?.maskColor?.url
         ? maskColorPreviewHtml(img, 'media-thumb')
         : maskOverlayPreviewHtml(img, 'media-thumb');
@@ -10028,10 +10032,17 @@ function singleMediaHtml(img, w, h){
     if(isFileMediaItem(img) || isTextMediaItem(img)) return `<div class="node-img media-card media-file-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="${isTextMediaItem(img) ? 'file-text' : 'file'}"></i></div><div class="media-card-title">${escapeHtml(img.name || (isTextMediaItem(img) ? 'Text' : 'File'))}</div><div class="media-card-sub">${isTextMediaItem(img) ? 'TEXT' : 'FILE'}</div></div>`;
     if(isAudioMediaItem(img)) return `<div class="node-img media-card media-audio-card" style="width:${w}px;height:${h}px"><div class="media-card-icon"><i data-lucide="file-audio"></i></div><div class="media-card-title">${escapeHtml(img.name || 'Audio')}</div><div class="media-card-sub">AUDIO</div><audio src="${escapeAttr(img.url || '')}" data-url="${escapeAttr(img.url || '')}" controls preload="metadata"></audio></div>`;
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card" style="width:${w}px;height:${h}px">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 768, 'alt=""')}<button class="smart-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
+    if(img?.annotation?.url) return annotationPreviewHtml(img, 'node-img', w, h);
     if(img?.mask?.url) return img.maskMode === 'color' && img?.maskColor?.url
         ? maskColorPreviewHtml(img, 'node-img', w, h)
         : maskOverlayPreviewHtml(img, 'node-img', w, h);
     return smartPreviewImgHtml(img, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
+}
+function annotationPreviewHtml(img, className='', w=0, h=0){
+    // 批注结果已烘焙进整张图，节点上直接显示这张"原图 + 批注"的结果
+    const source = escapeAttr(displayMediaUrl(img.annotation));
+    const size = w && h ? `width:${w}px;height:${h}px;` : '';
+    return `<div class="${escapeAttr(className)} mask-overlay-preview annotation-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><span class="mask-overlay-label">${escapeHtml(tr('canvas.annotationLabel'))}</span></div>`;
 }
 function maskColorPreviewHtml(img, className='', w=0, h=0){
     // 颜色叠加：节点上直接显示"原图 + 色块"的结果，和 ComfyUI 里那张输出一致
@@ -11687,7 +11698,7 @@ function runImageToolbarAction(action, mode){
             return;
         }
         if(action === 'download'){
-            downloadPreviewFile(node.images?.[index] || item);
+            downloadPreviewFile(imageForDisplay(node.images?.[index]) || item);
             return;
         }
         if(action === 'delete'){
@@ -11727,7 +11738,7 @@ function runImageToolbarAction(action, mode){
         return;
     }
     if(action === 'download'){
-        downloadPreviewFile(node.images?.[index] || item);
+        downloadPreviewFile(item);
         return;
     }
     if(action === 'delete'){
@@ -11749,7 +11760,12 @@ function runImageToolbarAction(action, mode){
         openMaskEditorForImage(node, index);
         return;
     }
-    if(!['crop','outpaint','brush','grid'].includes(action)) return;
+    if(action === 'brush'){
+        // 批注同样改为独立的全屏编辑器，保存后直接烘焙回当前图片，不新建节点。
+        openAnnotationEditorForImage(node, index);
+        return;
+    }
+    if(!['crop','outpaint','grid'].includes(action)) return;
     openImageEditor(node.id, index);
     setImageEditMode(action, true);
     if(action === 'grid' && canGridJoinCurrentNode()) setGridOperationMode('join');
@@ -12099,7 +12115,7 @@ function runSmartNodeToolbarAction(nodeId, action){
     selectedIds = [];
     selectedImage = {nodeId, index};
     if(action === 'download'){
-        downloadPreviewFile(node.images?.[index] || item);
+        downloadPreviewFile(item);
         return;
     }
     if(action === 'canvas'){
@@ -19642,6 +19658,9 @@ function replaceEditedImage(file, extra={}){
     pushUndo();
     const rect = nodeRect(node);
     const image = {...(node.images[index] || {}), url:file.url, name:file.name, kind:file.kind || mediaKindForItem(file), natural_w:0, natural_h:0, ...extra};
+    // 裁剪/扩图等派生图不再继承批注结果（源图已烘焙，避免新旧批注叠加），需要时重新批注。
+    delete image.annotation;
+    delete image.annotationPaint;
     // 预处理永远保留原素材：输出为右侧新的单图上传节点。
     const created = createImageNodeAt({x:rect.x + rect.width + 180, y:rect.y + rect.height / 2}, [image], {skipUndo:true, select:true});
     selectedIds = [];
@@ -19990,6 +20009,95 @@ async function maskBlobHasPaintedArea(blob){
     } finally {
         URL.revokeObjectURL(url);
     }
+}
+function annotationEditorLabels(){
+    return {
+        title: tr('canvas.annotationEditorTitle'),
+        toolBrush: tr('canvas.annotationEditorToolBrush'),
+        toolEraser: tr('canvas.annotationEditorToolEraser'),
+        toolRect: tr('canvas.annotationEditorToolRect'),
+        toolEllipse: tr('canvas.annotationEditorToolEllipse'),
+        toolLabel: tr('canvas.annotationEditorToolLabel'),
+        toolText: tr('canvas.annotationEditorToolText'),
+        sizeText: tr('canvas.annotationEditorSizeText'),
+        hint: tr('canvas.annotationEditorHint'),
+        shortcutHint: tr('canvas.annotationEditorShortcuts'),
+        undo: tr('canvas.maskEditorUndo'),
+        redo: tr('canvas.maskEditorRedo'),
+        clear: tr('canvas.clear'),
+        cancel: tr('canvas.maskEditorCancel'),
+        save: tr('canvas.annotationEditorSave'),
+        applying: tr('canvas.annotationEditorApplying'),
+        emptyHint: tr('canvas.annotationEditorEmptyHint'),
+        loadFail: tr('canvas.annotationEditorLoadFail'),
+        saveFail: tr('canvas.annotationEditorSaveFail'),
+        fit: tr('canvas.maskEditorFit'),
+        zoomIn: tr('canvas.maskEditorZoomIn'),
+        zoomOut: tr('canvas.maskEditorZoomOut'),
+        panelNote: tr('canvas.annotationEditorPanelNote'),
+        textPlaceholder: tr('canvas.annotationEditorTextPlaceholder'),
+        colorWhite: tr('canvas.maskEditorColorWhite'),
+        colorRed: tr('canvas.maskEditorColorRed'),
+        colorOrange: tr('canvas.maskEditorColorOrange'),
+        colorYellow: tr('canvas.maskEditorColorYellow'),
+        colorGreen: tr('canvas.maskEditorColorGreen'),
+        colorCyan: tr('canvas.maskEditorColorCyan'),
+        colorBlue: tr('canvas.maskEditorColorBlue'),
+        colorPurple: tr('canvas.maskEditorColorPurple'),
+        colorGray: tr('canvas.maskEditorColorGray')
+    };
+}
+async function openAnnotationEditorForImage(node, index){
+    const item = node?.images?.[index];
+    if(!item?.url) return;
+    const base = (item.name || 'image').replace(/\.[^.]+$/, '');
+    const editor = window.AnnotationEditor;
+    if(!editor || typeof editor.open !== 'function'){
+        toast(tr('canvas.annotationEditorUnavailable'));
+        return;
+    }
+    try{
+        await editor.open({
+            imageUrl: displayMediaUrl(item),
+            overlayUrl: item.annotationPaint?.url ? displayMediaUrl(item.annotationPaint) : '',
+            labels: annotationEditorLabels(),
+            onSave: result => saveAnnotationEditorResult(node, index, base, result)
+        });
+    } catch(error){
+        console.warn('批注编辑器打开失败：', error);
+        toast(tr('canvas.annotationEditorLoadFail'));
+    }
+}
+async function saveAnnotationEditorResult(node, index, base, result){
+    const live = liveSmartNode(node) || node;
+    const hasMarks = Boolean(result?.hasMarks && result?.flattenBlob);
+    const existed = Boolean(live?.images?.[index]?.annotation);
+    // 没有笔迹又没有旧批注：直接退出，不写入也不占用撤销栈。
+    if(!hasMarks && !existed) return;
+    let flattenFile = null;
+    let paintFile = null;
+    if(hasMarks){
+        flattenFile = await uploadCroppedBlob(result.flattenBlob, `${base}_annotate.png`);
+        if(!flattenFile) throw new Error(tr('canvas.annotationEditorSaveFail'));
+        // 透明笔迹小图只用于下次打开编辑器时继续编辑，不参与展示与生成。
+        if(result.overlayBlob){
+            paintFile = await uploadCroppedBlob(result.overlayBlob, `${base}_annotatepaint.png`).catch(() => null);
+        }
+    }
+    pushUndo();
+    const updated = {...(live.images[index] || {})};
+    // 清空批注 = 移除已有结果，图片回到原图。
+    if(flattenFile){
+        updated.annotation = {url:flattenFile.url, name:flattenFile.name, kind:'image'};
+        if(paintFile) updated.annotationPaint = {url:paintFile.url, name:paintFile.name, kind:'image'};
+        else delete updated.annotationPaint;
+    } else {
+        delete updated.annotation;
+        delete updated.annotationPaint;
+    }
+    live.images[index] = updated;
+    render(); scheduleSave();
+    toast(hasMarks ? tr('canvas.annotationEditorApplied') : tr('canvas.annotationEditorRemoved'));
 }
 function maskCanvasFromDrawCanvas(src){
     const mask = document.createElement('canvas');
@@ -22003,18 +22111,22 @@ function originalPromptTextFromParts(parts){
     return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 function promptRequestRefs(refs){
-    return (refs || []).map((img, index) => ({
-        // 颜色叠加模式：向下传递的就是"原图上带色块"的那张结果图，遮罩照旧随行
-        url:(img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url,
-        name:img.name || `图${index + 1}`,
-        mediaInstanceId:img.mediaInstanceId || '',
-        kind:img.kind || mediaKindForItem(img),
-        asset_uris:img.asset_uris || {},
-        role:`image_${index + 1}`,
-        // 画布上绘制的遮罩必须随引用图一起传给生成路径：ComfyUI 的 LoadImage
-        // 会从图片 alpha 通道读取遮罩，前端据此把遮罩合成进 PNG 再上传。
-        mask:img.mask ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined
-    }));
+    return (refs || []).map((img, index) => {
+        const annotated = Boolean(img.annotation?.url);
+        return {
+            // 批注已烘焙进图片，优先向下游传批注后的图，且不再随行遮罩
+            // 颜色叠加模式：向下传递的就是"原图上带色块"的那张结果图，遮罩照旧随行
+            url:annotated ? displayMediaUrl(img.annotation) : (img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url,
+            name:img.name || `图${index + 1}`,
+            mediaInstanceId:img.mediaInstanceId || '',
+            kind:img.kind || mediaKindForItem(img),
+            asset_uris:img.asset_uris || {},
+            role:`image_${index + 1}`,
+            // 画布上绘制的遮罩必须随引用图一起传给生成路径：ComfyUI 的 LoadImage
+            // 会从图片 alpha 通道读取遮罩，前端据此把遮罩合成进 PNG 再上传。
+            mask:(!annotated && img.mask) ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined
+        };
+    });
 }
 function buildPromptRequest(node, overrideDefaultImages=null, consumeDefault=false, ctx=smartLoopContext){
     const parts = collectPromptParts();

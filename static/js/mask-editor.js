@@ -1443,9 +1443,20 @@
             if (this.busy) return;
             event.preventDefault();
             event.stopPropagation();
+            // Ctrl（macOS 上也可用 Cmd）+ 滚轮快速调画笔大小，普通滚轮保持缩放。
+            if (event.ctrlKey || event.metaKey) {
+                event.stopImmediatePropagation();
+                this.adjustBrushSize(event.deltaY < 0 ? 1 : -1);
+                return;
+            }
             const rect = this.stage.getBoundingClientRect();
             const direction = event.deltaY < 0 ? 1.12 : 0.89;
             this.zoomAt(event.clientX - rect.left, event.clientY - rect.top, direction);
+        }
+
+        adjustBrushSize(direction) {
+            const step = Math.max(1, Math.round(this.brushSize * 0.12));
+            this.setBrushSize(this.brushSize + (direction > 0 ? step : -step));
         }
 
         handleResize() {
