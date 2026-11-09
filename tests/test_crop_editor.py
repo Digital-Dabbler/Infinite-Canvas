@@ -2,7 +2,7 @@
 
 覆盖：页面资源接线、编辑器对外契约与比例预设、无 ComfyUI 依赖、
 顶栏走独立裁切编辑器、节点显示与下游引用改用裁切结果、
-裁切数据模型与遮罩重映射、节点尺寸跟随、旧裁剪模式彻底退场，以及 i18n 词条。
+裁切数据模型与遮罩重映射、裁切不改节点尺寸、旧裁剪模式彻底退场，以及 i18n 词条。
 """
 import unittest
 from pathlib import Path
@@ -137,15 +137,22 @@ class CropEditorFrontendTests(unittest.TestCase):
         self.assertIn("source:{", body)
         self.assertIn("result:{url:file.url", body)
         self.assertIn("live.images[index] = updated;", body)
-        self.assertIn("fitNodeSizeToCrop(live, updated.crop, prevCrop);", body)
         self.assertIn("render(); scheduleSave();", body)
         # 就地生效：保存体里不能新建图片节点。
         self.assertNotIn("createImageNodeAt(", body, "")
+        # 裁切不碰节点尺寸：大图一裁就让节点按面积比例膨胀，会把周围节点挤开。
+        self.assertNotIn("fitNodeSizeToCrop", body, "")
+        self.assertNotIn("node.w =", body, "")
+
+    def test_crop_does_not_resize_node(self):
+        body = self._function_body(self.canvas_js, "async function clearImageCrop(node, index){")
+        self.assertNotIn("fitNodeSizeToCrop", body, "")
+        self.assertNotIn("node.w =", body, "")
+        self.assertNotIn("fitNodeSizeToCrop", self.canvas_js)
 
     def test_crop_can_be_cleared(self):
         body = self._function_body(self.canvas_js, "async function clearImageCrop(node, index){")
         self.assertIn("delete updated.crop;", body)
-        self.assertIn("fitNodeSizeToCrop(live, null, prevCrop);", body)
         self.assertIn("toast(tr('canvas.cropCleared'));", body)
 
     def test_mask_is_remapped_into_the_new_crop(self):

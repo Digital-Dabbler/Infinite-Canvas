@@ -20000,30 +20000,8 @@ async function rebuildCropColorLayer(item, toCrop, target, paintCanvas){
     // 底图本身不透明，叠完笔迹后整张画布 alpha 已是 255，不需要再做阈值化。
     return canvasEl;
 }
-// 节点尺寸跟随裁切：按"面积相近"折算，长宽比跟着裁切结果走。
-// 不然裁成竖条会变成一个又宽又空的框，裁掉一半面积节点又会突然膨胀。
-function fitNodeSizeToCrop(node, nextCrop, prevCrop){
-    const images = Array.isArray(node?.images) ? node.images : [];
-    if(images.length !== 1) return; // 多图节点翻页时尺寸不能跟着某一张跳
-    const item = images[0];
-    const prevSize = cropSourcePixelSize(item, prevCrop);
-    const nextSize = cropSourcePixelSize(item, nextCrop);
-    if(!(prevSize.width > 0 && prevSize.height > 0 && nextSize.width > 0 && nextSize.height > 0)) return;
-    const rect = nodeRect(node);
-    const width = Number(rect.width) || 0;
-    const height = Number(rect.height) || 0;
-    if(!(width > 24 && height > 24)) return; // 还没显式定尺寸的节点保持自动布局
-    const k = Math.sqrt((prevSize.width * prevSize.height) / (nextSize.width * nextSize.height));
-    if(!Number.isFinite(k) || k <= 0) return;
-    const nextW = Math.max(96, Math.round(nextSize.width * k));
-    const nextH = Math.max(96, Math.round(nextSize.height * k));
-    const centerX = (Number(node.x) || 0) + width / 2;
-    const centerY = (Number(node.y) || 0) + height / 2;
-    node.x = Math.round(centerX - nextW / 2);
-    node.y = Math.round(centerY - nextH / 2);
-    node.w = nextW;
-    node.h = nextH;
-}
+// 裁切不改变节点尺寸：否则原图很大的图一裁，节点会按面积比例突然膨胀/缩小，
+// 画布上其他节点和连线全被挤开。裁切结果按节点现有框等比适配显示即可。
 function cropBaseName(item){
     return (item?.name || 'image').replace(/\.[^.]+$/, '');
 }
@@ -20131,7 +20109,6 @@ async function saveCropEditorResult(node, index, result){
         }
     }
     live.images[index] = updated;
-    fitNodeSizeToCrop(live, updated.crop, prevCrop);
     render(); scheduleSave();
     toast(tr('canvas.cropSaved'));
 }
@@ -20164,7 +20141,6 @@ async function clearImageCrop(node, index){
         }
     }
     live.images[index] = updated;
-    fitNodeSizeToCrop(live, null, prevCrop);
     render(); scheduleSave();
     toast(tr('canvas.cropCleared'));
 }
