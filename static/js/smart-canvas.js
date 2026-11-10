@@ -3806,11 +3806,23 @@ function capabilityPromptLimit(capability){
 }
 function composerPromptLimit(){
     if(settings.engine !== 'api') return 0;
+    const node = typeof activeComposerNode === 'function' ? activeComposerNode() : null;
+    // 只有生成节点才会真正向上游提交提示词，提示词节点/循环节点不显示字数。
+    if(!node || (typeof isSmartRunnableNode === 'function' && !isSmartRunnableNode(node))) return 0;
     const capability = settings.apiKind === 'video' ? currentVideoModelCapability() : currentImageModelCapability();
     return capabilityPromptLimit(capability);
 }
 function composerComposedPromptText(){
     const node = typeof activeComposerNode === 'function' ? activeComposerNode() : null;
+    // 真正发出去的提示词由 buildPromptRequest 决定：上游提示词节点会整段接管
+    // （此时预设前后缀不参与拼接），参考图 @ 提及还会加上「图1：xxx」映射头。
+    // 字数必须按这个结果算，否则面板只统计了节点自己的草稿，会比真实请求少一截。
+    if(node && typeof buildPromptRequest === 'function'){
+        try {
+            const request = buildPromptRequest(node, null, false, smartLoopContext);
+            if(request && typeof request.prompt === 'string') return request.prompt;
+        } catch (_) {}
+    }
     const raw = String(promptInput?.innerText || '');
     return typeof window.promptPresetComposeText === 'function'
         ? String(window.promptPresetComposeText(node, raw) || '')

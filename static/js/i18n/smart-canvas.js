@@ -542,7 +542,7 @@
         "smart.imageInputOptional": { zh: "支持参考图 · 最多 {max} 张", en: "Reference images supported · Up to {max}" },
         "smart.promptLengthHint": { zh: "{used} / {limit} 字", en: "{used} / {limit} chars" },
         "smart.promptLengthOver": { zh: "超出 {over} 字", en: "{over} over" },
-        "smart.promptLengthTitle": { zh: "当前模型的提示词上限，超出后上游会直接拒绝", en: "Prompt limit of the current model; upstream rejects anything longer" },
+        "smart.promptLengthTitle": { zh: "当前模型的提示词上限；计数是实际发送的全文，含上游提示词节点、预设前后缀和图片引用头", en: "Prompt limit of the current model; the count is the full text actually sent, including upstream prompt nodes, preset prefix/suffix and the image reference header" },
         "smart.errPromptTooLong": { zh: "「{model}」的提示词上限是 {limit} 字，当前提示词 {length} 字，超出 {over} 字。请精简提示词，或拆成多个提示词节点分次生成；也可以换用提示词上限更高的模型。", en: "\"{model}\" accepts at most {limit} characters, but the prompt is {length} — {over} over. Shorten it, split it across several prompt nodes, or pick a model with a higher prompt limit." },
         "smart.imageParamNegativePrompt": { zh: "反向提示词", en: "Negative prompt" },
         "smart.imageParamSeed": { zh: "随机种子", en: "Seed" },
