@@ -174,6 +174,30 @@ class PromptLibraryPublicationTests(unittest.TestCase):
             self.assertEqual(handle.read().strip(), '{\n  "id": "%s"\n}' % snapshot_id)
         self.assertFalse(os.path.isfile(os.path.join(self.versioned_dir, f"{snapshot_id}.json")))
 
+    def test_tombstone_hides_a_stale_tracked_snapshot(self):
+        """A withdrawn record must stay withdrawn even if its file comes back.
+
+        Withdrawal writes the tombstone *and* deletes the tracked snapshot.  A
+        commit that missed the removal, or a checkout from before it landed,
+        resurrects the file while the tombstone stays behind; the tombstone has
+        to keep the publication off every served list on its own.
+        """
+        with patch.object(main, "require_authenticated", return_value=self.alice):
+            result = asyncio.run(main.publish_prompt_library_item(
+                "alice_prompt", main.PromptLibraryPublishRequest(published=True), object()
+            ))
+            snapshot_id = result["snapshot"]["id"]
+            asyncio.run(main.withdraw_prompt_library_snapshot(snapshot_id, object()))
+
+        # Re-create the tracked record exactly as a lost deletion would leave it.
+        self.assertIsNotNone(main.save_versioned_published_prompt(result["snapshot"]))
+        self.assertTrue(os.path.isfile(os.path.join(self.versioned_dir, f"{snapshot_id}.json")))
+
+        self.assertEqual(main.load_versioned_published_prompts(), [])
+        alice_view = main.public_prompt_libraries_for_user(main.load_prompt_libraries(), self.alice)
+        self.assertNotIn(snapshot_id, {item["id"] for item in alice_view["inspiration"]})
+        self.assertNotIn(snapshot_id, {item["id"] for item in alice_view["published"]})
+
     def test_tombstone_hides_a_stale_runtime_copy(self):
         snapshot_id = self.seed_legacy_runtime_publication()
         with patch.object(main, "require_authenticated", return_value=self.alice):
