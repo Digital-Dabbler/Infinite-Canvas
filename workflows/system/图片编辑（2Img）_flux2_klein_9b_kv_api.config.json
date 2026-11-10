@@ -1,0 +1,22 @@
+{
+  "title": "system/图片编辑（2Img）_flux2_klein_9b_kv_api",
+  "fields": [],
+  "mini_cards": {
+    "prompt": {
+      "x": 24,
+      "y": 30
+    },
+    "image": {
+      "x": 24,
+      "y": 210
+    },
+    "custom": {
+      "x": 280,
+      "y": 78
+    },
+    "output": {
+      "x": 540,
+      "y": 120
+    }
+  }
+}
