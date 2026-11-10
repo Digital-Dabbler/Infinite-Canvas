@@ -16413,9 +16413,13 @@ function setImageEditMode(mode, userTouched=false){
     refreshMaskOverlayHint();
     syncTextToolState(true);
     updatePreviewNavButtons();
-    // 预览态自带裁切层：进入预览就挂上，切到别的模式就拆掉。
-    if(imageEditMode === 'preview') syncPreviewCrop();
-    else destroyPreviewCrop();
+    // 预览态才可能有裁切层：进入预览先同步开关与裁切态，切到别的模式就整体拆掉。
+    if(imageEditMode === 'preview'){
+        syncPreviewCrop();
+    } else {
+        destroyPreviewCrop();
+        syncPreviewCropToggle();
+    }
     refreshIcons();
 }
 let previewCompareOn = false;
@@ -17135,9 +17139,16 @@ function refreshComparePanel(){
     const panoramaToggle = document.getElementById('panoramaToggleBtn');
     const editing = currentEditImage();
     updatePreviewGenerationPanel();
-    // 预览态要直接裁切：展示"批注后、未裁切"的整图，裁切框才对应原图坐标；
-    // 其它模式（扩图/缩放/宫格）仍按当前显示图工作。
-    const previewItem = (imageEditMode === 'preview' && editing.baseImage?.url) ? editing.baseImage : (editing.image || {});
+    // 换到另一张图（预览翻页）时重新决定裁切态：已经有裁切结果的图直接进裁切态，
+    // 其它图从纯预览开始。必须在选预览图之前算，否则首帧会先显示裁切图再贴框。
+    const editingKey = `${editing.node?.id || ''}:${editing.index}`;
+    if(imageEditMode === 'preview' && previewCropKey !== editingKey){
+        previewCropKey = editingKey;
+        previewCropActive = Boolean(editing.node?.images?.[editing.index]?.crop?.result?.url);
+    }
+    // 裁切态展示"批注后、未裁切"的整图（框的归一化坐标才对得上原图）；
+    // 纯预览展示正常显示图，也就是已有裁切结果的那张。
+    const previewItem = (imageEditMode === 'preview' && previewCropActive && editing.baseImage?.url) ? editing.baseImage : (editing.image || {});
     const curUrl = editing.image?.url || '';
     const isVideoPreview = mediaKindForItem(editing.image || {}) === 'video';
     const isPreviewMode = imageEditMode === 'preview';
@@ -19672,6 +19683,9 @@ function openImageEditor(nodeId, imageIndex=0){
 function closeImageEditor(){
     cleanupSmartLogPreviewNode();
     // 预览内裁切层先拆掉，再清舞台，避免覆盖层读到已经重置的图片尺寸。
+    // 关掉预览就忘了这一轮的裁切态：下次双击要按图片自身有没有裁切重新决定。
+    previewCropActive = false;
+    previewCropKey = '';
     destroyPreviewCrop();
     imageEditModal.classList.remove('open');
     document.querySelector('.image-edit-panel')?.classList.remove('video-preview-mode');
@@ -20338,21 +20352,37 @@ function saveCropAsNewNode(node, index){
     render(); scheduleSave();
     toast(tr('canvas.cropSavedAsNode'));
 }
-// —— 预览内直接裁切（static/js/crop-editor.js 的 attach 模式） ——
-// 双击图片进的就是预览；进去即可拖框裁切，不需要再点一次"裁剪"。
-// 框画在"批注后、未裁切"的整图上（预览态展示整图），跟随预览的缩放/平移一起走；
+// —— 预览内裁切（static/js/crop-editor.js 的 attach 模式） ——
+// 双击图片进的是预览，默认只是看图；点「裁剪」才在图上拉出裁切框。
+// 例外：图片已经有裁切结果时，双击进来直接就是裁切状态，方便马上调框。
+// 框画在"批注后、未裁切"的整图上（裁切态展示整图），跟随预览的缩放/平移一起走；
 // 应用后写回同一张图，并直接关掉预览回画布。
 let previewCropHandle = null;
 let previewCropDraft = null;
 let previewCropApplying = false;
+let previewCropActive = false;
+let previewCropKey = '';
 
 function previewCropBar(){ return document.getElementById('previewCropBar'); }
+function previewCropToggleBtn(){ return document.getElementById('previewCropToggleBtn'); }
 
 function previewCropShouldShow(){
     if(imageEditMode !== 'preview') return false;
     if(panoramaState.enabled) return false;
     const editing = currentEditImage();
     return mediaKindForItem(editing?.image || {}) === 'image' && Boolean(editing?.baseImage?.url);
+}
+
+function syncPreviewCropToggle(){
+    const btn = previewCropToggleBtn();
+    if(!btn) return;
+    const usable = previewCropShouldShow();
+    if(!usable) previewCropActive = false;
+    btn.style.display = usable ? '' : 'none';
+    btn.setAttribute('aria-pressed', previewCropActive ? 'true' : 'false');
+    btn.classList.toggle('active', previewCropActive);
+    const label = btn.querySelector('span');
+    if(label) label.textContent = tr(previewCropActive ? 'canvas.cropExit' : 'canvas.cropImage');
 }
 
 function destroyPreviewCrop(){
@@ -20370,25 +20400,57 @@ function destroyPreviewCrop(){
     if(size) size.textContent = '';
 }
 
+// 退出裁切态，回到"只看图"的预览（不关预览、不改数据）。
+function cancelPreviewCrop(){
+    if(!previewCropActive) return;
+    previewCropActive = false;
+    destroyPreviewCrop();
+    syncPreviewCropToggle();
+    refreshComparePanel();
+}
+
+// 预览工具条上的「裁剪 / 退出裁切」开关。
+function togglePreviewCrop(){
+    if(!previewCropShouldShow()) return;
+    if(previewCropActive){
+        cancelPreviewCrop();
+        return;
+    }
+    previewCropActive = true;
+    syncPreviewCropToggle();
+    refreshComparePanel();
+}
+
 function syncPreviewCrop(){
     const editor = window.CropEditor;
     const host = document.getElementById('previewFrame');
     const imageEl = document.getElementById('previewCurrentImage');
     if(!previewCropShouldShow() || !editor || typeof editor.attach !== 'function' || !host || !imageEl){
         destroyPreviewCrop();
+        syncPreviewCropToggle();
         return;
     }
     if(!imageEl.getAttribute('src')) return;
     const editing = currentEditImage();
     const item = editing.node?.images?.[editing.index] || editing.image || {};
     const key = `${editing.node?.id || ''}:${editing.index}`;
+    // 换图（含预览翻页）时重新判断：有裁切结果的图直接进裁切态，没裁切的就是纯预览。
+    if(previewCropKey !== key){
+        previewCropKey = key;
+        previewCropActive = Boolean(item.crop?.result?.url);
+    }
+    syncPreviewCropToggle();
+    if(!previewCropActive){
+        destroyPreviewCrop();
+        return;
+    }
     if(previewCropHandle && previewCropHandle.__previewKey === key){
         previewCropHandle.refresh?.();
         return;
     }
     destroyPreviewCrop();
     // 没有已保存的裁切时给一个居中的 80% 初始框：满幅框的手柄压在图片边缘上不好抓，
-    // 而且预览里"进来就能裁"，不该先让用户自己拉一个框出来。
+    // 而且点「裁剪」进来时不该先让用户自己拉一个框出来。
     const rect = imageCropRect(item.crop) || {x:.1, y:.1, w:.8, h:.8};
     const ratio = item.crop?.ratio || 'free';
     previewCropDraft = {rect, ratio, width:0, height:0};
@@ -20403,7 +20465,7 @@ function syncPreviewCrop(){
             labels: cropEditorLabels(),
             onRectChange: state => { previewCropDraft = state; },
             onApply: () => { applyPreviewCrop(); },
-            onCancel: () => { closeImageEditor(); }
+            onCancel: () => { cancelPreviewCrop(); }
         });
         previewCropHandle.__previewKey = key;
         previewCropDraft = previewCropHandle.getState?.() || previewCropDraft;

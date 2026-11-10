@@ -323,22 +323,57 @@ class PreviewCropIntegrationTests(unittest.TestCase):
 
     def test_preview_mode_mounts_and_other_modes_destroy(self):
         body = self._function_body(self.canvas_js, "function setImageEditMode(")
-        self.assertIn("if(imageEditMode === 'preview') syncPreviewCrop();", body)
-        self.assertIn("else destroyPreviewCrop();", body)
+        self.assertIn("if(imageEditMode === 'preview'){", body)
+        self.assertIn("syncPreviewCrop();", body)
+        self.assertIn("} else {", body)
+        self.assertIn("syncPreviewCropToggle();", body)
         closing = self._function_body(self.canvas_js, "function closeImageEditor(")
         self.assertIn("destroyPreviewCrop();", closing)
+        # 关掉预览要忘掉这一轮的裁切态，下次双击按图片自身有没有裁切重新决定。
+        self.assertIn("previewCropActive = false;", closing)
+        self.assertIn("previewCropKey = '';", closing)
         self.assertLess(
             closing.index("destroyPreviewCrop();"),
             closing.index("imageEditModal.classList.remove('open');"),
         )
 
+    def test_preview_has_crop_toggle_button(self):
+        # 双击进预览默认只是看图，裁剪要靠工具条上的开关；已有裁切结果时自动进裁切态。
+        self.assertIn('id="previewCropToggleBtn"', self.canvas_html)
+        self.assertIn('onclick="togglePreviewCrop()"', self.canvas_html)
+        self.assertIn('data-i18n="canvas.cropImage"', self.canvas_html)
+        # 裁切条上的「取消」只退出裁切态，不关整个预览。
+        self.assertIn('onclick="cancelPreviewCrop()"', self.canvas_html)
+        toggle = self._function_body(self.canvas_js, "function togglePreviewCrop(")
+        self.assertIn("previewCropActive = true;", toggle)
+        self.assertIn("cancelPreviewCrop();", toggle)
+        cancel = self._function_body(self.canvas_js, "function cancelPreviewCrop(")
+        self.assertIn("previewCropActive = false;", cancel)
+        self.assertIn("destroyPreviewCrop();", cancel)
+        self.assertIn("refreshComparePanel();", cancel)
+        self.assertNotIn("closeImageEditor(", cancel)
+
+    def test_preview_auto_enters_crop_only_when_already_cropped(self):
+        # 预览翻页/换图时按"这张图有没有裁切结果"决定是否直接进裁切态。
+        body = self._function_body(self.canvas_js, "function refreshComparePanel(")
+        self.assertIn("if(imageEditMode === 'preview' && previewCropKey !== editingKey){", body)
+        self.assertIn(
+            "Boolean(editing.node?.images?.[editing.index]?.crop?.result?.url);",
+            body,
+        )
+        self.assertLess(
+            body.index("previewCropActive = Boolean("),
+            body.index("const previewItem = ("),
+        )
+
     def test_preview_shows_uncropped_base_image(self):
         body = self._function_body(self.canvas_js, "function refreshComparePanel(")
         self.assertIn(
-            "const previewItem = (imageEditMode === 'preview' && editing.baseImage?.url) ? editing.baseImage : (editing.image || {});",
+            "const previewItem = (imageEditMode === 'preview' && previewCropActive && editing.baseImage?.url) ? editing.baseImage : (editing.image || {});",
             body,
         )
-        # 预览态必须展示"批注后、未裁切"的整图，否则裁切框坐标与看到的图不对应。
+        # 只有裁切态才展示"批注后、未裁切"的整图，否则框坐标与看到的图不对应；
+        # 纯预览展示正常显示图（已有裁切结果时就是裁切后的那张）。
         self.assertIn("displayMediaUrl(previewItem", body)
 
     def test_current_edit_image_exposes_base_image(self):

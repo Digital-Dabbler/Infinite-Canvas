@@ -181,6 +181,7 @@
         "canvas.cropImage": { zh: "裁剪", en: "Crop" },
         "canvas.cropHint": { zh: "拖动边框或手柄选择保留区域", en: "Drag the border or handles to select the keep area." },
         "canvas.cropLabel": { zh: "裁切", en: "Cropped" },
+    "canvas.cropExit": { zh: "退出裁切", en: "Exit crop" },
         "canvas.cropSaved": { zh: "裁切已应用", en: "Crop applied" },
         "canvas.cropCleared": { zh: "已还原为原图", en: "Crop cleared" },
         "canvas.cropSavedAsNode": { zh: "已另存为新节点", en: "Saved as a new node" },

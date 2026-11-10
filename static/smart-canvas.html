@@ -533,12 +533,13 @@
                             <div id="previewCropRatios" class="ce-inline-ratio"></div>
                             <span id="previewCropSize" class="preview-crop-size"></span>
                             <div class="preview-crop-actions">
-                                <button type="button" class="compare-toggle" onclick="closeImageEditor()" data-i18n="canvas.cropEditorCancel">取消</button>
+                                <button type="button" class="compare-toggle" onclick="cancelPreviewCrop()" data-i18n="canvas.cropEditorCancel">取消</button>
                                 <button type="button" class="compare-toggle primary" data-preview-crop-apply onclick="applyPreviewCrop()" data-i18n="canvas.cropEditorApply">应用裁切</button>
                             </div>
                         </div>
                         <div id="compareThumbs" class="compare-thumbs" style="display:none"></div>
                         <div class="preview-action-row">
+                            <button id="previewCropToggleBtn" class="compare-toggle" type="button" onclick="togglePreviewCrop()" aria-pressed="false" style="display:none"><i data-lucide="crop" class="w-4 h-4"></i><span data-i18n="canvas.cropImage">裁剪</span></button>
                             <button id="panoramaToggleBtn" class="compare-toggle" type="button" onclick="togglePanoramaPreview()" style="display:none"><i data-lucide="globe-2" class="w-4 h-4"></i><span data-i18n="smart.panorama360">360全景</span></button>
                             <button id="panoramaExportBtn" class="compare-toggle" type="button" onclick="exportPanoramaFrame()" style="display:none"><i data-lucide="image-down" class="w-4 h-4"></i><span data-i18n="smart.panoramaExport">导出画面</span></button>
                             <button id="compareToggleBtn" class="compare-toggle" type="button" onclick="togglePreviewCompare()" style="display:none"><i data-lucide="columns-2" class="w-4 h-4"></i><span data-i18n="smart.compareSource">对比原图</span></button>
