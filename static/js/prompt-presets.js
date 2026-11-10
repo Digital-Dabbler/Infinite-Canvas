@@ -133,7 +133,17 @@
         const chips = items.map((item, index) => `<span class="prompt-preset-chip" draggable="true" tabindex="0" role="listitem" data-preset-index="${index}" title="${escapeAttr ? escapeAttr(item.name) : item.name}" aria-label="${escapeAttr ? escapeAttr(`${item.name}，可拖动排序；按 Alt 加左右方向键排序`) : item.name}"><span>${escapeHtml ? escapeHtml(item.name) : item.name}</span><button type="button" data-preset-remove="${index}" title="移除 ${escapeAttr ? escapeAttr(item.name) : item.name}" aria-label="移除 ${escapeAttr ? escapeAttr(item.name) : item.name}"><i data-lucide="x"></i></button></span>`).join('');
         const summary = locked
             ? '<span class="prompt-preset-upstream">由上游提示词节点控制</span>'
-            : `<span class="prompt-preset-length ${finalText.length > WARN_LENGTH ? 'warn' : ''}">${finalText.length} 字符${finalText.length > WARN_LENGTH ? ' · 部分平台可能截断' : ''}</span>`;
+            : (() => {
+                // 当前模型声明了提示词上限时按硬上限算（超了就发不出去），
+                // 否则退回历史经验值，只做“可能被平台截断”的软提示。
+                const hardLimit = Math.max(0, Number(window.promptPresetPromptLimit?.() || 0) || 0);
+                const over = hardLimit ? Math.max(0, finalText.length - hardLimit) : 0;
+                const warn = finalText.length > (hardLimit || WARN_LENGTH);
+                const text = hardLimit
+                    ? `${finalText.length} / ${hardLimit} 字符${over ? ` · 超出 ${over} 字` : ''}`
+                    : `${finalText.length} 字符${warn ? ' · 部分平台可能截断' : ''}`;
+                return `<span class="prompt-preset-length ${warn ? 'warn' : ''}">${text}</span>`;
+            })();
         const row = `<div class="prompt-preset-row"><div class="prompt-preset-chips">${chips || '<span class="prompt-preset-empty">未应用预设</span>'}</div>
                 <div class="prompt-preset-actions"><button type="button" class="prompt-preset-clear" data-preset-clear ${items.length ? '' : 'disabled'} title="清空预设"><i data-lucide="rotate-ccw"></i></button><button type="button" class="prompt-preset-open" data-preset-open ${locked ? 'disabled title="由上游提示词控制"' : 'title="打开提示词库"'}><i data-lucide="library-big"></i><span>提示词库</span></button></div></div>`;
         const final = items.length ? `<details class="prompt-preset-final" ${variant === 'node' && node?.promptFinalPreviewOpen ? 'open' : ''}><summary>最终发送提示词 <span>${summary}</span></summary><div class="prompt-preset-final-body"><pre>${escapeHtml ? escapeHtml(finalText) : finalText}</pre><button type="button" class="smart-text-copy-btn prompt-preset-copy-final" data-preset-copy-final title="复制最终提示词" aria-label="复制最终提示词"><i data-lucide="copy"></i></button></div></details>` : '';
@@ -272,6 +282,7 @@
         host.innerHTML = presetBarHtml(node.id, 'node', 'row');
         bindControls(host, node.id);
         window.lucide?.createIcons();
+        window.updateComposerPromptLengthHint?.();
     }
 
     function addCard(card, targetId = '') {

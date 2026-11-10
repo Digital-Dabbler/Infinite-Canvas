@@ -3795,6 +3795,68 @@ function videoCapabilityBooleanDefault(field){
     const value = field?.default;
     return value === true || String(value || '').toLowerCase() === 'true' || String(value || '') === '1';
 }
+// 提示词长度上限：RunningHub 等上游在 schema 里声明 maxLength（例如 2000）。
+// 超限时上游在参数校验阶段就用 1007 拒绝，任务根本不会创建，因此这里把上限
+// 提前呈现出来，并在提交前拦下，避免用户等一圈才看到一段原始 JSON。
+const PROMPT_LIMIT_FIELD_KEYS = ['prompt', 'positive', 'prompttext', 'prompt_text', 'text', 'mainprompt'];
+function capabilityPromptLimit(capability){
+    const field = videoCapabilityField(capability, ...PROMPT_LIMIT_FIELD_KEYS);
+    const limit = Math.floor(Number(field?.maxLength || 0));
+    return Number.isFinite(limit) && limit > 0 ? limit : 0;
+}
+function composerPromptLimit(){
+    if(settings.engine !== 'api') return 0;
+    const capability = settings.apiKind === 'video' ? currentVideoModelCapability() : currentImageModelCapability();
+    return capabilityPromptLimit(capability);
+}
+function composerComposedPromptText(){
+    const node = typeof activeComposerNode === 'function' ? activeComposerNode() : null;
+    const raw = String(promptInput?.innerText || '');
+    return typeof window.promptPresetComposeText === 'function'
+        ? String(window.promptPresetComposeText(node, raw) || '')
+        : raw;
+}
+function composerPromptLimitElement(){
+    let el = document.getElementById('composerPromptLength');
+    if(el) return el;
+    const actions = composer?.querySelector('.composer-actions');
+    if(!actions) return null;
+    el = document.createElement('span');
+    el.id = 'composerPromptLength';
+    el.className = 'composer-prompt-length';
+    el.hidden = true;
+    const runBtn = actions.querySelector('#runBtn');
+    if(runBtn) actions.insertBefore(el, runBtn);
+    else actions.appendChild(el);
+    return el;
+}
+function updatePromptLengthHint(){
+    const el = composerPromptLimitElement();
+    if(!el) return 0;
+    const limit = composerPromptLimit();
+    if(!limit){
+        el.hidden = true;
+        el.textContent = '';
+        el.classList.remove('warn', 'over');
+        el.removeAttribute('title');
+        return 0;
+    }
+    const used = composerComposedPromptText().length;
+    const over = Math.max(0, used - limit);
+    const counter = tr('smart.promptLengthHint')
+        .replace('{used}', String(used))
+        .replace('{limit}', String(limit));
+    el.hidden = false;
+    el.classList.toggle('over', over > 0);
+    el.classList.toggle('warn', over === 0 && used > limit * 0.85);
+    el.textContent = over > 0
+        ? `${counter} · ${tr('smart.promptLengthOver').replace('{over}', String(over))}`
+        : counter;
+    el.title = tr('smart.promptLengthTitle');
+    return used;
+}
+window.updateComposerPromptLengthHint = updatePromptLengthHint;
+window.promptPresetPromptLimit = () => composerPromptLimit();
 function renderVideoInputCapabilityNote(capability){
     const fields = capability?.fields || [];
     const byType = type => fields.filter(field => String(field?.type || '').toUpperCase() === type);
@@ -5259,6 +5321,7 @@ function updatePromptPlaceholder(){
                 hintEl.hidden = needsPrompt;
                 hintEl.textContent = needsPrompt ? '' : tr('smart.comfyNoPromptHint');
             }
+            updatePromptLengthHint();
             return;
         }
     }
@@ -5268,6 +5331,7 @@ function updatePromptPlaceholder(){
     }
     const suggestion = rhDefaultPromptSuggestion();
     promptInput.dataset.placeholder = suggestion || tr('smart.promptPlaceholder');
+    updatePromptLengthHint();
 }
 function rhFieldIndexes(fields){
     const counters = {image:0, video:0, audio:0};
@@ -24709,7 +24773,25 @@ async function runApiGeneration(prompt, refs, runSettings=settings, canvasBindin
     // 所有 API 平台从同一份能力缓存读取比例、尺寸和显式宽高；RunningHub
     // 只在扩展参数序列化时保留其上游 schema 的专有通道。
     const aspectRatio = imageAspectValueForRun(runSettings);
-    const capability = imageModelCapabilityCache.get(imageCapabilityCacheKey(runSettings.provider_id, runSettings.model)) || null;
+    let capability = imageModelCapabilityCache.get(imageCapabilityCacheKey(runSettings.provider_id, runSettings.model)) || null;
+    if(!capability){
+        try {
+            capability = await ensureImageModelCapability(runSettings.provider_id, runSettings.model);
+        } catch (_) {
+            capability = null;
+        }
+    }
+    // 上游只在参数校验阶段才会因提示词超长拒绝（RunningHub 返回 1007），
+    // 这里按模型声明的上限提前拦下，避免白白提交一次再看到原始 JSON。
+    const promptLimit = capabilityPromptLimit(capability);
+    const promptLength = String(prompt || '').length;
+    if(promptLimit && promptLength > promptLimit){
+        throw new Error(tr('smart.errPromptTooLong')
+            .replace('{model}', String(runSettings.model || ''))
+            .replace('{limit}', String(promptLimit))
+            .replace('{length}', String(promptLength))
+            .replace('{over}', String(promptLength - promptLimit)));
+    }
     const hasDimensions = Boolean(videoCapabilityField(capability, 'width') || videoCapabilityField(capability, 'height'));
     const dimensionSize = hasDimensions && !runSettings.resolution && runSettings.imageCapabilityWidth && runSettings.imageCapabilityHeight
         ? `${Math.round(Number(runSettings.imageCapabilityWidth))}x${Math.round(Number(runSettings.imageCapabilityHeight))}`
@@ -27190,6 +27272,7 @@ promptInput.addEventListener('input', () => {
     delete promptInput.dataset.preserveDraftOnce;
     savePromptDraftForCurrent();
     renderInputThumbsRow(composerActionNode());
+    updatePromptLengthHint();
     scheduleSave();
 });
 promptInput.addEventListener('keyup', maybeOpenMentionPicker);

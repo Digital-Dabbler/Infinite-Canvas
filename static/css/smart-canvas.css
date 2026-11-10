@@ -1968,6 +1968,13 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .selection-box { position:absolute; z-index:18; border:1px solid var(--strong); background:rgba(15,23,42,.08); border-radius:10px; pointer-events:none; display:none; }
 .theme-dark .selection-box { background:rgba(248,250,252,.1); }
 .composer-actions { grid-area:run; display:flex; justify-content:flex-end; gap:6px; }
+/* 提示词字数：只在当前模型声明了 maxLength 时出现，接近上限转黄、超出转红。 */
+.composer-prompt-length { align-self:center; margin-right:2px; height:22px; padding:0 9px; border-radius:999px; border:1px solid var(--line); background:var(--soft); color:var(--muted); display:inline-flex; align-items:center; font-size:calc(10px * var(--canvas-font-scale, 1)); font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.composer-prompt-length[hidden] { display:none; }
+.composer-prompt-length.warn { color:#b45309; border-color:color-mix(in srgb, #f59e0b 42%, var(--line)); background:color-mix(in srgb, #f59e0b 12%, transparent); }
+.composer-prompt-length.over { color:#b91c1c; border-color:color-mix(in srgb, #ef4444 46%, var(--line)); background:color-mix(in srgb, #ef4444 12%, transparent); }
+.theme-dark .composer-prompt-length.warn { color:#fcd34d; }
+.theme-dark .composer-prompt-length.over { color:#fca5a5; }
 .preview-icon-btn { width:34px; height:34px; border-radius:12px; display:inline-flex; align-items:center; justify-content:center; color:var(--muted); background:var(--card); border:1px solid var(--line); }
 .preview-icon-btn:hover { background:var(--strong); color:var(--strong-text); }
 .preview-nav-btn { position:absolute; top:50%; z-index:9; width:42px; height:58px; transform:translateY(-50%); border-radius:999px; display:none; align-items:center; justify-content:center; background:rgba(255,255,255,.86); color:var(--text); border:1px solid var(--line); box-shadow:0 14px 34px rgba(15,23,42,.16); backdrop-filter:blur(14px); transition:background .14s ease, color .14s ease, transform .14s ease; }

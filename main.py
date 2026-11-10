@@ -14721,6 +14721,11 @@ def friendly_image_error_detail(text, size="", model=""):
     if is_gpt_image_2_model(model) and gpt_image_2_size_exceeds_supported(size):
         return gpt_image_2_size_error_message(size)
     mentions_size = any(token in lower_text for token in ["size", "resolution", "dimension"])
+    # RunningHub 等上游在参数校验阶段就拒绝超长提示词（errorCode 1007），
+    # 这类报错要翻译成能直接照做的中文，而不是把原始 JSON 丢给用户。
+    length_match = RUNNINGHUB_FIELD_LENGTH_ERROR_RE.search(text)
+    if length_match and str(length_match.group(1) or "").strip().lower() in RUNNINGHUB_PROMPT_FIELD_KEYS:
+        return runninghub_prompt_too_long_detail(length_match.group(3), length_match.group(2), model)
     is_gpt_size_error = is_gpt_image_2_model(model) and mentions_size and (
         "invalid" in lower_text
         or "unsupported" in lower_text
@@ -16114,6 +16119,70 @@ def runninghub_apply_image_aspect(body, params, aspect_ratio="", size=""):
     body[key] = runninghub_schema_value(field, aspect)
     return set()
 
+RUNNINGHUB_PROMPT_FIELD_KEYS = ("prompt", "positive", "positiveprompt", "prompttext", "text")
+
+def runninghub_prompt_field(params):
+    """返回模型 schema 声明的主提示词字段（带 maxLength 等约束）。"""
+    return runninghub_schema_field(params, *RUNNINGHUB_PROMPT_FIELD_KEYS)
+
+def runninghub_field_max_length(field):
+    try:
+        value = int((field or {}).get("maxLength") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return value if value > 0 else 0
+
+def runninghub_prompt_too_long_detail(limit, length, model=""):
+    """提示词超出上游模型上限时统一的中文说明（后端拦截与上游报错共用）。"""
+    limit = max(1, int(limit or 0))
+    length = max(0, int(length or 0))
+    name = str(model or "").strip() or "当前模型"
+    return (
+        f"「{name}」的提示词上限是 {limit} 字，当前提示词 {length} 字，超出 {max(0, length - limit)} 字。"
+        "请精简提示词，或拆成多个提示词节点分次生成；也可以换用提示词上限更高的模型。"
+    )
+
+def runninghub_ensure_prompt_length(field, text, model=""):
+    """按模型 schema 的 maxLength 预先拦截超长提示词，避免上游 1007 才失败。"""
+    limit = runninghub_field_max_length(field)
+    length = len(str(text or ""))
+    if limit and length > limit:
+        raise HTTPException(status_code=400, detail=runninghub_prompt_too_long_detail(limit, length, model))
+    return limit
+
+RUNNINGHUB_FIELD_LENGTH_ERROR_RE = re.compile(
+    r"field '([^']+)' length (\d+) is greater than the maximum length (\d+)",
+    re.IGNORECASE,
+)
+
+def runninghub_prompt_payload_error(raw):
+    """把上游「prompt 超长」原始 JSON 翻译成可直接展示的中文；其他错误返回空串。"""
+    if not isinstance(raw, dict):
+        return ""
+    message = str(raw.get("errorMessage") or raw.get("msg") or raw.get("message") or "").strip()
+    if not message:
+        return ""
+    match = RUNNINGHUB_FIELD_LENGTH_ERROR_RE.search(message)
+    if not match:
+        return ""
+    field_key = str(match.group(1) or "").strip()
+    length = int(match.group(2) or 0)
+    limit = int(match.group(3) or 0)
+    if field_key.lower() not in RUNNINGHUB_PROMPT_FIELD_KEYS:
+        return f"上游参数「{field_key}」超过字数上限 {limit}（当前 {length} 字），请精简后再提交。"
+    return runninghub_prompt_too_long_detail(limit, length)
+
+async def ensure_runninghub_prompt_capability(provider, model, prompt):
+    """提交前按上游模型 schema 校验提示词长度：超限直接 400，不建任务、不等待。"""
+    if not is_runninghub_provider(provider):
+        return 0
+    try:
+        model_def = await runninghub_model_definition(provider, model)
+    except Exception:
+        return 0
+    params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
+    return runninghub_ensure_prompt_length(runninghub_prompt_field(params), prompt, model)
+
 def runninghub_image_model_params(params, values):
     """只允许并转换当前 RunningHub 图片模型声明过的非媒体扩展参数。
 
@@ -16868,6 +16937,7 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": value})
             elif rh_field_role(field) == "prompt":
                 value = prompt_text or rh_default_value(field)
+                runninghub_ensure_prompt_length(field, value, model)
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": value})
             elif kind_f == "number" and field.get("random_enabled") is True:
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": rh_random_field_value(field)})
@@ -16900,10 +16970,18 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
             )
             raw = response.json()
         if not (isinstance(raw, dict) and raw.get("code") in (0, "0")):
-            raise HTTPException(status_code=502, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 提交失败：{raw}")
+            raise HTTPException(
+                status_code=502,
+                detail=runninghub_prompt_payload_error(raw)
+                or (raw.get("msg") if isinstance(raw, dict) else "")
+                or f"RunningHub 提交失败：{raw}",
+            )
         task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
         if not task_id:
-            raise HTTPException(status_code=502, detail=f"RunningHub 未返回 taskId：{raw}")
+            raise HTTPException(
+                status_code=502,
+                detail=runninghub_prompt_payload_error(raw) or f"RunningHub 未返回 taskId：{raw}",
+            )
 
         query_url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
         deadline = time.monotonic() + RUNNINGHUB_EXPLICIT_PENDING_MAX_SECONDS
@@ -16957,6 +17035,9 @@ async def generate_runninghub_provider_image(
     model_def = await runninghub_model_definition(provider, model)
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or model)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
+    # 上游 schema 已声明 prompt 字数上限时先拦下来：1007 报错发生在参数校验阶段，
+    # 提前拦能省掉一次上传参考图和一次失败的提交。
+    runninghub_ensure_prompt_length(runninghub_prompt_field(params), prompt, model)
     explicit_dimensions = str(resolution or "").strip() == "__custom_dimensions__"
     requested_resolution = "" if explicit_dimensions else (str(resolution or "").strip() or runninghub_resolution_from_size(size, "2k"))
     body = {"prompt": prompt}
@@ -17030,7 +17111,11 @@ async def generate_runninghub_provider_image(
         except HTTPException:
             task_id = runninghub_extract_task_id(raw)
             if not task_id:
-                raise HTTPException(status_code=502, detail=f"RunningHub 未返回 taskId 或图片结果：{raw}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=runninghub_prompt_payload_error(raw)
+                    or f"RunningHub 未返回 taskId 或图片结果：{raw}",
+                )
         result = await wait_for_runninghub_image_task(client, provider, task_id)
         return runninghub_extract_image(result), result
 
@@ -17077,6 +17162,7 @@ async def generate_runninghub_video(payload, provider):
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or payload.model)
     image_to_video = runninghub_is_image_to_video(payload.model) or runninghub_is_image_to_video(model_def.get("endpoint")) or runninghub_is_image_to_video(endpoint)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
+    runninghub_ensure_prompt_length(runninghub_prompt_field(params), str(payload.prompt or ""), payload.model)
     first_field = runninghub_schema_field(params, "firstFrameUrl", "first_frame_url", "firstFrameImage", "first_frame_image")
     last_field = runninghub_schema_field(params, "lastFrameUrl", "last_frame_url", "lastFrameImage", "last_frame_image")
     image_field = runninghub_schema_field(params, "imageUrls", "image_urls", "imageUrl", "image_url", "referenceImages", "referenceImageUrls")
@@ -20320,6 +20406,7 @@ async def build_online_image_result(payload: OnlineImageRequest, api_profile_id=
     provider = get_api_provider(payload.provider_id, api_profile_id)
     default_model = (provider.get("image_models") or [IMAGE_MODEL])[0]
     model = selected_model(payload.model, default_model)
+    await ensure_runninghub_prompt_capability(provider, model, payload.prompt)
     request_size = online_image_request_size(payload)
     refs = [ref.dict() for ref in payload.reference_images if ref.url]
     image_refs = image_references(refs)
@@ -20696,13 +20783,21 @@ async def create_canvas_image_task(payload: OnlineImageRequest, request: Request
     canvas_binding = require_canvas_task_editor(payload, request)
     event = begin_usage_event(request, "image", payload.provider_id, payload.model, {"size": payload.size, "quality": payload.quality, "count": payload.n, "entry": "canvas"})
     request.state.usage_event = event
-    request.state.usage_async = True
     upstream_context = upstream_context_for_profile_id(
         event.get("api_profile_id", ""),
         payload.provider_id,
         user_id=event.get("user_id", ""),
         allow_default=not bool(str(payload.provider_id or "").strip()),
     )
+    # 提示词超长属于纯参数问题：在建立画布任务和真正提交上游之前就拒绝，
+    # 前端能立刻看到可照做的中文说明，也不会留下排队中的失败任务。
+    # 此时 usage_async 仍为 False，审计中间件会把这条用量事件收口为 failed。
+    await ensure_runninghub_prompt_capability(
+        upstream_context.provider,
+        selected_model(payload.model, (upstream_context.provider.get("image_models") or [IMAGE_MODEL])[0]),
+        payload.prompt,
+    )
+    request.state.usage_async = True
     task_id = f"canvas_img_{uuid.uuid4().hex}"
     canvas_task_create({
         "id": task_id,
