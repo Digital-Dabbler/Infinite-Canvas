@@ -3798,11 +3798,31 @@ function videoCapabilityBooleanDefault(field){
 // 提示词长度上限：RunningHub 等上游在 schema 里声明 maxLength（例如 2000）。
 // 超限时上游在参数校验阶段就用 1007 拒绝，任务根本不会创建，因此这里把上限
 // 提前呈现出来，并在提交前拦下，避免用户等一圈才看到一段原始 JSON。
-const PROMPT_LIMIT_FIELD_KEYS = ['prompt', 'positive', 'prompttext', 'prompt_text', 'text', 'mainprompt'];
+const PROMPT_LIMIT_FIELD_KEYS = ['prompt', 'positive', 'positiveprompt', 'prompttext', 'prompt_text', 'mainprompt', 'text'];
+// 必须按“实际发送的字段”优先级取，不能按字段数组出现顺序取：
+// 一个模型常常同时声明 prompt 和 text/positive 这类别的长文本字段，
+// 它们的字数上限各不相同，取错了就会显示成另一个字段的上限。
+function capabilityPromptField(capability){
+    const fields = capability?.fields || [];
+    for(const key of PROMPT_LIMIT_FIELD_KEYS){
+        const field = fields.find(item => String(item?.key || '').toLowerCase() === key);
+        if(field) return field;
+    }
+    return null;
+}
 function capabilityPromptLimit(capability){
-    const field = videoCapabilityField(capability, ...PROMPT_LIMIT_FIELD_KEYS);
-    const limit = Math.floor(Number(field?.maxLength || 0));
+    const limit = Math.floor(Number(capabilityPromptField(capability)?.maxLength || 0));
     return Number.isFinite(limit) && limit > 0 ? limit : 0;
+}
+// 后端会把上游真正执行过的上限记下来：一旦这次报的是“提示词超长”，就刷新该
+// 模型的能力，让面板下一次按真实上限显示和拦截（注册表声明值偶尔偏松）。
+function syncPromptLimitFromServerError(error, providerId, model){
+    const message = String(error?.message || '');
+    if(!message.includes('提示词上限是') || !providerId || !model) return;
+    imageModelCapabilityCache.delete(imageCapabilityCacheKey(providerId, model));
+    ensureImageModelCapability(providerId, model)
+        .then(() => updatePromptLengthHint())
+        .catch(() => null);
 }
 function composerPromptLimit(){
     if(settings.engine !== 'api') return 0;
@@ -24824,11 +24844,17 @@ async function runApiGeneration(prompt, refs, runSettings=settings, canvasBindin
         reference_images:referenceImages,
         model_params:runningHub && runSettings.imageModelParams && typeof runSettings.imageModelParams === 'object' ? runSettings.imageModelParams : {}
     };
-    const tasks = await Promise.all(Array.from({length:count}, (_, batchIndex) => submitCanvasImageTask(canvasBinding ? {
-        ...payload,
-        ...canvasBinding,
-        batch_index:batchIndex
-    } : payload)));
+    let tasks;
+    try {
+        tasks = await Promise.all(Array.from({length:count}, (_, batchIndex) => submitCanvasImageTask(canvasBinding ? {
+            ...payload,
+            ...canvasBinding,
+            batch_index:batchIndex
+        } : payload)));
+    } catch(error) {
+        syncPromptLimitFromServerError(error, payload.provider_id, payload.model);
+        throw error;
+    }
     return {
         taskIds:tasks.map(task => task.task_id).filter(Boolean), count,
         providerId:payload.provider_id, model:payload.model,

@@ -15700,7 +15700,7 @@ def runninghub_adaptive_ratio_fields(fields):
         result.append(field)
     return result
 
-def public_runninghub_model_capabilities(model_def):
+def public_runninghub_model_capabilities(model_def, provider=None, model=""):
     fields = []
     for raw in model_def.get("params") or []:
         if not isinstance(raw, dict):
@@ -15739,15 +15739,38 @@ def public_runninghub_model_capabilities(model_def):
     output_type = str(model_def.get("output_type") or "").strip().lower()
     if output_type == "image":
         fields = runninghub_adaptive_ratio_fields(fields)
+    runninghub_apply_learned_prompt_limit(fields, provider, model or runninghub_model_id(model_def))
     return {
         "provider": "runninghub",
-        "model": runninghub_model_id(model_def),
+        "model": model or runninghub_model_id(model_def),
         "display_name": runninghub_model_display_name(model_def),
         "output_type": output_type,
         "fields": fields,
         "discovered": bool(fields),
         "source": "provider-schema",
     }
+
+def runninghub_apply_learned_prompt_limit(fields, provider, model):
+    """把上游实际拒绝过的提示词上限写进能力结构，纠正注册表的偏差。
+
+    注册表声明与实际校验偶尔不一致（例：seedream-v5-pro 声明 5000，上游按
+    2000 拒绝）。一旦被上游拒绝过，就用更严格的那个值，面板与预检随之对齐。
+    """
+    learned = runninghub_learned_prompt_limit(provider, model)
+    if not learned:
+        return fields
+    for wanted in RUNNINGHUB_PROMPT_FIELD_KEYS:
+        target = next(
+            (item for item in fields if str(item.get("key") or "").strip().lower() == wanted),
+            None,
+        )
+        if target is None:
+            continue
+        current = target.get("maxLength")
+        if not isinstance(current, (int, float)) or not current or learned < current:
+            target["maxLength"] = learned
+        break
+    return fields
 
 # 图片、视频 Composer 都使用这一份规范化能力结构。RunningHub 仍可从上游
 # schema 自动发现；其他平台先返回经过验证的适配器能力，再安全回退到其既有
@@ -15942,7 +15965,7 @@ async def provider_model_capability(provider, model, kind):
     kind = "video" if str(kind).lower() == "video" else "image"
     if is_runninghub_provider(provider):
         model_def = await runninghub_model_definition(provider, model)
-        result = public_runninghub_model_capabilities(model_def)
+        result = public_runninghub_model_capabilities(model_def, provider, model)
         result.update({"provider": provider.get("id"), "model": model, "kind": kind, "output_type": kind})
         return merge_declared_model_capability(result, provider, model, kind)
     base = generic_video_model_capability(provider, model) if kind == "video" else generic_image_model_capability(provider, model)
@@ -16121,9 +16144,47 @@ def runninghub_apply_image_aspect(body, params, aspect_ratio="", size=""):
 
 RUNNINGHUB_PROMPT_FIELD_KEYS = ("prompt", "positive", "positiveprompt", "prompttext", "text")
 
+# 上游真正执行过的提示词上限。注册表声明值可能与实际校验不一致（例如声明 5000
+# 实际按 2000 拒绝），被拒绝一次后以此为更严格的上限。键含配置组，避免同名的
+# 模型在不同配置组之间互相污染；仅进程内记忆，重启后重新学习。
+RUNNINGHUB_PROMPT_LIMIT_CACHE = {}
+
+def runninghub_prompt_limit_key(provider, model):
+    provider = provider if isinstance(provider, dict) else {}
+    profile_id = str(provider.get("_api_profile_id") or "").strip()
+    provider_id = str(provider.get("id") or "").strip()
+    return f"{profile_id}|{provider_id}|{str(model or '').strip()}"
+
+def runninghub_learned_prompt_limit(provider, model):
+    try:
+        return int(RUNNINGHUB_PROMPT_LIMIT_CACHE.get(runninghub_prompt_limit_key(provider, model)) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+def runninghub_learn_prompt_limit(provider, model, limit):
+    try:
+        limit = int(limit or 0)
+    except (TypeError, ValueError):
+        return 0
+    if limit > 0:
+        RUNNINGHUB_PROMPT_LIMIT_CACHE[runninghub_prompt_limit_key(provider, model)] = limit
+    return limit
+
 def runninghub_prompt_field(params):
-    """返回模型 schema 声明的主提示词字段（带 maxLength 等约束）。"""
-    return runninghub_schema_field(params, *RUNNINGHUB_PROMPT_FIELD_KEYS)
+    """返回模型 schema 声明的主提示词字段（带 maxLength 等约束）。
+
+    必须按字段名优先级查找，而不是按 schema 里的出现顺序：一个模型常常同时
+    声明 prompt 与 text/positive 这类别的长文本字段，各自的上限并不相同；
+    而实际提交到 /task/openapi/create 的主提示词恒定写在 prompt 字段里，
+    取错字段就会把别的字段上限当成提示词上限。
+    """
+    fields = [field for field in (params or []) if isinstance(field, dict)]
+    for key in RUNNINGHUB_PROMPT_FIELD_KEYS:
+        for field in fields:
+            names = {str(field.get("fieldKey") or "").strip().lower(), str(field.get("label") or "").strip().lower()}
+            if key in names:
+                return field
+    return None
 
 def runninghub_field_max_length(field):
     try:
@@ -16142,9 +16203,15 @@ def runninghub_prompt_too_long_detail(limit, length, model=""):
         "请精简提示词，或拆成多个提示词节点分次生成；也可以换用提示词上限更高的模型。"
     )
 
-def runninghub_ensure_prompt_length(field, text, model=""):
-    """按模型 schema 的 maxLength 预先拦截超长提示词，避免上游 1007 才失败。"""
-    limit = runninghub_field_max_length(field)
+def runninghub_ensure_prompt_length(field, text, model="", provider=None):
+    """预先拦截超长提示词，避免上游 1007 才失败。
+
+    上限取“注册表声明值”与“上游实际拒绝值”里更严格的那个：注册表偶尔把
+    别的长文本字段的上限挂到 prompt 上（或干脆漏写），以上游拒绝为准才准。
+    """
+    schema_limit = runninghub_field_max_length(field)
+    learned_limit = runninghub_learned_prompt_limit(provider, model)
+    limit = min(v for v in (schema_limit, learned_limit) if v) if (schema_limit or learned_limit) else 0
     length = len(str(text or ""))
     if limit and length > limit:
         raise HTTPException(status_code=400, detail=runninghub_prompt_too_long_detail(limit, length, model))
@@ -16155,8 +16222,12 @@ RUNNINGHUB_FIELD_LENGTH_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 
-def runninghub_prompt_payload_error(raw):
-    """把上游「prompt 超长」原始 JSON 翻译成可直接展示的中文；其他错误返回空串。"""
+def runninghub_prompt_payload_error(raw, provider=None, model=""):
+    """把上游「prompt 超长」原始 JSON 翻译成可直接展示的中文；其他错误返回空串。
+
+    顺手把上游实际执行的上限记下来：注册表声明与真实校验不一致时（例如声明
+    5000、实际 2000），下一次提交前就能按真实上限拦下，面板也按它显示。
+    """
     if not isinstance(raw, dict):
         return ""
     message = str(raw.get("errorMessage") or raw.get("msg") or raw.get("message") or "").strip()
@@ -16170,10 +16241,11 @@ def runninghub_prompt_payload_error(raw):
     limit = int(match.group(3) or 0)
     if field_key.lower() not in RUNNINGHUB_PROMPT_FIELD_KEYS:
         return f"上游参数「{field_key}」超过字数上限 {limit}（当前 {length} 字），请精简后再提交。"
-    return runninghub_prompt_too_long_detail(limit, length)
+    runninghub_learn_prompt_limit(provider, model, limit)
+    return runninghub_prompt_too_long_detail(limit, length, model)
 
 async def ensure_runninghub_prompt_capability(provider, model, prompt):
-    """提交前按上游模型 schema 校验提示词长度：超限直接 400，不建任务、不等待。"""
+    """提交前按上游真实提示词上限校验：超限直接 400，不建任务、不等待。"""
     if not is_runninghub_provider(provider):
         return 0
     try:
@@ -16181,7 +16253,7 @@ async def ensure_runninghub_prompt_capability(provider, model, prompt):
     except Exception:
         return 0
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
-    return runninghub_ensure_prompt_length(runninghub_prompt_field(params), prompt, model)
+    return runninghub_ensure_prompt_length(runninghub_prompt_field(params), prompt, model, provider)
 
 def runninghub_image_model_params(params, values):
     """只允许并转换当前 RunningHub 图片模型声明过的非媒体扩展参数。
@@ -16937,7 +17009,7 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": value})
             elif rh_field_role(field) == "prompt":
                 value = prompt_text or rh_default_value(field)
-                runninghub_ensure_prompt_length(field, value, model)
+                runninghub_ensure_prompt_length(field, value, model, provider)
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": value})
             elif kind_f == "number" and field.get("random_enabled") is True:
                 node_info_list.append({"nodeId": node_id, "fieldName": field_name, "fieldValue": rh_random_field_value(field)})
@@ -16972,7 +17044,7 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
         if not (isinstance(raw, dict) and raw.get("code") in (0, "0")):
             raise HTTPException(
                 status_code=502,
-                detail=runninghub_prompt_payload_error(raw)
+                detail=runninghub_prompt_payload_error(raw, provider, model)
                 or (raw.get("msg") if isinstance(raw, dict) else "")
                 or f"RunningHub 提交失败：{raw}",
             )
@@ -16980,7 +17052,7 @@ async def generate_runninghub_entry_image(prompt, size, model, reference_images,
         if not task_id:
             raise HTTPException(
                 status_code=502,
-                detail=runninghub_prompt_payload_error(raw) or f"RunningHub 未返回 taskId：{raw}",
+                detail=runninghub_prompt_payload_error(raw, provider, model) or f"RunningHub 未返回 taskId：{raw}",
             )
 
         query_url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
@@ -17037,7 +17109,7 @@ async def generate_runninghub_provider_image(
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
     # 上游 schema 已声明 prompt 字数上限时先拦下来：1007 报错发生在参数校验阶段，
     # 提前拦能省掉一次上传参考图和一次失败的提交。
-    runninghub_ensure_prompt_length(runninghub_prompt_field(params), prompt, model)
+    runninghub_ensure_prompt_length(runninghub_prompt_field(params), prompt, model, provider)
     explicit_dimensions = str(resolution or "").strip() == "__custom_dimensions__"
     requested_resolution = "" if explicit_dimensions else (str(resolution or "").strip() or runninghub_resolution_from_size(size, "2k"))
     body = {"prompt": prompt}
@@ -17113,7 +17185,7 @@ async def generate_runninghub_provider_image(
             if not task_id:
                 raise HTTPException(
                     status_code=502,
-                    detail=runninghub_prompt_payload_error(raw)
+                    detail=runninghub_prompt_payload_error(raw, provider, model)
                     or f"RunningHub 未返回 taskId 或图片结果：{raw}",
                 )
         result = await wait_for_runninghub_image_task(client, provider, task_id)
@@ -17162,7 +17234,7 @@ async def generate_runninghub_video(payload, provider):
     endpoint = runninghub_task_endpoint(provider, model_def.get("endpoint") or payload.model)
     image_to_video = runninghub_is_image_to_video(payload.model) or runninghub_is_image_to_video(model_def.get("endpoint")) or runninghub_is_image_to_video(endpoint)
     params = model_def.get("params") if isinstance(model_def.get("params"), list) else []
-    runninghub_ensure_prompt_length(runninghub_prompt_field(params), str(payload.prompt or ""), payload.model)
+    runninghub_ensure_prompt_length(runninghub_prompt_field(params), str(payload.prompt or ""), payload.model, provider)
     first_field = runninghub_schema_field(params, "firstFrameUrl", "first_frame_url", "firstFrameImage", "first_frame_image")
     last_field = runninghub_schema_field(params, "lastFrameUrl", "last_frame_url", "lastFrameImage", "last_frame_image")
     image_field = runninghub_schema_field(params, "imageUrls", "image_urls", "imageUrl", "image_url", "referenceImages", "referenceImageUrls")
@@ -17263,7 +17335,11 @@ async def generate_runninghub_video(payload, provider):
         if not task_id:
             fail_reason = runninghub_fail_reason(raw)
             if fail_reason:
-                raise HTTPException(status_code=502, detail=f"RunningHub 视频接口错误：{fail_reason}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=runninghub_prompt_payload_error(raw, provider, payload.model)
+                    or f"RunningHub 视频接口错误：{fail_reason}",
+                )
         result = raw
         if task_id and not video_output_urls(raw):
             result = await wait_for_runninghub_openapi_task(client, provider, task_id, "video")
