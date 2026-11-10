@@ -84,7 +84,7 @@ class MaskEditorFrontendTests(unittest.TestCase):
     def test_editor_restores_color_layers(self):
         # 重新打开颜色叠加结果时，按纯色块小图还原每种颜色，并回显上次的叠加设置。
         self.assertIn("this.paintUrl = this.opts.paintUrl || '';", self.editor_js)
-        self.assertIn("this.mode = this.hideColorMode ? 'mask' : (this.opts.mode === 'color' ? 'color' : 'mask');", self.editor_js)
+        self.assertIn("this.mode = this.opts.mode === 'color' ? 'color' : 'mask';", self.editor_js)
         self.assertIn("async loadPaintData()", self.editor_js)
         self.assertIn("kind: 'baseline', color: name", self.editor_js)
         self.assertIn("baselineCount() {", self.editor_js)

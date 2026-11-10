@@ -1,7 +1,7 @@
 """「移除重绘」功能的静态契约测试。
 
 覆盖：顶部工具栏按钮、动作分发、Qwen 移除/局部重绘工作流的参数映射、
-遮罩编辑器为这个场景新增的开关（hideColorMode / promptBox），以及节点显示文案。
+遮罩编辑器为这个场景新增的提示词框（颜色叠加模式保持可用），以及节点显示文案。
 
 只读文件做结构断言，不启动服务、不跑 ComfyUI。
 """
@@ -110,17 +110,23 @@ class MaskEditorRemoveRedrawOptionsTests(unittest.TestCase):
         cls.editor_css = read_text("static/css/mask-editor.css")
         cls.canvas_js = read_text("static/js/smart-canvas.js")
 
-    def test_options_are_opt_in(self):
-        # 默认行为（普通遮罩编辑器）必须完全不变。
-        self.assertIn("this.hideColorMode = this.opts.hideColorMode === true;", self.editor_js)
+    def test_prompt_box_is_opt_in(self):
+        # 普通遮罩编辑器没有提示词框，也不该凭空多出 prompt 字段。
         self.assertIn(
             "this.promptBox = this.opts.promptBox && typeof this.opts.promptBox === 'object' ? this.opts.promptBox : null;",
             self.editor_js,
         )
-        self.assertIn("this.mode = this.hideColorMode ? 'mask' : (this.opts.mode === 'color' ? 'color' : 'mask');", self.editor_js)
-        # 没有 promptBox 时不渲染输入框，也没有多余的 prompt 字段。
         self.assertIn("const promptMarkup = this.promptBox", self.editor_js)
-        self.assertIn("const modeSeg = this.hideColorMode ? '' :", self.editor_js)
+
+    def test_color_overlay_mode_stays_available(self):
+        # 局部重绘要看「哪块涂了」，颜色叠加模式必须保留：编辑器不再有隐藏它的开关。
+        self.assertNotIn("hideColorMode", self.editor_js)
+        self.assertNotIn("hideColorMode", self.canvas_js)
+        self.assertIn("this.mode = this.opts.mode === 'color' ? 'color' : 'mask';", self.editor_js)
+        self.assertIn("const modeSeg =", self.editor_js)
+        self.assertIn('data-mode="color"', self.editor_js)
+        # 文案也不能被抹掉，否则模式切换按钮是空白。
+        self.assertNotIn("delete labels.modeColor;", self.canvas_js)
 
     def test_prompt_value_returned(self):
         self.assertIn("this.promptInput = root.querySelector('.me-prompt-input');", self.editor_js)

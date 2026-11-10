@@ -12830,8 +12830,6 @@ function smartRemoveRedrawLabels(){
     labels.saving = tr('smart.removeRedrawRunning');
     labels.hint = tr('smart.removeRedrawEditorHint');
     labels.saveFail = tr('smart.removeRedrawSubmitFail');
-    // 这个场景不需要颜色叠加，面板里也不该出现色板/不透明度
-    delete labels.modeColor;
     return labels;
 }
 async function openRemoveRedrawEditorForImage(node, index){
@@ -12848,7 +12846,6 @@ async function openRemoveRedrawEditorForImage(node, index){
             // 底图与遮罩都活在当前可见像素空间（有裁切时用裁切结果）
             imageUrl: displayMediaUrl(imageForDisplay(item)),
             // 每次从空白遮罩开始：这是一次性的“涂抹后处理”，不沿用图片已有遮罩
-            hideColorMode: true,
             labels: smartRemoveRedrawLabels(),
             promptBox: {
                 guide: tr('smart.removeRedrawPromptGuide'),

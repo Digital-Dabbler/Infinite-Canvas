@@ -10,7 +10,6 @@
  *       imageUrl,        // 必填：原图地址（同源 /assets、/output 或 blob:）
  *       maskUrl,         // 可选：旧遮罩（不透明黑白 PNG，白色 = 已涂抹）
  *       labels,          // 必填：全部界面文案，由调用方传入
- *       hideColorMode,   // 可选：true = 只做遮罩，不渲染「仅遮罩 / 颜色叠加」模式切换
  *       promptBox,       // 可选：{ guide, placeholder, value }，在底部中央放一个提示词输入框
  *       onSave           // async (result) => {}，被 await；抛错则留在编辑器
  *   }) → Promise<boolean>，true = 已保存，false = 取消 / 关闭
@@ -346,8 +345,6 @@
             this.colorUrl = this.opts.colorUrl || '';
             this.paintUrl = this.opts.paintUrl || '';
             this.onSave = typeof this.opts.onSave === 'function' ? this.opts.onSave : null;
-            // 特化场景（如「移除重绘」）只需要遮罩，不提供颜色叠加模式，也不渲染模式切换。
-            this.hideColorMode = this.opts.hideColorMode === true;
             // 可选：底部居中的提示词输入框 { guide, placeholder, value }，提交时随结果回传给调用方。
             this.promptBox = this.opts.promptBox && typeof this.opts.promptBox === 'object' ? this.opts.promptBox : null;
 
@@ -371,7 +368,7 @@
             this.tool = 'brush';
             this.brushSize = DEFAULT_BRUSH;
             this.colorName = 'red';
-            this.mode = this.hideColorMode ? 'mask' : (this.opts.mode === 'color' ? 'color' : 'mask');
+            this.mode = this.opts.mode === 'color' ? 'color' : 'mask';
             this.opacity = Number.isFinite(Number(this.opts.opacity))
                 ? clamp(Number(this.opts.opacity), 0, 100)
                 : DEFAULT_OPACITY;
@@ -460,8 +457,7 @@
                     'aria-label="' + escapeHtml(labels[COLOR_LABEL_KEYS[name]]) + '"></button>';
             }).join('');
 
-            // 「移除重绘」这类只需遮罩的场景：不渲染颜色叠加模式切换
-            const modeSeg = this.hideColorMode ? '' :
+            const modeSeg =
                 '<div class="me-seg">' +
                     '<button type="button" class="me-seg-btn" data-mode="mask">' +
                         escapeHtml(labels.modeMask) + '</button>' +
