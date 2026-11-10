@@ -300,6 +300,9 @@ class PreviewCropIntegrationTests(unittest.TestCase):
         self.assertIn(".preview-crop-bar[hidden] { display:none; }", self.canvas_css)
         self.assertIn(".preview-crop-bar.is-busy", self.canvas_css)
         self.assertIn(".ce-inline-ratio {", self.canvas_css)
+        # 窄窗口里比例条要换行收进工具区，不能把「应用裁切」挤出屏幕。
+        self.assertIn("max-width:min(560px, 100%);", self.canvas_css)
+        self.assertIn("max-width:calc(100vw - 28px);", self.canvas_css)
 
     # ---- 接入逻辑 ----
     def test_preview_crop_layer_uses_embedded_attach(self):
@@ -320,6 +323,8 @@ class PreviewCropIntegrationTests(unittest.TestCase):
             self.assertIn(token, body)
         # 同一条图片重复调用只刷新，不重复挂载，避免叠出两层覆盖层。
         self.assertIn("previewCropHandle.refresh?.();", body)
+        # 第一次点「裁剪」时框要覆盖整图，往内收才是裁切。
+        self.assertIn("|| {x:0, y:0, w:1, h:1};", body)
 
     def test_preview_mode_mounts_and_other_modes_destroy(self):
         body = self._function_body(self.canvas_js, "function setImageEditMode(")

@@ -20449,9 +20449,9 @@ function syncPreviewCrop(){
         return;
     }
     destroyPreviewCrop();
-    // 没有已保存的裁切时给一个居中的 80% 初始框：满幅框的手柄压在图片边缘上不好抓，
-    // 而且点「裁剪」进来时不该先让用户自己拉一个框出来。
-    const rect = imageCropRect(item.crop) || {x:.1, y:.1, w:.8, h:.8};
+    // 没有已保存的裁切时框就从整图开始：第一次点「裁剪」看到的是全图，
+// 往内收就是裁切，比先给一个缩小的框再往外拉顺手得多。
+    const rect = imageCropRect(item.crop) || {x:0, y:0, w:1, h:1};
     const ratio = item.crop?.ratio || 'free';
     previewCropDraft = {rect, ratio, width:0, height:0};
     try{

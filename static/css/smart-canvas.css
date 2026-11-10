@@ -1048,13 +1048,14 @@ video.node-img { object-fit:cover; background:#0f172a; }
 .preview-compare-handle::after { content:""; position:absolute; left:50%; top:50%; width:30px; height:30px; border-radius:999px; transform:translate(-50%, -50%); background:rgba(15,23,42,.72); border:1px solid rgba(255,255,255,.75); box-shadow:0 8px 24px rgba(15,23,42,.24); }
 .preview-stage.compare-on .preview-compare-handle { display:block; }
 .preview-download-overlay { position:absolute; right:14px; top:14px; z-index:9; pointer-events:auto; display:flex; align-items:center; gap:8px; }
-.preview-tools-overlay { position:absolute; right:14px; bottom:14px; z-index:8; display:flex; flex-direction:column; align-items:flex-end; gap:8px; pointer-events:auto; }
+.preview-tools-overlay { position:absolute; right:14px; bottom:14px; z-index:8; display:flex; flex-direction:column; align-items:flex-end; gap:8px; pointer-events:auto; max-width:calc(100vw - 28px); }
 .preview-action-row { display:flex; align-items:center; justify-content:flex-end; gap:8px; }
 /* 预览内裁切条：比例预设 + 尺寸读数 + 取消/应用，放在预览右下角工具区，不随图片缩放变形。 */
-.preview-crop-bar { display:flex; flex-direction:column; align-items:flex-end; gap:8px; padding:8px 10px; border:1px solid var(--line); border-radius:14px; background:color-mix(in srgb, var(--card) 92%, transparent); box-shadow:0 12px 32px rgba(2,6,23,.28); pointer-events:auto; }
+.preview-crop-bar { display:flex; flex-direction:column; align-items:flex-end; gap:8px; padding:8px 10px; border:1px solid var(--line); border-radius:14px; background:color-mix(in srgb, var(--card) 92%, transparent); box-shadow:0 12px 32px rgba(2,6,23,.28); pointer-events:auto; max-width:100%; }
 .preview-crop-bar[hidden] { display:none; }
 .preview-crop-bar.is-busy { opacity:.6; pointer-events:none; }
-.ce-inline-ratio { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; max-width:min(560px, calc(100vw - 160px)); }
+/* 窗口窄时比例按钮换行，别把「应用裁切」挤出屏幕。 */
+.ce-inline-ratio { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; max-width:min(560px, 100%); }
 .preview-crop-size { font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight:850; color:var(--muted); letter-spacing:.02em; }
 .preview-crop-actions { display:flex; align-items:center; gap:8px; }
 .preview-crop-bar .compare-toggle.primary { background:var(--strong); color:var(--strong-text); border-color:var(--strong); }
