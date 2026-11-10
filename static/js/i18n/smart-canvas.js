@@ -1,7 +1,6 @@
 (function(){
     if(!window.StudioI18n) return;
     window.StudioI18n.register({
-        "smart.railDirector3d": { zh: "3D导演台", en: "3D Director" },
         "smart.createDirector3d": { zh: "3D导演台", en: "3D Director" },
         "smart.createDirector3dSub": { zh: "摆放人物、道具和机位", en: "Place characters, props, and cameras" },
         "smart.directorNodeTitle": { zh: "3D导演台", en: "3D Director" },

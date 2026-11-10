@@ -25970,7 +25970,6 @@ window.addEventListener('message', event => {
     if(data.type==='director3d:prompt' && typeof data.text==='string' && data.text.length<=3000){ pushUndo(); const created=createPromptNode(node.x+node.w+180,node.y,{skipUndo:true,select:true}); created.text=data.text; render(); scheduleSave(); toast('已创建构图提示词节点'); }
     if(data.type==='director3d:close') closeDirector3d();
 });
-document.getElementById('rhDirector3d')?.addEventListener('click', () => createDirector3dNode(viewportCenter()));
 director3dModal?.addEventListener('click', event => { if(event.target===director3dModal) closeDirector3d(); });
 // 画布平移：鼠标中键在画布任意位置（包括节点、工作流分组内部）都固定为移动画布，
 // 避免鼠标落在分组/节点上时误触发移动分组。左键空白处拖拽的既有行为保持不变。
