@@ -19,6 +19,12 @@ history.json
 # 每日重启任务的运行日志（本机运行时产生）
 logs/daily_restart.log
 
+# 启动器与原生窗口的运行时状态（端口、会话、窗口位置、日志）
+logs/launcher*.log
+logs/launcher*.json
+logs/launcher_port.txt
+python/pythonw.exe.WebView2/
+
 # Local agent skills and lock files
 .agents/
 skills-lock.json

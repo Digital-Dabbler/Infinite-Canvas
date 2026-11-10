@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -22,6 +23,10 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 SERVER_LOG = os.path.join(LOG_DIR, "launcher_server.log")
 LAUNCHER_LOG = os.path.join(LOG_DIR, "launcher.log")
 SERVICE_STATE = os.path.join(LOG_DIR, "launcher_server.json")
+# 本启动器亲手启动的服务：run_id 由环境变量带进服务进程，pid 用于 stop/quit 授权。
+# 只有 pid 命中这里才允许停止，避免把用户自己双击 bat 起来的服务一起关掉。
+SESSION_STATE = os.path.join(LOG_DIR, "launcher_session.json")
+RUN_ID_ENV = "INFINITE_CANVAS_LAUNCHER_RUN_ID"
 PORT_FILE = os.path.join(LOG_DIR, "launcher_port.txt")
 HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher.html")
 
@@ -147,8 +152,80 @@ def pid_image_path(pid):
         return ""
 
 
+def pid_env_value(pid, name):
+    """读取指定进程的环境变量（NtQueryInformationProcess 方式，只依赖 ntdll）。
+
+    用来认领「是不是本启动器起的服务」：服务进程继承了我们注入的 run_id，即使 pid 记录
+    没写成，也能凭这个变量确认归属。普通用户对同权限进程可读；读不到返回 ""。
+    """
+    if os.name != "nt" or not pid:
+        return ""
+    try:
+        import ctypes.wintypes as wt
+
+        class UNICODE_STRING(ctypes.Structure):
+            _fields_ = [("Length", wt.USHORT), ("MaximumLength", wt.USHORT), ("Buffer", ctypes.c_void_p)]
+
+        class PBI(ctypes.Structure):
+            _fields_ = [
+                ("Reserved1", ctypes.c_void_p), ("PebBaseAddress", ctypes.c_void_p),
+                ("Reserved2", ctypes.c_void_p * 2), ("UniqueProcessId", ctypes.c_size_t),
+                ("Reserved3", ctypes.c_void_p),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        ntdll = ctypes.windll.ntdll
+        kernel32.OpenProcess.restype = wt.HANDLE
+        kernel32.OpenProcess.argtypes = [wt.DWORD, wt.BOOL, wt.DWORD]
+        ntdll.NtQueryInformationProcess.restype = ctypes.c_long
+        ntdll.NtQueryInformationProcess.argtypes = [
+            wt.HANDLE, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong),
+        ]
+        kernel32.ReadProcessMemory.restype = wt.BOOL
+        kernel32.ReadProcessMemory.argtypes = [
+            wt.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t),
+        ]
+        handle = kernel32.OpenProcess(0x0410, False, int(pid))  # QUERY_INFORMATION | VM_READ
+        if not handle:
+            return ""
+        try:
+            pbi = PBI()
+            got = ctypes.c_ulong(0)
+            if ntdll.NtQueryInformationProcess(handle, 0, ctypes.byref(pbi), ctypes.sizeof(pbi), ctypes.byref(got)) != 0:
+                return ""
+            read = ctypes.c_size_t(0)
+            params = ctypes.c_void_p()
+            if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(pbi.PebBaseAddress + 0x20),
+                                              ctypes.byref(params), 8, ctypes.byref(read)):
+                return ""
+            # RTL_USER_PROCESS_PARAMETERS.Environment 在 x64 上位于 +0x80
+            env_ptr = ctypes.c_void_p()
+            if not kernel32.ReadProcessMemory(handle, ctypes.c_void_p(params.value + 0x80),
+                                              ctypes.byref(env_ptr), 8, ctypes.byref(read)):
+                return ""
+            if not env_ptr.value:
+                return ""
+            head = ctypes.create_string_buffer(65536)
+            if not kernel32.ReadProcessMemory(handle, env_ptr, head, 65536, ctypes.byref(read)):
+                return ""
+            text = head.raw[: read.value].decode("utf-16-le", "ignore")
+            target = name.lower() + "="
+            for item in text.split("\x00"):
+                if item.lower().startswith(target):
+                    return item.split("=", 1)[1]
+            return ""
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def listening_pid(port=SERVICE_PORT):
-    """netstat 找监听端口进程（本机 WMI/tasklist 会卡死，必须避开）。"""
+    """netstat 找监听端口进程（本机 WMI/tasklist 会卡死，必须避开）。
+
+    只认端口号精确相等且状态为 LISTENING 的行：早先按「地址以 :3000 结尾 + 对端 0.0.0.0:0」
+    匹配，漏掉了 127.0.0.1:3000 这类监听，导致明明有服务却报"未运行"。
+    """
     res = run_cmd(["netstat", "-ano", "-p", "tcp"], timeout=20)
     if res["code"] != 0:
         return None
@@ -156,7 +233,7 @@ def listening_pid(port=SERVICE_PORT):
     for line in res["out"].splitlines():
         parts = line.split()
         if len(parts) >= 4 and parts[0].upper() == "TCP" and parts[1].endswith(suffix) \
-                and parts[2] == "0.0.0.0:0" and parts[3].upper() == "LISTENING":
+                and parts[3].upper() == "LISTENING":
             try:
                 return int(parts[-1])
             except ValueError:
@@ -211,21 +288,67 @@ def lan_address():
 
 # ---------------------------------------------------------------- 服务管理
 
+def open_external(url):
+    """把工作台交给系统默认浏览器打开（启动器窗口自己不能变成浏览器标签页）。"""
+    url = str(url or "").strip()
+    if not re.match(r"^https?://(127\.0\.0\.1|localhost)(:\d+)?(/|$)", url):
+        return {"ok": False, "message": "只允许打开本机工作台地址"}
+    try:
+        os.startfile(url)  # noqa: S606 - 已按白名单校验，只会是本机 http 地址
+    except OSError as exc:
+        return {"ok": False, "message": f"打开浏览器失败：{exc}"}
+    return {"ok": True, "message": "已用默认浏览器打开工作台"}
+
+
+def quit_launcher():
+    """退出启动器：只关掉它自己启动的服务，别人的服务一律不碰。"""
+    stopped = stop_own_service()
+    if stopped is None:
+        message = "启动器已退出；正在运行的服务不是本启动器启动的，保持原样"
+    else:
+        message = stopped.get("message") or "服务已停止"
+    log_line(f"main: 用户退出启动器（{message}）")
+    return {"ok": True, "message": message, "state": service_status()}
+
+
+def owns_pid(pid):
+    """pid 是不是本启动器亲手起的服务：会话记录里必须有 pid，且该服务仍带着同一个 run_id。
+
+    服务进程在 main.py 跑起来后会把会话记录补写为自己的真实 pid；期间由环境变量认领，
+    这样即使「启动」响应在端口就绪前超时，也不会被误判成别人的服务。
+    """
+    if not pid:
+        return False
+    session = read_json(SESSION_STATE, {})
+    run_id = str(session.get("run_id") or "")
+    if not run_id:
+        return False
+    if int(session.get("pid") or 0) == pid:
+        return True
+    if int(session.get("pid") or 0) != 0:
+        return False
+    return pid_env_value(pid, RUN_ID_ENV) == run_id
+
+
 def service_status():
     pid = listening_pid()
     state = read_json(SERVICE_STATE, {})
+    session = read_json(SESSION_STATE, {})
     running = pid is not None
+    managed = owns_pid(pid)
     ours = bool(pid and is_project_python(pid_image_path(pid)))
     external = running and not ours
     return {
         "running": running,
         "ours": ours,
+        "managed": managed,
         "external": external,
-        "pid": pid or state.get("pid") or 0,
+        "pid": pid or 0,
+        "occupant_pid": pid or 0,
         "port": SERVICE_PORT,
         "url": f"http://127.0.0.1:{SERVICE_PORT}",
         "lan": lan_address() if running else "",
-        "started_at": state.get("started_at", "") if state.get("pid") == pid else "",
+        "started_at": state.get("started_at", "") if (running and managed) else "",
     }
 
 
@@ -237,6 +360,11 @@ def start_service():
     exe = project_python()
     if not os.path.exists(exe):
         return {"ok": False, "message": "找不到可用的 Python 解释器", "state": current}
+    # 先记下"这一轮启动器亲手起的服务"，再拉起进程：
+    # 退出启动器/停止服务只认这个会话，否则端口上任意一个项目 python 都会被当成自己的。
+    run_id = uuid.uuid4().hex
+    session = {"run_id": run_id, "pid": 0, "started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "exe": exe}
+    write_json(SESSION_STATE, session)
     logf = io.open(SERVER_LOG, "ab")
     flags = 0
     if os.name == "nt":
@@ -247,11 +375,16 @@ def start_service():
             [exe, "main.py"], cwd=BASE_DIR,
             stdout=logf, stderr=logf, stdin=subprocess.DEVNULL,
             creationflags=flags,
+            env=dict(os.environ, **{RUN_ID_ENV: run_id}),
         )
     except Exception as exc:  # noqa: BLE001
         logf.close()
+        end_session(run_id)
         return {"ok": False, "message": f"启动失败：{exc}", "state": current}
-    write_json(SERVICE_STATE, {"pid": proc.pid, "started_at": time.strftime("%Y-%m-%d %H:%M:%S"), "exe": exe})
+    session["pid"] = proc.pid
+    if session_owner(run_id) == run_id:
+        write_json(SESSION_STATE, session)
+    write_json(SERVICE_STATE, {"pid": proc.pid, "run_id": run_id, "started_at": session["started_at"], "exe": exe})
     ready = wait_port_ready(SERVICE_PORT, timeout=180)
     return {
         "ok": ready,
@@ -270,20 +403,60 @@ def wait_port_ready(port, timeout=60):
     return False
 
 
-def stop_service():
+def session_owner(run_id):
+    """这一轮启动器是否仍然拥有该服务（防止"启动-失败-又启动"的竞态把新会话认成旧的）。"""
+    return str(read_json(SESSION_STATE, {}).get("run_id") or "") == str(run_id)
+
+
+def end_session(run_id):
+    """结束会话认领；run_id 为空表示无条件结束。"""
+    session = read_json(SESSION_STATE, {})
+    if run_id and str(session.get("run_id") or "") != str(run_id):
+        return
+    session["pid"] = 0
+    write_json(SESSION_STATE, session)
+
+
+def stop_own_service():
+    """只停止本启动器亲手启动的服务；不是自己起的返回 None（调用方只提示，不动手）。"""
     pid = listening_pid()
     if pid is None:
+        # 端口上已经没有服务：结束认领（别删 run_id，否则下次启动的竞态保护也失效）
+        end_session()
         return {"ok": True, "message": "服务本来就没有在运行", "state": service_status()}
+    session = read_json(SESSION_STATE, {})
+    if not owns_pid(pid):
+        return None
     exe = pid_image_path(pid)
     if not is_project_python(exe):
-        return {"ok": False, "message": f"端口 {SERVICE_PORT} 被外部程序占用（{exe or '未知'}），为避免误杀不执行停止", "state": service_status()}
+        return None
     terminate_pid(pid)
+    end_session(session.get("run_id"))
     freed = wait_port_free(SERVICE_PORT)
     return {"ok": freed, "message": "服务已停止" if freed else "已发送停止，但端口仍被占用，请查看任务管理器", "state": service_status()}
 
 
+def stop_service():
+    pid = listening_pid()
+    if pid is None:
+        return {"ok": True, "message": "服务本来就没有在运行", "state": service_status()}
+    result = stop_own_service()
+    if result is None:
+        # 端口上的是用户自己双击 bat 起的、或上一次启动器留下的服务：只提示，绝不动手。
+        # （曾经因此把用户正在使用的服务杀掉过。）
+        return {
+            "ok": False,
+            "message": f"端口 {SERVICE_PORT} 上的服务不是本启动器启动的，为避免误关已跳过；如需停止请到任务管理器结束 PID {pid}",
+            "state": service_status(),
+        }
+    return result
+
+
 def restart_service():
-    stopped = stop_service()
+    stopped = stop_own_service()
+    if stopped is None:
+        # 不是本启动器起的服务，重启会把它杀掉；这种情况请用户自己处理，别替用户做决定
+        return stop_service()
     if not stopped["ok"]:
         return stopped
     return start_service()
@@ -700,6 +873,15 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True})
             threading.Timer(0.4, lambda: os._exit(0)).start()
             return
+        if path == "/api/open-url":
+            self._send(200, open_external(str(body.get("url") or "")))
+            return
+        if path == "/api/quit":
+            # 「退出启动器」= 退出启动器并一并关掉它自己启动的服务；右上角关窗只关窗口、服务继续。
+            result = quit_launcher()
+            self._send(200, result)
+            threading.Timer(0.6, lambda: os._exit(0)).start()
+            return
         if path == "/api/service/start":
             result = start_service(); refresh_snapshot(); self._send(200, result)
             return
@@ -817,16 +999,16 @@ def bind_server():
 
 
 def watchdog(httpd):
-    """窗口关掉后启动器继续驻留 2 分钟（服务照常跑），之后自动退出。"""
+    """兜底看门狗。
+
+    关窗后启动器必须继续驻留：服务照常跑，再双击启动器会直接重开窗口。
+    只有「窗口始终没连上启动器」（窗口进程没起来）才在 180 秒后退出，
+    否则后台会一直挂一个再也打不开窗口的空启动器。
+    """
     while True:
         time.sleep(5)
-        now = time.time()
-        if HEARTBEAT["loaded"]:
-            if now - HEARTBEAT["last"] > 120:
-                log_line("watchdog: 窗口 120 秒无心跳，启动器自动退出")
-                os._exit(0)
-        elif now - httpd.started_at > 180:
-            log_line("watchdog: 窗口始终没有连上启动器，服务已退出（详见上方 window 日志）")
+        if not HEARTBEAT["loaded"] and time.time() - httpd.started_at > 180:
+            log_line("watchdog: 窗口始终没有连上启动器，启动器退出（详见上方 window 日志）")
             os._exit(0)
 
 

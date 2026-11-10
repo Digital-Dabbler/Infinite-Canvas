@@ -52,7 +52,9 @@ def log_line(msg):
 
 def read_json(path, default):
     try:
-        with io.open(path, "r", encoding="utf-8") as f:
+        # utf-8-sig：Windows 的 PowerShell/记事本会在文件头加 BOM，
+        # 用 utf-8 读会直接解析失败，窗口位置就"记不住"了。
+        with io.open(path, "r", encoding="utf-8-sig") as f:
             return json.load(f)
     except Exception:  # noqa: BLE001
         return default
@@ -65,6 +67,45 @@ def write_json(path, payload):
             json.dump(payload, f, ensure_ascii=False, indent=1)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _screen_rects():
+    """返回所有屏幕的矩形坐标 [(l, t, r, b)]；取不到时返回空列表。"""
+    try:
+        import clr  # noqa: F401  pythonnet 必须先 import clr，System 模块才会出现
+        import System
+        forms = System.Reflection.Assembly.Load("System.Windows.Forms")
+        Screen = forms.GetType("System.Windows.Forms.Screen")
+        rects = []
+        for screen in Screen.GetProperty("AllScreens").GetValue(None, None):
+            b = screen.Bounds
+            rects.append((int(b.Left), int(b.Top), int(b.Right), int(b.Bottom)))
+        return rects
+    except Exception as exc:  # noqa: BLE001
+        log_line(f"读取屏幕区域失败：{exc}")
+        return []
+
+
+def _is_on_screen(x, y, rects=None):
+    """坐标是否落在某块屏幕的可见区域内。
+
+    最小化的窗口坐标是 -32000；取不到屏幕信息时按"可见"处理，
+    宁可保留用户上次的位置，也不要把记住的位置丢掉再居中。
+    """
+    try:
+        x, y = int(x), int(y)
+    except (TypeError, ValueError):
+        return False
+    if x < -10000 or y < -10000:
+        return False
+    rects = _screen_rects() if rects is None else rects
+    if not rects:
+        return True
+    for left, top, right, bottom in rects:
+        if left <= x < right and top <= y < bottom:
+            return True
+    log_line(f"坐标 ({x}, {y}) 不在任何屏幕区域内：{rects}")
+    return False
 
 
 def pick_windesktop_runtime():
@@ -238,31 +279,53 @@ class LauncherWindow:
         self.webview = None
         self._pending_ready = None
         self._ready_timer = None
+        self._saved_box = None
 
     # -- 位置记忆
     def _saved_geometry(self):
-        data = read_json(WINDOW_STATE, {})
+        loaded = read_json(WINDOW_STATE, {})
+        data = loaded if isinstance(loaded, dict) else {}
         try:
             w = int(data.get("width") or DEFAULT_SIZE[0])
             h = int(data.get("height") or DEFAULT_SIZE[1])
         except (TypeError, ValueError):
             w, h = DEFAULT_SIZE
+        x, y = data.get("x"), data.get("y")
+        # 存下来的位置不在任何一块屏幕上（最小化、拔掉显示器），就回到居中
+        if x is not None and y is not None and not _is_on_screen(x, y):
+            x = y = None
+        # 每次启动都把生效的位置写回：万一文件坏了，下一次也还是居中而不是反复读取坏文件
+        log_line(f"恢复窗口位置：{(x, y, max(MIN_SIZE[0], w), max(MIN_SIZE[1], h))}")
         return {
             "width": max(MIN_SIZE[0], w),
             "height": max(MIN_SIZE[1], h),
-            "x": data.get("x"),
-            "y": data.get("y"),
+            "x": x,
+            "y": y,
         }
 
     def _remember_geometry(self):
         if not self.form:
             return
         try:
+            # 最小化时 Bounds 会变成 (-32000,-32000,160,28)，存下来下次窗口就跑到屏幕外了
+            if str(self.form.WindowState) == "Minimized":
+                return
             bounds = self.form.Bounds
-            write_json(WINDOW_STATE, {
-                "x": int(bounds.X), "y": int(bounds.Y),
-                "width": int(bounds.Width), "height": int(bounds.Height),
-            })
+            x, y = int(bounds.X), int(bounds.Y)
+            w, h = int(bounds.Width), int(bounds.Height)
+            saved = getattr(self, "_saved_box", None)
+            if saved and (w, h) == (saved["width"], saved["height"]):
+                # 尺寸和启动时一模一样，说明用户没动过窗口。
+                # Windows 在关窗前（窗口停靠/DPI 切换）会把窗口挪走一两百像素，
+                # 这时不能拿屏幕坐标覆盖用户手放的位置，否则"记住的位置"每次都漂。
+                x, y = saved["x"], saved["y"]
+            # 被最小化到一边的窗口同样不可见，一律不覆盖上次的有效位置
+            if not _is_on_screen(bounds.X, bounds.Y):
+                return
+            if w < MIN_SIZE[0] or h < MIN_SIZE[1]:
+                log_line(f"跳过异常窗口几何：{(x, y, w, h)}")
+                return
+            write_json(WINDOW_STATE, {"x": x, "y": y, "width": w, "height": h})
         except Exception as exc:  # noqa: BLE001
             log_line(f"保存窗口位置失败：{exc}")
 
@@ -295,6 +358,7 @@ class LauncherWindow:
             pass
 
         geo = self._saved_geometry()
+        self._saved_box = geo
         form.Size = Activator.CreateInstance(Size, Int32(geo["width"]), Int32(geo["height"]))
         placed = False
         if geo["x"] is not None and geo["y"] is not None:
@@ -419,11 +483,22 @@ class LauncherWindow:
             log_line(f"WebView2 导航失败：{exc}")
             self._show_fallback_panel(str(exc))
     def _on_new_window(self, sender, args):
+        """页面里所有 target=_blank 一律交给系统默认浏览器，不在本窗口里再开一个 WebView2 页签。"""
         try:
-            os.startfile(str(args.Uri))
-            args.Handled = True
-        except Exception as exc:  # noqa: BLE001
-            log_line(f"打开外部链接失败：{exc}")
+            uri = str(args.Uri) if args is not None else ""
+        except Exception:  # noqa: BLE001
+            uri = ""
+        try:
+            if args is not None:
+                args.Handled = True
+        except Exception:  # noqa: BLE001
+            pass
+        if uri:
+            try:
+                os.startfile(uri)  # noqa: S606 - 只用于把本机工作台交给默认浏览器
+                log_line(f"window: 新窗口请求已转交系统浏览器：{uri}")
+            except OSError as exc:
+                log_line(f"window: 交给浏览器打开失败 {uri}：{exc}")
 
     def _show_fallback_panel(self, reason):
         """没有 WebView2 时的兜底：告诉用户手工打开控制台网址。"""

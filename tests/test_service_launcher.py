@@ -4,6 +4,7 @@ import ast
 import io
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -250,7 +251,7 @@ class StaticSpecCase(unittest.TestCase):
         src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
         tree = ast.parse(src)
         allowed = {"ctypes", "io", "json", "os", "re", "socket", "subprocess", "sys",
-                   "threading", "time", "urllib", "http"}
+                   "threading", "time", "urllib", "uuid", "http"}
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -306,6 +307,67 @@ class StaticSpecCase(unittest.TestCase):
         self.assertIn("只重新打开窗口", src)
         self.assertIn("/api/ping", src)
 
+    def test_close_window_keeps_launcher_and_service(self):
+        # 用户明确要求：关窗后服务继续运行，再双击只重开窗口，不能被看门狗自动杀掉
+        src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
+        watchdog = src.split("def watchdog(")[1].split("\ndef ")[0]
+        self.assertIn("not HEARTBEAT[\"loaded\"]", watchdog)
+        self.assertNotIn("HEARTBEAT[\"last\"]", watchdog)
+
+    def test_quit_buttons_have_distinct_semantics(self):
+        # 关窗=只关窗口；「退出启动器」=连服务一起关；「打开工作台」交给系统浏览器
+        src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
+        self.assertIn('path == "/api/quit"', src)
+        self.assertIn("def quit_launcher", src)
+        self.assertIn("def open_external", src)
+        self.assertIn("127", src.split("def open_external(")[1].split("\ndef ")[0])
+        html = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.html"))
+        self.assertIn("/api/quit", html)
+        self.assertIn("/api/open-url", html)
+        self.assertIn("openWorkbench", html)
+        window = read_file(os.path.join(ROOT, "tools", "launcher", "window.py"))
+        self.assertIn("os.startfile", window.split("def _on_new_window(")[1].split("\n    def ")[0])
+
+    def test_stop_and_restart_never_touch_foreign_service(self):
+        # 事故回归：用户自己双击 bat 起的服务不能被启动器的停止/重启/退出杀掉
+        src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.py"))
+        stop_own = src.split("def stop_own_service(")[1].split("\ndef ")[0]
+        self.assertIn("SESSION_STATE", stop_own)
+        self.assertIn("return None", stop_own)
+        stop = src.split("def stop_service(")[1].split("\ndef ")[0]
+        self.assertIn("stop_own_service()", stop)
+        self.assertNotIn("terminate_pid", stop)
+        restart = src.split("def restart_service(")[1].split("\n# ---")[0]
+        self.assertIn("stop_own_service()", restart)
+        self.assertNotIn("terminate_pid", restart)
+        self.assertIn("if stopped is None:", restart)
+        quit_block = src.split("def quit_launcher(")[1].split("\ndef ")[0]
+        self.assertIn("stop_own_service()", quit_block)
+        self.assertNotIn("stop_service()", quit_block)
+        start_block = src.split("def start_service(")[1].split("\ndef ")[0]
+        self.assertIn("RUN_ID_ENV", start_block)
+        self.assertIn("SESSION_STATE", start_block)
+        status = src.split("def service_status(")[1].split("\ndef ")[0]
+        self.assertIn('"managed"', status)
+        html = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.html"))
+        self.assertIn("!s.managed", html)
+        self.assertNotIn("!s.ours", html)
+
+    def test_window_geometry_survives_bom_and_logs_restore(self):
+        # 位置记忆三连坑回归：BOM 读不了、屏幕判断依赖 .NET 点对象、拿不到屏幕就丢弃位置
+        window = read_file(os.path.join(ROOT, "tools", "launcher", "window.py"))
+        self.assertIn('encoding="utf-8-sig"', window)
+        rects = window.split("def _screen_rects(")[1].split("\ndef ")[0]
+        self.assertIn("import clr", rects)
+        self.assertIn("AllScreens", rects)
+        self.assertNotIn("Point(", rects)
+        on_screen = window.split("def _is_on_screen(")[1].split("\ndef ")[0]
+        self.assertIn("return True", on_screen)
+        remember = window.split("def _remember_geometry(")[1].split("\n    def ")[0]
+        self.assertIn("Minimized", remember)
+        self.assertIn("_saved_box", remember)
+        self.assertIn("_is_on_screen", remember)
+
     def test_html_has_no_external_assets(self):
         src = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.html"))
         for token in ("//cdn", "unpkg", "jsdelivr", "googleapis"):
@@ -316,6 +378,29 @@ class StaticSpecCase(unittest.TestCase):
         self.assertTrue(launcher.is_project_python(os.path.join(base, "python", "python.exe")))
         self.assertFalse(launcher.is_project_python(r"C:\Other\python.exe"))
         self.assertFalse(launcher.is_project_python(""))
+
+    def test_listening_pid_matches_loopback_only_listener(self):
+        # 回归：服务只监听 127.0.0.1 时也必须被认出来（旧实现只认 0.0.0.0 对端）
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.addCleanup(probe.close)
+        probe.bind(("127.0.0.1", 0))
+        probe.listen(1)
+        port = probe.getsockname()[1]
+        self.assertEqual(launcher.listening_pid(port), os.getpid())
+
+    def test_owns_pid_requires_session_record(self):
+        # 空闲时端口没有服务、也没有会话记录：任何 pid 都不能被认作自己的
+        self.assertFalse(launcher.owns_pid(None))
+        self.assertFalse(launcher.owns_pid(0))
+        if not os.path.exists(launcher.SESSION_STATE):
+            self.assertFalse(launcher.owns_pid(os.getpid()))
+
+    def test_service_status_exposes_occupant_pid(self):
+        status = launcher.service_status()
+        self.assertIn("occupant_pid", status)
+        self.assertEqual(status["pid"], status["occupant_pid"])
+        html = read_file(os.path.join(ROOT, "tools", "launcher", "launcher.html"))
+        self.assertIn("occupant_pid", html)
 
     def test_main_py_update_dead_code_removed(self):
         src = read_file(os.path.join(ROOT, "main.py"))
