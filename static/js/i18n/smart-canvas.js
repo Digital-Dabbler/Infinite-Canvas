@@ -865,5 +865,37 @@
         ,"smart.noteSizeAuto": { zh: "改为自适应尺寸", en: "Switch to auto size" }
         ,"smart.noteSizeFixed": { zh: "改为固定尺寸", en: "Switch to fixed size" }
         ,"smart.noteRichTextLimit": { zh: "便签内容已达 {n} 字上限", en: "Notes are limited to {n} characters" }
+        ,"smart.psd.action": { zh: "图层拆分", en: "Layer Split" }
+        ,"smart.psd.nodeTitle": { zh: "图层拆分", en: "Layer Split" }
+        ,"smart.psd.nodeHint": { zh: "双击节点打开图层编辑", en: "Double-click the node to edit layers" }
+        ,"smart.psd.emptyHint": { zh: "选中图片后点击工具栏「图层拆分」", en: "Select an image and click Layer Split in the toolbar" }
+        ,"smart.psd.layerCount": { zh: "{n} 个图层", en: "{n} layers" }
+        ,"smart.psd.edit": { zh: "编辑图层", en: "Edit Layers" }
+        ,"smart.psd.needSource": { zh: "请先选择一张可用的图片", en: "Select a usable image first" }
+        ,"smart.psd.submitFailed": { zh: "图层拆分任务提交失败", en: "Failed to submit layer split task" }
+        ,"smart.psd.failed": { zh: "图层拆分失败", en: "Layer split failed" }
+        ,"smart.psd.noLayers": { zh: "该节点还没有图层拆分结果", en: "This node has no layer results yet" }
+        ,"smart.psd.hide": { zh: "隐藏图层", en: "Hide layer" }
+        ,"smart.psd.show": { zh: "显示图层", en: "Show layer" }
+        ,"smart.psd.moveUp": { zh: "上移一层", en: "Move up" }
+        ,"smart.psd.moveDown": { zh: "下移一层", en: "Move down" }
+        ,"smart.psd.renameHint": { zh: "双击重命名", en: "Double-click to rename" }
+        ,"smart.psd.exporting": { zh: "导出中…", en: "Exporting…" }
+        ,"smart.psd.exportFailed": { zh: "PSD 导出失败", en: "PSD export failed" }
+        ,"smart.psd.createTitle": { zh: "图层拆分", en: "Layer Split" }
+        ,"smart.psd.createSub": { zh: "对当前图片进行 AI 分层，结果在节点内直接预览", en: "AI-decompose this image into layers, previewed right on the node" }
+        ,"smart.psd.promptLabel": { zh: "拆分说明（可选）", en: "Split instructions (optional)" }
+        ,"smart.psd.promptPlaceholder": { zh: "例如：把人物、背景、标题文字拆成独立图层", en: "e.g. split subject, background and title text into separate layers" }
+        ,"smart.psd.resolutionLabel": { zh: "输出分辨率", en: "Output resolution" }
+        ,"smart.psd.resolutionAuto": { zh: "自动", en: "Auto" }
+        ,"smart.psd.resolution1k": { zh: "1K", en: "1K" }
+        ,"smart.psd.resolution15k": { zh: "1.5K", en: "1.5K" }
+        ,"smart.psd.resolution2k": { zh: "2K", en: "2K" }
+        ,"smart.psd.cancel": { zh: "取消", en: "Cancel" }
+        ,"smart.psd.start": { zh: "开始拆分", en: "Start Split" }
+        ,"smart.psd.editTitle": { zh: "图层编辑", en: "Layer Editing" }
+        ,"smart.psd.editSub": { zh: "拖动图层调整位置，双击名称重命名；坐标始终为原图像素", en: "Drag layers to move, double-click names to rename; coordinates stay in source pixels" }
+        ,"smart.psd.compare": { zh: "原图对照", en: "Compare Original" }
+        ,"smart.psd.export": { zh: "导出 PSD", en: "Export PSD" }
     });
 })();

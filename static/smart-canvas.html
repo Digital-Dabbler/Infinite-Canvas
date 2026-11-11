@@ -142,6 +142,7 @@
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="angle" title="角度控制"><i data-lucide="box"></i><span>角度</span></button>
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="crop" title="裁剪"><i data-lucide="crop"></i><span>裁剪</span></button>
             <button type="button" data-toolbar-kind="image" data-image-toolbar-action="grid" title="宫格切分"><i data-lucide="grid-3x3"></i><span>宫格切分</span></button>
+            <button type="button" data-toolbar-kind="image" data-image-toolbar-action="psd" title="图层拆分" data-i18n-title="smart.psd.action"><i data-lucide="layers-3"></i><span data-i18n="smart.psd.action">图层拆分</span></button>
             <button type="button" data-toolbar-kind="video" data-image-toolbar-action="trim" title="截取视频片段" data-i18n-title="smart.videoTrim"><i data-lucide="scissors"></i><span data-i18n="smart.videoTrimShort">截取片段</span></button>
             <button type="button" data-toolbar-kind="video" data-image-toolbar-action="frames" title="逐帧查看与导出画面" data-i18n-title="smart.videoFrameTools"><i data-lucide="gallery-horizontal-end"></i><span data-i18n="smart.videoFrameToolsShort">帧工具</span></button>
             <span class="image-action-divider"></span>
@@ -190,6 +191,56 @@
                     </div>
                 </div>
                 <footer class="angle-control-actions"><button id="angleControlReset" class="image-edit-btn secondary" type="button"><i data-lucide="rotate-ccw"></i><span data-i18n="smart.reset">重置</span></button><button id="angleControlGenerate" class="image-edit-btn primary" type="button"><i data-lucide="sparkles"></i><span data-i18n="smart.angleGenerate">生成角度图</span></button></footer>
+            </section>
+        </div>
+        <!-- 图层拆分：发起弹窗（选分辨率 + 可选拆分说明），确认后创建 smart-psd 节点并提交后端任务 -->
+        <div id="psdCreateModal" class="psd-modal" role="dialog" aria-modal="true" aria-labelledby="psdCreateTitle" aria-hidden="true">
+            <section class="psd-panel psd-create-panel">
+                <header class="psd-head">
+                    <div><strong id="psdCreateTitle" data-i18n="smart.psd.createTitle">图层拆分</strong><span data-i18n="smart.psd.createSub">对当前图片进行 AI 分层，结果在节点内直接预览</span></div>
+                    <button id="psdCreateClose" class="preview-icon-btn" type="button" data-i18n-label="common.close" aria-label="关闭"><i data-lucide="x"></i></button>
+                </header>
+                <div class="psd-create-body">
+                    <label class="psd-field"><span data-i18n="smart.psd.promptLabel">拆分说明（可选）</span>
+                        <textarea id="psdCreatePrompt" rows="3" maxlength="2000" placeholder="例如：把人物、背景、标题文字拆成独立图层" data-i18n-placeholder="smart.psd.promptPlaceholder"></textarea>
+                    </label>
+                    <label class="psd-field"><span data-i18n="smart.psd.resolutionLabel">输出分辨率</span>
+                        <select id="psdCreateResolution">
+                            <option value="auto" selected data-i18n="smart.psd.resolutionAuto">自动</option>
+                            <option value="1k" data-i18n="smart.psd.resolution1k">1K</option>
+                            <option value="1.5k" data-i18n="smart.psd.resolution15k">1.5K</option>
+                            <option value="2k" data-i18n="smart.psd.resolution2k">2K</option>
+                        </select>
+                    </label>
+                </div>
+                <footer class="psd-actions">
+                    <button id="psdCreateCancel" class="image-edit-btn secondary" type="button" onclick="closePsdCreateModal()" data-i18n="smart.psd.cancel">取消</button>
+                    <button id="psdCreateRun" class="image-edit-btn primary" type="button"><i data-lucide="layers-3"></i><span data-i18n="smart.psd.start">开始拆分</span></button>
+                </footer>
+            </section>
+        </div>
+        <!-- 图层拆分：图层编辑弹窗（可见性/拖动/调序/重命名/原图对照/导出 PSD） -->
+        <div id="psdEditModal" class="psd-modal" role="dialog" aria-modal="true" aria-labelledby="psdEditTitle" aria-hidden="true">
+            <section class="psd-panel psd-edit-panel">
+                <header class="psd-head">
+                    <div><strong id="psdEditTitle" data-i18n="smart.psd.editTitle">图层编辑</strong><span data-i18n="smart.psd.editSub">拖动图层调整位置，双击名称重命名；坐标始终为原图像素</span></div>
+                    <button id="psdEditClose" class="preview-icon-btn" type="button" data-i18n-label="common.close" aria-label="关闭"><i data-lucide="x"></i></button>
+                </header>
+                <div class="psd-edit-body">
+                    <aside class="psd-layer-panel">
+                        <div id="psdLayerList" class="psd-layer-list" role="list" aria-label="图层列表"></div>
+                    </aside>
+                    <div class="psd-stage-area">
+                        <div id="psdStageWrap" class="psd-stage-wrap">
+                            <div id="psdStage" class="psd-stack interactive" style="aspect-ratio:1/1"></div>
+                        </div>
+                        <div class="psd-stage-tools">
+                            <label class="psd-compare-label"><input id="psdCompareToggle" type="checkbox"><span data-i18n="smart.psd.compare">原图对照</span></label>
+                            <span id="psdExportInfo" class="psd-export-info" aria-live="polite"></span>
+                            <button id="psdExportBtn" class="image-edit-btn primary" type="button"><i data-lucide="download"></i><span data-i18n="smart.psd.export">导出 PSD</span></button>
+                        </div>
+                    </div>
+                </div>
             </section>
         </div>
         <div id="workflowGroupToolbar" class="workflow-group-toolbar workflow-group-toolbar-floating" role="toolbar" aria-labelledby="workflowGroupToolbarLabel" aria-hidden="true">

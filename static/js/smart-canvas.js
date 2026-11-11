@@ -44,6 +44,19 @@ const imageMattingMenu = document.getElementById('imageMattingMenu');
 const mattingPromptPanel = document.getElementById('mattingPromptPanel');
 const mattingPromptInput = document.getElementById('mattingPromptInput');
 const mattingPromptRun = document.getElementById('mattingPromptRun');
+// 图层拆分（smart-psd）弹窗元素引用。
+const psdCreateModal = document.getElementById('psdCreateModal');
+const psdCreatePromptInput = document.getElementById('psdCreatePrompt');
+const psdCreateResolutionSelect = document.getElementById('psdCreateResolution');
+const psdCreateRunButton = document.getElementById('psdCreateRun');
+const psdCreateCloseButton = document.getElementById('psdCreateClose');
+const psdEditModal = document.getElementById('psdEditModal');
+const psdEditCloseButton = document.getElementById('psdEditClose');
+const psdLayerListEl = document.getElementById('psdLayerList');
+const psdStageWrap = document.getElementById('psdStageWrap');
+const psdCompareToggle = document.getElementById('psdCompareToggle');
+const psdExportButton = document.getElementById('psdExportBtn');
+const psdExportInfoEl = document.getElementById('psdExportInfo');
 const workflowGroupToolbar = document.getElementById('workflowGroupToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const photoshopInstallModal = document.getElementById('photoshopInstallModal');
@@ -1523,6 +1536,12 @@ function isSmartAudioUploadNode(node){
 function isSmartImageGenerationNode(node){
     return Boolean(node && node.type === 'smart-image-generation');
 }
+// 图层拆分节点：图片节点工具栏发起的服务端 PSD 分层任务结果节点。
+// 它是图片的下游功能节点，但不属于 isSmartGenerationNode/isSmartRunnableNode 簇：
+// 不参与 Composer 生成运行、级联与循环，只按 node.psd 描述分层预览与编辑。
+function isSmartPsdNode(node){
+    return Boolean(node && node.type === 'smart-psd');
+}
 function isSmartBackgroundRemovalNode(node){
     return Boolean(isSmartImageGenerationNode(node) && node.backgroundRemoval);
 }
@@ -1676,6 +1695,22 @@ function normalizeLegacySmartNode(node){
             window.migratePromptPresetNodeText(node);
         }
         delete node.textOutputSemanticsV1;
+    }
+    if(isSmartPsdNode(node)){
+        // 图层拆分节点默认值：psd 由服务端 finalize 写入（前端只读直到用户编辑），
+        // 旧画布/导入包缺字段时补 null，保证加载、保存、重载幂等。
+        node.title = String(node.title || tr('smart.psd.nodeTitle'));
+        node.psd = node.psd && typeof node.psd === 'object' ? node.psd : null;
+        if(node.psd){
+            const source = node.psd.source && typeof node.psd.source === 'object' ? node.psd.source : null;
+            node.psd.source = source;
+            const fallbackW = Number(source?.width) > 0 ? Number(source.width) : 1;
+            const fallbackH = Number(source?.height) > 0 ? Number(source.height) : 1;
+            const size = node.psd.size && typeof node.psd.size === 'object' ? node.psd.size : {};
+            node.psd.size = {width:Number(size.width) > 0 ? Number(size.width) : fallbackW, height:Number(size.height) > 0 ? Number(size.height) : fallbackH};
+            if(!Array.isArray(node.psd.layers)) node.psd.layers = [];
+            if(node.psd.exportedFile && typeof node.psd.exportedFile !== 'object') node.psd.exportedFile = null;
+        }
     }
     return node;
 }
@@ -2713,6 +2748,9 @@ function smartGroupImageGridLayout(node){
 }
 function imageLayout(images, scale=1, node=null){
     if(isSmart3dDirectorNode(node)) return {cols:1, rows:1, width:Number(node.w) || 260, height:Number(node.h) || 240, thumb:96, single:true};
+    // 图层拆分节点：服务端 finalize 会把各图层 PNG 登记进 node.images（媒体目录用途），
+    // 但节点盒子必须恒为显式 w/h（创建时 420×420），不参与多图网格布局，保证预览位置尺寸不变。
+    if(isSmartPsdNode(node)) return {cols:1, rows:1, width:Math.round(Number(node.w) || 420), height:Math.round(Number(node.h) || 420), thumb:Math.round(96 * (Number.isFinite(scale) && scale > 0 ? scale : 1)), single:true};
     if(node?.type === 'smart-group'){
         const groupThumbLayout = smartGroupThumbLayout(node);
         if(groupThumbLayout) return groupThumbLayout;
@@ -10974,6 +11012,8 @@ function nodeBodyHtml(node, layout){
     if(node.type === 'smart-group') return smartGroupBodyHtml(node);
     if(node.type === 'smart-prompt') return promptNodeBodyHtml(node);
     if(node.type === 'smart-loop') return smartLoopBodyHtml(node);
+    // 图层拆分节点：不依赖 node.images，按 node.psd 直接渲染分层预览。
+    if(isSmartPsdNode(node)) return smartPsdBodyHtml(node, layout);
     const imgs = (node.images || []).map(imageForDisplay);
     const imageToolbarOwnsDelete = isSmartImageUploadNode(node) && imgs.length && imgs.every(img => mediaKindForItem(img) === 'image');
     if(node.jimengPending && node.jimengPending.submitId && imgs.length === 0){
@@ -11041,6 +11081,52 @@ function generationPendingCellHtml(options={}){
         <span class="generation-pending-copy"><strong>${escapeHtml(label)}</strong>${options.compact ? '' : `<small>${escapeHtml(tr('smart.waitSub'))}</small>`}</span>
     </div>`;
 }
+// —— 图层拆分（smart-psd）节点体与预览栈 ——
+// 渲染换算：节点画布坐标即原图像素坐标，各层按包围盒百分比绝对定位叠加，不做任何缩放裁剪。
+function psdLayerPositionStyle(layer, size){
+    const w = Number(size?.width) > 0 ? Number(size.width) : 1;
+    const h = Number(size?.height) > 0 ? Number(size.height) : 1;
+    const x = Number(layer?.x) || 0;
+    const y = Number(layer?.y) || 0;
+    const lw = Number(layer?.width) > 0 ? Number(layer.width) : w;
+    const lh = Number(layer?.height) > 0 ? Number(layer.height) : h;
+    return `left:${(x / w * 100).toFixed(4)}%;top:${(y / h * 100).toFixed(4)}%;width:${(lw / w * 100).toFixed(4)}%;height:${(lh / h * 100).toFixed(4)}%`;
+}
+function psdStackHtml(psd, options={}){
+    const size = psd?.size || {width:1, height:1};
+    const layers = Array.isArray(psd?.layers) ? psd.layers : [];
+    const ratio = `${Number(size.width) > 0 ? Number(size.width) : 1}/${Number(size.height) > 0 ? Number(size.height) : 1}`;
+    const interactive = options.interactive ? ' interactive' : '';
+    // 原图对照只存在于弹窗内：半透明底图叠在栈最底层，不写入节点数据。
+    const compareBase = options.compare && psd?.source?.url
+        ? `<img class="psd-layer psd-compare-base" src="${escapeAttr(psd.source.url)}" alt="" draggable="false" style="left:0;top:0;width:100%;height:100%;z-index:0">`
+        : '';
+    const layerImgs = layers.map((layer, index) => {
+        const visible = layer.visible !== false;
+        const selected = options.interactive && options.selectedLayerId === layer.id ? ' psd-layer-selected' : '';
+        return `<img class="psd-layer${selected}" data-psd-layer-id="${escapeAttr(layer.id || '')}" src="${escapeAttr(layer.url || '')}" alt="${escapeAttr(layer.name || '')}" title="${escapeAttr(layer.name || '')}" draggable="false" style="${psdLayerPositionStyle(layer, size)};z-index:${index + 1};${visible ? '' : 'display:none;'}">`;
+    }).join('');
+    return `<div class="psd-stack${interactive}"${options.id ? ` id="${options.id}"` : ''} style="aspect-ratio:${ratio}">${compareBase}${layerImgs}</div>`;
+}
+function smartPsdBodyHtml(node, layout){
+    if(node.psd && Array.isArray(node.psd.layers) && node.psd.layers.length){
+        const layers = node.psd.layers;
+        const exported = node.psd.exportedFile && node.psd.exportedFile.url;
+        return `<div class="psd-card">
+            ${psdStackHtml(node.psd)}
+            <div class="psd-card-foot">
+                <span class="psd-layer-count">${escapeHtml(trf('smart.psd.layerCount', {n:layers.length}))}</span>
+                <button type="button" class="psd-edit-btn" data-smart-action="psd-edit" data-node-id="${escapeAttr(node.id)}"><i data-lucide="layers"></i><span>${escapeHtml(tr('smart.psd.edit'))}</span></button>
+                ${exported ? `<a class="psd-exported-link" href="${escapeAttr(node.psd.exportedFile.url)}" download="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}" title="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}"><i data-lucide="download"></i><span>PSD</span></a>` : ''}
+            </div>
+        </div>`;
+    }
+    if(node.lastRunError && !node.pending) return failedGenerationCellHtml(node, layout);
+    if(node.pending || node.running || node.submitting || smartPendingTasks(node).length){
+        return generationPendingCellHtml({submitting:node.submitting && !node.pending, single:true, width:layout.width, height:layout.height});
+    }
+    return `<div class="generation-empty-state"><i data-lucide="layers-3"></i><span>${escapeHtml(tr('smart.psd.emptyHint'))}</span></div>`;
+}
 function jimengPendingBodyHtml(node, layout){
     const jp = node.jimengPending || {};
     const querying = Boolean(jp.querying);
@@ -11084,6 +11170,13 @@ function smartNodeToolbarImageIndex(node){
 }
 function currentMediaToolbarTarget(){
     const node = selectedNode();
+    // 图层拆分节点没有 node.images；以拆分源图（或已连接的上游图片）合成工具栏目标，
+    // psdSource 标记让工具栏只暴露「图层拆分」按钮。
+    if(isSmartPsdNode(node)){
+        const info = psdSourceInfo(node);
+        if(!info?.url) return null;
+        return {node, index:0, item:{url:info.url, name:info.name || 'source.png', kind:'image'}, kind:'image', psdSource:true};
+    }
     if(!isSmartImageNode(node)) return null;
     const index = smartNodeToolbarImageIndex(node);
     const item = imageForDisplay(node.images?.[index]);
@@ -11136,12 +11229,14 @@ function updateImageActionToolbar(){
             (target && requiredKind && requiredKind !== target.kind)
             || (action === 'matting' && !canRemoveBackground)
             || (action === 'erase' && !canRemoveBackground)
+            // 图层拆分节点只保留「图层拆分」入口，其余图片操作对它无意义。
+            || (target && target.psdSource && action !== 'psd')
         );
         button.disabled = !target || (action === 'upscale' && !upscaleModesAvailable());
     });
     // 「放大」悬停菜单与主按钮同步：任一模式可用即可点，选项按各自能力单独置灰。
     if(imageUpscaleMenu){
-        if(!target || target.kind !== 'image'){
+        if(!target || target.kind !== 'image' || target.psdSource){
             imageUpscaleMenuClose();
         } else {
             imageUpscaleMenu.querySelectorAll('[data-upscale-mode]').forEach(option => {
@@ -11150,7 +11245,7 @@ function updateImageActionToolbar(){
         }
     }
     // 「抠图」下拉与指定抠图面板跟随工具栏目标：目标丢失或切换图片时关闭/重定位。
-    if(!target || target.kind !== 'image'){
+    if(!target || target.kind !== 'image' || target.psdSource){
         imageMattingMenuClose();
         closeMattingPromptPanel();
     } else if(mattingPromptPanel?.classList.contains('open')){
@@ -11882,6 +11977,11 @@ function runImageToolbarAction(action, mode){
     if(!target) return;
     const {node, index, item, kind} = target;
     selectedImage = {nodeId:node.id, index};
+    // 图层拆分：图片节点工具栏入口（smart-psd 节点上为重拆源图）。
+    if(action === 'psd'){
+        openPsdCreateDialog(node);
+        return;
+    }
     if(action === 'cover'){
         setSmartCanvasCover(node, index, item, kind);
         return;
@@ -11974,6 +12074,388 @@ function runImageToolbarAction(action, mode){
     setImageEditMode(action, true);
     if(action === 'grid' && canGridJoinCurrentNode()) setGridOperationMode('join');
 }
+// —— 图层拆分（smart-psd）：发起弹窗、提交任务、轮询恢复与图层编辑弹窗 ——
+// 后端契约：POST /api/canvas-psd-tasks 提交；GET /api/canvas-psd-tasks/{id} 轮询；
+// POST /api/canvas-psd-export 导出。任务由服务端 finalize：node.psd 写入与 pending 清除
+// 都通过既有 node_fields 窄操作广播回来，前端不自行落 images[]。
+const psdTaskUrl = id => `/api/canvas-psd-tasks/${encodeURIComponent(id)}`;
+let psdCreateSourceNodeId = '';
+let psdEditorNodeId = '';
+let psdEditorSelectedLayerId = '';
+let psdEditorCompare = false;
+let psdEditorExporting = false;
+let psdDragState = null;
+function psdSourceInfo(node){
+    // 重拆场景：smart-psd 节点用它的拆分源图；图片节点用当前选中的结果图。
+    if(isSmartPsdNode(node)){
+        const source = node.psd?.source;
+        if(source?.url) return {url:source.url, name:source.name || 'source.png'};
+        // 端口连线新建的空拆分节点：回退到已连接的上游图片，让「图层拆分」按钮可直接用。
+        const upstream = (canvas?.connections || [])
+            .filter(conn => conn.to === node.id)
+            .map(conn => nodes.find(n => n.id === conn.from))
+            .find(n => n && isSmartImageNode(n));
+        if(upstream){
+            const item = imageForDisplay(upstream.images?.[smartNodeToolbarImageIndex(upstream)]);
+            if(item?.url && mediaKindForItem(item) === 'image') return {url:item.url, name:item.name || 'source.png', upstreamNodeId:upstream.id};
+        }
+        return null;
+    }
+    if(!isSmartImageNode(node)) return null;
+    const item = imageForDisplay(node.images?.[smartNodeToolbarImageIndex(node)]);
+    if(!item?.url || mediaKindForItem(item) !== 'image') return null;
+    return {url:item.url, name:item.name || 'source.png'};
+}
+function createSmartPsdNodeAt(point, options={}){
+    if(!options.skipUndo) pushUndo();
+    const node = {id:uid('psd'), type:'smart-psd', x:Math.round((point?.x || 0) - 210), y:Math.round((point?.y || 0) - 210), w:420, h:420, title:tr('smart.psd.nodeTitle'), images:[], activeImageIndex:0, psd:null, created_at:Date.now()};
+    nodes.push(node);
+    localUnsyncedNodeIds.add(node.id);
+    localDeletedNodeIds.delete(node.id);
+    if(options.select !== false) selectedId = node.id;
+    if(!options.deferRender) render();
+    if(!options.deferSave) scheduleSave();
+    return node;
+}
+function openPsdCreateDialog(sourceNode){
+    const source = liveSmartNode(sourceNode) || sourceNode;
+    if(!source || !psdSourceInfo(source)){ toast(tr('smart.psd.needSource')); return; }
+    psdCreateSourceNodeId = source.id;
+    if(psdCreatePromptInput) psdCreatePromptInput.value = '';
+    if(psdCreateResolutionSelect) psdCreateResolutionSelect.value = 'auto';
+    psdCreateModal?.classList.add('open');
+    psdCreateModal?.setAttribute('aria-hidden', 'false');
+    refreshIcons();
+    psdCreatePromptInput?.focus?.();
+}
+function closePsdCreateModal(){
+    psdCreateModal?.classList.remove('open');
+    psdCreateModal?.setAttribute('aria-hidden', 'true');
+    psdCreateSourceNodeId = '';
+}
+async function submitPsdDecompose(){
+    const source = nodes.find(node => node.id === psdCreateSourceNodeId);
+    const sourceInfo = source ? psdSourceInfo(source) : null;
+    if(!source || !sourceInfo?.url){ toast(tr('smart.psd.needSource')); closePsdCreateModal(); return; }
+    const prompt = String(psdCreatePromptInput?.value || '').trim().slice(0, 2000);
+    const resolution = ['auto', '1k', '1.5k', '2k'].includes(psdCreateResolutionSelect?.value) ? psdCreateResolutionSelect.value : 'auto';
+    closePsdCreateModal();
+    pushUndo();
+    // 端口连线新建的空拆分节点：直接复用自身承接本次拆分，不再新建重复节点。
+    const reuseNode = isSmartPsdNode(source) && !source.psd ? source : null;
+    let created = reuseNode;
+    if(!created){
+        const rect = nodeRect(source);
+        created = createSmartPsdNodeAt({x:rect.x + rect.width + 200 + 210, y:rect.y + 118 + 210}, {skipUndo:true, select:true});
+        created.sourceNodeId = sourceInfo.upstreamNodeId || source.id;
+        // 重拆源图（smart-psd 自身）不画 psd→psd 连线；图片源按既有方式连入。
+        if(!isSmartPsdNode(source)) connectInputNode(source.id, created.id);
+    }
+    created.runStartedAt = nowMs();
+    created.running = true;
+    created.pending = 1;
+    delete created.lastRunError;
+    render();
+    scheduleSave();
+    try {
+        // 节点必须先经窄操作落库，服务端才能把拆分任务绑定到这个节点（对齐绑定任务的既有顺序约束）。
+        await saveCanvas();
+        // 对齐后端 CanvasPsdRequest 契约：batch 字段与服务端登记 pendingTasks/生成日志所需元数据。
+        const payload = {
+            canvas_id:canvasId,
+            node_id:created.id,
+            batch_id:uid('batch'),
+            batch_index:0,
+            source_url:sourceInfo.url,
+            prompt,
+            resolution,
+            log_run:{nodeType:'smart-psd', prompt, settings:{resolution}, refs:[]},
+            log_started_at:created.runStartedAt,
+        };
+        const task = await fetch('/api/canvas-psd-tasks', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)}).then(async r => {
+            if(!r.ok) throw new Error((await r.text()).slice(0, 300));
+            return r.json();
+        });
+        if(!task?.ok || !task.task_id) throw new Error(task?.error || tr('smart.psd.submitFailed'));
+        const live = liveSmartNode(created) || created;
+        // pendingTasks 由服务端 register_bound_canvas_task 管理；前端记录 serverManaged，
+        // 刷新后 resumeSmartPendingNode 会按该标记跳过重提交（任务终态由服务端广播收敛）。
+        live.pendingTasks = [{taskId:task.task_id, kind:'psd', model:'seedream-v5.5-layer-decomposition', serverManaged:true}];
+        live.running = false;
+        render();
+        scheduleSave();
+        startPsdTaskPoll(live.id, task.task_id);
+    } catch(e) {
+        toast((e?.message || tr('smart.psd.submitFailed')).slice(0, 180));
+        const live = liveSmartNode(created) || created;
+        live.running = false;
+        live.pending = 0;
+        delete live.pendingTasks;
+        if(!live.psd && !(live.images || []).length){
+            nodes = nodes.filter(node => node.id !== live.id);
+            if(canvas) canvas.connections = (canvas.connections || []).filter(conn => conn.from !== live.id && conn.to !== live.id);
+        }
+        render();
+        scheduleSave();
+    }
+}
+async function startPsdTaskPoll(nodeId, taskId){
+    try {
+        await pollSmartCanvasTask(taskId, 'psd', psdTaskUrl);
+        // 成功：服务端 finalize 已通过窄操作写好 node.psd 并清除 pending，这里只停轮询刷新展示。
+        render();
+    } catch(e) {
+        const node = nodes.find(n => n.id === nodeId);
+        if(!node) return;
+        node.pendingTasks = smartPendingTasks(node).filter(task => task.taskId !== taskId);
+        node.pending = smartPendingTasks(node).length;
+        if(!node.pending && smartPendingTasks(node).length === 0){
+            delete node.pendingTasks;
+            markSmartNodeFailedIfIdle(node, e?.message || tr('smart.psd.failed'));
+        }
+        toast((e?.message || tr('smart.psd.failed')).slice(0, 180));
+        render();
+        scheduleSave();
+    }
+}
+function psdEditorNode(){ return nodes.find(node => node.id === psdEditorNodeId) || null; }
+function formatPsdSize(bytes){
+    const n = Number(bytes) || 0;
+    if(n <= 0) return '';
+    if(n < 1024) return `${n} B`;
+    if(n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+function openPsdEditor(nodeId){
+    const node = nodes.find(n => n.id === nodeId);
+    if(!isSmartPsdNode(node) || !node.psd || !(node.psd.layers || []).length){ toast(tr('smart.psd.noLayers')); return; }
+    psdEditorNodeId = node.id;
+    psdEditorSelectedLayerId = '';
+    psdEditorCompare = false;
+    psdDragState = null;
+    if(psdCompareToggle) psdCompareToggle.checked = false;
+    renderPsdEditor();
+    psdEditModal?.classList.add('open');
+    psdEditModal?.setAttribute('aria-hidden', 'false');
+}
+function closePsdEditor(){
+    psdEditModal?.classList.remove('open');
+    psdEditModal?.setAttribute('aria-hidden', 'true');
+    psdEditorNodeId = '';
+    psdEditorSelectedLayerId = '';
+    psdDragState = null;
+}
+function renderPsdEditor(){
+    const node = psdEditorNode();
+    if(!node?.psd) return;
+    const layers = Array.isArray(node.psd.layers) ? node.psd.layers : [];
+    if(psdLayerListEl){
+        // 列表自上而下 = 顶层在上，layers[0] 恒为底图，因此按数组倒序渲染。
+        psdLayerListEl.innerHTML = layers.map((layer, index) => ({layer, index})).reverse().map(({layer, index}) => {
+            const visible = layer.visible !== false;
+            const selected = psdEditorSelectedLayerId === layer.id ? ' selected' : '';
+            return `<div class="psd-layer-row${selected}" data-psd-row-id="${escapeAttr(layer.id || '')}" role="listitem">
+                <button type="button" class="psd-eye-btn" data-psd-eye="${escapeAttr(layer.id || '')}" title="${escapeHtml(visible ? tr('smart.psd.hide') : tr('smart.psd.show'))}"><i data-lucide="${visible ? 'eye' : 'eye-off'}"></i></button>
+                <span class="psd-layer-name" data-psd-rename="${escapeAttr(layer.id || '')}" title="${escapeHtml(tr('smart.psd.renameHint'))}">${escapeHtml(layer.name || '')}</span>
+                <span class="psd-layer-order">
+                    <button type="button" data-psd-up="${escapeAttr(layer.id || '')}" title="${escapeHtml(tr('smart.psd.moveUp'))}" ${index >= layers.length - 1 || layer.isBase ? 'disabled' : ''}><i data-lucide="arrow-up"></i></button>
+                    <button type="button" data-psd-down="${escapeAttr(layer.id || '')}" title="${escapeHtml(tr('smart.psd.moveDown'))}" ${index <= 0 || layer.isBase ? 'disabled' : ''}><i data-lucide="arrow-down"></i></button>
+                </span>
+            </div>`;
+        }).join('');
+    }
+    const stage = document.getElementById('psdStage');
+    if(stage){
+        // 用 outerHTML 重建可交互图层栈（委托事件绑在静态外层 #psdStageWrap 上，重建不打断监听）。
+        stage.outerHTML = psdStackHtml(node.psd, {interactive:true, id:'psdStage', selectedLayerId:psdEditorSelectedLayerId, compare:psdEditorCompare});
+    }
+    if(psdExportInfoEl){
+        const exported = node.psd.exportedFile;
+        const bytes = Number(exported.sizeBytes ?? exported.size_bytes) || 0;
+        psdExportInfoEl.textContent = exported && exported.url ? `${exported.name || 'layers.psd'}${formatPsdSize(bytes) ? ` · ${formatPsdSize(bytes)}` : ''}` : '';
+    }
+    refreshIcons();
+}
+function refreshPsdStageSelection(){
+    psdStageWrap?.querySelectorAll?.('img.psd-layer').forEach(img => {
+        img.classList.toggle('psd-layer-selected', Boolean(psdEditorSelectedLayerId) && img.dataset.psdLayerId === psdEditorSelectedLayerId);
+    });
+    psdLayerListEl?.querySelectorAll?.('.psd-layer-row').forEach(row => {
+        row.classList.toggle('selected', row.dataset.psdRowId === psdEditorSelectedLayerId);
+    });
+}
+function mutatePsdLayer(layerId, mutate){
+    const node = psdEditorNode();
+    if(!node?.psd) return false;
+    const layers = Array.isArray(node.psd.layers) ? node.psd.layers : [];
+    const index = layers.findIndex(layer => layer.id === layerId);
+    if(index < 0) return false;
+    // 统一「先 pushUndo 快照 → 修改 node.psd → 窄操作保存」的编辑路径。
+    pushUndo();
+    mutate(layers[index], index, layers);
+    renderPsdEditor();
+    render();
+    scheduleSave();
+    return true;
+}
+async function exportPsdFromEditor(){
+    const node = psdEditorNode();
+    if(!node?.psd || psdEditorExporting) return;
+    psdEditorExporting = true;
+    psdExportButton?.classList.add('busy');
+    if(psdExportInfoEl) psdExportInfoEl.textContent = tr('smart.psd.exporting');
+    try {
+        const data = await fetch('/api/canvas-psd-export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({canvas_id:canvasId, node_id:node.id})}).then(async r => {
+            if(!r.ok) throw new Error((await r.text()).slice(0, 300));
+            return r.json();
+        });
+        if(!data?.ok || !data.url) throw new Error(data?.error || tr('smart.psd.exportFailed'));
+        const bytes = Number(data.sizeBytes ?? data.size_bytes) || 0;
+        if(psdExportInfoEl) psdExportInfoEl.textContent = `${data.name || 'layers.psd'}${formatPsdSize(bytes) ? ` · ${formatPsdSize(bytes)}` : ''}`;
+        // exportedFile 由服务端写入节点并经窄操作广播回来；弹窗只展示结果，关闭即可。
+    } catch(e) {
+        if(psdExportInfoEl) psdExportInfoEl.textContent = '';
+        toast((e?.message || tr('smart.psd.exportFailed')).slice(0, 180));
+    } finally {
+        psdEditorExporting = false;
+        psdExportButton?.classList.remove('busy');
+    }
+}
+psdCreateCloseButton?.addEventListener('click', closePsdCreateModal);
+psdCreateRunButton?.addEventListener('click', () => { submitPsdDecompose(); });
+psdCreateModal?.addEventListener('click', event => { if(event.target === psdCreateModal) closePsdCreateModal(); });
+psdEditCloseButton?.addEventListener('click', closePsdEditor);
+psdEditModal?.addEventListener('click', event => { if(event.target === psdEditModal) closePsdEditor(); });
+psdCompareToggle?.addEventListener('change', () => { psdEditorCompare = Boolean(psdCompareToggle.checked); renderPsdEditor(); });
+psdExportButton?.addEventListener('click', () => { exportPsdFromEditor(); });
+// 图层列表：眼睛开关、↑↓ 调序（委托绑定，重建 innerHTML 不丢监听）。
+psdLayerListEl?.addEventListener('click', event => {
+    const eye = event.target.closest?.('[data-psd-eye]');
+    if(eye){
+        const id = eye.dataset.psdEye || '';
+        mutatePsdLayer(id, layer => { layer.visible = layer.visible === false; });
+        return;
+    }
+    const up = event.target.closest?.('[data-psd-up]');
+    if(up){
+        const id = up.dataset.psdUp || '';
+        mutatePsdLayer(id, (layer, index, layers) => {
+            if(index >= layers.length - 1) return;
+            layers.splice(index, 1);
+            layers.splice(index + 1, 0, layer);
+        });
+        return;
+    }
+    const down = event.target.closest?.('[data-psd-down]');
+    if(down){
+        const id = down.dataset.psdDown || '';
+        mutatePsdLayer(id, (layer, index, layers) => {
+            if(index <= 0) return;
+            layers.splice(index, 1);
+            layers.splice(index - 1, 0, layer);
+        });
+    }
+});
+// 双击图层名改名为行内输入框；Enter/失焦提交，Esc 放弃。
+psdLayerListEl?.addEventListener('dblclick', event => {
+    const nameEl = event.target.closest?.('[data-psd-rename]');
+    if(!nameEl) return;
+    const node = psdEditorNode();
+    if(!node?.psd) return;
+    const layer = (node.psd.layers || []).find(item => item.id === nameEl.dataset.psdRename);
+    if(!layer) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'psd-rename-input';
+    input.maxLength = 60;
+    input.value = String(layer.name || '');
+    input.setAttribute('aria-label', tr('smart.psd.renameHint'));
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+    const commit = save => {
+        const next = String(input.value || '').trim();
+        if(save && next && next !== String(layer.name || '')){
+            pushUndo();
+            layer.name = next;
+            render();
+            scheduleSave();
+        }
+        renderPsdEditor();
+    };
+    input.addEventListener('blur', () => commit(true));
+    input.addEventListener('keydown', keyEvent => {
+        if(keyEvent.key === 'Enter'){ keyEvent.preventDefault(); input.blur(); }
+        else if(keyEvent.key === 'Escape'){ keyEvent.preventDefault(); commit(false); }
+    });
+});
+// 舞台拖动：位移按 原图像素/容器像素 换算成整数 x/y；首次有效位移前压撤销栈（快照即起始坐标）。
+psdStageWrap?.addEventListener('pointerdown', event => {
+    if(event.button !== 0 && event.pointerType === 'mouse') return;
+    const node = psdEditorNode();
+    if(!node?.psd) return;
+    const img = event.target.closest?.('img.psd-layer');
+    if(!img || img.classList.contains('psd-compare-base')){
+        psdEditorSelectedLayerId = '';
+        refreshPsdStageSelection();
+        return;
+    }
+    const layer = (node.psd.layers || []).find(item => item.id === img.dataset.psdLayerId);
+    if(!layer) return;
+    event.preventDefault();
+    psdEditorSelectedLayerId = layer.id;
+    refreshPsdStageSelection();
+    psdDragState = {
+        layerId:layer.id,
+        pointerId:event.pointerId,
+        startX:event.clientX,
+        startY:event.clientY,
+        origX:Number(layer.x) || 0,
+        origY:Number(layer.y) || 0,
+        moved:false,
+        undoed:false,
+        img
+    };
+    img.setPointerCapture?.(event.pointerId);
+});
+psdStageWrap?.addEventListener('pointermove', event => {
+    if(!psdDragState || event.pointerId !== psdDragState.pointerId) return;
+    const node = psdEditorNode();
+    if(!node?.psd) return;
+    const dx = event.clientX - psdDragState.startX;
+    const dy = event.clientY - psdDragState.startY;
+    if(!dx && !dy) return;
+    const layer = (node.psd.layers || []).find(item => item.id === psdDragState.layerId);
+    const stackEl = psdStageWrap.querySelector?.('.psd-stack');
+    const rect = stackEl?.getBoundingClientRect?.();
+    if(!layer || !rect || !rect.width || !rect.height) return;
+    if(!psdDragState.undoed){
+        // 撤销快照发生在任何坐标改动之前：Ctrl+Z 精确回到拖拽起始坐标。
+        pushUndo();
+        psdDragState.undoed = true;
+    }
+    psdDragState.moved = true;
+    const size = node.psd.size || {width:1, height:1};
+    layer.x = Math.round(psdDragState.origX + dx * (Number(size.width) / rect.width));
+    layer.y = Math.round(psdDragState.origY + dy * (Number(size.height) / rect.height));
+    const zIndex = (node.psd.layers || []).indexOf(layer) + 1;
+    psdDragState.img.style.cssText = `${psdLayerPositionStyle(layer, size)};z-index:${zIndex}${layer.visible === false ? ';display:none' : ''}`;
+});
+const finishPsdDrag = event => {
+    if(!psdDragState || (event && event.pointerId !== psdDragState.pointerId)) return;
+    const moved = psdDragState.moved;
+    psdDragState = null;
+    if(moved){
+        // 拖拽结束：改动以 node_fields 窄操作同步；重渲染列表/舞台保持选层一致。
+        renderPsdEditor();
+        render();
+        scheduleSave();
+    }
+};
+psdStageWrap?.addEventListener('pointerup', event => { finishPsdDrag(event); });
+psdStageWrap?.addEventListener('pointercancel', event => { finishPsdDrag(event); });
 imageActionToolbar?.addEventListener('mousedown', event => event.stopPropagation());
 imageActionToolbar?.addEventListener('click', event => {
     const button = event.target.closest?.('[data-image-toolbar-action]');
@@ -12311,6 +12793,9 @@ function duplicateSmartNodeMediaToCanvas(node, imageIndex){
 function runSmartNodeToolbarAction(nodeId, action){
     const node = nodes.find(n => n.id === nodeId);
     if(!node) return;
+    // 图层拆分入口与图层编辑：smart-psd 节点没有 node.images，必须在图片项检查前分发。
+    if(action === 'psd'){ openPsdCreateDialog(node); return; }
+    if(action === 'psd-edit'){ openPsdEditor(node.id); return; }
     const index = smartNodeToolbarImageIndex(node);
     const item = imageForDisplay(node.images?.[index]);
     if(!item?.url) return;
@@ -13411,7 +13896,7 @@ function render(){
         const isBackgroundRemoval = isSmartBackgroundRemovalNode(node);
         const isTranslucentMatting = isSmartTranslucentMattingNode(node);
         const isErase = isSmartEraseNode(node);
-        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted') : isTranslucentMatting ? tr('smart.translucentProduct') : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? (isSmartRemoveRedrawNode(node) ? tr('smart.removeRedraw') : tr('smart.erase')) : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
+        const title = isSmart3dDirectorNode(node) ? (node.title || tr('smart.directorNodeTitle') || '3D导演台') : node.type === 'smart-group' ? (node.title === '万能分组' ? '智能分组' : (node.title || '智能分组')) : node.type === 'smart-prompt' ? tr('smart.textNode') : node.type === 'smart-loop' ? '循环' : isSmartPromptMattingNode(node) ? tr('smart.mattingTargeted') : isTranslucentMatting ? tr('smart.translucentProduct') : isBackgroundRemoval ? tr('smart.removeBackground') : isErase ? (isSmartRemoveRedrawNode(node) ? tr('smart.removeRedraw') : tr('smart.erase')) : isSmartComfyUpscaleNode(node) ? tr('smart.comfyUpscaleOutputMain') : isSmartPsdNode(node) ? escapeHtml(tr('smart.psd.nodeTitle')) : isSmartVideoGenerationNode(node) ? '视频生成' : isSmartImageGenerationNode(node) ? '图片生成' : isSmartUploadNode(node) ? uploadNodeLabel(uploadMediaKindForNode(node)) : (imgs.length ? '上传' : escapeHtml(tr('smart.createImportNode')));
         const scale = nodeScale(node);
         const layout = imageLayout(imgs, scale, node);
         const isPrompt = node.type === 'smart-prompt';
@@ -13425,7 +13910,7 @@ function render(){
         const isEmpty = isImageNode && imgs.length === 0 && !node.pending && !isSubmitting && !isQueued && !isJimengPending;
         const isHistory = isHistoryGroupNode(node);
         const roleTitle = isHistory ? '历史结果' : title;
-        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isSmartPromptMattingNode(node) ? 'wand-sparkles' : isTranslucentMatting ? 'droplets' : isBackgroundRemoval ? 'scan' : isErase ? (isSmartRemoveRedrawNode(node) ? 'wand-2' : 'eraser') : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
+        const roleIcon = isHistory ? 'history' : isSmart3dDirectorNode(node) ? 'cuboid' : isSmartVideoGenerationNode(node) ? 'video' : isSmartPromptMattingNode(node) ? 'wand-sparkles' : isTranslucentMatting ? 'droplets' : isBackgroundRemoval ? 'scan' : isErase ? (isSmartRemoveRedrawNode(node) ? 'wand-2' : 'eraser') : isSmartComfyUpscaleNode(node) ? 'maximize-2' : isSmartPsdNode(node) ? 'layers-3' : isSmartImageGenerationNode(node) ? 'image-plus' : isSmartUploadNode(node) ? uploadNodeIcon(uploadMediaKindForNode(node)) : isPrompt ? 'text-cursor-input' : isLoop ? 'repeat-2' : isSmartGroup ? 'group' : 'box';
         const isGroup = false;
         const isPending = ((node.pending || isSubmitting || isQueued || isJimengPending) && imgs.length === 0);
         const body = nodeBodyHtml(node, layout);
@@ -13435,8 +13920,8 @@ function render(){
         // anchored to that card.
         const renderedNodeHeight = layout.height;
         const deleteBtn = isGroup ? '' : `<button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button>`;
-        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isTranslucentMatting ? escapeHtml(tr('smart.translucentProductNodeHint')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr(isSmartRemoveRedrawNode(node) ? 'smart.removeRedrawHintNode' : 'smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
-        const html = `<div class="image-node ${isSmart3dDirectorNode(node) ? 'director3d-node' : ''} ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
+        const hint = isSmartGroup ? '旧分组' : isPending ? escapeHtml(tr('smart.hintPending')) : isTranslucentMatting ? escapeHtml(tr('smart.translucentProductNodeHint')) : isBackgroundRemoval ? escapeHtml(tr('smart.backgroundRemovalHint')) : isErase ? escapeHtml(tr(isSmartRemoveRedrawNode(node) ? 'smart.removeRedrawHintNode' : 'smart.eraseHintNode')) : isSmartComfyUpscaleNode(node) ? escapeHtml(tr('smart.upscaleHintNode')) : isSmartPsdNode(node) ? escapeHtml(tr('smart.psd.nodeHint')) : isSmartGenerationNode(node) ? (imgs.length ? '选择结果后可继续处理或连接下游生成' : (isSmartVideoGenerationNode(node) ? '连接素材与提示词后生成视频' : '连接图片与提示词后生成')) : (imgs.length ? escapeHtml(tr('smart.hintSingle')) : escapeHtml(tr('smart.hintEmpty')));
+        const html = `<div class="image-node ${isSmart3dDirectorNode(node) ? 'director3d-node' : ''} ${(isSmartGenerationNode(node) || isPrompt) ? 'generation-card-node' : ''} ${isSmartGenerationNode(node) ? 'media-generation-card-node' : ''} ${isPrompt ? 'text-generation-card-node' : ''} ${isEmpty ? 'empty-node' : ''} ${isHistory ? 'history-group-node' : ''} ${isPrompt ? 'prompt-smart-node' : ''} ${isLoop ? 'loop-smart-node' : ''} ${isSmartGroup ? 'smart-group-node' : ''} ${isSmartUploadNode(node) ? 'media-upload-node' : ''} ${isSmartImageUploadNode(node) ? 'image-upload-node' : ''} ${isSmartVideoUploadNode(node) ? 'video-upload-node' : ''} ${isSmartAudioUploadNode(node) ? 'audio-upload-node' : ''} ${uploadResourceHeader ? 'has-upload-resource-header' : ''} ${isSmartVideoGenerationNode(node) ? 'video-generation-node' : ''} ${isSmartPsdNode(node) ? 'smart-psd-node' : ''} ${isCompactMember ? 'smart-group-member-node' : ''} ${isNodeSelected(node.id) ? 'selected' : ''} ${(dragState?.groupIds?.includes(node.id) || dragState?.id === node.id) ? 'dragging' : ''} ${node.running ? 'node-running' : ''} ${isPending ? 'node-pending' : ''}" data-id="${escapeHtml(node.id)}" tabindex="${isPrompt ? '0' : '-1'}" style="left:${node.x || 0}px;top:${node.y || 0}px;width:${layout.width}px;--node-port-y:${Number(layout.portY || layout.height / 2)}px;height:${renderedNodeHeight}px">
             <div class="node-role-label"><i data-lucide="${roleIcon}"></i><span>${escapeHtml(roleTitle)}</span></div>
             <div class="node-head">${uploadResourceHeader || `<div class="node-title">${title}</div><div class="node-actions">${deleteBtn}</div>`}</div>
             ${!isEmpty && !isGroup && !(isSmartGenerationNode(node) && imgs.length) && !(isSmartUploadNode(node) && imgs.length) ? `<div class="floating-node-actions"><button class="mini-x node-delete" type="button" title="${escapeHtml(tr('smart.deleteNode'))}"><i data-lucide="trash-2"></i></button></div>` : ''}
@@ -14449,7 +14934,7 @@ function handlePortDrop(drag, e){
         requestAnimationFrame(() => openPortConnectMenu(drag.fromId, drag.fromPort, e));
         return;
     }
-    if(hit?.closest?.('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.smart-minimap')){
+    if(hit?.closest?.('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.smart-minimap')){
         discardPendingUndo(); render(); return;
     }
     // 拖线落在空白处时与点击端口保持同一套功能候选，不再默认创建图片生成节点。
@@ -15018,6 +15503,11 @@ function bindNodeEvents(){
             event.stopPropagation();
             beginSmartNoteEdit(nodeForControls, el, event);
         };
+        else if(isSmartPsdNode(nodeForControls)) el.ondblclick = event => {
+            // 双击图层拆分节点 = 打开图层编辑弹窗（尚无结果时保持默认行为）。
+            event.stopPropagation();
+            if(nodeForControls.psd && (nodeForControls.psd.layers || []).length) openPsdEditor(id);
+        };
         else if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => e.stopPropagation();
         const nodeDrop = el.querySelector('.node-drop');
         nodeDrop?.addEventListener('mousedown', e => {
@@ -15041,6 +15531,17 @@ function bindNodeEvents(){
             btn.addEventListener('click', e => {
                 e.preventDefault(); e.stopPropagation();
                 deleteNodeFromButton(id);
+            });
+        });
+        el.querySelectorAll('[data-smart-action]').forEach(btn => {
+            btn.addEventListener('mousedown', e => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, true);
+            btn.addEventListener('click', e => {
+                e.preventDefault();
+                e.stopPropagation();
+                runSmartNodeToolbarAction(btn.dataset.nodeId || id, btn.dataset.smartAction);
             });
         });
         el.querySelectorAll('[data-smart-node-action]').forEach(btn => {
@@ -15427,7 +15928,9 @@ function canAutoConnectDraggedNode(sourceNode, targetNode){
     if(!sourceNode || !targetNode || sourceNode.id === targetNode.id) return false;
     if(isHistoryGroupNode(sourceNode) || isHistoryGroupNode(targetNode)) return false;
     if(isSmartGroupNode(targetNode)) return false;
-    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt';
+    if(isSmartImageNode(sourceNode)) return isSmartImageNode(targetNode) || isSmartPsdNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt';
+    // 图层拆分只作为图片的下游功能节点存在：不把自己连到任何节点的上游去驱动生成。
+    if(isSmartPsdNode(sourceNode)) return false;
     if(sourceNode.type === 'smart-prompt') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop' || targetNode.type === 'smart-prompt';
     if(sourceNode.type === 'smart-loop') return isSmartImageNode(targetNode);
     if(sourceNode.type === 'smart-group') return isSmartImageNode(targetNode) || targetNode.type === 'smart-loop';
@@ -15440,6 +15943,7 @@ function smartConnectionNodeLabel(node){
     if(isSmartBackgroundRemovalNode(node)) return tr('smart.removeBackground');
     if(isSmartEraseNode(node)) return isSmartRemoveRedrawNode(node) ? tr('smart.removeRedraw') : tr('smart.erase');
     if(isSmartComfyUpscaleNode(node)) return tr('smart.comfyUpscaleOutputMain');
+    if(isSmartPsdNode(node)) return tr('smart.psd.action');
     if(isSmartImageGenerationNode(node)) return '图片生成';
     if(isSmartUploadNode(node)) return uploadNodeLabel(uploadMediaKindForNode(node));
     if(node?.type === 'smart-prompt') return tr('smart.textNode');
@@ -15449,6 +15953,7 @@ function smartConnectionNodeLabel(node){
 function smartConnectionNodeIcon(node){
     if(isSmartVideoGenerationNode(node)) return 'video';
     if(isSmartImageGenerationNode(node)) return 'sparkles';
+    if(node?.type === 'smart-psd') return 'layers-3';
     if(isSmartUploadNode(node)) return uploadNodeIcon(uploadMediaKindForNode(node));
     if(node?.type === 'smart-prompt') return 'text-cursor-input';
     if(node?.type === 'smart-loop') return 'repeat-2';
@@ -15458,6 +15963,7 @@ const PORT_CONNECTION_FUNCTION_TYPES = [
     'smart-image-upload',
     'smart-image-generation',
     'smart-video-generation',
+    'smart-psd',
     'smart-prompt',
     'smart-loop'
 ];
@@ -15465,6 +15971,7 @@ function smartConnectionFunctionLabel(type){
     if(type === 'smart-image-upload') return '上传';
     if(type === 'smart-image-generation') return '图片生成';
     if(type === 'smart-video-generation') return '视频生成';
+    if(type === 'smart-psd') return tr('smart.psd.action');
     if(type === 'smart-prompt') return tr('smart.textNode');
     if(type === 'smart-loop') return '循环';
     return '节点';
@@ -15495,6 +16002,7 @@ function createPortConnectionNode(type, point){
     if(type === 'smart-image-upload') return createImageNodeAt(point, [], {skipUndo:true, select:true, pendingUpload:true});
     if(type === 'smart-image-generation') return createImageGenerationNode(point, {skipUndo:true, select:true});
     if(type === 'smart-video-generation') return createVideoGenerationNode(point, {skipUndo:true, select:true});
+    if(type === 'smart-psd') return createSmartPsdNodeAt(point, {skipUndo:true, select:true});
     if(type === 'smart-prompt') return createPromptNode(Math.round(point.x - 158), Math.round(point.y - 97), {skipUndo:true, select:true});
     if(type === 'smart-loop') return createLoopNode(Math.round(point.x - 135), Math.round(point.y - 95), {skipUndo:true, select:true});
     return null;
@@ -25490,14 +25998,17 @@ function resumeJimengPendingNodes(){
         startJimengPoll(n);
     });
 }
-async function pollSmartCanvasTask(taskId, kind='image'){
+// taskUrlFn 为可选第三参数：默认沿用 canvas-image-tasks / canvas-video-tasks；
+// 图层拆分等新型任务传入自己的轮询 URL 构造器即可（最小改动复用同一轮询循环与去重）。
+async function pollSmartCanvasTask(taskId, kind='image', taskUrlFn=null){
     if(!taskId) throw new Error(tr('smart.errRunFailed'));
     if(activeSmartTaskPolls.has(taskId)) return activeSmartTaskPolls.get(taskId);
     const promise = (async () => {
         for(let i = 0; i < 900; i++){
             await new Promise(resolve => setTimeout(resolve, 2000));
             const taskPath = kind === 'video' ? 'canvas-video-tasks' : 'canvas-image-tasks';
-            const task = await fetch(`/api/${taskPath}/${encodeURIComponent(taskId)}`).then(async r => {
+            const taskUrl = typeof taskUrlFn === 'function' ? taskUrlFn(taskId) : `/api/${taskPath}/${encodeURIComponent(taskId)}`;
+            const task = await fetch(taskUrl).then(async r => {
                 if(!r.ok) throw new Error(await r.text());
                 return r.json();
             });
@@ -25973,7 +26484,7 @@ window.addEventListener('message', event => {
 director3dModal?.addEventListener('click', event => { if(event.target===director3dModal) closeDirector3d(); });
 // 画布平移：鼠标中键在画布任意位置（包括节点、工作流分组内部）都固定为移动画布，
 // 避免鼠标落在分组/节点上时误触发移动分组。左键空白处拖拽的既有行为保持不变。
-const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.upload-resource-picker,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.angle-control-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';
+const CANVAS_PAN_IGNORE_SELECTOR = '.composer,.smart-back,.asset-panel,.asset-toggle,.asset-dialog-backdrop,.asset-hover-preview,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.workflow-transfer-panel,.upload-resource-picker,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.angle-control-modal,.psd-modal,.create-menu,.port-connect-menu,.photoshop-context-menu,.photoshop-install-modal,.smart-minimap';
 function startCanvasPan(e){
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
@@ -26035,14 +26546,14 @@ shell.addEventListener('auxclick', e => {
 shell.addEventListener('mousedown', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
 }, true);
 shell.addEventListener('click', e => {
     if(!zoomPreviewState) return;
     if(e.button !== 0) return;
-    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     e.preventDefault();
     e.stopPropagation();
     const nodeEl = e.target.closest('.image-node');
@@ -26050,7 +26561,7 @@ shell.addEventListener('click', e => {
     else exitZoomPreview(screenToWorld(e));
 }, true);
 shell.onmousedown = e => {
-    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(zoomPreviewState && e.button === 0 && !e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     if(e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     clearCanvasPresence();
     closeCreateMenu();
@@ -26109,7 +26620,7 @@ shell.oncontextmenu = e => {
         e.stopPropagation();
         return;
     }
-    if(didPan || e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
+    if(didPan || e.target.closest('.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu,.smart-minimap')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     e.stopPropagation();
@@ -26139,14 +26650,14 @@ shell.oncontextmenu = e => {
     openCreateMenu(e);
 };
 shell.ondblclick = e => {
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     openCreateMenu(e);
 };
 shell.onclick = e => {
     if(selectionJustFinished) return;
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.create-menu,.port-connect-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     closeCreateMenu();
     closePortConnectMenu();
@@ -26681,7 +27192,7 @@ window.onmouseup = e => {
 }
 };
 shell.addEventListener('wheel', e => {
-    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.angle-control-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
+    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.angle-control-modal,.psd-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
     e.preventDefault();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
@@ -26830,6 +27341,15 @@ window.addEventListener('keydown', e => {
             if(lastNodePasteAt >= requestedAt) return;
             pasteNodes();
         }, 90);
+    }
+    // 图层拆分两个弹窗：Esc 优先关闭最上层弹窗（与图片编辑弹窗同级处理）。
+    if(e.key === 'Escape' && psdEditModal?.classList.contains('open')){
+        closePsdEditor();
+        return;
+    }
+    if(e.key === 'Escape' && psdCreateModal?.classList.contains('open')){
+        closePsdCreateModal();
+        return;
     }
     if(e.key === 'Escape' && imageEditModal.classList.contains('open')){
         closeImageEditor();
