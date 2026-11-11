@@ -245,6 +245,33 @@ class RunnerSuccessTest(CanvasPsdTaskBase):
         self.assertTrue(any(log.get("local_task_id") == task_id for log in canvas["logs"]))
         main.manager.broadcast_canvas_operation.assert_awaited()
 
+    async def test_small_image_rejected_before_upload(self):
+        # 实测根因：长边 <512 的图上游以 errorCode 1013「文件处理失败」拒绝（不扣费但白跑一轮）。
+        # 现在提交前本地拦截：不上传、不提交上游，任务直接失败并给出「放大」指引。
+        canvas_id, node_id, task_id = "c-psd", "psd_1", "canvas_psd_small"
+        self.make_pending_node(canvas_id, node_id, task_id)
+        http = FakeHttp({"code": 0, "data": {}})
+        upload = AsyncMock(return_value="https://rh.example/uploaded.png")
+        finish = Mock()
+        event = {"id": "ev-1", "user_id": "u1", "api_profile_id": "legacy-shared"}
+        with patch.object(main, "upstream_context_for_profile_id", Mock(return_value=CTX)), \
+             patch.object(main, "psd_local_image_size", Mock(return_value=(500, 333))), \
+             patch.object(main, "runninghub_upload_reference", upload), \
+             patch.object(main, "finish_usage_event", finish), \
+             patch.object(main.httpx, "AsyncClient", http.factory):
+            await main.run_canvas_psd_task(task_id, self.psd_payload(), event, "legacy-shared")
+        upload.assert_not_awaited()
+        self.assertEqual(http.calls, [])
+        task = main.canvas_task_get(task_id)
+        self.assertEqual(task["status"], "failed")
+        self.assertIn("放大", task["error"])
+        self.assertIn("512", task["error"])
+        self.assertEqual(finish.call_args[0][1], "failed")
+        canvas = json.loads((self.canvases / f"{canvas_id}.json").read_text(encoding="utf-8"))
+        node = canvas["nodes"][0]
+        self.assertIn("放大", str(node.get("lastRunError")))
+        self.assertNotIn("pendingTasks", node)
+
     async def test_poll_timeout_marks_recoverable_without_resubmit(self):
         canvas_id, node_id, task_id = "c-psd", "psd_1", "canvas_psd_to"
         self.make_pending_node(canvas_id, node_id, task_id)

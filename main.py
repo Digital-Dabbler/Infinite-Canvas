@@ -20978,6 +20978,11 @@ async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=Non
     upstream_id = ""
     try:
         base_w, base_h = await asyncio.to_thread(psd_local_image_size, payload.source_url)
+        if max(base_w, base_h) < psd_layers.LAYER_MIN_EDGE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"图片太小（{base_w}×{base_h}），图层拆分要求长边至少 {psd_layers.LAYER_MIN_EDGE} 像素，请先用工具栏「放大」处理后再拆分",
+            )
         context = upstream_context_for_profile_id(
             api_profile_id,
             "runninghub",

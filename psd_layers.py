@@ -19,6 +19,9 @@ from typing import Any, Dict, List, Tuple
 
 LAYER_DECOMPOSE_MODEL = "seedream-v5.5-layer-decomposition"
 LAYER_DECOMPOSE_PATH = "seedream-v5.5/layer-decomposition"
+# RunningHub 图层拆分对输入图有最低分辨率要求：长边不足 512 像素时上游直接以
+# errorCode 1013「文件处理失败」拒绝（两台项目实测一致），提交前先在本地拦截。
+LAYER_MIN_EDGE = 512
 LAYER_PROMPT_MAX = 2000
 LAYER_DEFAULT_MAX_IMAGES = 10
 LAYER_MIN_MAX_IMAGES = 2
