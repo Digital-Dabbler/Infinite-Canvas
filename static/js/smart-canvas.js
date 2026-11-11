@@ -1026,6 +1026,9 @@ function canvasForStorage(){
     (clean.nodes || []).forEach(node => {
         if(Array.isArray(node.images)) node.images = node.images.map(mediaItemForStorage);
         if(node.runSettings) node.runSettings = settingsForStorage(node.runSettings);
+        // 落盘前剥掉瞬时任务字段：pendingTasks 等由服务端 register/finalize 独占管理，
+        // 浏览器回显会把本地形态写进画布存档（历史泄漏），还会与服务端形态互相覆盖。
+        clearSmartNodeTransientRunState(node);
     });
     if(Array.isArray(clean.media_catalog)) clean.media_catalog = clean.media_catalog.map(mediaItemForStorage);
     return clean;
