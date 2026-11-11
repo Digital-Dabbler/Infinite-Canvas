@@ -195,9 +195,10 @@ class RunnerSuccessTest(CanvasPsdTaskBase):
         http = FakeHttp({"code": 0, "data": {"taskId": "2120440366181736450", "status": "RUNNING"}})
         event = {"id": "ev-1", "user_id": "u1", "api_profile_id": "legacy-shared"}
         finish = Mock()
+        upload = AsyncMock(return_value="https://rh.example/uploaded.png")
         with patch.object(main, "upstream_context_for_profile_id", Mock(return_value=CTX)), \
              patch.object(main, "psd_local_image_size", Mock(return_value=(1199, 1200))), \
-             patch.object(main, "runninghub_upload_reference", AsyncMock(return_value="https://rh.example/uploaded.png")), \
+             patch.object(main, "runninghub_upload_reference", upload), \
              patch.object(main, "wait_for_runninghub_openapi_task", AsyncMock(return_value=SUCCESS_QUERY_RAW)), \
              patch.object(main, "save_psd_layer_image", AsyncMock(side_effect=lambda url, index: f"/assets/output/psd_layer{index}_x.png")), \
              patch.object(main, "finish_usage_event", finish), \
@@ -213,6 +214,11 @@ class RunnerSuccessTest(CanvasPsdTaskBase):
         self.assertEqual(call["json"]["resolution"], "1k")
         self.assertEqual(call["json"]["maxImages"], 20)
         self.assertNotIn("apiKey", call["json"])
+        # 上传必须走 runninghub.ai 域（共享钱包 Key 在 .cn 上传不被认），提交/轮询保持 .cn。
+        upload_provider = upload.await_args.args[1]
+        self.assertEqual(upload_provider["base_url"], main.RUNNINGHUB_LAYER_UPLOAD_BASE_URL)
+        self.assertTrue(upload_provider["base_url"].endswith("runninghub.ai"))
+        self.assertTrue(call["url"].startswith("https://www.runninghub.cn/openapi/v2/"), call["url"])
 
         # 2) 任务收口 succeeded，用量事件同 id 记 succeeded。
         task = main.canvas_task_get(task_id)

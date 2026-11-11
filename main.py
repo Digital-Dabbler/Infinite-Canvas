@@ -861,6 +861,9 @@ ONLINE_IMAGE_REFERENCE_MAX = int(os.getenv("ONLINE_IMAGE_REFERENCE_MAX", "20"))
 # 端点路径做成环境变量，便于官方改名时不停服切换（实测 seedream-v5.5 与 dola-Seedream-5.5 两路径均可用）。
 RUNNINGHUB_LAYER_DECOMPOSE_PATH = str(os.getenv("RUNNINGHUB_LAYER_DECOMPOSE_PATH") or psd_layers.LAYER_DECOMPOSE_PATH).strip()
 RUNNINGHUB_LAYER_DEFAULT_MAX_IMAGES = int(os.getenv("RUNNINGHUB_LAYER_DEFAULT_MAX_IMAGES", str(psd_layers.LAYER_DEFAULT_MAX_IMAGES)))
+# 共享钱包 Key 只在 runninghub.ai 域名被媒体上传接口认可（两台项目实测：.cn 上传报「API Key不存在」）。
+# 提交/轮询仍走 provider 本域（.cn），只把上传单独指到 .ai。
+RUNNINGHUB_LAYER_UPLOAD_BASE_URL = str(os.getenv("RUNNINGHUB_LAYER_UPLOAD_BASE_URL") or "https://www.runninghub.ai").strip().rstrip("/")
 
 FIELD_LABELS = {
     "prompt": "提示词",
@@ -20977,7 +20980,10 @@ async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=Non
         provider = context.provider
         result_raw = None
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=120.0, write=120.0, pool=20.0)) as client:
-            uploaded = await runninghub_upload_reference(client, provider, {"url": payload.source_url})
+            # 共享钱包 Key 的媒体上传只认 runninghub.ai（.cn 上传报「API Key不存在」，两台项目实测）；
+            # 提交/轮询仍走 provider 本域，只有这一步换 base_url。
+            upload_provider = {**provider, "base_url": RUNNINGHUB_LAYER_UPLOAD_BASE_URL} if str(provider.get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL).rstrip("/") != RUNNINGHUB_LAYER_UPLOAD_BASE_URL else provider
+            uploaded = await runninghub_upload_reference(client, upload_provider, {"url": payload.source_url})
             canvas_task_update(task_id, {"stage": "submit"})
             body = psd_layers.build_layer_body(
                 uploaded,
