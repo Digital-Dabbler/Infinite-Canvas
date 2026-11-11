@@ -49,6 +49,12 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
+# Windows 内置便携 Python（python/python310._pth）会把 sys.path 锁死在解释器目录，
+# 不自动包含脚本目录；`python main.py` 直接启动时必须手动补上，否则本地模块导入失败。
+_MAIN_DIR = os.path.dirname(os.path.abspath(__file__))
+if _MAIN_DIR not in sys.path:
+    sys.path.insert(0, _MAIN_DIR)
+
 import psd_layers  # 画布图片转 PSD：图层拆分参数与结果解析（纯函数模块）
 
 QUIET_ACCESS_PATHS = {
