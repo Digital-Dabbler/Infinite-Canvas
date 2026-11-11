@@ -49,6 +49,8 @@ from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 
+import psd_layers  # 画布图片转 PSD：图层拆分参数与结果解析（纯函数模块）
+
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
     "/api/canvases",
@@ -855,6 +857,10 @@ VIDEO_PROMPT_MAX_LENGTH = int(os.getenv("VIDEO_PROMPT_MAX_LENGTH", "4000"))
 LLM_MESSAGE_MAX_LENGTH = int(os.getenv("LLM_MESSAGE_MAX_LENGTH", "20000"))
 CHAT_ATTACHMENT_MAX = int(os.getenv("CHAT_ATTACHMENT_MAX", "20"))
 ONLINE_IMAGE_REFERENCE_MAX = int(os.getenv("ONLINE_IMAGE_REFERENCE_MAX", "20"))
+# 画布图片转 PSD：Dola Seedream 5.5 图层拆分（v2 标准模型接口，仅企业共享钱包 Key）。
+# 端点路径做成环境变量，便于官方改名时不停服切换（实测 seedream-v5.5 与 dola-Seedream-5.5 两路径均可用）。
+RUNNINGHUB_LAYER_DECOMPOSE_PATH = str(os.getenv("RUNNINGHUB_LAYER_DECOMPOSE_PATH") or psd_layers.LAYER_DECOMPOSE_PATH).strip()
+RUNNINGHUB_LAYER_DEFAULT_MAX_IMAGES = int(os.getenv("RUNNINGHUB_LAYER_DEFAULT_MAX_IMAGES", str(psd_layers.LAYER_DEFAULT_MAX_IMAGES)))
 
 FIELD_LABELS = {
     "prompt": "提示词",
@@ -4795,6 +4801,24 @@ class OnlineImageRequest(BaseModel):
     log_run: Dict[str, Any] = Field(default_factory=dict)
     log_started_at: int = 0
 
+class CanvasPsdRequest(BaseModel):
+    # 画布图片转 PSD：对一张已有图片发起 AI 图层拆分。prompt 可选（描述要拆出的元素），
+    # 因此不复用 OnlineImageRequest（它强制 prompt 非空，且 body 恒发 prompt）。
+    canvas_id: str = ""
+    node_id: str = ""
+    batch_id: str = ""
+    batch_index: int = 0
+    source_url: str = ""
+    prompt: str = ""
+    resolution: str = "auto"
+    max_images: int = RUNNINGHUB_LAYER_DEFAULT_MAX_IMAGES
+    log_run: Dict[str, Any] = Field(default_factory=dict)
+    log_started_at: int = 0
+
+class CanvasPsdExportRequest(BaseModel):
+    canvas_id: str = ""
+    node_id: str = ""
+
 class VideoTrimRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2000)
     start: float = Field(default=0, ge=0, le=36000)
@@ -5086,7 +5110,13 @@ def finalize_bound_canvas_task(task_id, result=None, error=""):
                 max(0, len(current) - 1),
             )
             node["outputKind"] = outputs[0].get("kind") or "image"
-            node["title"] = "视频生成" if node.get("type") == "smart-video-generation" else "图片生成"
+            if str(task.get("type") or "") == "canvas-psd" and isinstance(result, dict) and isinstance(result.get("psd"), dict):
+                # 图层拆分结果整体写入 psd 字段；layers 顺序即叠放序，底图在 0 位。
+                node["psd"] = psd_layers.normalize_psd_layers(result["psd"])
+            if str(task.get("type") or "") == "canvas-psd":
+                node["title"] = "图层拆分"
+            else:
+                node["title"] = "视频生成" if node.get("type") == "smart-video-generation" else "图片生成"
         elif error:
             node["lastRunError"] = str(error)
         entry = {
@@ -20912,6 +20942,297 @@ async def get_canvas_image_task(task_id: str, request: Request):
     if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
         raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
     return task
+
+def psd_local_image_size(url):
+    """读取站内图片像素尺寸；拆分源图必须是本站素材，否则拒绝（上游拉不到内网/临时链）。"""
+    path = output_file_from_url(url)
+    if not path:
+        raise HTTPException(status_code=400, detail="图层拆分的源图必须是站内素材（/assets 或 /output 路径）。")
+    with Image.open(path) as image:
+        return int(image.width), int(image.height)
+
+async def save_psd_layer_image(remote_url, layer_index):
+    """把拆分出的一层落盘到素材库；save_ai_image_to_output 失败时自带回退远程链接的行为。"""
+    return await save_ai_image_to_output(
+        {"type": "url", "value": str(remote_url or "")},
+        prefix=f"psd_layer{layer_index}_",
+    )
+
+async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=None, api_profile_id=""):
+    """画布图片转 PSD 的后台任务：上传源图 → 提交拆分 → 轮询 → 逐层落盘 → 写 node.psd。
+
+    上游提交与轮询全程复用 RunningHub 钱包 Key 的 v2 开放接口；轮询交给
+    wait_for_runninghub_openapi_task，它会经 ACTIVE_CANVAS_TASK_ID 把上游任务 ID
+    连同配置组 scope 持久化，重启后可人工续查、绝不自动重提。"""
+    canvas_task_update(task_id, {"status": "running", "stage": "upload"})
+    capture_token = ACTIVE_CANVAS_TASK_ID.set(task_id)
+    upstream_id = ""
+    try:
+        base_w, base_h = await asyncio.to_thread(psd_local_image_size, payload.source_url)
+        context = upstream_context_for_profile_id(
+            api_profile_id,
+            "runninghub",
+            user_id=(event or {}).get("user_id", ""),
+        )
+        provider = context.provider
+        result_raw = None
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=120.0, write=120.0, pool=20.0)) as client:
+            uploaded = await runninghub_upload_reference(client, provider, {"url": payload.source_url})
+            canvas_task_update(task_id, {"stage": "submit"})
+            body = psd_layers.build_layer_body(
+                uploaded,
+                prompt=payload.prompt,
+                resolution=payload.resolution,
+                max_images=payload.max_images,
+            )
+            submit_url = runninghub_openapi_url(provider, RUNNINGHUB_LAYER_DECOMPOSE_PATH)
+            response = await client.post(submit_url, headers=runninghub_json_headers(provider), json=body)
+            response.raise_for_status()
+            submit_raw = response.json()
+            upstream_id = runninghub_extract_task_id(submit_raw)
+            if not upstream_id:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"RunningHub 图层拆分提交失败：{runninghub_fail_reason(submit_raw) or str(submit_raw)[:200]}",
+                )
+            canvas_task_update(task_id, {"stage": "waiting"})
+            result_raw = await wait_for_runninghub_openapi_task(client, provider, upstream_id)
+        canvas_task_update(task_id, {"stage": "collect"})
+        parsed = psd_layers.parse_layer_decomposition_results(result_raw, base_w, base_h, id_seed=str(task_id)[-8:])
+        layers = parsed.get("layers") or []
+        if not layers:
+            raise RuntimeError(f"图层拆分没有返回任何图层：{runninghub_fail_reason(result_raw) or str(result_raw)[:200]}")
+        stored_layers, media_items = [], []
+        for index, layer in enumerate(layers):
+            stored_url = await save_psd_layer_image(layer.get("url", ""), index)
+            item = dict(layer)
+            item["url"] = stored_url
+            stored_layers.append(item)
+            media_items.append({
+                "url": stored_url,
+                "kind": "image",
+                "name": str(layer.get("name") or f"图层{index + 1}"),
+                "source_url": rewrite_runninghub_file_url(str(layer.get("url") or "")),
+                "natural_w": int(layer.get("width") or 0),
+                "natural_h": int(layer.get("height") or 0),
+            })
+        psd_field = {
+            "source": {"url": payload.source_url, "width": base_w, "height": base_h},
+            "size": {"width": base_w, "height": base_h},
+            "layers": stored_layers,
+            "exportedFile": None,
+            "taskId": task_id,
+            "upstreamTaskId": str(upstream_id),
+            "model": psd_layers.LAYER_DECOMPOSE_MODEL,
+            "strategy": parsed.get("strategy") or "",
+            "createdAt": now_ms(),
+        }
+        result = {
+            "psd": psd_field,
+            "media_items": media_items,
+            "layerCount": len(stored_layers),
+            "upstream_task_id": str(upstream_id),
+        }
+        if event:
+            result["usage_event_id"] = event["id"]
+            finish_usage_event(event, "succeeded", raw_usage={"layerCount": len(stored_layers)})
+        canvas_task_update(task_id, {"status": "succeeded", "result": result, "error": "", "stage": "done"})
+        canvas = finalize_bound_canvas_task(task_id, result)
+        if canvas:
+            await broadcast_bound_canvas_node(task_id, canvas)
+    except Exception as exc:
+        if event:
+            finish_usage_event(event, "failed", getattr(exc, "detail", None) or str(exc))
+        detail = getattr(exc, "detail", None) or str(exc)
+        status_code = getattr(exc, "status_code", 500)
+        upstream_task_id = getattr(exc, "upstream_task_id", "") or str(upstream_id or "") or extract_task_id_from_text(detail)
+        # 只有本地轮询超时（408/504）才允许续查，上游拒绝不能用同一个已计费任务重试。
+        recovery_available = bool(upstream_task_id) and (
+            bool(getattr(exc, "recovery_available", False))
+            or int(status_code or 0) in {408, 504}
+        )
+        if upstream_task_id:
+            try:
+                context = upstream_context_for_profile_id(
+                    api_profile_id,
+                    "runninghub",
+                    user_id=(event or {}).get("user_id", ""),
+                )
+                save_upstream_task_scope(
+                    upstream_task_id,
+                    context,
+                    user_id=(event or {}).get("user_id", ""),
+                    usage_event_id=(event or {}).get("id", ""),
+                    credential_kind="runninghub_wallet",
+                    metadata={
+                        "kind": "psd-recovery",
+                        "model": psd_layers.LAYER_DECOMPOSE_MODEL,
+                        "use_wallet": True,
+                    },
+                )
+            except Exception:
+                pass
+        canvas_task_update(task_id, {
+            "status": "failed",
+            "error": str(detail),
+            "status_code": status_code,
+            "upstream_task_id": upstream_task_id,
+            "recovery_available": recovery_available,
+        })
+        canvas = finalize_bound_canvas_task(task_id, error=str(detail))
+        if canvas:
+            await broadcast_bound_canvas_node(task_id, canvas)
+    finally:
+        ACTIVE_CANVAS_TASK_ID.reset(capture_token)
+
+@app.post("/api/canvas-psd-tasks")
+async def create_canvas_psd_task(payload: CanvasPsdRequest, request: Request):
+    # 参数问题必须在建账与建立任务之前拒绝（同 canvas-image-tasks 的收口约定）。
+    canvas_binding = require_canvas_task_editor(payload, request)
+    source_url = str(payload.source_url or "").strip()
+    if not source_url:
+        raise HTTPException(status_code=400, detail="缺少要拆分的源图。")
+    resolution = str(payload.resolution or "auto").strip().lower()
+    if resolution not in psd_layers.LAYER_RESOLUTIONS:
+        raise HTTPException(status_code=400, detail="分辨率只能是 auto、1k、1.5k 或 2k。")
+    if len(str(payload.prompt or "")) > psd_layers.LAYER_PROMPT_MAX:
+        raise HTTPException(status_code=400, detail=f"拆分描述请控制在 {psd_layers.LAYER_PROMPT_MAX} 字以内。")
+    max_images = int(payload.max_images or 0)
+    if not (psd_layers.LAYER_MIN_MAX_IMAGES <= max_images <= psd_layers.LAYER_MAX_MAX_IMAGES):
+        raise HTTPException(status_code=400, detail=f"图层数上限只能是 {psd_layers.LAYER_MIN_MAX_IMAGES}-{psd_layers.LAYER_MAX_MAX_IMAGES} 之间的整数。")
+    event = begin_usage_event(
+        request,
+        "image",
+        "runninghub",
+        psd_layers.LAYER_DECOMPOSE_MODEL,
+        {"resolution": resolution, "count": max_images, "entry": "canvas-psd"},
+    )
+    request.state.usage_event = event
+    upstream_context = upstream_context_for_profile_id(
+        event.get("api_profile_id", ""),
+        "runninghub",
+        user_id=event.get("user_id", ""),
+    )
+    request.state.usage_async = True
+    task_id = f"canvas_psd_{uuid.uuid4().hex}"
+    canvas_task_create({
+        "id": task_id,
+        "type": "canvas-psd",
+        "status": "queued",
+        "created_at": time.time(),
+        "updated_at": time.time(),
+        "result": None,
+        "error": "",
+        "provider_id": upstream_context.provider_id,
+        "api_profile_id": upstream_context.api_profile_id,
+        "model": psd_layers.LAYER_DECOMPOSE_MODEL,
+        "user_id": event["user_id"],
+        "usage_event_id": event["id"],
+        "canvas_binding": canvas_binding,
+    })
+    task = canvas_task_get(task_id)
+    canvas = register_bound_canvas_task(task, payload.log_run, payload.log_started_at)
+    remember_upstream_task_scope(
+        request,
+        task_id,
+        upstream_context,
+        credential_kind="runninghub_wallet",
+        metadata={"kind": "canvas-psd", "model": psd_layers.LAYER_DECOMPOSE_MODEL, "use_wallet": True},
+    )
+    asyncio.create_task(run_canvas_psd_task(task_id, payload, event, event.get("api_profile_id", "")))
+    if canvas:
+        await broadcast_bound_canvas_node(task_id, canvas)
+    return {"ok": True, "task_id": task_id, "status": "queued", "usage_event_id": event["id"], "canvas_bound": bool(canvas)}
+
+@app.get("/api/canvas-psd-tasks/{task_id}")
+async def get_canvas_psd_task(task_id: str, request: Request):
+    task = canvas_task_get(task_id)
+    if not task or str(task.get("type") or "") != "canvas-psd":
+        raise HTTPException(status_code=404, detail="图层拆分任务不存在或已超过保留期限")
+    user = require_authenticated(request)
+    if user.get("role") != "admin" and task.get("user_id") and task.get("user_id") != user.get("id"):
+        raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
+    return task
+
+def build_canvas_psd_file(canvas_id, node_id):
+    """PSD 组装的同步段（调用方必须持 CANVAS_LOCK）：读图层 PNG、写文件、回写 exportedFile。
+
+    图层顺序按 node.psd.layers 当前叠放序：0=底图，而 PSD 记录序是顶层在前，
+    psd_writer 约定接收的也是 0=最底，由其写盘时反序，这里不重复处理。"""
+    canvas = load_canvas(canvas_id)
+    node = next((item for item in (canvas.get("nodes") or []) if str(item.get("id") or "") == str(node_id)), None)
+    if not isinstance(node, dict):
+        raise HTTPException(status_code=404, detail="节点不存在")
+    normalized = psd_layers.normalize_psd_layers(node.get("psd") if isinstance(node.get("psd"), dict) else {})
+    layers = normalized.get("layers") or []
+    if not layers:
+        raise HTTPException(status_code=400, detail="该节点还没有图层拆分结果，无法导出 PSD。")
+    size = normalized.get("size") if isinstance(normalized.get("size"), dict) else {}
+    try:
+        width = int(size.get("width") or layers[0].get("width") or 0)
+        height = int(size.get("height") or layers[0].get("height") or 0)
+    except (TypeError, ValueError):
+        width = height = 0
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="图层结果的画布尺寸无效，无法导出 PSD。")
+    specs = []
+    for layer in layers:
+        name = str(layer.get("name") or f"图层{len(specs) + 1}")
+        path = output_file_from_url(layer.get("url"))
+        if not path:
+            raise HTTPException(status_code=400, detail=f"图层「{name}」的图片不在站内，无法导出。")
+        with open(path, "rb") as fh:
+            png_bytes = fh.read()
+        specs.append({
+            "png_bytes": png_bytes,
+            "x": int(layer.get("x") or 0),
+            "y": int(layer.get("y") or 0),
+            "w": max(1, int(layer.get("width") or 1)),
+            "h": max(1, int(layer.get("height") or 1)),
+            "name": name,
+            "visible": bool(layer.get("visible", True)),
+        })
+    import psd_writer  # 延迟导入：导出器是独立纯模块，只在真正导出时要求就位。
+    data = psd_writer.build_psd(width, height, specs)
+    stamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+    safe_canvas = re.sub(r"[^a-z0-9_-]", "", str(canvas_id or "").lower())[:12]
+    filename = f"psd_{safe_canvas or 'canvas'}_{stamp}.psd"
+    path = output_path_for(filename, "output")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    exported = {
+        "url": output_url_for(filename, "output"),
+        "name": filename,
+        "sizeBytes": len(data),
+        "layerCount": len(specs),
+        "exportedAt": now_ms(),
+    }
+    current = node.get("psd") if isinstance(node.get("psd"), dict) else normalized
+    current["exportedFile"] = exported
+    node["psd"] = current
+    save_canvas(canvas)
+    revision = record_canvas_server_operation(canvas, "node_fields", node_id)
+    return canvas, node, revision, exported
+
+@app.post("/api/canvas-psd-export")
+async def export_canvas_psd(payload: CanvasPsdExportRequest, request: Request):
+    user = require_authenticated(request)
+    canvas_id = str(payload.canvas_id or "").strip()
+    node_id = str(payload.node_id or "").strip()
+    if not canvas_id or not node_id:
+        raise HTTPException(status_code=400, detail="缺少 canvas_id 或 node_id。")
+    def mutate():
+        with CANVAS_LOCK:
+            canvas = load_canvas(canvas_id)
+            require_canvas_access(canvas, user, "editor")
+            return build_canvas_psd_file(canvas_id, node_id)
+    canvas, node, revision, exported = await asyncio.to_thread(mutate)
+    await manager.broadcast_canvas_operation(canvas_id, {
+        "kind": "node_fields",
+        "node_id": node_id,
+        "fields": {"psd": node.get("psd")},
+    }, revision)
+    return {"ok": True, **exported}
 
 async def run_canvas_comfy_task(task_id: str, payload: GenerateRequest, event=None):
     canvas_task_update(task_id, {"status": "running"})
