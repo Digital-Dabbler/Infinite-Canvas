@@ -20952,13 +20952,51 @@ async def get_canvas_image_task(task_id: str, request: Request):
         raise HTTPException(status_code=403, detail="无权查看其他用户的任务。")
     return task
 
-def psd_local_image_size(url):
-    """读取站内图片像素尺寸；拆分源图必须是本站素材，否则拒绝（上游拉不到内网/临时链）。"""
+def psd_prepare_upload_source(url):
+    """上传前预处理：最短边不足 LAYER_MIN_EDGE 时等比放大（上游对小图报 1013 拒绝）。
+
+    规则（用户 2026-11-12 拍板）：最短边 < 512 → 等比缩放到最短边恰为 512 再上传；
+    最短边 >= 512 → 原图直传，不做任何处理。放大结果落盘为站内 PNG（等比，宽高比不变，
+    预览与原图对照仍逐像素对齐）。返回 dict：
+      upload_url/width/height = 实际提交上游的图与尺寸（拆分坐标空间以此为准）；
+      source_url/source_width/source_height = 用户原图；resized = 是否做了放大。
+    """
     path = output_file_from_url(url)
     if not path:
         raise HTTPException(status_code=400, detail="图层拆分的源图必须是站内素材（/assets 或 /output 路径）。")
     with Image.open(path) as image:
-        return int(image.width), int(image.height)
+        source_w, source_h = int(image.width), int(image.height)
+        short_edge = min(source_w, source_h)
+        info = {
+            "upload_url": url,
+            "width": source_w,
+            "height": source_h,
+            "source_url": url,
+            "source_width": source_w,
+            "source_height": source_h,
+            "resized": False,
+        }
+        if short_edge >= psd_layers.LAYER_MIN_EDGE:
+            return info
+        scale = psd_layers.LAYER_MIN_EDGE / float(short_edge)
+        new_w = max(1, round(source_w * scale))
+        new_h = max(1, round(source_h * scale))
+        # 四舍五入可能把最短边带回 511，强制拉回 512（1 像素比例误差可忽略）。
+        if min(new_w, new_h) < psd_layers.LAYER_MIN_EDGE:
+            if new_w <= new_h:
+                new_w = psd_layers.LAYER_MIN_EDGE
+            else:
+                new_h = psd_layers.LAYER_MIN_EDGE
+        prepared = image.resize((new_w, new_h), Image.LANCZOS)
+        filename = f"psd_prepared_{uuid.uuid4().hex[:10]}.png"
+        prepared.save(output_path_for(filename, "output"), format="PNG")
+    info.update({
+        "upload_url": output_url_for(filename, "output"),
+        "width": new_w,
+        "height": new_h,
+        "resized": True,
+    })
+    return info
 
 async def save_psd_layer_image(remote_url, layer_index):
     """把拆分出的一层落盘到素材库；save_ai_image_to_output 失败时自带回退远程链接的行为。"""
@@ -20977,12 +21015,10 @@ async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=Non
     capture_token = ACTIVE_CANVAS_TASK_ID.set(task_id)
     upstream_id = ""
     try:
-        base_w, base_h = await asyncio.to_thread(psd_local_image_size, payload.source_url)
-        if max(base_w, base_h) < psd_layers.LAYER_MIN_EDGE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"图片太小（{base_w}×{base_h}），图层拆分要求长边至少 {psd_layers.LAYER_MIN_EDGE} 像素，请先用工具栏「放大」处理后再拆分",
-            )
+        # 预处理：最短边 <512 的图先等比放大到 512 再上传（上游对小图报 1013；实测 500×333 被拒）。
+        # 拆分坐标空间 = 实际提交上游的图（prepared.width/height），原图信息保留在 psd.source 里。
+        prepared = await asyncio.to_thread(psd_prepare_upload_source, payload.source_url)
+        base_w, base_h = int(prepared["width"]), int(prepared["height"])
         context = upstream_context_for_profile_id(
             api_profile_id,
             "runninghub",
@@ -20994,7 +21030,7 @@ async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=Non
             # 共享钱包 Key 的媒体上传只认 runninghub.ai（.cn 上传报「API Key不存在」，两台项目实测）；
             # 提交/轮询仍走 provider 本域，只有这一步换 base_url。
             upload_provider = {**provider, "base_url": RUNNINGHUB_LAYER_UPLOAD_BASE_URL} if str(provider.get("base_url") or RUNNINGHUB_DEFAULT_BASE_URL).rstrip("/") != RUNNINGHUB_LAYER_UPLOAD_BASE_URL else provider
-            uploaded = await runninghub_upload_reference(client, upload_provider, {"url": payload.source_url})
+            uploaded = await runninghub_upload_reference(client, upload_provider, {"url": prepared["upload_url"]})
             canvas_task_update(task_id, {"stage": "submit"})
             body = psd_layers.build_layer_body(
                 uploaded,
@@ -21034,9 +21070,11 @@ async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=Non
                 "natural_h": int(layer.get("height") or 0),
             })
         psd_field = {
-            "source": {"url": payload.source_url, "width": base_w, "height": base_h},
-            # 图层坐标在上游画布像素空间（可能大于本地源图），预览与导出必须以 canvasSize 为准。
+            # source 恒为用户原图（原图对照用）；size/图层坐标在上游画布像素空间，
+            # 该空间基于预处理后的提交图（小图已被等比放大，可能再被上游重绘放大）。
+            "source": {"url": prepared["source_url"], "width": prepared["source_width"], "height": prepared["source_height"]},
             "size": parsed.get("canvasSize") or {"width": base_w, "height": base_h},
+            "preprocessed": {"resized": bool(prepared.get("resized"))},
             "layers": stored_layers,
             "exportedFile": None,
             "taskId": task_id,

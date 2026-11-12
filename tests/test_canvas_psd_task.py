@@ -54,6 +54,16 @@ def owner_user():
     return {"id": "u1", "role": "user"}
 
 
+def prepared_info(w, h, resized=False, upload_url=None, source_url="/assets/output/src.png"):
+    """构造 psd_prepare_upload_source 的返回值（mock 用）。"""
+    return {
+        "upload_url": upload_url or source_url,
+        "width": w, "height": h,
+        "source_url": source_url, "source_width": w, "source_height": h,
+        "resized": resized,
+    }
+
+
 class CanvasPsdTaskBase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -197,7 +207,7 @@ class RunnerSuccessTest(CanvasPsdTaskBase):
         finish = Mock()
         upload = AsyncMock(return_value="https://rh.example/uploaded.png")
         with patch.object(main, "upstream_context_for_profile_id", Mock(return_value=CTX)), \
-             patch.object(main, "psd_local_image_size", Mock(return_value=(1199, 1200))), \
+             patch.object(main, "psd_prepare_upload_source", Mock(return_value=prepared_info(1199, 1200))), \
              patch.object(main, "runninghub_upload_reference", upload), \
              patch.object(main, "wait_for_runninghub_openapi_task", AsyncMock(return_value=SUCCESS_QUERY_RAW)), \
              patch.object(main, "save_psd_layer_image", AsyncMock(side_effect=lambda url, index: f"/assets/output/psd_layer{index}_x.png")), \
@@ -245,32 +255,56 @@ class RunnerSuccessTest(CanvasPsdTaskBase):
         self.assertTrue(any(log.get("local_task_id") == task_id for log in canvas["logs"]))
         main.manager.broadcast_canvas_operation.assert_awaited()
 
-    async def test_small_image_rejected_before_upload(self):
-        # 实测根因：长边 <512 的图上游以 errorCode 1013「文件处理失败」拒绝（不扣费但白跑一轮）。
-        # 现在提交前本地拦截：不上传、不提交上游，任务直接失败并给出「放大」指引。
+    async def test_small_image_auto_upscaled_before_upload(self):
+        # 实测：500×333 小图上游报 1013 拒绝。现在预处理自动等比放大到最短边 512 再上传。
+        # 本用例验证 runner 把「预处理后的图」交给上传，而不是原图。
         canvas_id, node_id, task_id = "c-psd", "psd_1", "canvas_psd_small"
         self.make_pending_node(canvas_id, node_id, task_id)
-        http = FakeHttp({"code": 0, "data": {}})
-        upload = AsyncMock(return_value="https://rh.example/uploaded.png")
-        finish = Mock()
+        http = FakeHttp({"code": 0, "data": {"taskId": "2120440366181736450", "status": "RUNNING"}})
         event = {"id": "ev-1", "user_id": "u1", "api_profile_id": "legacy-shared"}
+        finish = Mock()
+        upload = AsyncMock(return_value="https://rh.example/uploaded.png")
+        prepared = prepared_info(768, 512, resized=True, upload_url="/assets/output/psd_prepared_test.png")
         with patch.object(main, "upstream_context_for_profile_id", Mock(return_value=CTX)), \
-             patch.object(main, "psd_local_image_size", Mock(return_value=(500, 333))), \
+             patch.object(main, "psd_prepare_upload_source", Mock(return_value=prepared)) as prep, \
              patch.object(main, "runninghub_upload_reference", upload), \
+             patch.object(main, "wait_for_runninghub_openapi_task", AsyncMock(return_value=SUCCESS_QUERY_RAW)), \
+             patch.object(main, "save_psd_layer_image", AsyncMock(side_effect=lambda url, index: f"/assets/output/psd_layer{index}_x.png")), \
              patch.object(main, "finish_usage_event", finish), \
              patch.object(main.httpx, "AsyncClient", http.factory):
             await main.run_canvas_psd_task(task_id, self.psd_payload(), event, "legacy-shared")
-        upload.assert_not_awaited()
-        self.assertEqual(http.calls, [])
+        prep.assert_called_once()
+        # 上传的是预处理放大图，不是原图。
+        self.assertEqual(upload.await_args.args[2]["url"], "/assets/output/psd_prepared_test.png")
         task = main.canvas_task_get(task_id)
-        self.assertEqual(task["status"], "failed")
-        self.assertIn("放大", task["error"])
-        self.assertIn("512", task["error"])
-        self.assertEqual(finish.call_args[0][1], "failed")
+        self.assertEqual(task["status"], "succeeded")
         canvas = json.loads((self.canvases / f"{canvas_id}.json").read_text(encoding="utf-8"))
-        node = canvas["nodes"][0]
-        self.assertIn("放大", str(node.get("lastRunError")))
-        self.assertNotIn("pendingTasks", node)
+        psd = canvas["nodes"][0]["psd"]
+        # source 保留用户原图信息；preprocessed.resized 标记放大过。
+        self.assertEqual(psd["source"]["width"], 768)
+        self.assertTrue(psd["preprocessed"]["resized"])
+
+    def test_prepare_upload_source_real_resize(self):
+        # 真函数：500×333 → 最短边拉到 512（768×512），落盘站内 PNG；≥512 原样直传。
+        from PIL import Image
+        small = self.output / "tiny_src.png"
+        Image.new("RGB", (500, 333), (10, 200, 30)).save(small)
+        info = main.psd_prepare_upload_source("/assets/output/tiny_src.png")
+        self.assertTrue(info["resized"])
+        # 500×333 → 最短边拉到 512：512/333≈1.5375，500×1.5375=768.77→round=769。
+        self.assertEqual((info["width"], info["height"]), (769, 512))
+        self.assertEqual(info["source_width"], 500)
+        self.assertEqual(info["source_height"], 333)
+        prepared_path = main.output_file_from_url(info["upload_url"])
+        self.assertIsNotNone(prepared_path)
+        with Image.open(prepared_path) as im:
+            self.assertEqual(im.size, (769, 512))
+        # 大图不动：upload_url=原图、resized=False。
+        big = self.output / "big_src.png"
+        Image.new("RGB", (1200, 900), (5, 5, 5)).save(big)
+        info2 = main.psd_prepare_upload_source("/assets/output/big_src.png")
+        self.assertFalse(info2["resized"])
+        self.assertEqual(info2["upload_url"], "/assets/output/big_src.png")
 
     async def test_poll_timeout_marks_recoverable_without_resubmit(self):
         canvas_id, node_id, task_id = "c-psd", "psd_1", "canvas_psd_to"
@@ -283,7 +317,7 @@ class RunnerSuccessTest(CanvasPsdTaskBase):
         scope = Mock()
         wait = AsyncMock(side_effect=timeout_error)
         with patch.object(main, "upstream_context_for_profile_id", Mock(return_value=CTX)), \
-             patch.object(main, "psd_local_image_size", Mock(return_value=(1199, 1200))), \
+             patch.object(main, "psd_prepare_upload_source", Mock(return_value=prepared_info(1199, 1200))), \
              patch.object(main, "runninghub_upload_reference", AsyncMock(return_value="https://rh.example/uploaded.png")), \
              patch.object(main, "wait_for_runninghub_openapi_task", wait), \
              patch.object(main, "finish_usage_event", finish), \
