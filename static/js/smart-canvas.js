@@ -310,6 +310,12 @@ function performUndo(){
     }
     clearComposerSubject();
     render();
+    // 图层编辑弹窗打开时，撤销会用快照整体替换 nodes，必须重渲染舞台与图层列表，否则弹窗停留在旧位置。
+    if(psdEditModal?.classList.contains('open')){
+        const psdNode = psdEditorNode();
+        if(psdNode?.psd) renderPsdEditor();
+        else closePsdEditor();
+    }
     scheduleSave();
     undoSuppressed = false;
     toast(tr('smart.toastUndone'));
@@ -12353,6 +12359,7 @@ psdCreateModal?.addEventListener('click', event => { if(event.target === psdCrea
 psdEditCloseButton?.addEventListener('click', closePsdEditor);
 psdEditModal?.addEventListener('click', event => { if(event.target === psdEditModal) closePsdEditor(); });
 psdCompareToggle?.addEventListener('change', () => { psdEditorCompare = Boolean(psdCompareToggle.checked); renderPsdEditor(); });
+document.getElementById('psdUndoBtn')?.addEventListener('click', () => { performUndo(); });
 psdExportButton?.addEventListener('click', () => { exportPsdFromEditor(); });
 // 图层列表：眼睛开关、↑↓ 调序（委托绑定，重建 innerHTML 不丢监听）。
 psdLayerListEl?.addEventListener('click', event => {

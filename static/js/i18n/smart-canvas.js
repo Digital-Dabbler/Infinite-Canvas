@@ -896,6 +896,7 @@
         ,"smart.psd.editTitle": { zh: "图层编辑", en: "Layer Editing" }
         ,"smart.psd.editSub": { zh: "拖动图层调整位置，双击名称重命名；坐标始终为原图像素", en: "Drag layers to move, double-click names to rename; coordinates stay in source pixels" }
         ,"smart.psd.compare": { zh: "原图对照", en: "Compare Original" }
+,"smart.psd.undo": { zh: "撤销", en: "Undo" }
         ,"smart.psd.export": { zh: "导出 PSD", en: "Export PSD" }
     });
 })();
