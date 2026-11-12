@@ -1257,6 +1257,47 @@ def normalize_ms_loras(values):
         })
     return normalized
 
+RUNNINGHUB_REDACTED_SECRET = "<redacted>"
+# RunningHub app 详情接口自带的 curl 示例里可能内嵌 apiKey；配置组文件只允许非敏感设置。
+RUNNINGHUB_SECRET_TEXT_PATTERNS = (
+    re.compile(r"""(?i)(api[_-]?key[\\"'\s]*[:=][\\"'\s]*)([A-Za-z0-9_\-]{8,})"""),
+    re.compile(r"""(?i)(bearer\s+)([A-Za-z0-9_\-\.]{16,})"""),
+)
+
+def redact_runninghub_secret_text(value):
+    text = str(value or "")
+    for pattern in RUNNINGHUB_SECRET_TEXT_PATTERNS:
+        text = pattern.sub(lambda match: match.group(1) + RUNNINGHUB_REDACTED_SECRET, text)
+    return text
+
+def sanitize_runninghub_payload(value):
+    if isinstance(value, dict):
+        return {str(key): sanitize_runninghub_payload(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_runninghub_payload(item) for item in value]
+    if isinstance(value, str):
+        return redact_runninghub_secret_text(value)
+    return value
+
+def sanitize_runninghub_entries_payload(entries):
+    cleaned = []
+    for entry in entries or []:
+        if isinstance(entry, dict) and isinstance(entry.get("raw"), dict):
+            entry = {**entry, "raw": sanitize_runninghub_payload(entry["raw"])}
+        cleaned.append(entry)
+    return cleaned
+
+def sanitize_runninghub_provider_payloads(providers):
+    cleaned = []
+    for provider in providers or []:
+        if isinstance(provider, dict):
+            provider = dict(provider)
+            for list_key in ("rh_apps", "rh_workflows"):
+                if isinstance(provider.get(list_key), list):
+                    provider[list_key] = sanitize_runninghub_entries_payload(provider[list_key])
+        cleaned.append(provider)
+    return cleaned
+
 def normalize_runninghub_entry(raw, kind):
     if not isinstance(raw, dict):
         return None
@@ -1292,7 +1333,7 @@ def normalize_runninghub_entry(raw, kind):
             entry["workflowJson"] = workflow_json
     raw_payload = raw.get("raw")
     if isinstance(raw_payload, dict):
-        entry["raw"] = raw_payload
+        entry["raw"] = sanitize_runninghub_payload(raw_payload)
     try:
         updated_at = int(raw.get("updatedAt") or raw.get("updated_at") or 0)
         if updated_at > 0:
@@ -1797,6 +1838,7 @@ def load_api_providers():
 
 def save_api_providers(providers, sync_legacy=True):
     os.makedirs(DATA_DIR, exist_ok=True)
+    providers = sanitize_runninghub_provider_payloads(providers)
     with GLOBAL_CONFIG_LOCK:
         with open(API_PROVIDERS_FILE, "w", encoding="utf-8") as f:
             json.dump(providers, f, ensure_ascii=False, indent=2)

@@ -67,6 +67,7 @@ class ApiProfileMigrationTests(unittest.TestCase):
         self.patchers = [
             patch.object(main, "DATA_DIR", self.data_dir),
             patch.object(main, "API_PROFILES_FILE", self.profiles_path),
+            patch.object(main, "API_PROVIDERS_FILE", os.path.join(self.data_dir, "api_providers.json")),
             patch.object(main, "AUTH_USERS_FILE", self.users_path),
             patch.object(main, "API_ENV_FILE", self.env_path),
             patch.object(
@@ -514,6 +515,91 @@ class ApiProfileMigrationTests(unittest.TestCase):
             set(saved["profiles"]),
             {main.LEGACY_API_PROFILE_ID, "art-profile"},
         )
+
+    def test_runninghub_app_raw_payload_redacts_embedded_api_keys(self):
+        secret = "5ec8" + "a" * 28 + "d07"
+        escaped_secret = "0d19" + "b" * 28 + "942"
+        bearer_secret = "c" * 32
+        payload = {
+            "version": 1,
+            "profiles": [
+                {
+                    "id": "legacy-shared",
+                    "name": "兼容组",
+                    "enabled": True,
+                    "providers": [
+                        {
+                            "id": "runninghub",
+                            "name": "RunningHub",
+                            "protocol": "runninghub",
+                            "rh_apps": [
+                                {
+                                    "id": "app-1",
+                                    "title": "应用",
+                                    "raw": {
+                                        "curl": (
+                                            "curl 'https://www.runninghub.ai/task/openapi/create"
+                                            f"?apiKey={secret}'"
+                                        ),
+                                        "demo": '{\\"apiKey\\": \\"%s\\"}' % escaped_secret,
+                                        "headers": {"Authorization": f"Bearer {bearer_secret}"},
+                                        "webappName": "应用",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "migration": {"legacy_users_bound": True},
+        }
+        with open(self.profiles_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+
+        loaded = main.load_api_profiles()
+        app = loaded["profiles"][0]["providers"][0]["rh_apps"][0]
+        self.assertEqual(app["raw"]["webappName"], "应用")
+        for text in (
+            app["raw"]["curl"],
+            app["raw"]["demo"],
+            app["raw"]["headers"]["Authorization"],
+        ):
+            self.assertIn(main.RUNNINGHUB_REDACTED_SECRET, text)
+            self.assertNotIn(secret, text)
+            self.assertNotIn(escaped_secret, text)
+            self.assertNotIn(bearer_secret, text)
+
+        main.save_api_profiles(loaded)
+        with open(self.profiles_path, "r", encoding="utf-8") as f:
+            saved_text = f.read()
+        self.assertNotIn(secret, saved_text)
+        self.assertNotIn(escaped_secret, saved_text)
+        self.assertNotIn(bearer_secret, saved_text)
+
+    def test_saving_legacy_providers_redacts_embedded_api_keys(self):
+        secret = "f" * 32
+        providers = [
+            {
+                "id": "runninghub",
+                "name": "RunningHub",
+                "protocol": "runninghub",
+                "rh_apps": [
+                    {
+                        "id": "app-1",
+                        "raw": {"curl": f"curl ?apiKey={secret}", "webappName": "应用"},
+                    }
+                ],
+            }
+        ]
+        main.save_api_providers(providers, sync_legacy=False)
+
+        with open(main.API_PROVIDERS_FILE, "r", encoding="utf-8") as f:
+            saved_text = f.read()
+        self.assertNotIn(secret, saved_text)
+        self.assertIn(main.RUNNINGHUB_REDACTED_SECRET, saved_text)
+        with open(main.API_PROVIDERS_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        self.assertEqual(saved[0]["rh_apps"][0]["raw"]["webappName"], "应用")
 
     def test_paid_provider_calls_cannot_use_legacy_unscoped_resolvers(self):
         tree = ast.parse(Path(main.__file__).read_text(encoding="utf-8"))
