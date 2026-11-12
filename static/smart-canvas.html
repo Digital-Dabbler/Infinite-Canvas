@@ -211,17 +211,23 @@
                     <button id="psdCreateClose" class="preview-icon-btn" type="button" data-i18n-label="common.close" aria-label="关闭"><i data-lucide="x"></i></button>
                 </header>
                 <div class="psd-create-body">
-                    <label class="psd-field"><span data-i18n="smart.psd.promptLabel">拆分说明（可选）</span>
-                        <textarea id="psdCreatePrompt" rows="3" maxlength="2000" placeholder="例如：把人物、背景、标题文字拆成独立图层" data-i18n-placeholder="smart.psd.promptPlaceholder"></textarea>
-                    </label>
-                    <label class="psd-field"><span data-i18n="smart.psd.resolutionLabel">输出分辨率</span>
-                        <select id="psdCreateResolution">
-                            <option value="auto" selected data-i18n="smart.psd.resolutionAuto">自动</option>
-                            <option value="1k" data-i18n="smart.psd.resolution1k">1K</option>
-                            <option value="1.5k" data-i18n="smart.psd.resolution15k">1.5K</option>
-                            <option value="2k" data-i18n="smart.psd.resolution2k">2K</option>
-                        </select>
-                    </label>
+                    <div id="psdCreateStage" class="psd-create-stage" aria-label="待拆分图片预览">
+                        <img id="psdCreateImage" class="psd-create-image" alt="" draggable="false">
+                        <span class="psd-create-stage-hint" data-i18n="smart.psd.stageHint">滚轮缩放 · 按住中键拖动 · 双击复位</span>
+                    </div>
+                    <div class="psd-create-form">
+                        <label class="psd-field"><span data-i18n="smart.psd.promptLabel">拆分说明（可选）</span>
+                            <textarea id="psdCreatePrompt" rows="3" maxlength="2000" placeholder="例如：把人物、背景、标题文字拆成独立图层" data-i18n-placeholder="smart.psd.promptPlaceholder"></textarea>
+                        </label>
+                        <label class="psd-field"><span data-i18n="smart.psd.resolutionLabel">输出分辨率</span>
+                            <select id="psdCreateResolution">
+                                <option value="auto" selected data-i18n="smart.psd.resolutionAuto">自动</option>
+                                <option value="1k" data-i18n="smart.psd.resolution1k">1K</option>
+                                <option value="1.5k" data-i18n="smart.psd.resolution15k">1.5K</option>
+                                <option value="2k" data-i18n="smart.psd.resolution2k">2K</option>
+                            </select>
+                        </label>
+                    </div>
                 </div>
                 <footer class="psd-actions">
                     <button id="psdCreateCancel" class="image-edit-btn secondary" type="button" onclick="closePsdCreateModal()" data-i18n="smart.psd.cancel">取消</button>

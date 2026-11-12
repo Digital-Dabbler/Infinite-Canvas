@@ -889,6 +889,7 @@
         ,"smart.psd.promptLabel": { zh: "拆分说明（可选）", en: "Split instructions (optional)" }
         ,"smart.psd.promptPlaceholder": { zh: "例如：把人物、背景、标题文字拆成独立图层", en: "e.g. split subject, background and title text into separate layers" }
         ,"smart.psd.resolutionLabel": { zh: "输出分辨率", en: "Output resolution" }
+        ,"smart.psd.stageHint": { zh: "滚轮缩放 · 按住中键拖动 · 双击复位", en: "Wheel to zoom · hold middle button to pan · double-click to fit" }
         ,"smart.psd.resolutionAuto": { zh: "自动", en: "Auto" }
         ,"smart.psd.resolution1k": { zh: "1K", en: "1K" }
         ,"smart.psd.resolution15k": { zh: "1.5K", en: "1.5K" }

@@ -53,6 +53,7 @@ const psdCreatePromptInput = document.getElementById('psdCreatePrompt');
 const psdCreateResolutionSelect = document.getElementById('psdCreateResolution');
 const psdCreateRunButton = document.getElementById('psdCreateRun');
 const psdCreateCloseButton = document.getElementById('psdCreateClose');
+const psdCreateStage = document.getElementById('psdCreateStage');
 const psdEditModal = document.getElementById('psdEditModal');
 const psdEditCloseButton = document.getElementById('psdEditClose');
 const psdLayerListEl = document.getElementById('psdLayerList');
@@ -12282,6 +12283,8 @@ function openPsdCreateDialog(sourceNode){
     if(psdCreateResolutionSelect) psdCreateResolutionSelect.value = 'auto';
     psdCreateModal?.classList.add('open');
     psdCreateModal?.setAttribute('aria-hidden', 'false');
+    // 弹窗可见后才能量到预览区尺寸，reset 必须在 open 之后。
+    psdPreviewReset(source);
     refreshIcons();
     psdCreatePromptInput?.focus?.();
 }
@@ -12289,7 +12292,103 @@ function closePsdCreateModal(){
     psdCreateModal?.classList.remove('open');
     psdCreateModal?.setAttribute('aria-hidden', 'true');
     psdCreateSourceNodeId = '';
+    psdPreviewState.pan = null;
+    psdPreviewState.image?.removeEventListener?.('load', psdPreviewFit);
 }
+// —— 发起弹窗 1号区图片预览：滚轮缩放（适配值的 50%~800%）、中键拖动平移、双击复位 ——
+const PSD_PREVIEW_MIN_RATIO = 0.5;
+const PSD_PREVIEW_MAX_RATIO = 8;
+const psdPreviewState = { image:null, stage:null, fitScale:1, scale:1, x:0, y:0, pan:null };
+function psdPreviewTransform(){
+    if(!psdPreviewState.image) return;
+    psdPreviewState.image.style.transform = `translate(${psdPreviewState.x}px, ${psdPreviewState.y}px) scale(${psdPreviewState.scale})`;
+}
+function psdPreviewFit(){
+    const img = psdPreviewState.image;
+    const stage = psdPreviewState.stage;
+    if(!img || !stage) return;
+    const naturalW = img.naturalWidth || 1;
+    const naturalH = img.naturalHeight || 1;
+    const boxW = Math.max(40, stage.clientWidth - 2);
+    const boxH = Math.max(40, stage.clientHeight - 2);
+    const fit = Math.min(boxW / naturalW, boxH / naturalH);
+    psdPreviewState.fitScale = fit;
+    psdPreviewState.scale = fit;
+    // 适配尺寸下居中。
+    psdPreviewState.x = (boxW - naturalW * fit) / 2;
+    psdPreviewState.y = (boxH - naturalH * fit) / 2;
+    psdPreviewTransform();
+}
+function psdPreviewReset(source){
+    psdPreviewState.stage = document.getElementById('psdCreateStage');
+    psdPreviewState.image = document.getElementById('psdCreateImage');
+    psdPreviewState.pan = null;
+    psdPreviewState.fitScale = 1;
+    psdPreviewState.scale = 1;
+    psdPreviewState.x = 0;
+    psdPreviewState.y = 0;
+    const img = psdPreviewState.image;
+    if(!img || !psdPreviewState.stage) return;
+    img.removeEventListener?.('load', psdPreviewFit);
+    const info = psdSourceInfo(source);
+    img.src = info?.url || '';
+    if(img.complete && img.naturalWidth) psdPreviewFit();
+    else img.addEventListener('load', psdPreviewFit, { once:true });
+    psdPreviewState.stage.classList.remove('is-panning');
+}
+function psdPreviewZoomAt(clientX, clientY, factor){
+    const stage = psdPreviewState.stage;
+    const img = psdPreviewState.image;
+    if(!stage || !img || !img.naturalWidth) return;
+    const rect = stage.getBoundingClientRect();
+    const pointX = clientX - rect.left;
+    const pointY = clientY - rect.top;
+    const minScale = psdPreviewState.fitScale * PSD_PREVIEW_MIN_RATIO;
+    const maxScale = psdPreviewState.fitScale * PSD_PREVIEW_MAX_RATIO;
+    const next = Math.max(minScale, Math.min(maxScale, psdPreviewState.scale * factor));
+    if(next === psdPreviewState.scale) return;
+    // 以光标为锚点：缩放前后光标下的图像点保持不动。
+    const contentX = (pointX - psdPreviewState.x) / psdPreviewState.scale;
+    const contentY = (pointY - psdPreviewState.y) / psdPreviewState.scale;
+    psdPreviewState.scale = next;
+    psdPreviewState.x = pointX - contentX * next;
+    psdPreviewState.y = pointY - contentY * next;
+    psdPreviewTransform();
+}
+psdCreateStage?.addEventListener('wheel', event => {
+    if(!psdCreateModal?.classList.contains('open')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    psdPreviewZoomAt(event.clientX, event.clientY, event.deltaY < 0 ? 1.15 : 1 / 1.15);
+}, { passive:false });
+psdCreateStage?.addEventListener('pointerdown', event => {
+    if(event.button !== 1) return;   // 仅中键拖动平移；左键留给表单交互
+    event.preventDefault();
+    event.stopPropagation();
+    psdPreviewState.pan = { pointerId:event.pointerId, startX:event.clientX, startY:event.clientY, originX:psdPreviewState.x, originY:psdPreviewState.y };
+    psdCreateStage.classList.add('is-panning');
+    try { psdCreateStage.setPointerCapture(event.pointerId); } catch(e) { /* 忽略不支持的浏览器 */ }
+});
+psdCreateStage?.addEventListener('pointermove', event => {
+    const pan = psdPreviewState.pan;
+    if(!pan || event.pointerId !== pan.pointerId) return;
+    psdPreviewState.x = pan.originX + (event.clientX - pan.startX);
+    psdPreviewState.y = pan.originY + (event.clientY - pan.startY);
+    psdPreviewTransform();
+});
+const finishPsdPreviewPan = event => {
+    if(!psdPreviewState.pan || event.pointerId !== psdPreviewState.pan.pointerId) return;
+    psdPreviewState.pan = null;
+    psdCreateStage?.classList.remove('is-panning');
+};
+psdCreateStage?.addEventListener('pointerup', finishPsdPreviewPan);
+psdCreateStage?.addEventListener('pointercancel', finishPsdPreviewPan);
+psdCreateStage?.addEventListener('dblclick', event => {
+    event.preventDefault();
+    event.stopPropagation();
+    psdPreviewFit();
+});
+psdCreateStage?.addEventListener('auxclick', event => { if(event.button === 1) event.preventDefault(); });
 async function submitPsdDecompose(){
     const source = nodes.find(node => node.id === psdCreateSourceNodeId);
     const sourceInfo = source ? psdSourceInfo(source) : null;
