@@ -2380,7 +2380,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .director3d-node .node-body{padding:0;overflow:hidden;background:#101a29}.director3d-node .node-hint{display:none}.director3d-card{height:100%;display:flex;flex-direction:column;gap:8px;padding:10px;box-sizing:border-box}.director3d-thumb{min-height:132px;flex:1;border-radius:7px;overflow:hidden;background:linear-gradient(135deg,#253a57,#111a29);display:grid;place-items:center}.director3d-thumb img{width:100%;height:100%;object-fit:cover}.director3d-thumb i{color:#90b6e7;width:34px;height:34px}.director3d-card p{margin:0;color:#9eb1cc;font-size:12px;line-height:1.4}.director3d-open{width:100%;border:0;border-radius:6px;background:#315f9d;color:#fff;padding:7px;cursor:pointer}.director3d-modal{position:fixed;z-index:10050;inset:56px 72px 28px 100px;display:none;background:rgba(4,8,14,.62);backdrop-filter:blur(5px)}.director3d-modal.open{display:block}.director3d-dialog{width:100%;height:100%;border:1px solid #3d5271;border-radius:12px;overflow:hidden;background:#101826;box-shadow:0 24px 70px rgba(0,0,0,.5)}.director3d-dialog iframe{display:block;width:100%;height:100%;border:0}.director3d-node .node-port{display:none}@media(max-width:800px){.director3d-modal{inset:50px 8px 8px 8px}}
 /* 图层拆分（smart-psd）：节点内绝对定位的图层预览栈 + 发起/编辑弹窗。坐标恒为原图像素，容器只做百分比换算，不改位置尺寸。 */
 .psd-modal{position:absolute;inset:0;z-index:95;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(248,250,252,.42);backdrop-filter:blur(18px)}.psd-modal.open{display:flex}
-.psd-panel{width:min(560px,100%);max-height:calc(100% - 8px);display:flex;flex-direction:column;background:var(--card,#fff);border:1px solid var(--line,#cbd5e1);border-radius:14px;box-shadow:0 24px 70px rgba(15,23,42,.22);overflow:hidden}.psd-edit-panel{width:min(980px,100%)}
+.psd-panel{width:min(560px,100%);max-height:calc(100% - 8px);display:flex;flex-direction:column;background:var(--card,#fff);border:1px solid var(--line,#cbd5e1);border-radius:14px;box-shadow:0 24px 70px rgba(15,23,42,.22);overflow:hidden}.psd-edit-panel{width:min(980px,100%);height:min(88vh,940px);max-height:calc(100% - 8px)}
 .psd-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line,#cbd5e1)}.psd-head div{display:flex;flex-direction:column;gap:3px;min-width:0}.psd-head strong{font-size:calc(15px * var(--canvas-font-scale,1));color:var(--text,#172033)}.psd-head span{font-size:calc(12px * var(--canvas-font-scale,1));color:var(--muted,#64748b)}
 .psd-create-body{display:flex;flex-direction:column;gap:12px;padding:16px}
 .psd-field{display:flex;flex-direction:column;gap:6px;font-size:calc(12px * var(--canvas-font-scale,1));color:var(--text,#172033)}.psd-field textarea{width:100%;box-sizing:border-box;border:1px solid var(--line,#cbd5e1);border-radius:9px;padding:8px 10px;background:#fff;color:inherit;font:inherit;resize:vertical;min-height:64px}.psd-field select{border:1px solid var(--line,#cbd5e1);border-radius:9px;padding:7px 9px;background:#fff;color:inherit;font:inherit}
@@ -2394,13 +2394,15 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .psd-layer-order{display:flex;gap:2px}.psd-layer-order button{border:1px solid var(--line,#cbd5e1);background:transparent;border-radius:6px;cursor:pointer;padding:2px;display:inline-flex;color:var(--text,#172033)}.psd-layer-order button:hover:not(:disabled){border-color:var(--rh-brand,#315f9d);color:var(--rh-brand,#315f9d)}.psd-layer-order button:disabled{opacity:.35;cursor:default}.psd-layer-order i{width:13px;height:13px}
 .psd-rename-input{flex:1;min-width:0;border:1px solid var(--rh-brand,#315f9d);border-radius:6px;padding:3px 6px;font:inherit;color:var(--text,#172033);background:var(--card,#fff)}
 .psd-stage-area{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;min-height:0}
-.psd-stage-wrap{flex:1;min-height:240px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line,#cbd5e1);border-radius:10px;padding:10px;box-sizing:border-box;background-image:conic-gradient(from 90deg at 50% 50%,#dfe4ec 0 25%,#f2f5f9 0 50%,#dfe4ec 0 75%,#f2f5f9 0);background-size:20px 20px}
+/* 舞台盒：flex:1 + min-height:0 + overflow:hidden——编辑卡片已定高（.psd-edit-panel height），
+   wrap 尺寸只由弹窗决定，栈内容 px 不回推 wrap/弹窗，打断「测量→重渲染→越点越大」的反馈环。*/
+.psd-stage-wrap{flex:1;min-height:0;overflow:hidden;display:flex;align-items:center;justify-content:center;border:1px solid var(--line,#cbd5e1);border-radius:10px;padding:10px;box-sizing:border-box;background-image:conic-gradient(from 90deg at 50% 50%,#dfe4ec 0 25%,#f2f5f9 0 50%,#dfe4ec 0 75%,#f2f5f9 0);background-size:20px 20px}
 .psd-stack{position:relative;width:100%;pointer-events:none;overflow:hidden;background:#0b1220;border-radius:8px}
 .psd-stack.interactive{pointer-events:auto;max-width:100%;max-height:100%;background:transparent;border-radius:0}
 .psd-layer{position:absolute;display:block;pointer-events:none;-webkit-user-drag:none;user-select:none}
 .psd-stack.interactive .psd-layer{pointer-events:auto;cursor:move}
 .psd-layer-selected{outline:2px solid var(--rh-brand,#315f9d);outline-offset:-2px}
-.psd-compare-base{opacity:.45;cursor:default !important}
+.psd-compare-base{opacity:.45;pointer-events:none !important;cursor:default !important}
 .psd-stage-tools{display:flex;align-items:center;gap:10px}
 .psd-compare-label{display:inline-flex;align-items:center;gap:6px;font-size:calc(12px * var(--canvas-font-scale,1));color:var(--text,#172033);cursor:pointer}
 .psd-export-info{flex:1;min-width:0;text-align:right;color:var(--muted,#64748b);font-size:calc(12px * var(--canvas-font-scale,1));word-break:break-all}
@@ -2414,8 +2416,15 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
    底栏不再预留 px 带，改绝对定位悬浮覆盖（.psd-card-foot），百分比栈在拖动缩放手柄时随节点盒实时解析。*/
 .psd-card{position:relative;display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;min-height:0}
 .psd-card .psd-stack{flex:0 0 auto;margin:auto}
-/* 悬浮底栏：深色渐变叠在图片底部兜底可读性，pointer-events 保持按钮/链接可点；浅色文字/描边适配叠图场景。*/
-.psd-card-foot{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;padding:14px 10px 8px;font-size:calc(12px * var(--canvas-font-scale,1));color:#e2e8f0;background:linear-gradient(transparent,rgba(2,6,23,.52) 58%,rgba(2,6,23,.74));pointer-events:auto}
+/* 悬浮底栏：深色渐变叠在图片底部兜底可读性，pointer-events 保持按钮/链接可点；浅色文字/描边适配叠图场景。
+   z-index:1000 必需：.psd-stack 是 position:relative 但 z-index:auto，不构成层叠上下文，
+   栈内图层的内联 z-index(1..n) 会逃逸到节点层叠上下文参与排序，absolute 底栏（auto=0）会被不透明图片整体盖死
+   （现象=看不见但盲点可点，图片 pointer-events:none 让点击穿透到底栏）。图层上限 ~100，1000 稳压；
+   不给 .psd-stack 补 z-index:0——那会把弹窗舞台的对照叠影/排序语义卷进新上下文，改动面大。*/
+.psd-card-foot{position:absolute;left:0;right:0;bottom:0;z-index:1000;display:flex;align-items:center;gap:8px;padding:14px 10px 8px;font-size:calc(12px * var(--canvas-font-scale,1));color:#e2e8f0;background:linear-gradient(transparent,rgba(2,6,23,.52) 58%,rgba(2,6,23,.74));pointer-events:auto}
+/* 缩放手柄必须压在底栏之上：手柄(节点直接子级 z5)与逃逸图层图片/底栏(z1000)同处节点层叠上下文，
+   不抬升则右下角被底栏渐变带接走 mousedown，psd 节点无法拖角缩放；端口在盒外沿半圆区不受底栏横带覆盖，保持默认。*/
+.image-node.smart-psd-node .node-resize-handle{z-index:1001}
 .psd-layer-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .psd-edit-btn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line,#cbd5e1);border-radius:7px;background:transparent;color:var(--text,#172033);padding:4px 8px;cursor:pointer;font-size:calc(12px * var(--canvas-font-scale,1))}.psd-edit-btn:hover{border-color:var(--rh-brand,#315f9d)}.psd-edit-btn i{width:14px;height:14px}
 .psd-exported-link{display:inline-flex;align-items:center;gap:5px;color:var(--rh-brand,#315f9d);text-decoration:none;font-weight:700;font-size:calc(12px * var(--canvas-font-scale,1))}.psd-exported-link i{width:14px;height:14px}

@@ -11143,9 +11143,10 @@ function psdStackHtml(psd, options={}){
             sizeStyle = `aspect-ratio:${ratio};width:${box.width}px;height:${box.height}px`;
         }
     }
-    // 原图对照只存在于弹窗内：半透明底图叠在栈最底层，不写入节点数据。
+    // 原图对照只存在于弹窗内：半透明原图作为顶层叠影压在全部图层之上（z-index 比最后一层再高 2），
+    // 不写入节点数据；底层是不透明的合成底图，叠它下面永远看不见。
     const compareBase = options.compare && psd?.source?.url
-        ? `<img class="psd-layer psd-compare-base" src="${escapeAttr(psd.source.url)}" alt="" draggable="false" style="left:0;top:0;width:100%;height:100%;z-index:0">`
+        ? `<img class="psd-layer psd-compare-base" src="${escapeAttr(psd.source.url)}" alt="" draggable="false" style="left:0;top:0;width:100%;height:100%;z-index:${layers.length + 2}">`
         : '';
     const layerImgs = layers.map((layer, index) => {
         const visible = layer.visible !== false;
@@ -12322,6 +12323,8 @@ function renderPsdEditor(){
     if(stage){
         // 用 outerHTML 重建可交互图层栈（委托事件绑在静态外层 #psdStageWrap 上，重建不打断监听）。
         // 按舞台实际像素 contain 整图，横图/竖图都不裁不压扁；弹窗未开时 clientWidth=0 走兜底。
+        // 尺寸约定：.psd-edit-panel 定高 + .psd-stage-wrap overflow:hidden，wrap 的 client 尺寸由弹窗决定、
+        // 与栈内容 px 无关——否则栈撑大 wrap、wrap 撑大弹窗，每次 mutate 重渲染都量得更大，舞台逐级放大。
         const wrapW = Number(psdStageWrap?.clientWidth) || 560;
         const wrapH = Number(psdStageWrap?.clientHeight) || 430;
         stage.outerHTML = psdStackHtml(node.psd, {interactive:true, id:'psdStage', selectedLayerId:psdEditorSelectedLayerId, compare:psdEditorCompare, fitW:wrapW - 12, fitH:wrapH - 12});
