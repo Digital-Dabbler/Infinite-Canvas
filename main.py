@@ -21035,7 +21035,8 @@ async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=Non
             })
         psd_field = {
             "source": {"url": payload.source_url, "width": base_w, "height": base_h},
-            "size": {"width": base_w, "height": base_h},
+            # 图层坐标在上游画布像素空间（可能大于本地源图），预览与导出必须以 canvasSize 为准。
+            "size": parsed.get("canvasSize") or {"width": base_w, "height": base_h},
             "layers": stored_layers,
             "exportedFile": None,
             "taskId": task_id,

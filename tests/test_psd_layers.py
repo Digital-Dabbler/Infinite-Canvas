@@ -98,6 +98,32 @@ class ParseResultsTest(unittest.TestCase):
         self.assertEqual(parsed["layers"][1]["x"], 10)
         self.assertEqual(parsed["layers"][1]["y"], 20)
 
+    def test_upstream_canvas_larger_than_local_source(self):
+        # 实测 ZEUS：本地源图 735×836，上游重绘画布 960×1092，absolute 包围盒是画布像素空间。
+        # 坐标空间必须取上游画布，否则所有图层按 1.3 倍溢出，预览上下被裁。
+        payload = {"results": [
+            {"url": "b.png", "zindex": 0, "background": "opaque", "size": "960x1092"},
+            {"url": "l1.png", "name": "左柱", "zindex": 1, "size": "379x1092",
+             "boundingBox": {"absolute": [0, 0, 379, 1092]}},
+            {"url": "l7.png", "name": "底栏符号", "zindex": 7, "size": "777x334",
+             "boundingBox": {"absolute": [89, 742, 866, 1076]}},
+        ]}
+        parsed = psd_layers.parse_layer_decomposition_results(payload, 735, 836, id_seed="z1")
+        self.assertEqual(parsed["canvasSize"], {"width": 960, "height": 1092})
+        base = parsed["layers"][0]
+        self.assertEqual((base["x"], base["y"], base["width"], base["height"]), (0, 0, 960, 1092))
+        bottom = parsed["layers"][2]
+        self.assertEqual((bottom["x"], bottom["y"], bottom["width"], bottom["height"]), (89, 742, 777, 334))
+
+    def test_canvas_falls_back_to_absolute_extent(self):
+        # 底图项没有 size 字段时，用所有 absolute 盒的最大范围推断画布。
+        payload = {"results": [
+            {"url": "b.png", "zindex": 0, "background": "opaque"},
+            {"url": "l1.png", "zindex": 1, "boundingBox": {"absolute": [0, 0, 500, 700]}},
+        ]}
+        parsed = psd_layers.parse_layer_decomposition_results(payload, 400, 600)
+        self.assertEqual(parsed["canvasSize"], {"width": 500, "height": 700})
+
     def test_array_order_used_when_no_explicit_z(self):
         payload = {"results": [
             {"url": "b.png", "size": "100x100", "background": "opaque", "boundingBox": {"normalized": [0, 0, 1000, 1000]}},

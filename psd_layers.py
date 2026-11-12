@@ -115,19 +115,19 @@ def _floats(values: Any, count: int = 4) -> List[float]:
         return []
 
 
-def _box_to_rect(box: Dict[str, Any], layer_w: int, layer_h: int, base_w: int, base_h: int) -> Tuple[int, int, int, int]:
-    """盒子 → (x, y, w, h) 原图像素。absolute=像素，normalized=千分比，缺失则铺满（底图）。"""
+def _box_to_rect(box: Dict[str, Any], layer_w: int, layer_h: int, canvas_w: int, canvas_h: int) -> Tuple[int, int, int, int]:
+    """盒子 → (x, y, w, h) 上游画布像素。absolute=像素，normalized=千分比，缺失则铺满（底图）。"""
     nums = _floats(box.get("absolute"))
     if nums:
         x1, y1, x2, y2 = nums
     else:
         nums = _floats(box.get("normalized"))
-        if nums and base_w > 0 and base_h > 0:
-            x1, y1, x2, y2 = (nums[0] / 1000.0 * base_w, nums[1] / 1000.0 * base_h,
-                              nums[2] / 1000.0 * base_w, nums[3] / 1000.0 * base_h)
+        if nums and canvas_w > 0 and canvas_h > 0:
+            x1, y1, x2, y2 = (nums[0] / 1000.0 * canvas_w, nums[1] / 1000.0 * canvas_h,
+                              nums[2] / 1000.0 * canvas_w, nums[3] / 1000.0 * canvas_h)
         else:
             # 无盒子：底图路径（或异常结果），铺满整幅。
-            return 0, 0, (base_w or layer_w), (base_h or layer_h)
+            return 0, 0, (canvas_w or layer_w), (canvas_h or layer_h)
     width = x2 - x1
     height = y2 - y1
     if width <= 0:
@@ -147,14 +147,44 @@ def _z_of(item: dict, index: int) -> Tuple[bool, float]:
     return False, float(index)
 
 
+def _canvas_size(items: List[dict], base_w: int, base_h: int) -> Tuple[int, int]:
+    """上游输出画布尺寸：absolute 包围盒与该画布的像素空间一致，而不是本地源图。
+
+    实测（ZEUS 735×836 → 上游画布 960×1092）：直接拿本地尺寸当坐标空间会让所有图层
+    按 ~1.3 倍溢出，预览上下被裁、导出错位。取值优先级：
+    底图项 size 字段 → 所有 absolute 盒的最大范围 → 本地尺寸兜底。
+    """
+    for item in items:
+        box = _bbox_of(item)
+        is_baseish = (not box) or str(item.get("background") or "").strip().lower() == "opaque"
+        if is_baseish:
+            w, h = _parse_size(item.get("size") or item.get("imageSize") or item.get("resolution"))
+            if w > 0 and h > 0:
+                return w, h
+    max_x = 0
+    max_y = 0
+    for item in items:
+        nums = _floats((_bbox_of(item) or {}).get("absolute"))
+        if len(nums) >= 4:
+            max_x = max(max_x, int(round(nums[2])))
+            max_y = max(max_y, int(round(nums[3])))
+    if max_x > 0 and max_y > 0:
+        return max(max_x, base_w), max(max_y, base_h)
+    return base_w, base_h
+
+
 def parse_layer_decomposition_results(payload: Any, base_w: int, base_h: int, id_seed: str = "psd") -> Dict[str, Any]:
-    """results[] → {layers:[...], strategy, baseIndex}；layers[0] 恒为底图。
+    """results[] → {layers:[...], strategy, baseIndex, canvasSize}；layers[0] 恒为底图。
 
     layers 项：id/name/description/url/x/y/width/height/zIndex/visible/isBase。
+    坐标与 canvasSize 同处上游画布像素空间；base_w/base_h 仅在无法判定时兜底。
     """
     items = _extract_items(payload)
     if not items:
-        return {"layers": [], "strategy": "empty", "baseIndex": -1}
+        return {"layers": [], "strategy": "empty", "baseIndex": -1,
+                "canvasSize": {"width": int(base_w) or 0, "height": int(base_h) or 0}}
+
+    canvas_w, canvas_h = _canvas_size(items, base_w, base_h)
 
     z_pairs = [_z_of(item, index) for index, item in enumerate(items)]
     explicit_z = sum(1 for has_z, _ in z_pairs if has_z)
@@ -171,7 +201,7 @@ def parse_layer_decomposition_results(payload: Any, base_w: int, base_h: int, id
             continue
         layer_w, layer_h = _parse_size(item.get("size") or item.get("imageSize") or item.get("resolution"))
         box = _bbox_of(item)
-        x, y, w, h = _box_to_rect(box, layer_w, layer_h, base_w, base_h)
+        x, y, w, h = _box_to_rect(box, layer_w, layer_h, canvas_w, canvas_h)
         name = str(item.get("name") or item.get("label") or "").strip()
         description = str(item.get("description") or "").strip()
         background = str(item.get("background") or "").strip().lower()
@@ -180,15 +210,15 @@ def parse_layer_decomposition_results(payload: Any, base_w: int, base_h: int, id
         if is_base and not base_done:
             base_done = True
             x, y = 0, 0
-            w = w or base_w
-            h = h or base_h
+            w = w or canvas_w
+            h = h or canvas_h
             name = name or "背景"
         elif not base_done and slot == len(order) - 1:
             # 全列表都找不到明显底图时，最后一张兜底当底图，保证 layers[0] 契约。
             is_base = True
             base_done = True
             x, y = 0, 0
-            w, h = base_w or w, base_h or h
+            w, h = canvas_w or w, canvas_h or h
             name = name or "背景"
         if not name:
             name = f"图层 {len(layers) + 1}"
@@ -219,7 +249,8 @@ def parse_layer_decomposition_results(payload: Any, base_w: int, base_h: int, id
         layers[0]["isBase"] = True
         layers[0]["x"], layers[0]["y"] = 0, 0
     strategy = "result_fields" if any(_bbox_of(item) for item in items) else "array_order"
-    return {"layers": layers, "strategy": strategy, "baseIndex": 0 if layers else -1}
+    return {"layers": layers, "strategy": strategy, "baseIndex": 0 if layers else -1,
+            "canvasSize": {"width": int(canvas_w) or 1, "height": int(canvas_h) or 1}}
 
 
 def normalize_psd_layers(node_psd: Any) -> Dict[str, Any]:
