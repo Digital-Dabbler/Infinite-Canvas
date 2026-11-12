@@ -626,5 +626,46 @@ class ApiProfileMigrationTests(unittest.TestCase):
         self.assertEqual(violations, [])
 
 
+class RunningHubAppInfoRedactionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_app_info_response_redacts_embedded_api_key(self):
+        secret = "5ec8c0ffee1234567890abcdef00d07"
+        demo_curl = (
+            'curl -X POST "https://www.runninghub.ai/task/openapi/ai-app/run'
+            f'?apiKey={secret}"'
+        )
+
+        class FakeResponse:
+            status_code = 200
+            text = "ok"
+
+            def json(self):
+                return {"code": 0, "data": {"webappName": "应用", "curl": demo_curl}}
+
+        class FakeClient:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return False
+
+            async def get(self, url, headers=None):
+                return FakeResponse()
+
+        with patch.object(main, "runninghub_provider_for_request", return_value={}), \
+                patch.object(main, "runninghub_api_key", return_value=secret), \
+                patch.object(main, "runninghub_app_headers", return_value={}), \
+                patch.object(main, "runninghub_endpoint_url", return_value="https://upstream.invalid/api"), \
+                patch.object(main.httpx, "AsyncClient", return_value=FakeClient()):
+            result = await main.runninghub_app_info(SimpleNamespace(), webappId="123")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["webappName"], "应用")
+        self.assertNotIn(secret, json.dumps(result, ensure_ascii=False))
+        self.assertIn(main.RUNNINGHUB_REDACTED_SECRET, result["data"]["curl"])
+
+
 if __name__ == "__main__":
     unittest.main()

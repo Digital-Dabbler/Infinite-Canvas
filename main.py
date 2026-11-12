@@ -19034,15 +19034,15 @@ async def runninghub_app_info(request: Request, webappId: str = ""):
             response = await client.get(url, headers=runninghub_app_headers(False, provider=provider))
             raw = response.json()
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text[:500]) from exc
+            raise HTTPException(status_code=exc.response.status_code, detail=redact_runninghub_secret_text(exc.response.text)[:500]) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"请求 RunningHub 应用信息失败：{exc}") from exc
+            raise HTTPException(status_code=502, detail=redact_runninghub_secret_text(f"请求 RunningHub 应用信息失败：{exc}")) from exc
     if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=json.dumps(raw, ensure_ascii=False)[:500])
+        raise HTTPException(status_code=response.status_code, detail=redact_runninghub_secret_text(json.dumps(raw, ensure_ascii=False))[:500])
     if isinstance(raw, dict) and raw.get("code") not in (0, "0", None):
-        raise HTTPException(status_code=400, detail=raw.get("msg") or f"RunningHub 查询失败 code={raw.get('code')}")
+        raise HTTPException(status_code=400, detail=redact_runninghub_secret_text(str(raw.get("msg") or f"RunningHub 查询失败 code={raw.get('code')}")))
     data = raw.get("data") if isinstance(raw, dict) else {}
-    return {"success": True, "data": data or {}}
+    return {"success": True, "data": sanitize_runninghub_payload(data or {})}
 
 @app.post("/api/runninghub/submit")
 async def runninghub_submit(payload: RunningHubSubmitRequest, request: Request):
