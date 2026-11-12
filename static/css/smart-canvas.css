@@ -2405,15 +2405,20 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .psd-compare-label{display:inline-flex;align-items:center;gap:6px;font-size:calc(12px * var(--canvas-font-scale,1));color:var(--text,#172033);cursor:pointer}
 .psd-export-info{flex:1;min-width:0;text-align:right;color:var(--muted,#64748b);font-size:calc(12px * var(--canvas-font-scale,1));word-break:break-all}
 #psdExportBtn.busy{opacity:.6;pointer-events:none}
-/* 图层拆分节点：node-head/node-hint 在非空智能节点上均 display:none，node-body 是节点盒唯一流内子级；
-   height:100% 让 .psd-card 的百分比解析链确定（el 显式 px 高 → body 100% → card 100%）。
+/* 图层拆分节点：盒子=合成图本身（与普通图片节点观感一致，端口/删除/手柄贴着图边）。
+   node-head/node-hint 在非空智能节点上均 display:none，node-body 是节点盒唯一流内子级；
+   padding:0 + height:100% 让 .psd-card 的百分比解析链确定（el 显式 px → body 100% → card 100%）。
    选择器带 .image-node 前缀是为了压过 `.image-node:not(.empty-node) .node-body{padding:0}` 的同权重后置规则。*/
-.image-node.smart-psd-node .node-body{height:100%;min-height:0;overflow:hidden}
-/* 卡片内 padding 6/8、预留底栏 78：内容盒恰好等于 JS 里 fitW/fitH 分母（layout.width-16 × layout.height-84），
-   百分比栈在拖动缩放手柄时随节点盒 px 实时解析，底栏文字落在预留 padding 带内不被裁。*/
-.psd-card{display:flex;flex-direction:column;gap:6px;width:100%;height:100%;box-sizing:border-box;padding:6px 8px 78px;min-height:0}
+.image-node.smart-psd-node .node-body{padding:0;height:100%;box-sizing:border-box;min-height:0;overflow:hidden}
+/* 卡片 padding 归零：内容盒即 layout.width×layout.height，与 JS fitW/fitH 百分比分母严格一致；
+   底栏不再预留 px 带，改绝对定位悬浮覆盖（.psd-card-foot），百分比栈在拖动缩放手柄时随节点盒实时解析。*/
+.psd-card{position:relative;display:flex;flex-direction:column;width:100%;height:100%;box-sizing:border-box;min-height:0}
 .psd-card .psd-stack{flex:0 0 auto;margin:auto}
-.psd-card-foot{display:flex;align-items:center;gap:8px;padding:0 2px;font-size:calc(12px * var(--canvas-font-scale,1));color:var(--muted,#64748b)}
+/* 悬浮底栏：深色渐变叠在图片底部兜底可读性，pointer-events 保持按钮/链接可点；浅色文字/描边适配叠图场景。*/
+.psd-card-foot{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;padding:14px 10px 8px;font-size:calc(12px * var(--canvas-font-scale,1));color:#e2e8f0;background:linear-gradient(transparent,rgba(2,6,23,.52) 58%,rgba(2,6,23,.74));pointer-events:auto}
 .psd-layer-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .psd-edit-btn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line,#cbd5e1);border-radius:7px;background:transparent;color:var(--text,#172033);padding:4px 8px;cursor:pointer;font-size:calc(12px * var(--canvas-font-scale,1))}.psd-edit-btn:hover{border-color:var(--rh-brand,#315f9d)}.psd-edit-btn i{width:14px;height:14px}
 .psd-exported-link{display:inline-flex;align-items:center;gap:5px;color:var(--rh-brand,#315f9d);text-decoration:none;font-weight:700;font-size:calc(12px * var(--canvas-font-scale,1))}.psd-exported-link i{width:14px;height:14px}
+/* 悬浮底栏内的浅色适配（叠在深色渐变上，主题深字/描边会糊，统一翻浅）。*/
+.psd-card-foot .psd-edit-btn{color:#e2e8f0;border-color:rgba(226,232,240,.45);background:rgba(15,23,42,.38)}.psd-card-foot .psd-edit-btn:hover{border-color:#fff;color:#fff}
+.psd-card-foot .psd-exported-link{color:#9cc3f5}.psd-card-foot .psd-exported-link:hover{color:#fff}

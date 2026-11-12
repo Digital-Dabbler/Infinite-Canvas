@@ -11158,11 +11158,10 @@ function smartPsdBodyHtml(node, layout){
     if(node.psd && Array.isArray(node.psd.layers) && node.psd.layers.length){
         const layers = node.psd.layers;
         const exported = node.psd.exportedFile && node.psd.exportedFile.url;
-        // 节点盒宽跟随 node.w、盒高由 imageLayout 按拆分画布宽高比推导（盒子贴合合成图）；
-        // fitW/fitH 是百分比的换算分母，必须与 CSS 里 .psd-card 内容盒的实际像素严格一致：
-        // 宽 = layout.width - 16（.node-body 左右 padding 8+8），高 = layout.height - 84（上下 padding 6+6 加卡片预留底栏 72）。
-        const boxW = Math.max(40, (Number(layout.width) || 420) - 16);
-        const boxH = Math.max(40, (Number(layout.height) || 420) - 84);
+        // 盒子=合成图本身（与普通图片节点观感一致）：卡片 padding 归零，内容盒即节点盒 layout.width × layout.height，
+        // fitW/fitH 百分比分母与之严格一致；底栏改悬浮覆盖层（absolute+渐变底，见 css），不再预留布局高度。
+        const boxW = Math.max(40, Number(layout.width) || 420);
+        const boxH = Math.max(40, Number(layout.height) || 420);
         return `<div class="psd-card">
             ${psdStackHtml(node.psd, {fitW:boxW, fitH:boxH, fitPercent:true})}
             <div class="psd-card-foot">
@@ -11269,7 +11268,10 @@ function positionImageActionToolbar(target=currentMediaToolbarTarget()){
 }
 function updateImageActionToolbar(){
     if(!imageActionToolbar) return;
-    const target = currentMediaToolbarTarget();
+    // 图层拆分节点不弹悬浮工具栏：盒子即图片，编辑图层/下载 PSD 入口已在节点体内；
+    // 重新拆分的入口保留在源图片节点的「图层拆分」按钮上。smart-psd 的 target 视同无 target（open 关闭+aria-hidden）。
+    const psdToolbarTarget = currentMediaToolbarTarget();
+    const target = psdToolbarTarget && isSmartPsdNode(psdToolbarTarget.node) ? null : psdToolbarTarget;
     const canRemoveBackground = Boolean(target?.kind === 'image' && (isSmartImageGenerationNode(target.node) || isSmartImageUploadNode(target.node)));
     imageActionToolbar.classList.toggle('open', Boolean(target));
     imageActionToolbar.setAttribute('aria-hidden', target ? 'false' : 'true');
@@ -15565,9 +15567,11 @@ function bindNodeEvents(){
             beginSmartNoteEdit(nodeForControls, el, event);
         };
         else if(isSmartPsdNode(nodeForControls)) el.ondblclick = event => {
-            // 双击图层拆分节点 = 打开图层编辑弹窗（尚无结果时保持默认行为）。
+            // 双击图层拆分节点：有结果打开图层编辑弹窗；无结果的空节点（从图片 out 端口拉出创建）打开拆分弹窗，
+            // 源图经 psdSourceInfo 上游回退获取——工具栏对 psd 节点隐藏后，这里是唯一的发起入口。
             event.stopPropagation();
             if(nodeForControls.psd && (nodeForControls.psd.layers || []).length) openPsdEditor(id);
+            else if(!nodeForControls.pending && !smartPendingTasks(nodeForControls).length) openPsdCreateDialog(nodeForControls);
         };
         else if(nodeForControls?.type !== 'smart-group') el.ondblclick = e => e.stopPropagation();
         const nodeDrop = el.querySelector('.node-drop');
