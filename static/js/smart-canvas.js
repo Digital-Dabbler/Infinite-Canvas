@@ -2758,8 +2758,19 @@ function smartGroupImageGridLayout(node){
 function imageLayout(images, scale=1, node=null){
     if(isSmart3dDirectorNode(node)) return {cols:1, rows:1, width:Number(node.w) || 260, height:Number(node.h) || 240, thumb:96, single:true};
     // 图层拆分节点：服务端 finalize 会把各图层 PNG 登记进 node.images（媒体目录用途），
-    // 但节点盒子必须恒为显式 w/h（创建时 420×420），不参与多图网格布局，保证预览位置尺寸不变。
-    if(isSmartPsdNode(node)) return {cols:1, rows:1, width:Math.round(Number(node.w) || 420), height:Math.round(Number(node.h) || 420), thumb:Math.round(96 * (Number.isFinite(scale) && scale > 0 ? scale : 1)), single:true};
+    // 节点盒子不参与多图网格布局。已有拆分结果（psd.size 有效）时，盒高按拆分画布宽高比跟随盒宽，
+    // 让盒子贴合合成图本身——端口/删除按钮/缩放手柄才会贴着图边缘，而不是钉在方形盒边角离图很远；
+    // pending/失败态没有 psd 尺寸可依据，保持创建时的显式 w/h（420×420 方形占位）不变。
+    if(isSmartPsdNode(node)){
+        const psdBoxW = Math.max(48, Math.round(Number(node.w) || 420));
+        const psdSize = node.psd && node.psd.size;
+        const psdSrcW = Number(psdSize?.width) || 0;
+        const psdSrcH = Number(psdSize?.height) || 0;
+        const psdBoxH = psdSrcW > 0 && psdSrcH > 0
+            ? Math.max(48, Math.round(psdBoxW * psdSrcH / psdSrcW))
+            : Math.max(48, Math.round(Number(node.h) || 420));
+        return {cols:1, rows:1, width:psdBoxW, height:psdBoxH, thumb:Math.round(96 * (Number.isFinite(scale) && scale > 0 ? scale : 1)), single:true};
+    }
     if(node?.type === 'smart-group'){
         const groupThumbLayout = smartGroupThumbLayout(node);
         if(groupThumbLayout) return groupThumbLayout;
@@ -11119,7 +11130,18 @@ function psdStackHtml(psd, options={}){
     let sizeStyle = `aspect-ratio:${ratio}`;
     if(Number(options.fitW) > 0 && Number(options.fitH) > 0){
         const box = psdContainBox(options.fitW, options.fitH, size.width, size.height);
-        sizeStyle = `aspect-ratio:${ratio};width:${box.width}px;height:${box.height}px`;
+        if(options.fitPercent){
+            // 节点预览（画布上的卡片）用百分比贴合：拖动右下角缩放手柄时 updateNodeElementDuringResize
+            // 只实时改节点盒 px，内联 px 的栈不会跟随手势；% 相对 .psd-card 的确定内容盒（height:100% 且
+            // padding-bottom 预留出正好等于 fitW/fitH 分母的 px）解析，图随手势实时缩放，松手 render 重算归位。
+            // 拖动瞬间宽高比会短暂拉伸，与普通图片节点观感一致，可接受。
+            const fw = Math.max(1, Number(options.fitW));
+            const fh = Math.max(1, Number(options.fitH));
+            sizeStyle = `aspect-ratio:${ratio};width:${(box.width / fw * 100).toFixed(4)}%;height:${(box.height / fh * 100).toFixed(4)}%`;
+        } else {
+            // 编辑弹窗舞台保持像素值：弹窗有自己的 resize 监听会重新渲染，且舞台容器高度确定。
+            sizeStyle = `aspect-ratio:${ratio};width:${box.width}px;height:${box.height}px`;
+        }
     }
     // 原图对照只存在于弹窗内：半透明底图叠在栈最底层，不写入节点数据。
     const compareBase = options.compare && psd?.source?.url
@@ -11136,11 +11158,13 @@ function smartPsdBodyHtml(node, layout){
     if(node.psd && Array.isArray(node.psd.layers) && node.psd.layers.length){
         const layers = node.psd.layers;
         const exported = node.psd.exportedFile && node.psd.exportedFile.url;
-        // 节点盒恒为方形 420×420，图片多为竖/横版：按 contain 计算栈像素尺寸，保证整图完整可见不被裁。
-        const boxW = (Number(layout.width) || 420) - 16;
-        const boxH = (Number(layout.height) || 420) - 84;
+        // 节点盒宽跟随 node.w、盒高由 imageLayout 按拆分画布宽高比推导（盒子贴合合成图）；
+        // fitW/fitH 是百分比的换算分母，必须与 CSS 里 .psd-card 内容盒的实际像素严格一致：
+        // 宽 = layout.width - 16（.node-body 左右 padding 8+8），高 = layout.height - 84（上下 padding 6+6 加卡片预留底栏 72）。
+        const boxW = Math.max(40, (Number(layout.width) || 420) - 16);
+        const boxH = Math.max(40, (Number(layout.height) || 420) - 84);
         return `<div class="psd-card">
-            ${psdStackHtml(node.psd, {fitW:boxW, fitH:boxH})}
+            ${psdStackHtml(node.psd, {fitW:boxW, fitH:boxH, fitPercent:true})}
             <div class="psd-card-foot">
                 <span class="psd-layer-count">${escapeHtml(trf('smart.psd.layerCount', {n:layers.length}))}</span>
                 <button type="button" class="psd-edit-btn" data-smart-action="psd-edit" data-node-id="${escapeAttr(node.id)}"><i data-lucide="layers"></i><span>${escapeHtml(tr('smart.psd.edit'))}</span></button>

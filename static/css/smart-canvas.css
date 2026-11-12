@@ -2405,8 +2405,13 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .psd-compare-label{display:inline-flex;align-items:center;gap:6px;font-size:calc(12px * var(--canvas-font-scale,1));color:var(--text,#172033);cursor:pointer}
 .psd-export-info{flex:1;min-width:0;text-align:right;color:var(--muted,#64748b);font-size:calc(12px * var(--canvas-font-scale,1));word-break:break-all}
 #psdExportBtn.busy{opacity:.6;pointer-events:none}
-.smart-psd-node .node-body{padding:6px 8px;box-sizing:border-box;overflow:hidden}
-.psd-card{display:flex;flex-direction:column;gap:6px;width:100%;min-height:0}
+/* 图层拆分节点：node-head/node-hint 在非空智能节点上均 display:none，node-body 是节点盒唯一流内子级；
+   height:100% 让 .psd-card 的百分比解析链确定（el 显式 px 高 → body 100% → card 100%）。
+   选择器带 .image-node 前缀是为了压过 `.image-node:not(.empty-node) .node-body{padding:0}` 的同权重后置规则。*/
+.image-node.smart-psd-node .node-body{height:100%;min-height:0;overflow:hidden}
+/* 卡片内 padding 6/8、预留底栏 78：内容盒恰好等于 JS 里 fitW/fitH 分母（layout.width-16 × layout.height-84），
+   百分比栈在拖动缩放手柄时随节点盒 px 实时解析，底栏文字落在预留 padding 带内不被裁。*/
+.psd-card{display:flex;flex-direction:column;gap:6px;width:100%;height:100%;box-sizing:border-box;padding:6px 8px 78px;min-height:0}
 .psd-card .psd-stack{flex:0 0 auto;margin:auto}
 .psd-card-foot{display:flex;align-items:center;gap:8px;padding:0 2px;font-size:calc(12px * var(--canvas-font-scale,1));color:var(--muted,#64748b)}
 .psd-layer-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
