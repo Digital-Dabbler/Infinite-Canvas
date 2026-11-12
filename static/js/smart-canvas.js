@@ -21525,6 +21525,7 @@ function annotationEditorLabels(){
         toolLabel: tr('canvas.annotationEditorToolLabel'),
         toolText: tr('canvas.annotationEditorToolText'),
         sizeText: tr('canvas.annotationEditorSizeText'),
+        opacityText: tr('canvas.annotationEditorOpacityText'),
         hint: tr('canvas.annotationEditorHint'),
         shortcutHint: tr('canvas.annotationEditorShortcuts'),
         undo: tr('canvas.maskEditorUndo'),

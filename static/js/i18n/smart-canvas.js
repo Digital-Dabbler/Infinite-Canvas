@@ -16,6 +16,7 @@
         "canvas.annotationEditorToolLabel": { zh: "编号", en: "Number" },
         "canvas.annotationEditorToolText": { zh: "文字", en: "Text" },
         "canvas.annotationEditorSizeText": { zh: "大小", en: "Size" },
+        "canvas.annotationEditorOpacityText": { zh: "不透明", en: "Opacity" },
         "canvas.annotationEditorHint": { zh: "左键绘制 · 右键左右拖动调大小 · Ctrl+滚轮也可调大小", en: "Draw with left button · drag right button to resize · Ctrl+wheel also resizes" },
         "canvas.annotationEditorShortcuts": { zh: "B 画笔 · E 橡皮 · R 矩形 · O 椭圆 · N 编号 · T 文字 · Ctrl+Z 撤销 · [ ] 调大小 · 空格拖动画布", en: "B brush · E eraser · R rectangle · O ellipse · N number · T text · Ctrl+Z undo · [ ] resize · Space to pan" },
         "canvas.annotationEditorSave": { zh: "应用批注", en: "Apply Annotation" },

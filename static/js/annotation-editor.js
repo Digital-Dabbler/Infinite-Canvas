@@ -24,6 +24,9 @@
     const DEFAULT_BRUSH = 16;
     const MIN_TEXT = 10;
     const MAX_TEXT = 200;
+    const MIN_OPACITY = 10;            // 画笔不透明度滑杆下限（%）
+    const MAX_OPACITY = 100;
+    const DEFAULT_OPACITY = 100;
     const ROOT_Z_INDEX = '2147483000';
     const IMAGE_LOAD_TIMEOUT = 30000;
     const MARK_ALPHA = 8;              // 判定「画过东西」的 alpha 阈值
@@ -171,6 +174,7 @@
 
             this.tool = 'brush';
             this.brushSize = DEFAULT_BRUSH;
+            this.brushOpacity = DEFAULT_OPACITY;
             this.colorName = DEFAULT_COLOR;
             this.labelCounter = 1;
 
@@ -294,6 +298,13 @@
                             escapeHtml(this.label('sizeText')) + '">' +
                         '<span class="me-size-value">' + this.brushSize + 'px</span>' +
                     '</div>' +
+                    '<div class="me-size me-toolbar-opacity">' +
+                        '<span class="me-size-text">' + escapeHtml(this.label('opacityText')) + '</span>' +
+                        '<input type="range" class="me-size-range me-toolbar-opacity-range" min="' + MIN_OPACITY + '" max="' + MAX_OPACITY +
+                            '" step="5" value="' + this.brushOpacity + '" aria-label="' +
+                            escapeHtml(this.label('opacityText')) + '">' +
+                        '<span class="me-size-value">' + this.brushOpacity + '%</span>' +
+                    '</div>' +
                     '<div class="me-actions">' +
                         '<button type="button" class="me-icon-btn" data-act="undo" title="' +
                             escapeHtml(this.label('undo')) + ' (Ctrl+Z)">' + ICONS.undo + '</button>' +
@@ -360,6 +371,8 @@
             this.cursor = root.querySelector('.me-cursor');
             this.sizeInput = root.querySelector('.me-size-range');
             this.sizeValue = root.querySelector('.me-size-value');
+            this.opacityInput = root.querySelector('.me-toolbar-opacity-range');
+            this.opacityValue = root.querySelector('.me-toolbar-opacity .me-size-value');
             this.zoomValue = root.querySelector('.me-zoom-value');
             this.emptyHint = root.querySelector('.me-empty-hint');
             this.errorBox = root.querySelector('.me-error-box');
@@ -392,6 +405,7 @@
             this.onPointerCancel = function (event) { session.handlePointerUp(event); };
             this.onDblClick = function (event) { session.handleDoubleClick(event); };
             this.onSizeInput = function (event) { session.setBrushSize(event.target.value); };
+            this.onOpacityInput = function (event) { session.setBrushOpacity(event.target.value); };
             this.onErrorClose = function () { session.hideError(); };
 
             this.root.addEventListener('click', this.onClick);
@@ -403,6 +417,7 @@
             this.stage.addEventListener('pointercancel', this.onPointerCancel);
             this.stage.addEventListener('dblclick', this.onDblClick);
             this.sizeInput.addEventListener('input', this.onSizeInput);
+            if (this.opacityInput) this.opacityInput.addEventListener('input', this.onOpacityInput);
             this.errorBox.querySelector('.me-error-close').addEventListener('click', this.onErrorClose);
 
             this.boundHandlers = {
@@ -560,6 +575,13 @@
             this.updateCursor();
         }
 
+        setBrushOpacity(value) {
+            const next = clamp(Math.round(Number(value) || DEFAULT_OPACITY), MIN_OPACITY, MAX_OPACITY);
+            this.brushOpacity = next;
+            if (this.opacityInput) this.opacityInput.value = String(next);
+            if (this.opacityValue) this.opacityValue.textContent = next + '%';
+        }
+
         adjustBrushSize(delta) {
             if (this.tool === 'text' && this.selectedTextId) {
                 const item = this.textItems.get(this.selectedTextId);
@@ -606,6 +628,8 @@
             }
             if (this.sizeInput) this.sizeInput.value = String(this.brushSize);
             if (this.sizeValue) this.sizeValue.textContent = this.brushSize + 'px';
+            if (this.opacityInput) this.opacityInput.value = String(this.brushOpacity);
+            if (this.opacityValue) this.opacityValue.textContent = this.brushOpacity + '%';
         }
 
         updatePanel() {
@@ -709,6 +733,10 @@
             } else {
                 ctx.strokeStyle = op.color;
                 ctx.fillStyle = op.color;
+                // 半透明笔画整条一次性描边（单条 path 的 round 接头不重复加深）；
+                // 旧记录没有 opacity 字段时视为完全不透明。
+                const opacity = clamp(Number(op.opacity) || DEFAULT_OPACITY, MIN_OPACITY, MAX_OPACITY);
+                if (opacity < MAX_OPACITY) ctx.globalAlpha = opacity / 100;
             }
             ctx.lineWidth = op.size;
             ctx.lineCap = 'round';
@@ -989,6 +1017,7 @@
                 kind: 'stroke',
                 color: erase ? '#000000' : this.colorValue(),
                 size: this.brushSize,
+                opacity: erase ? MAX_OPACITY : this.brushOpacity,
                 erase: erase,
                 points: [{ x: point.x, y: point.y }]
             };
@@ -1037,6 +1066,9 @@
                     ctx.strokeStyle = '#000';
                 } else {
                     ctx.strokeStyle = this.strokeOp.color;
+                    // 实时逐段描边在接头处会略深于整条描边，松手 render 重放整条后归一。
+                    const opacity = clamp(Number(this.strokeOp.opacity) || DEFAULT_OPACITY, MIN_OPACITY, MAX_OPACITY);
+                    if (opacity < MAX_OPACITY) ctx.globalAlpha = opacity / 100;
                 }
                 ctx.lineWidth = this.strokeOp.size;
                 ctx.lineCap = 'round';
