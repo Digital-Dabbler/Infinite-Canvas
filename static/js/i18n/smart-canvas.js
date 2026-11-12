@@ -898,5 +898,8 @@
         ,"smart.psd.compare": { zh: "原图对照", en: "Compare Original" }
 ,"smart.psd.undo": { zh: "撤销", en: "Undo" }
         ,"smart.psd.export": { zh: "导出 PSD", en: "Export PSD" }
+        ,"smart.psd.saveHint": { zh: "已保存到所选位置", en: "Saved to the chosen location" }
+        ,"smart.psd.saveCanceled": { zh: "已取消保存", en: "Save canceled" }
+        ,"smart.psd.saveFallback": { zh: "已存到浏览器下载文件夹，服务器副本 {name}", en: "Saved to your browser downloads folder; server copy: {name}" }
     });
 })();

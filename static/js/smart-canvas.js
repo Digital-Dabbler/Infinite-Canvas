@@ -11168,7 +11168,7 @@ function smartPsdBodyHtml(node, layout){
             <div class="psd-card-foot">
                 <span class="psd-layer-count">${escapeHtml(trf('smart.psd.layerCount', {n:layers.length}))}</span>
                 <button type="button" class="psd-edit-btn" data-smart-action="psd-edit" data-node-id="${escapeAttr(node.id)}"><i data-lucide="layers"></i><span>${escapeHtml(tr('smart.psd.edit'))}</span></button>
-                ${exported ? `<a class="psd-exported-link" href="${escapeAttr(node.psd.exportedFile.url)}" download="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}" title="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}"><i data-lucide="download"></i><span>PSD</span></a>` : ''}
+                ${exported ? `<a class="psd-exported-link" data-smart-action="psd-save" data-node-id="${escapeAttr(node.id)}" href="${escapeAttr(node.psd.exportedFile.url)}" download="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}" title="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}"><i data-lucide="download"></i><span>PSD</span></a>` : ''}
             </div>
         </div>`;
     }
@@ -12359,6 +12359,48 @@ function mutatePsdLayer(layerId, mutate){
     scheduleSave();
     return true;
 }
+// PSD 保存助手：服务运行在本机安全上下文（http://127.0.0.1:3000），优先用浏览器原生
+// 「另存为」对话框（showSaveFilePicker）让用户自选落盘路径；不支持的浏览器（如 Firefox）
+// 回退为程序化 <a download> 点击（落到浏览器默认下载目录）并提示服务器副本文件名。
+// url 拉取整包 blob（~18MB 本机局域网可接受）；用户在系统对话框取消（AbortError）只提示不报错。
+async function savePsdFileWithPicker(url, name){
+    if(!url) return;
+    const fileName = name || 'layers.psd';
+    // 程序化下载兜底：落到浏览器默认下载目录，同时提示服务器副本文件名。
+    const anchorDownload = () => {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        toast(trf('smart.psd.saveFallback', { name: fileName }));
+    };
+    try {
+        if(window.showSaveFilePicker){
+            // 先取整包 blob 再进系统对话框（~18MB 本机局域网可接受）。
+            const blob = await fetch(url).then(async r => { if(!r.ok) throw new Error(tr('smart.psd.exportFailed')); return r.blob(); });
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: fileName,
+                    types: [{ description: 'Photoshop', accept: { 'image/vnd.adobe.photoshop': ['.psd'] } }],
+                });
+                const writable = await handle.createWritable();
+                await writable.write(blob);
+                await writable.close();
+                toast(tr('smart.psd.saveHint'));
+            } catch(err){
+                if(err?.name === 'AbortError'){ toast(tr('smart.psd.saveCanceled')); return; }
+                // 用户手势过期（NotAllowedError）等系统对话框异常：退回程序化下载，保证文件总能拿到。
+                anchorDownload();
+            }
+        } else {
+            anchorDownload();
+        }
+    } catch(e){
+        toast((e?.message || tr('smart.psd.exportFailed')).slice(0, 180));
+    }
+}
 async function exportPsdFromEditor(){
     const node = psdEditorNode();
     if(!node?.psd || psdEditorExporting) return;
@@ -12373,7 +12415,8 @@ async function exportPsdFromEditor(){
         if(!data?.ok || !data.url) throw new Error(data?.error || tr('smart.psd.exportFailed'));
         const bytes = Number(data.sizeBytes ?? data.size_bytes) || 0;
         if(psdExportInfoEl) psdExportInfoEl.textContent = `${data.name || 'layers.psd'}${formatPsdSize(bytes) ? ` · ${formatPsdSize(bytes)}` : ''}`;
-        // exportedFile 由服务端写入节点并经窄操作广播回来；弹窗只展示结果，关闭即可。
+        // exportedFile 由服务端写入节点并经窄操作广播回来；随后走公共保存助手让用户选路径。
+        await savePsdFileWithPicker(data.url, data.name || 'layers.psd');
     } catch(e) {
         if(psdExportInfoEl) psdExportInfoEl.textContent = '';
         toast((e?.message || tr('smart.psd.exportFailed')).slice(0, 180));
@@ -12862,6 +12905,8 @@ function runSmartNodeToolbarAction(nodeId, action){
     // 图层拆分入口与图层编辑：smart-psd 节点没有 node.images，必须在图片项检查前分发。
     if(action === 'psd'){ openPsdCreateDialog(node); return; }
     if(action === 'psd-edit'){ openPsdEditor(node.id); return; }
+    // 卡片脚 PSD 链接：拦截默认跳转，走与弹窗导出同一保存助手（href 保留供右键另存）。
+    if(action === 'psd-save'){ savePsdFileWithPicker(node.psd?.exportedFile?.url, node.psd?.exportedFile?.name); return; }
     const index = smartNodeToolbarImageIndex(node);
     const item = imageForDisplay(node.images?.[index]);
     if(!item?.url) return;
