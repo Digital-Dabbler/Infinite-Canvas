@@ -157,19 +157,23 @@ class PsdWriterTwoLayerTests(unittest.TestCase):
         self.assertEqual(parsed["layer_count"], 2)
         self.assertEqual(parsed["trailing"], b"")  # 各段长度自洽，文件无多余尾巴
 
-    def test_top_layer_written_first(self):
-        """PSD 记录顺序必须"顶层在前"：layers[1]（上层）应排在记录 0。"""
+    def test_bottom_layer_written_first(self):
+        """PSD 记录顺序必须"自底向上"：layers[0]（底图）应排在记录 0。
+
+        （psd-tools 源码与 Photoshop 实测一致：record[0]=背景层；
+        曾反序写导致 PS 面板图层顺序整体颠倒。）
+        """
         parsed = _parse_psd(psd_writer.build_psd(4, 4, self._layers()))
-        rec_top, rec_base = parsed["records"][0], parsed["records"][1]
-        self.assertEqual(rec_top["luni"], "上层·蓝")   # 中文名靠 luni 块还原
+        rec_base, rec_top = parsed["records"][0], parsed["records"][1]
         self.assertEqual(rec_base["luni"], "底图")
+        self.assertEqual(rec_top["luni"], "上层·蓝")   # 中文名靠 luni 块还原
         self.assertEqual(rec_top["pascal"], "")         # 非 ASCII 名截断为空
-        self.assertEqual(rec_top["bounds"], (1, 1, 3, 3))    # top,left,bottom,right
         self.assertEqual(rec_base["bounds"], (0, 0, 4, 4))
+        self.assertEqual(rec_top["bounds"], (1, 1, 3, 3))    # top,left,bottom,right
 
     def test_visible_flag_blend_and_opacity(self):
         parsed = _parse_psd(psd_writer.build_psd(4, 4, self._layers()))
-        rec_top, rec_base = parsed["records"]
+        rec_base, rec_top = parsed["records"]
         self.assertEqual(rec_top["flags"] & 1, 1)   # visible=False → bit0 置位（隐藏）
         self.assertEqual(rec_base["flags"] & 1, 0)  # visible=True  → bit0 为 0
         self.assertEqual(rec_top["blend_sig"], b"8BIM")  # 规范：混合签名恒为 '8BIM'
@@ -180,7 +184,7 @@ class PsdWriterTwoLayerTests(unittest.TestCase):
 
     def test_channel_records_and_raw_lengths(self):
         parsed = _parse_psd(psd_writer.build_psd(4, 4, self._layers()))
-        for rec, (w, h) in zip(parsed["records"], [(2, 2), (4, 4)]):
+        for rec, (w, h) in zip(parsed["records"], [(4, 4), (2, 2)]):
             self.assertEqual([t for t, _ in rec["chans"]], [0, 1, 2, -1])
             for _ctype, clen in rec["chans"]:
                 self.assertEqual(clen, 2 + w * h)     # 长度含 2 字节压缩标志
@@ -244,10 +248,10 @@ class PsdWriterNegativeBoundsTests(unittest.TestCase):
             {"png_bytes": png, "x": 2, "y": 2, "w": 4, "h": 4, "name": "出界", "visible": True},
         ]
         parsed = _parse_psd(psd_writer.build_psd(4, 4, layers))
-        recs = parsed["records"]  # 顶层在前：出界、负、底
-        self.assertEqual(recs[0]["bounds"], (2, 2, 6, 6))    # 盒超出画布按原值写
+        recs = parsed["records"]  # 自底向上：底、负、出界
+        self.assertEqual(recs[0]["bounds"], (0, 0, 4, 4))
         self.assertEqual(recs[1]["bounds"], (-2, -3, 0, -1))  # 负坐标原样写
-        self.assertEqual(recs[2]["bounds"], (0, 0, 4, 4))
+        self.assertEqual(recs[2]["bounds"], (2, 2, 6, 6))     # 盒超出画布按原值写
         # 通道数据仍为完整 w*h
         self.assertEqual(len(recs[0]["data"][0][1]), 4 * 4)
         self.assertEqual(len(recs[1]["data"][0][1]), 2 * 2)

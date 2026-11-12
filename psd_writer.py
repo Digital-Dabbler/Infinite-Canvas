@@ -170,9 +170,11 @@ def build_psd(width: int, height: int, layers) -> bytes:
     ]
 
     # ---- Layer and Mask Information ----
-    # 写入顺序为"顶层在前"：layers[0] 是底图，故整条记录流反序。
-    ordered = list(reversed(layers))
-    ordered_imgs = list(reversed(images))
+    # PSD 文件的图层记录顺序是**自底向上**（record[0]=最底层/背景，psd-tools 源码
+    # 与 Photoshop 实测一致；曾按"顶层在前"反序写，PS 面板里顺序整体颠倒）。
+    # layers[0] 是底图，天然就是自底向上，直接按原顺序写。
+    ordered = list(layers)
+    ordered_imgs = list(images)
     records = b"".join(_layer_record(l, im) for l, im in zip(ordered, ordered_imgs))
     channel_blocks = b"".join(_channel_data(im) for im in ordered_imgs)
 
