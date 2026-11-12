@@ -726,6 +726,7 @@
         "smart.eraseFailedTitle": { zh: "擦除失败", en: "Erase failed" },
         "smart.eraseHintNode": { zh: "擦除结果，可继续处理或连接下游生成", en: "Erase result. Continue editing or connect it downstream." },
         "smart.removeRedraw": { zh: "移除重绘", en: "Remove / Redraw" },
+        "smart.angleAction": { zh: "角度", en: "Angle" },
         "smart.removeRedrawEditorTitle": { zh: "移除重绘", en: "Remove / Redraw" },
         "smart.removeRedrawEditorHint": { zh: "涂抹要处理的区域；提示词留空为移除，填写则为局部重绘", en: "Paint the region to work on. Leave the prompt empty to remove it, or fill it in to redraw." },
         "smart.removeRedrawPromptGuide": { zh: "清空提示词为移除；非空提示词为局部重绘", en: "Empty prompt removes the region; a filled prompt redraws it" },

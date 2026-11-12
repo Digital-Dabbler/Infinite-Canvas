@@ -41,6 +41,9 @@ let outpaintRunBtnBaseDisabled = false;
 const imageActionToolbar = document.getElementById('imageActionToolbar');
 const imageUpscaleMenu = document.getElementById('imageUpscaleMenu');
 const imageMattingMenu = document.getElementById('imageMattingMenu');
+// 「移除重绘」「更多」下拉菜单（第七轮：工具栏溢出治理，角度/擦除收纳进下拉）。
+const imageRedrawMenu = document.getElementById('imageRedrawMenu');
+const imageMoreMenu = document.getElementById('imageMoreMenu');
 const mattingPromptPanel = document.getElementById('mattingPromptPanel');
 const mattingPromptInput = document.getElementById('mattingPromptInput');
 const mattingPromptRun = document.getElementById('mattingPromptRun');
@@ -2994,6 +2997,8 @@ function applyViewport(){
         positionWorkflowGroupToolbar();
         imageUpscaleMenuClose();
         imageMattingMenuClose();
+        imageRedrawMenuClose();
+        imageMoreMenuClose();
         positionMattingPromptPanel();
         if(uploadResourcePanel && uploadResourcePanel.isOpen()) uploadResourcePanel.reposition();
         // 图片生成 composer 位于 world 内，会随视口变换自然移动；文本节点的
@@ -11305,6 +11310,25 @@ function updateImageActionToolbar(){
     } else if(mattingPromptPanel?.classList.contains('open')){
         requestAnimationFrame(() => positionMattingPromptPanel(target));
     }
+    // 「移除重绘」下拉：擦除项沿用原顶层按钮的 canRemoveBackground 规则；不可用时隐藏该项并收起菜单。
+    if(imageRedrawMenu){
+        const eraseOption = imageRedrawMenu.querySelector('[data-image-toolbar-action="erase"]');
+        if(eraseOption) eraseOption.hidden = Boolean(!target || target.kind !== 'image' || !canRemoveBackground);
+        if(!target || (eraseOption && eraseOption.hidden)) imageRedrawMenuClose();
+    }
+    // 「更多」下拉：逐项按 data-toolbar-kind 同步显隐；菜单里没有可用项时隐藏「更多」按钮本体。
+    if(imageMoreMenu){
+        if(!target) imageMoreMenuClose();
+        let visibleMoreItems = 0;
+        imageMoreMenu.querySelectorAll('[data-image-toolbar-action]').forEach(item => {
+            const requiredKind = item.dataset.toolbarKind || '';
+            item.hidden = Boolean(!target || (requiredKind && requiredKind !== target.kind));
+            if(!item.hidden) visibleMoreItems += 1;
+        });
+        const moreButton = imageActionToolbar.querySelector('[data-image-toolbar-action="more"]');
+        if(moreButton && target) moreButton.hidden = visibleMoreItems === 0;
+        if(visibleMoreItems === 0) imageMoreMenuClose();
+    }
     if(target) requestAnimationFrame(() => positionImageActionToolbar(target));
 }
 // 「放大」三模式：jimeng 需要配置组内有即梦图片平台；comfy（Flux2-Klein）与 vosr2 走本地 ComfyUI 引擎，
@@ -11382,6 +11406,76 @@ function imageMattingMenuClose(){
     if(!imageMattingMenu) return;
     imageMattingMenu.classList.remove('open');
     imageMattingMenu.setAttribute('aria-hidden', 'true');
+}
+// 「移除重绘」下拉（第七轮：工具栏溢出治理）：锚定 remove-redraw 按钮，样式复用 .image-upscale-menu 基类。
+function positionImageRedrawMenu(){
+    if(!imageRedrawMenu || !imageRedrawMenu.classList.contains('open')) return;
+    const redrawButton = imageActionToolbar?.querySelector('[data-image-toolbar-action="remove-redraw"]');
+    if(!redrawButton) return;
+    const shellRect = shell.getBoundingClientRect();
+    const btnRect = redrawButton.getBoundingClientRect();
+    const width = imageRedrawMenu.offsetWidth || 168;
+    const height = imageRedrawMenu.offsetHeight || 108;
+    let left = btnRect.left - shellRect.left + btnRect.width / 2 - width / 2;
+    left = Math.max(12, Math.min(shellRect.width - width - 12, left));
+    let top = btnRect.bottom - shellRect.top + 4;
+    if(top + height > shellRect.height - 12 && btnRect.top - shellRect.top - height - 10 > 12){
+        top = btnRect.top - shellRect.top - height - 10;
+    }
+    imageRedrawMenu.style.left = `${Math.round(left)}px`;
+    imageRedrawMenu.style.top = `${Math.round(top)}px`;
+}
+function imageRedrawMenuOpen(){
+    if(!imageRedrawMenu) return;
+    const target = currentMediaToolbarTarget();
+    if(!target?.kind || target.kind !== 'image') return;
+    // 擦除项不可用（被 updateImageActionToolbar 置 hidden）时不弹出空菜单。
+    const eraseOption = imageRedrawMenu.querySelector('[data-image-toolbar-action="erase"]');
+    if(!eraseOption || eraseOption.hidden) return;
+    imageRedrawMenu.classList.add('open');
+    imageRedrawMenu.setAttribute('aria-hidden', 'false');
+    positionImageRedrawMenu();
+}
+function imageRedrawMenuClose(){
+    if(!imageRedrawMenu) return;
+    imageRedrawMenu.classList.remove('open');
+    imageRedrawMenu.setAttribute('aria-hidden', 'true');
+}
+// 「更多」下拉（第七轮）：低频图片操作收纳处；菜单项沿用 data-image-toolbar-action，点击复用 runImageToolbarAction 分发。
+function positionImageMoreMenu(){
+    if(!imageMoreMenu || !imageMoreMenu.classList.contains('open')) return;
+    const moreButton = imageActionToolbar?.querySelector('[data-image-toolbar-action="more"]');
+    if(!moreButton) return;
+    const shellRect = shell.getBoundingClientRect();
+    const btnRect = moreButton.getBoundingClientRect();
+    const width = imageMoreMenu.offsetWidth || 168;
+    const height = imageMoreMenu.offsetHeight || 108;
+    let left = btnRect.left - shellRect.left + btnRect.width / 2 - width / 2;
+    left = Math.max(12, Math.min(shellRect.width - width - 12, left));
+    let top = btnRect.bottom - shellRect.top + 4;
+    if(top + height > shellRect.height - 12 && btnRect.top - shellRect.top - height - 10 > 12){
+        top = btnRect.top - shellRect.top - height - 10;
+    }
+    imageMoreMenu.style.left = `${Math.round(left)}px`;
+    imageMoreMenu.style.top = `${Math.round(top)}px`;
+}
+function imageMoreMenuOpen(){
+    if(!imageMoreMenu) return;
+    const target = currentMediaToolbarTarget();
+    if(!target?.kind || target.kind !== 'image') return;
+    const moreButton = imageActionToolbar?.querySelector('[data-image-toolbar-action="more"]');
+    if(moreButton?.hidden) return;
+    // 没有任何可用项时不弹出（例如未来菜单项全部被隐藏）。
+    const hasVisibleItem = Array.from(imageMoreMenu.querySelectorAll('[data-image-toolbar-action]')).some(item => !item.hidden);
+    if(!hasVisibleItem) return;
+    imageMoreMenu.classList.add('open');
+    imageMoreMenu.setAttribute('aria-hidden', 'false');
+    positionImageMoreMenu();
+}
+function imageMoreMenuClose(){
+    if(!imageMoreMenu) return;
+    imageMoreMenu.classList.remove('open');
+    imageMoreMenu.setAttribute('aria-hidden', 'true');
 }
 // 指定抠图面板：锚定在图片节点下方、替换原本的生成面板（composer）；目标图片丢失、翻页或切换节点时自动关闭。
 let mattingPromptTarget = null;
@@ -12036,6 +12130,11 @@ function runImageToolbarAction(action, mode){
         openPsdCreateDialog(node);
         return;
     }
+    // 「更多」按钮：点击（触屏兜底）直接弹出「更多」下拉，菜单项再走本分发。
+    if(action === 'more'){
+        imageMoreMenuOpen();
+        return;
+    }
     if(action === 'cover'){
         setSmartCanvasCover(node, index, item, kind);
         return;
@@ -12585,12 +12684,16 @@ imageActionToolbar?.addEventListener('click', event => {
     event.stopPropagation();
     imageUpscaleMenuClose();
     imageMattingMenuClose();
+    imageRedrawMenuClose();
+    imageMoreMenuClose();
     runImageToolbarAction(button.dataset.imageToolbarAction || '');
 });
-// 「放大」「抠图」悬停菜单：悬停主按钮弹出模式选择，移出按钮/菜单后收起。
+// 「放大」「抠图」「移除重绘」「更多」悬停菜单：悬停主按钮弹出模式选择，移出按钮/菜单后收起。
 imageActionToolbar?.addEventListener('mouseover', event => {
     if(event.target.closest?.('[data-image-toolbar-action="upscale"]')) imageUpscaleMenuOpen();
     if(event.target.closest?.('[data-image-toolbar-action="matting"]')) imageMattingMenuOpen();
+    if(event.target.closest?.('[data-image-toolbar-action="remove-redraw"]')) imageRedrawMenuOpen();
+    if(event.target.closest?.('[data-image-toolbar-action="more"]')) imageMoreMenuOpen();
 });
 imageActionToolbar?.addEventListener('mouseout', event => {
     if(event.target.closest?.('[data-image-toolbar-action="upscale"]') && !event.relatedTarget?.closest?.('#imageUpscaleMenu')){
@@ -12598,6 +12701,12 @@ imageActionToolbar?.addEventListener('mouseout', event => {
     }
     if(event.target.closest?.('[data-image-toolbar-action="matting"]') && !event.relatedTarget?.closest?.('#imageMattingMenu')){
         imageMattingMenuClose();
+    }
+    if(event.target.closest?.('[data-image-toolbar-action="remove-redraw"]') && !event.relatedTarget?.closest?.('#imageRedrawMenu')){
+        imageRedrawMenuClose();
+    }
+    if(event.target.closest?.('[data-image-toolbar-action="more"]') && !event.relatedTarget?.closest?.('#imageMoreMenu')){
+        imageMoreMenuClose();
     }
 });
 imageUpscaleMenu?.addEventListener('mouseleave', () => imageUpscaleMenuClose());
@@ -12631,6 +12740,27 @@ imageMattingMenu?.addEventListener('click', event => {
         return;
     }
     runSmartBackgroundRemoval(target.node, target.index);
+});
+// 「移除重绘」「更多」菜单本体：菜单项就是带 data-image-toolbar-action 的按钮，点击复用同一分发，不造第二条链路。
+imageRedrawMenu?.addEventListener('mouseleave', () => imageRedrawMenuClose());
+imageRedrawMenu?.addEventListener('mousedown', event => event.stopPropagation());
+imageRedrawMenu?.addEventListener('click', event => {
+    const option = event.target.closest?.('[data-image-toolbar-action]');
+    if(!option || option.disabled || option.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    imageRedrawMenuClose();
+    runImageToolbarAction(option.dataset.imageToolbarAction || '');
+});
+imageMoreMenu?.addEventListener('mouseleave', () => imageMoreMenuClose());
+imageMoreMenu?.addEventListener('mousedown', event => event.stopPropagation());
+imageMoreMenu?.addEventListener('click', event => {
+    const option = event.target.closest?.('[data-image-toolbar-action]');
+    if(!option || option.disabled || option.hidden) return;
+    event.preventDefault();
+    event.stopPropagation();
+    imageMoreMenuClose();
+    runImageToolbarAction(option.dataset.imageToolbarAction || '');
 });
 mattingPromptPanel?.addEventListener('mousedown', event => event.stopPropagation());
 mattingPromptPanel?.addEventListener('click', event => event.stopPropagation());
@@ -28029,7 +28159,7 @@ document.addEventListener('click', event => {
     if(!event.target.closest('.mention-picker') && !event.target.closest('#promptInput') && !event.target.closest('[data-input-add-reference]')) closeMentionPicker();
 });
 document.addEventListener('keydown', event => {
-    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); imageMattingMenuClose(); closeMattingPromptPanel(); }
+    if(event.key === 'Escape') { closeSmartLogLightbox(); closeAllSmartPopovers(); closeCreateMenu(); closeSmartCanvasLog(); closeSmartCanvasShortcuts(); imageMattingMenuClose(); closeMattingPromptPanel(); imageMoreMenuClose(); imageRedrawMenuClose(); }
 });
 document.getElementById('outpaintFrame').addEventListener('mousedown', event => {
     if(event.target.closest('[data-outpaint-handle]')) return;
