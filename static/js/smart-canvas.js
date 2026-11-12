@@ -11310,11 +11310,13 @@ function updateImageActionToolbar(){
     } else if(mattingPromptPanel?.classList.contains('open')){
         requestAnimationFrame(() => positionMattingPromptPanel(target));
     }
-    // 「移除重绘」下拉：擦除项沿用原顶层按钮的 canRemoveBackground 规则；不可用时隐藏该项并收起菜单。
+    // 「移除重绘」下拉：两项（移除重绘/擦除）都沿用原顶层按钮的 canRemoveBackground 规则；
+    // 不可用时隐藏该项并收起菜单（两项全隐藏时菜单里已无任何可用项）。
     if(imageRedrawMenu){
-        const eraseOption = imageRedrawMenu.querySelector('[data-image-toolbar-action="erase"]');
-        if(eraseOption) eraseOption.hidden = Boolean(!target || target.kind !== 'image' || !canRemoveBackground);
-        if(!target || (eraseOption && eraseOption.hidden)) imageRedrawMenuClose();
+        const redrawOptions = imageRedrawMenu.querySelectorAll('[data-image-toolbar-action]');
+        const redrawHidden = Boolean(!target || target.kind !== 'image' || !canRemoveBackground);
+        redrawOptions.forEach(option => { option.hidden = redrawHidden; });
+        if(redrawHidden) imageRedrawMenuClose();
     }
     // 「更多」下拉：逐项按 data-toolbar-kind 同步显隐；菜单里没有可用项时隐藏「更多」按钮本体。
     if(imageMoreMenu){
@@ -11429,9 +11431,9 @@ function imageRedrawMenuOpen(){
     if(!imageRedrawMenu) return;
     const target = currentMediaToolbarTarget();
     if(!target?.kind || target.kind !== 'image') return;
-    // 擦除项不可用（被 updateImageActionToolbar 置 hidden）时不弹出空菜单。
-    const eraseOption = imageRedrawMenu.querySelector('[data-image-toolbar-action="erase"]');
-    if(!eraseOption || eraseOption.hidden) return;
+    // 菜单项（移除重绘/擦除）都不可用时不弹出空菜单。
+    const hasVisibleRedrawItem = Array.from(imageRedrawMenu.querySelectorAll('[data-image-toolbar-action]')).some(item => !item.hidden);
+    if(!hasVisibleRedrawItem) return;
     imageRedrawMenu.classList.add('open');
     imageRedrawMenu.setAttribute('aria-hidden', 'false');
     positionImageRedrawMenu();
