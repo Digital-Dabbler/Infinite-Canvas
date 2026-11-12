@@ -901,5 +901,6 @@
         ,"smart.psd.saveHint": { zh: "已保存到所选位置", en: "Saved to the chosen location" }
         ,"smart.psd.saveCanceled": { zh: "已取消保存", en: "Save canceled" }
         ,"smart.psd.saveFallback": { zh: "已存到浏览器下载文件夹，服务器副本 {name}", en: "Saved to your browser downloads folder; server copy: {name}" }
+        ,"smart.psd.saveAs": { zh: "重新导出并保存", en: "Re-export and save" }
     });
 })();

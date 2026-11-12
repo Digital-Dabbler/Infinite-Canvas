@@ -11168,7 +11168,7 @@ function smartPsdBodyHtml(node, layout){
             <div class="psd-card-foot">
                 <span class="psd-layer-count">${escapeHtml(trf('smart.psd.layerCount', {n:layers.length}))}</span>
                 <button type="button" class="psd-edit-btn" data-smart-action="psd-edit" data-node-id="${escapeAttr(node.id)}"><i data-lucide="layers"></i><span>${escapeHtml(tr('smart.psd.edit'))}</span></button>
-                ${exported ? `<a class="psd-exported-link" data-smart-action="psd-save" data-node-id="${escapeAttr(node.id)}" href="${escapeAttr(node.psd.exportedFile.url)}" download="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}" title="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}"><i data-lucide="download"></i><span>PSD</span></a>` : ''}
+                ${exported ? `<a class="psd-exported-link" data-smart-action="psd-save" data-node-id="${escapeAttr(node.id)}" href="${escapeAttr(node.psd.exportedFile.url)}" download="${escapeAttr(node.psd.exportedFile.name || 'layers.psd')}" title="${escapeAttr(tr('smart.psd.saveAs'))}"><i data-lucide="download"></i><span>PSD</span></a>` : ''}
             </div>
         </div>`;
     }
@@ -12138,6 +12138,8 @@ let psdEditorNodeId = '';
 let psdEditorSelectedLayerId = '';
 let psdEditorCompare = false;
 let psdEditorExporting = false;
+// 卡片脚「PSD」链接防连点守卫：记录正在“重新导出+保存”的节点 id，完成后移除。
+const psdCardExporting = new Set();
 let psdDragState = null;
 function psdSourceInfo(node){
     // 重拆场景：smart-psd 节点用它的拆分源图；图片节点用当前选中的结果图。
@@ -12401,6 +12403,19 @@ async function savePsdFileWithPicker(url, name){
         toast((e?.message || tr('smart.psd.exportFailed')).slice(0, 180));
     }
 }
+// 导出核心链路：POST /api/canvas-psd-export 现场重新装配 PSD（服务端写入 exportedFile 并广播节点），
+// 再走公共保存助手让用户选路径。弹窗按钮与卡片脚链接共用此链路——下载的永远是“当前”图层状态，
+// 而不是上一次导出的旧文件（用户调过图层/顺序后旧文件会过期）。
+async function exportAndSavePsd(node){
+    if(!isSmartPsdNode(node) || !(node.psd?.layers || []).length) return null;
+    const data = await fetch('/api/canvas-psd-export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({canvas_id:canvasId, node_id:node.id})}).then(async r => {
+        if(!r.ok) throw new Error((await r.text()).slice(0, 300));
+        return r.json();
+    });
+    if(!data?.ok || !data.url) throw new Error(data?.error || tr('smart.psd.exportFailed'));
+    await savePsdFileWithPicker(data.url, data.name || 'layers.psd');
+    return data;
+}
 async function exportPsdFromEditor(){
     const node = psdEditorNode();
     if(!node?.psd || psdEditorExporting) return;
@@ -12408,15 +12423,12 @@ async function exportPsdFromEditor(){
     psdExportButton?.classList.add('busy');
     if(psdExportInfoEl) psdExportInfoEl.textContent = tr('smart.psd.exporting');
     try {
-        const data = await fetch('/api/canvas-psd-export', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({canvas_id:canvasId, node_id:node.id})}).then(async r => {
-            if(!r.ok) throw new Error((await r.text()).slice(0, 300));
-            return r.json();
-        });
-        if(!data?.ok || !data.url) throw new Error(data?.error || tr('smart.psd.exportFailed'));
-        const bytes = Number(data.sizeBytes ?? data.size_bytes) || 0;
-        if(psdExportInfoEl) psdExportInfoEl.textContent = `${data.name || 'layers.psd'}${formatPsdSize(bytes) ? ` · ${formatPsdSize(bytes)}` : ''}`;
-        // exportedFile 由服务端写入节点并经窄操作广播回来；随后走公共保存助手让用户选路径。
-        await savePsdFileWithPicker(data.url, data.name || 'layers.psd');
+        const data = await exportAndSavePsd(node);
+        if(data){
+            const bytes = Number(data.sizeBytes ?? data.size_bytes) || 0;
+            // exportedFile 由服务端写入节点并经窄操作广播回来；这里只更新弹窗信息行。
+            if(psdExportInfoEl) psdExportInfoEl.textContent = `${data.name || 'layers.psd'}${formatPsdSize(bytes) ? ` · ${formatPsdSize(bytes)}` : ''}`;
+        }
     } catch(e) {
         if(psdExportInfoEl) psdExportInfoEl.textContent = '';
         toast((e?.message || tr('smart.psd.exportFailed')).slice(0, 180));
@@ -12905,8 +12917,18 @@ function runSmartNodeToolbarAction(nodeId, action){
     // 图层拆分入口与图层编辑：smart-psd 节点没有 node.images，必须在图片项检查前分发。
     if(action === 'psd'){ openPsdCreateDialog(node); return; }
     if(action === 'psd-edit'){ openPsdEditor(node.id); return; }
-    // 卡片脚 PSD 链接：拦截默认跳转，走与弹窗导出同一保存助手（href 保留供右键另存）。
-    if(action === 'psd-save'){ savePsdFileWithPicker(node.psd?.exportedFile?.url, node.psd?.exportedFile?.name); return; }
+    // 卡片脚 PSD 链接：与弹窗「导出 PSD」同一链路——先现场重新导出再弹保存对话框；
+    // href 保留供右键另存（拿服务器最近一次导出文件）。防连点：同节点导出中直接忽略，toast 提示进行中。
+    if(action === 'psd-save'){
+        if(!(node.psd?.layers || []).length) return;
+        if(psdCardExporting.has(node.id)) return;
+        psdCardExporting.add(node.id);
+        toast(tr('smart.psd.exporting'));
+        exportAndSavePsd(node)
+            .catch(e => { toast((e?.message || tr('smart.psd.exportFailed')).slice(0, 180)); })
+            .finally(() => { psdCardExporting.delete(node.id); });
+        return;
+    }
     const index = smartNodeToolbarImageIndex(node);
     const item = imageForDisplay(node.images?.[index]);
     if(!item?.url) return;
