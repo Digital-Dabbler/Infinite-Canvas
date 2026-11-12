@@ -83,10 +83,17 @@ def _layer_record(layer: dict, img: Image.Image) -> bytes:
     """构造单个图层记录（不含通道图像数据，数据在所有记录之后统一写）。
 
     字段顺序：bounds(top,left,bottom,right i32) → u16 通道数 → 每通道
-    (类型 i16 + 数据长度 u32，长度含 2 字节压缩标志) → 混合签名 '8BPS' +
+    (类型 i16 + 数据长度 u32，长度含 2 字节压缩标志) → 混合签名 '8BIM' +
     模式 'norm' + opacity/clipping/flags/filler 各 u8 → u32 附加数据长度 +
-    附加数据（mask u16=0、blending ranges u16=0、PASCAL 名、luni 块，
+    附加数据（mask u32=0、blending ranges u32=0、PASCAL 名、luni 块，
     整体补零到 4 字节倍数）。
+
+    注意两处 Adobe 规范硬约束（实测 Photoshop 打不开即出在这）：
+    1) 混合模式签名必须是 '8BIM'（不是文件头 '8BPS'），否则 PS 报
+       "这个文件使用了不受支持的混合模式"；
+    2) 附加数据里的 mask 长度与 blending ranges 长度都是 u32（各 4 字节），
+       若按 u16 写会少 4 字节，PS 把 PASCAL 名当 blending 长度解析，
+       后续全部错位 → "意外地遇到文件尾"。
 
     bounds 是有符号 i32：x/y 允许为负、盒允许超出画布，按原值写入不裁剪。
     """
@@ -99,13 +106,15 @@ def _layer_record(layer: dict, img: Image.Image) -> bytes:
     chan_len = 2 + w * h
     for ctype in _CHANNEL_TYPES:
         out.append(struct.pack(">hI", ctype, chan_len))
-    # 混合：签名 '8BPS' + 版本兼容的模式串 'norm' + 不透明/剪辑/标志/填充
+    # 混合：签名必须是 '8BIM'（规范原文 "Always '8BIM'"，不是文件头的 '8BPS'）
+    # + 模式 'norm' + 不透明/剪辑/标志/填充
     flags = 0 if layer.get("visible", True) else 1  # bit0=1 表示隐藏
-    out.append(struct.pack(">4s4sBBBB", _MAGIC, b"norm", 255, 0, flags, 0))
+    out.append(struct.pack(">4s4sBBBB", b"8BIM", b"norm", 255, 0, flags, 0))
 
-    # 附加图层数据：mask 长 0 + blending ranges 长 0 + PASCAL 名 + luni 块
+    # 附加图层数据：mask 长 u32 0 + blending ranges 长 u32 0 + PASCAL 名 + luni 块
+    # （两个长度字段都是 4 字节，写成 u16 会让 Photoshop 错位解析后续全部崩坏）
     name = str(layer.get("name", ""))
-    extra = struct.pack(">HH", 0, 0) + _pascal_name(name) + _luni_block(name)
+    extra = struct.pack(">II", 0, 0) + _pascal_name(name) + _luni_block(name)
     extra += b"\x00" * ((-len(extra)) % 4)  # 补零到 4 倍数，保证下一条记录对齐
     out.append(struct.pack(">I", len(extra)))
     out.append(extra)

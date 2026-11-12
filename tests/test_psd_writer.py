@@ -80,12 +80,13 @@ def _parse_psd(data: bytes) -> dict:
         p += 4
         extra = data[p:p + extra_len]
         p += extra_len
-        # 解析 extra：mask(u16 长) + ranges(u16 长) + PASCAL 名 + 若干 '8BIM' 块
+        # 解析 extra：mask(u32 长) + ranges(u32 长) + PASCAL 名 + 若干 '8BIM' 块
+        # （Adobe 规范：两个长度字段都是 4 字节；按 u16 解析会与 Photoshop 错位）
         e = 0
-        (mask_len,) = struct.unpack_from(">H", extra, e)
-        e += 2 + mask_len
-        (range_len,) = struct.unpack_from(">H", extra, e)
-        e += 2 + range_len
+        (mask_len,) = struct.unpack_from(">I", extra, e)
+        e += 4 + mask_len
+        (range_len,) = struct.unpack_from(">I", extra, e)
+        e += 4 + range_len
         name_len = extra[e]
         rec["pascal"] = extra[e + 1:e + 1 + name_len].decode("ascii", "ignore")
         pascal_field = ((1 + name_len + 3) // 4) * 4  # 已补零到 4 倍数
@@ -111,6 +112,9 @@ def _parse_psd(data: bytes) -> dict:
             planes[ctype] = (comp, data[q:q + clen - 2])
             q += clen - 2
         rec["data"] = planes
+    # 严格自洽：记录+通道数据必须正好落在 layer_info 段尾的 0..3 字节补齐范围内，
+    # 任何长度字段写错（如 mask/blending 用 u16）都会让 Photoshop 读出文件尾。
+    assert 0 <= li_end - q < 4, "通道数据结束位置 %r 与 layer_info 段尾 %r 不自洽" % (q, li_end)
     result["records"] = records
     # Image Data 段
     off = lm_end
@@ -168,7 +172,7 @@ class PsdWriterTwoLayerTests(unittest.TestCase):
         rec_top, rec_base = parsed["records"]
         self.assertEqual(rec_top["flags"] & 1, 1)   # visible=False → bit0 置位（隐藏）
         self.assertEqual(rec_base["flags"] & 1, 0)  # visible=True  → bit0 为 0
-        self.assertEqual(rec_top["blend_sig"], b"8BPS")
+        self.assertEqual(rec_top["blend_sig"], b"8BIM")  # 规范：混合签名恒为 '8BIM'
         self.assertEqual(rec_top["blend"], b"norm")
         self.assertEqual(rec_top["opacity"], 255)
         self.assertEqual(rec_top["clip"], 0)
