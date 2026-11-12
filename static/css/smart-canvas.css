@@ -2396,7 +2396,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .psd-stage-area{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;min-height:0}
 .psd-stage-wrap{flex:1;min-height:240px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line,#cbd5e1);border-radius:10px;padding:10px;box-sizing:border-box;background-image:conic-gradient(from 90deg at 50% 50%,#dfe4ec 0 25%,#f2f5f9 0 50%,#dfe4ec 0 75%,#f2f5f9 0);background-size:20px 20px}
 .psd-stack{position:relative;width:100%;pointer-events:none;overflow:hidden;background:#0b1220;border-radius:8px}
-.psd-stack.interactive{pointer-events:auto;width:auto;height:min(58vh,560px);max-width:100%;background:transparent;border-radius:0}
+.psd-stack.interactive{pointer-events:auto;max-width:100%;max-height:100%;background:transparent;border-radius:0}
 .psd-layer{position:absolute;display:block;pointer-events:none;-webkit-user-drag:none;user-select:none}
 .psd-stack.interactive .psd-layer{pointer-events:auto;cursor:move}
 .psd-layer-selected{outline:2px solid var(--rh-brand,#315f9d);outline-offset:-2px}
@@ -2407,7 +2407,7 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 #psdExportBtn.busy{opacity:.6;pointer-events:none}
 .smart-psd-node .node-body{padding:6px 8px;box-sizing:border-box;overflow:hidden}
 .psd-card{display:flex;flex-direction:column;gap:6px;width:100%;min-height:0}
-.psd-card .psd-stack{flex:0 1 auto;max-height:calc(100% - 30px);margin:auto}
+.psd-card .psd-stack{flex:0 0 auto;margin:auto}
 .psd-card-foot{display:flex;align-items:center;gap:8px;padding:0 2px;font-size:calc(12px * var(--canvas-font-scale,1));color:var(--muted,#64748b)}
 .psd-layer-count{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .psd-edit-btn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line,#cbd5e1);border-radius:7px;background:transparent;color:var(--text,#172033);padding:4px 8px;cursor:pointer;font-size:calc(12px * var(--canvas-font-scale,1))}.psd-edit-btn:hover{border-color:var(--rh-brand,#315f9d)}.psd-edit-btn i{width:14px;height:14px}

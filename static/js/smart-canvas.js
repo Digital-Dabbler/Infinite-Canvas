@@ -11095,11 +11095,26 @@ function psdLayerPositionStyle(layer, size){
     const lh = Number(layer?.height) > 0 ? Number(layer.height) : h;
     return `left:${(x / w * 100).toFixed(4)}%;top:${(y / h * 100).toFixed(4)}%;width:${(lw / w * 100).toFixed(4)}%;height:${(lh / h * 100).toFixed(4)}%`;
 }
+function psdContainBox(boxW, boxH, w, h){
+    // contain 语义：在给定盒子里按图片宽高比放最大且不裁切；节点盒是方形而图常为竖/横版，
+    // 纯 CSS 的 aspect-ratio+max-height 组合会退化成裁切或压扁，这里用像素值确定栈的实际尺寸。
+    const bw = Math.max(40, Number(boxW) || 40);
+    const bh = Math.max(40, Number(boxH) || 40);
+    const iw = Number(w) > 0 ? Number(w) : 1;
+    const ih = Number(h) > 0 ? Number(h) : 1;
+    const scale = Math.min(bw / iw, bh / ih);
+    return {width:Math.max(1, Math.round(iw * scale)), height:Math.max(1, Math.round(ih * scale))};
+}
 function psdStackHtml(psd, options={}){
     const size = psd?.size || {width:1, height:1};
     const layers = Array.isArray(psd?.layers) ? psd.layers : [];
     const ratio = `${Number(size.width) > 0 ? Number(size.width) : 1}/${Number(size.height) > 0 ? Number(size.height) : 1}`;
     const interactive = options.interactive ? ' interactive' : '';
+    let sizeStyle = `aspect-ratio:${ratio}`;
+    if(Number(options.fitW) > 0 && Number(options.fitH) > 0){
+        const box = psdContainBox(options.fitW, options.fitH, size.width, size.height);
+        sizeStyle = `aspect-ratio:${ratio};width:${box.width}px;height:${box.height}px`;
+    }
     // 原图对照只存在于弹窗内：半透明底图叠在栈最底层，不写入节点数据。
     const compareBase = options.compare && psd?.source?.url
         ? `<img class="psd-layer psd-compare-base" src="${escapeAttr(psd.source.url)}" alt="" draggable="false" style="left:0;top:0;width:100%;height:100%;z-index:0">`
@@ -11109,14 +11124,17 @@ function psdStackHtml(psd, options={}){
         const selected = options.interactive && options.selectedLayerId === layer.id ? ' psd-layer-selected' : '';
         return `<img class="psd-layer${selected}" data-psd-layer-id="${escapeAttr(layer.id || '')}" src="${escapeAttr(layer.url || '')}" alt="${escapeAttr(layer.name || '')}" title="${escapeAttr(layer.name || '')}" draggable="false" style="${psdLayerPositionStyle(layer, size)};z-index:${index + 1};${visible ? '' : 'display:none;'}">`;
     }).join('');
-    return `<div class="psd-stack${interactive}"${options.id ? ` id="${options.id}"` : ''} style="aspect-ratio:${ratio}">${compareBase}${layerImgs}</div>`;
+    return `<div class="psd-stack${interactive}"${options.id ? ` id="${options.id}"` : ''} style="${sizeStyle}">${compareBase}${layerImgs}</div>`;
 }
 function smartPsdBodyHtml(node, layout){
     if(node.psd && Array.isArray(node.psd.layers) && node.psd.layers.length){
         const layers = node.psd.layers;
         const exported = node.psd.exportedFile && node.psd.exportedFile.url;
+        // 节点盒恒为方形 420×420，图片多为竖/横版：按 contain 计算栈像素尺寸，保证整图完整可见不被裁。
+        const boxW = (Number(layout.width) || 420) - 16;
+        const boxH = (Number(layout.height) || 420) - 84;
         return `<div class="psd-card">
-            ${psdStackHtml(node.psd)}
+            ${psdStackHtml(node.psd, {fitW:boxW, fitH:boxH})}
             <div class="psd-card-foot">
                 <span class="psd-layer-count">${escapeHtml(trf('smart.psd.layerCount', {n:layers.length}))}</span>
                 <button type="button" class="psd-edit-btn" data-smart-action="psd-edit" data-node-id="${escapeAttr(node.id)}"><i data-lucide="layers"></i><span>${escapeHtml(tr('smart.psd.edit'))}</span></button>
@@ -12237,9 +12255,10 @@ function openPsdEditor(nodeId){
     psdEditorCompare = false;
     psdDragState = null;
     if(psdCompareToggle) psdCompareToggle.checked = false;
-    renderPsdEditor();
+    // 先开弹窗再渲染：renderPsdEditor 需要测量舞台容器尺寸，display:none 时 clientWidth 为 0。
     psdEditModal?.classList.add('open');
     psdEditModal?.setAttribute('aria-hidden', 'false');
+    renderPsdEditor();
 }
 function closePsdEditor(){
     psdEditModal?.classList.remove('open');
@@ -12270,11 +12289,15 @@ function renderPsdEditor(){
     const stage = document.getElementById('psdStage');
     if(stage){
         // 用 outerHTML 重建可交互图层栈（委托事件绑在静态外层 #psdStageWrap 上，重建不打断监听）。
-        stage.outerHTML = psdStackHtml(node.psd, {interactive:true, id:'psdStage', selectedLayerId:psdEditorSelectedLayerId, compare:psdEditorCompare});
+        // 按舞台实际像素 contain 整图，横图/竖图都不裁不压扁；弹窗未开时 clientWidth=0 走兜底。
+        const wrapW = Number(psdStageWrap?.clientWidth) || 560;
+        const wrapH = Number(psdStageWrap?.clientHeight) || 430;
+        stage.outerHTML = psdStackHtml(node.psd, {interactive:true, id:'psdStage', selectedLayerId:psdEditorSelectedLayerId, compare:psdEditorCompare, fitW:wrapW - 12, fitH:wrapH - 12});
     }
     if(psdExportInfoEl){
         const exported = node.psd.exportedFile;
-        const bytes = Number(exported.sizeBytes ?? exported.size_bytes) || 0;
+        // exportedFile 初始为 null（服务端契约），必须空值安全，否则整个编辑器渲染抛错、弹窗打不开。
+        const bytes = Number(exported?.sizeBytes ?? exported?.size_bytes) || 0;
         psdExportInfoEl.textContent = exported && exported.url ? `${exported.name || 'layers.psd'}${formatPsdSize(bytes) ? ` · ${formatPsdSize(bytes)}` : ''}` : '';
     }
     refreshIcons();
@@ -12459,6 +12482,10 @@ const finishPsdDrag = event => {
 };
 psdStageWrap?.addEventListener('pointerup', event => { finishPsdDrag(event); });
 psdStageWrap?.addEventListener('pointercancel', event => { finishPsdDrag(event); });
+// 窗口尺寸变化时重算舞台 contain 盒（仅弹窗打开时）。
+window.addEventListener('resize', () => {
+    if(psdEditModal?.classList.contains('open')) renderPsdEditor();
+});
 imageActionToolbar?.addEventListener('mousedown', event => event.stopPropagation());
 imageActionToolbar?.addEventListener('click', event => {
     const button = event.target.closest?.('[data-image-toolbar-action]');
