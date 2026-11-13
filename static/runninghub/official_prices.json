@@ -1,13 +1,13 @@
 {
  "schema_version": 1,
- "generated_at": 1794567310,
+ "generated_at": 1794567896,
  "generated_note": "由 tools/sync_runninghub_official_prices.py 抓取 RunningHub 官网标价生成",
  "source": [
   "https://www.runninghub.cn/api/sku/list",
   "https://www.runninghub.cn/api/area/price/table",
   "https://www.runninghub.ai/api/sku/list"
  ],
- "count": 368,
+ "count": 425,
  "models": {
   "alibaba/happyhorse-1.0/image-to-video": {
    "billing": "per_second",
@@ -1123,24 +1123,17 @@
   },
   "dola-Seedream-5.5/image-to-image": {
    "billing": "per_unit",
-   "unit_cny": 0.05,
-   "low_cny": 0.05,
+   "unit_cny": 0.13,
+   "low_cny": 0.13,
    "high_cny": 0.52,
    "unit_label": "张",
    "sku_id": "2134102100000100019",
    "name_cn": "Dola Seedream 5.5 Image To Image",
    "provider": "ByteDance",
    "category": "image-to-image",
-   "price_text": "¥0.05~0.52/张",
+   "price_text": "¥0.13~0.52/张",
    "note": "官方标价（国际站）",
    "tiers": [
-    {
-     "label": "输入图",
-     "price": 0.05,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "按张计费，首张也计费"
-    },
     {
      "label": "输出图 1.5K",
      "price": 0.13,
@@ -1164,7 +1157,6 @@
     }
    ],
    "notes": {
-    "输入图": 0.05,
     "输出图 1.5K": 0.13,
     "输出图 2K": 0.23,
     "输出图 3K": 0.52
@@ -1172,24 +1164,17 @@
   },
   "dola-Seedream-5.5/layer-decomposition": {
    "billing": "per_unit",
-   "unit_cny": 0.05,
-   "low_cny": 0.05,
+   "unit_cny": 0.13,
+   "low_cny": 0.13,
    "high_cny": 0.52,
    "unit_label": "张",
    "sku_id": "2134102100000100020",
    "name_cn": "Dola Seedream 5.5 Layer Decomposition",
    "provider": "ByteDance",
    "category": "image-tools",
-   "price_text": "¥0.05~0.52/张",
+   "price_text": "¥0.13~0.52/张",
    "note": "官方标价（国际站）",
    "tiers": [
-    {
-     "label": "输入图",
-     "price": 0.05,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "按张计费，首张也计费"
-    },
     {
      "label": "输出图 1.5K",
      "price": 0.13,
@@ -1213,7 +1198,6 @@
     }
    ],
    "notes": {
-    "输入图": 0.05,
     "输出图 1.5K": 0.13,
     "输出图 2K": 0.23,
     "输出图 3K": 0.52
@@ -4123,6 +4107,162 @@
    "price_text": "¥0.15/张",
    "note": "官方标价（国际站）"
   },
+  "rhart-video-flux3/draft-enhance": {
+   "billing": "per_unit",
+   "unit_cny": 2.03,
+   "low_cny": 2.03,
+   "high_cny": 3.71,
+   "unit_label": "次",
+   "sku_id": "2050000000000000004",
+   "name_cn": "FLUX 3 Video 草稿增强",
+   "provider": "Black Forest Labs",
+   "category": "video-to-video",
+   "price_text": "¥2.03~3.71/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "Text / Image 模式增强 · FHD",
+     "price": 2.03,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.03"
+    },
+    {
+     "label": "Video 模式增强 · FHD",
+     "price": 3.71,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.71"
+    }
+   ],
+   "notes": {
+    "Text / Image 模式增强 · FHD": 2.03,
+    "Video 模式增强 · FHD": 3.71
+   }
+  },
+  "rhart-video-flux3/image-to-video": {
+   "billing": "per_unit",
+   "unit_cny": 0.42,
+   "low_cny": 0.42,
+   "high_cny": 2.03,
+   "unit_label": "次",
+   "sku_id": "2050000000000000002",
+   "name_cn": "FLUX 3 Video 图生视频",
+   "provider": "Black Forest Labs",
+   "category": "image-to-video",
+   "price_text": "¥0.42~2.03/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "FLUX 3 Video Draft · HD",
+     "price": 0.42,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.42"
+    },
+    {
+     "label": "FLUX 3 Video · HD",
+     "price": 1.19,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.19"
+    },
+    {
+     "label": "FLUX 3 Video · FHD",
+     "price": 2.03,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.03"
+    }
+   ],
+   "notes": {
+    "FLUX 3 Video Draft · HD": 0.42,
+    "FLUX 3 Video · HD": 1.19,
+    "FLUX 3 Video · FHD": 2.03
+   }
+  },
+  "rhart-video-flux3/text-to-video": {
+   "billing": "per_unit",
+   "unit_cny": 0.42,
+   "low_cny": 0.42,
+   "high_cny": 2.03,
+   "unit_label": "次",
+   "sku_id": "2050000000000000001",
+   "name_cn": "FLUX 3 Video 文生视频",
+   "provider": "Black Forest Labs",
+   "category": "text-to-video",
+   "price_text": "¥0.42~2.03/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "FLUX 3 Video Draft · HD",
+     "price": 0.42,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.42"
+    },
+    {
+     "label": "FLUX 3 Video · HD",
+     "price": 1.19,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.19"
+    },
+    {
+     "label": "FLUX 3 Video · FHD",
+     "price": 2.03,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.03"
+    }
+   ],
+   "notes": {
+    "FLUX 3 Video Draft · HD": 0.42,
+    "FLUX 3 Video · HD": 1.19,
+    "FLUX 3 Video · FHD": 2.03
+   }
+  },
+  "rhart-video-flux3/video-to-video": {
+   "billing": "per_unit",
+   "unit_cny": 0.84,
+   "low_cny": 0.84,
+   "high_cny": 3.71,
+   "unit_label": "次",
+   "sku_id": "2050000000000000003",
+   "name_cn": "FLUX 3 Video 视频续生",
+   "provider": "Black Forest Labs",
+   "category": "video-to-video",
+   "price_text": "¥0.84~3.71/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "FLUX 3 Video Draft · HD",
+     "price": 0.84,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.84"
+    },
+    {
+     "label": "FLUX 3 Video · HD",
+     "price": 2.87,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.87"
+    },
+    {
+     "label": "FLUX 3 Video · FHD",
+     "price": 3.71,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.71"
+    }
+   ],
+   "notes": {
+    "FLUX 3 Video Draft · HD": 0.84,
+    "FLUX 3 Video · HD": 2.87,
+    "FLUX 3 Video · FHD": 3.71
+   }
+  },
   "rhart-video-v3.1-fast/text-to-video": {
    "billing": "per_unit",
    "unit_cny": 1.5,
@@ -4590,24 +4730,17 @@
   },
   "seedream-v5-pro/image-to-image": {
    "billing": "per_unit",
-   "unit_cny": 0.018,
-   "low_cny": 0.018,
+   "unit_cny": 0.27,
+   "low_cny": 0.27,
    "high_cny": 0.54,
    "unit_label": "张",
    "sku_id": "2133000000000504074",
    "name_cn": "seedream-v5-pro-图生图",
    "provider": "ByteDance",
    "category": "image-to-image",
-   "price_text": "¥0.018~0.54/张",
+   "price_text": "¥0.27~0.54/张",
    "note": "官方标价",
    "tiers": [
-    {
-     "label": "输入图",
-     "price": 0.018,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "首张免费，超出部分按张计费"
-    },
     {
      "label": "输出图（≤236万像素）",
      "price": 0.27,
@@ -4624,7 +4757,6 @@
     }
    ],
    "notes": {
-    "输入图": 0.018,
     "输出图（≤236万像素）": 0.27,
     "输出图（>236万像素）": 0.54
    }
@@ -4697,24 +4829,17 @@
   },
   "seedream-v5.5/image-to-image": {
    "billing": "per_unit",
-   "unit_cny": 0.05,
-   "low_cny": 0.05,
+   "unit_cny": 0.13,
+   "low_cny": 0.13,
    "high_cny": 0.52,
    "unit_label": "张",
    "sku_id": "2134102100000100016",
    "name_cn": "seedream-v5.5-图生图",
    "provider": "ByteDance",
    "category": "image-to-image",
-   "price_text": "¥0.05~0.52/张",
+   "price_text": "¥0.13~0.52/张",
    "note": "官方标价",
    "tiers": [
-    {
-     "label": "输入图",
-     "price": 0.05,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "按张计费，首张也计费"
-    },
     {
      "label": "输出图 1.5K",
      "price": 0.13,
@@ -4738,7 +4863,6 @@
     }
    ],
    "notes": {
-    "输入图": 0.05,
     "输出图 1.5K": 0.13,
     "输出图 2K": 0.23,
     "输出图 3K": 0.52
@@ -4746,24 +4870,17 @@
   },
   "seedream-v5.5/layer-decomposition": {
    "billing": "per_unit",
-   "unit_cny": 0.05,
-   "low_cny": 0.05,
+   "unit_cny": 0.13,
+   "low_cny": 0.13,
    "high_cny": 0.52,
    "unit_label": "张",
    "sku_id": "2134102100000100017",
    "name_cn": "seedream-v5.5-图层拆分",
    "provider": "ByteDance",
    "category": "image-tools",
-   "price_text": "¥0.05~0.52/张",
+   "price_text": "¥0.13~0.52/张",
    "note": "官方标价",
    "tiers": [
-    {
-     "label": "输入图",
-     "price": 0.05,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "按张计费，首张也计费"
-    },
     {
      "label": "输出图 1.5K",
      "price": 0.13,
@@ -4787,7 +4904,6 @@
     }
    ],
    "notes": {
-    "输入图": 0.05,
     "输出图 1.5K": 0.13,
     "输出图 2K": 0.23,
     "输出图 3K": 0.52
@@ -5309,25 +5425,25 @@
    "unit_cny": 0.056,
    "low_cny": 0.056,
    "high_cny": 0.093,
-   "unit_label": "次",
+   "unit_label": "帧",
    "sku_id": "2133100000000700007",
    "name_cn": "topazlabs视频放大Astra",
    "provider": "Topaz Labs",
    "category": "video-to-video",
-   "price_text": "¥0.056~0.093/次",
+   "price_text": "¥0.056~0.093/帧",
    "note": "官方标价（国际站）",
    "tiers": [
     {
      "label": "1080p",
      "price": 0.056,
-     "unit": "次",
+     "unit": "帧",
      "billing": "per_unit",
      "note": ""
     },
     {
      "label": "4K",
      "price": 0.093,
-     "unit": "次",
+     "unit": "帧",
      "billing": "per_unit",
      "note": ""
     }
@@ -5479,15 +5595,15 @@
   },
   "topazlabs/video-proteus": {
    "billing": "per_unit",
-   "unit_cny": 0.00189,
-   "low_cny": 0.00189,
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
    "high_cny": 20.16,
    "unit_label": "次",
    "sku_id": "2133100000000700004",
    "name_cn": "topazlabs视频增强Proteus",
    "provider": "Topaz Labs",
    "category": "video-to-video",
-   "price_text": "¥0.00189~20.16/次",
+   "price_text": "¥0.56~20.16/次",
    "note": "官方标价（国际站）",
    "tiers": [
     {
@@ -5573,13 +5689,6 @@
      "unit": "次",
      "billing": "per_unit",
      "note": "¥45.92"
-    },
-    {
-     "label": "",
-     "price": 0.00189,
-     "unit": "次",
-     "billing": "per_unit",
-     "note": "约¥0.00189/帧"
     }
    ]
   },
@@ -5588,46 +5697,46 @@
    "unit_cny": 0.0105,
    "low_cny": 0.0105,
    "high_cny": 0.0217,
-   "unit_label": "次",
+   "unit_label": "帧",
    "sku_id": "2133100000000700005",
    "name_cn": "topazlabs视频增强Starlight",
    "provider": "Topaz Labs",
    "category": "video-to-video",
-   "price_text": "¥0.0105~0.0217/次",
+   "price_text": "¥0.0105~0.0217/帧",
    "note": "官方标价（国际站）",
    "tiers": [
     {
      "label": "Starlight Precise 2.5(slp-2.5)",
      "price": 0.0217,
-     "unit": "次",
+     "unit": "帧",
      "billing": "per_unit",
      "note": "约¥0.0217/帧"
     },
     {
      "label": "Starlight HQ(slhq-1)",
      "price": 0.0217,
-     "unit": "次",
+     "unit": "帧",
      "billing": "per_unit",
      "note": "约¥0.0217/帧"
     },
     {
      "label": "Starlight Mini(slm-1)",
      "price": 0.0217,
-     "unit": "次",
+     "unit": "帧",
      "billing": "per_unit",
      "note": "约¥0.0217/帧"
     },
     {
      "label": "Starlight Sharp(wonder-1)",
      "price": 0.0217,
-     "unit": "次",
+     "unit": "帧",
      "billing": "per_unit",
      "note": "约¥0.0217/帧"
     },
     {
      "label": "Starlight Fast 2(slf-2)",
      "price": 0.0105,
-     "unit": "次",
+     "unit": "帧",
      "billing": "per_unit",
      "note": "约¥0.0105/帧"
     }
@@ -5638,6 +5747,2344 @@
     "Starlight Mini(slm-1)": 0.0217,
     "Starlight Sharp(wonder-1)": 0.0217,
     "Starlight Fast 2(slf-2)": 0.0105
+   }
+  },
+  "tripo-global/convert": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2133100000000800392",
+   "name_cn": "tripo-global/格式转换",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.54/次"
+    },
+    {
+     "label": "高级参数 · 任一非默认高级参数（quad / faceLimit / textureSize≠4096 等）",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 0.54,
+    "高级参数 · 任一非默认高级参数（quad / faceLimit / textureSize≠4096 等）": 0.54
+   }
+  },
+  "tripo-global/image-to-splat": {
+   "billing": "per_unit",
+   "unit_cny": 3.26,
+   "low_cny": 3.26,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800393",
+   "name_cn": "tripo-global/图片生成GaussianSplat",
+   "provider": "",
+   "category": "",
+   "price_text": "¥3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 3.26
+   }
+  },
+  "tripo-global/mesh-complete": {
+   "billing": "per_unit",
+   "unit_cny": 2.18,
+   "low_cny": 2.18,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800394",
+   "name_cn": "tripo-global/网格补全",
+   "provider": "",
+   "category": "",
+   "price_text": "¥2.18~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    },
+    {
+     "label": "AI 补全 · AI 补全",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 3.26,
+    "AI 补全 · AI 补全": 2.18
+   }
+  },
+  "tripo-global/mesh-segment-v1.0": {
+   "billing": "per_unit",
+   "unit_cny": 4.35,
+   "low_cny": 4.35,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800395",
+   "name_cn": "tripo-global/网格分割-v1.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥4.35/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 4.35
+   }
+  },
+  "tripo-global/mesh-segment-v2.0": {
+   "billing": "per_unit",
+   "unit_cny": 4.35,
+   "low_cny": 4.35,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800396",
+   "name_cn": "tripo-global/网格分割-v2.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥4.35/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 4.35
+   }
+  },
+  "tripo-global/mesh-smartsegment": {
+   "billing": "per_unit",
+   "unit_cny": 3.26,
+   "low_cny": 3.26,
+   "high_cny": 5.98,
+   "unit_label": "次",
+   "sku_id": "2133100000000800397",
+   "name_cn": "tripo-global/智能分割",
+   "provider": "",
+   "category": "",
+   "price_text": "¥3.26~5.98/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（模型智能分割） · 默认",
+     "price": 5.98,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥5.98/次"
+    },
+    {
+     "label": "图片智能分割 · 图片智能分割",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（模型智能分割） · 默认": 5.98,
+    "图片智能分割 · 图片智能分割": 3.26
+   }
+  },
+  "tripo-global/retopology-v1.0": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 1.09,
+   "unit_label": "次",
+   "sku_id": "2133100000000800398",
+   "name_cn": "tripo-global/重拓扑-v1.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 1.09
+   }
+  },
+  "tripo-global/retopology-v2.0": {
+   "billing": "per_unit",
+   "unit_cny": 3.26,
+   "low_cny": 3.26,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800399",
+   "name_cn": "tripo-global/重拓扑-v2.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 3.26
+   }
+  },
+  "tripo-global/texture-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 1.09,
+   "unit_label": "次",
+   "sku_id": "2133100000000800400",
+   "name_cn": "tripo-global/模型贴图-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（标准贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（标准贴图） · 默认": 1.09
+   }
+  },
+  "tripo-global/texture-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 2.18,
+   "unit_label": "次",
+   "sku_id": "2133100000000800401",
+   "name_cn": "tripo-global/模型贴图-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~2.18/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（标准贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 高清贴图",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "8K 超清贴图 · 8K 超清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（标准贴图） · 默认": 1.09,
+    "高清贴图 · 高清贴图": 1.09,
+    "8K 超清贴图 · 8K 超清贴图": 2.18
+   }
+  },
+  "tripo-h-global/image-to-3d-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 2.18,
+   "unit_label": "次",
+   "sku_id": "2133100000000800402",
+   "name_cn": "tripo-global/图生3D-H-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~2.18/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09
+   }
+  },
+  "tripo-h-global/image-to-3d-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800403",
+   "name_cn": "tripo-global/图生3D-H-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h-global/image-to-3d-v3.1": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800404",
+   "name_cn": "tripo-global/图生3D-H-v3.1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h-global/multiview-to-3d-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 2.18,
+   "unit_label": "次",
+   "sku_id": "2133100000000800405",
+   "name_cn": "tripo-global/多视图生3D-H-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~2.18/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09
+   }
+  },
+  "tripo-h-global/multiview-to-3d-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800406",
+   "name_cn": "tripo-global/多视图生3D-H-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h-global/multiview-to-3d-v3.1": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800407",
+   "name_cn": "tripo-global/多视图生3D-H-v3.1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h-global/text-to-3d-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 1.09,
+   "unit_label": "次",
+   "sku_id": "2133100000000800408",
+   "name_cn": "tripo-global/文生3D-H-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 1.09,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09
+   }
+  },
+  "tripo-h-global/text-to-3d-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800409",
+   "name_cn": "tripo-global/文生3D-H-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 1.09,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h-global/text-to-3d-v3.1": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800410",
+   "name_cn": "tripo-global/文生3D-H-v3.1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 1.09,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h/image-to-3d-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 2.18,
+   "unit_label": "次",
+   "sku_id": "2133100000000800411",
+   "name_cn": "tripo/图生3D-H-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~2.18/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09
+   }
+  },
+  "tripo-h/image-to-3d-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800412",
+   "name_cn": "tripo/图生3D-H-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h/image-to-3d-v3.1": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800413",
+   "name_cn": "tripo/图生3D-H-v3.1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h/multiview-to-3d-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 2.18,
+   "unit_label": "次",
+   "sku_id": "2133100000000800414",
+   "name_cn": "tripo/多视图生3D-H-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~2.18/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09
+   }
+  },
+  "tripo-h/multiview-to-3d-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800415",
+   "name_cn": "tripo/多视图生3D-H-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h/multiview-to-3d-v3.1": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800416",
+   "name_cn": "tripo/多视图生3D-H-v3.1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥2.18/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 2.18,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h/text-to-3d-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 1.09,
+   "unit_label": "次",
+   "sku_id": "2133100000000800417",
+   "name_cn": "tripo/文生3D-H-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 1.09,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09
+   }
+  },
+  "tripo-h/text-to-3d-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800418",
+   "name_cn": "tripo/文生3D-H-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 1.09,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-h/text-to-3d-v3.1": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800419",
+   "name_cn": "tripo/文生3D-H-v3.1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    },
+    {
+     "label": "超清几何精度 · 超清几何精度",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "四边面网格 · 四边面网格",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    },
+    {
+     "label": "智能低模 · 智能低模",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 1.09,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26,
+    "超清几何精度 · 超清几何精度": 2.18,
+    "四边面网格 · 四边面网格": 0.54,
+    "智能低模 · 智能低模": 1.09,
+    "分部件生成 · texture/pbr/quad 均为 false 时计费；与智能低模互斥时低模优先、本项不计": 2.18
+   }
+  },
+  "tripo-p-global/image-to-3d-P1": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800420",
+   "name_cn": "tripo-global/图生3D-P-P1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~4.35/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 4.35,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p-global/image-to-3d-P2": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 10.88,
+   "unit_label": "次",
+   "sku_id": "2133100000000800421",
+   "name_cn": "tripo-global/图生3D-P-P2",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~10.88/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 10.88,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥10.88/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 10.88,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p-global/multiview-to-3d-P1": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800422",
+   "name_cn": "tripo-global/多视图生3D-P-P1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~4.35/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 4.35,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p-global/multiview-to-3d-P2": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 10.88,
+   "unit_label": "次",
+   "sku_id": "2133100000000800423",
+   "name_cn": "tripo-global/多视图生3D-P-P2",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~10.88/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 10.88,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥10.88/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 10.88,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p-global/text-to-3d-P1": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800424",
+   "name_cn": "tripo-global/文生3D-P-P1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~3.26/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 3.26,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p-global/text-to-3d-P2": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 10.88,
+   "unit_label": "次",
+   "sku_id": "2133100000000800425",
+   "name_cn": "tripo-global/文生3D-P-P2",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~10.88/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 10.88,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥10.88/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 10.88,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p/image-to-3d-P1": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800426",
+   "name_cn": "tripo/图生3D-P-P1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~4.35/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 4.35,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p/image-to-3d-P2": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 10.88,
+   "unit_label": "次",
+   "sku_id": "2133100000000800427",
+   "name_cn": "tripo/图生3D-P-P2",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~10.88/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 10.88,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥10.88/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 10.88,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p/multiview-to-3d-P1": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800428",
+   "name_cn": "tripo/多视图生3D-P-P1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~4.35/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 4.35,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p/multiview-to-3d-P2": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 10.88,
+   "unit_label": "次",
+   "sku_id": "2133100000000800429",
+   "name_cn": "tripo/多视图生3D-P-P2",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~10.88/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 10.88,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥10.88/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 10.88,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p/text-to-3d-P1": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800430",
+   "name_cn": "tripo/文生3D-P-P1",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 3.26,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo-p/text-to-3d-P2": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 10.88,
+   "unit_label": "次",
+   "sku_id": "2133100000000800431",
+   "name_cn": "tripo/文生3D-P-P2",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~10.88/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（无贴图） · 默认",
+     "price": 10.88,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥10.88/次"
+    },
+    {
+     "label": "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 生效贴图 · 高清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    },
+    {
+     "label": "8K 超清贴图 · 生效贴图 · 8K 超清贴图",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（无贴图） · 默认": 10.88,
+    "标准贴图 · 开启贴图（pbr=true 时强制开启贴图）": 1.09,
+    "高清贴图 · 生效贴图 · 高清贴图": 2.18,
+    "8K 超清贴图 · 生效贴图 · 8K 超清贴图": 3.26
+   }
+  },
+  "tripo/convert": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2133100000000800432",
+   "name_cn": "tripo/格式转换",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.54/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.54/次"
+    },
+    {
+     "label": "高级参数 · 任一非默认高级参数（quad / faceLimit / textureSize≠4096 等）",
+     "price": 0.54,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥0.54/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 0.54,
+    "高级参数 · 任一非默认高级参数（quad / faceLimit / textureSize≠4096 等）": 0.54
+   }
+  },
+  "tripo/image-to-splat": {
+   "billing": "per_unit",
+   "unit_cny": 3.26,
+   "low_cny": 3.26,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800433",
+   "name_cn": "tripo/图片生成GaussianSplat",
+   "provider": "",
+   "category": "",
+   "price_text": "¥3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 3.26
+   }
+  },
+  "tripo/mesh-complete": {
+   "billing": "per_unit",
+   "unit_cny": 2.18,
+   "low_cny": 2.18,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800434",
+   "name_cn": "tripo/网格补全",
+   "provider": "",
+   "category": "",
+   "price_text": "¥2.18~3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    },
+    {
+     "label": "AI 补全 · AI 补全",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 3.26,
+    "AI 补全 · AI 补全": 2.18
+   }
+  },
+  "tripo/mesh-segment-v1.0": {
+   "billing": "per_unit",
+   "unit_cny": 4.35,
+   "low_cny": 4.35,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800435",
+   "name_cn": "tripo/网格分割-v1.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥4.35/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 4.35
+   }
+  },
+  "tripo/mesh-segment-v2.0": {
+   "billing": "per_unit",
+   "unit_cny": 4.35,
+   "low_cny": 4.35,
+   "high_cny": 4.35,
+   "unit_label": "次",
+   "sku_id": "2133100000000800436",
+   "name_cn": "tripo/网格分割-v2.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥4.35/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 4.35,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.35/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 4.35
+   }
+  },
+  "tripo/mesh-smartsegment": {
+   "billing": "per_unit",
+   "unit_cny": 3.26,
+   "low_cny": 3.26,
+   "high_cny": 5.98,
+   "unit_label": "次",
+   "sku_id": "2133100000000800437",
+   "name_cn": "tripo/智能分割",
+   "provider": "",
+   "category": "",
+   "price_text": "¥3.26~5.98/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（模型智能分割） · 默认",
+     "price": 5.98,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥5.98/次"
+    },
+    {
+     "label": "图片智能分割 · 图片智能分割",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价（模型智能分割） · 默认": 5.98,
+    "图片智能分割 · 图片智能分割": 3.26
+   }
+  },
+  "tripo/retopology-v1.0": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 1.09,
+   "unit_label": "次",
+   "sku_id": "2133100000000800438",
+   "name_cn": "tripo/重拓扑-v1.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 1.09
+   }
+  },
+  "tripo/retopology-v2.0": {
+   "billing": "per_unit",
+   "unit_cny": 3.26,
+   "low_cny": 3.26,
+   "high_cny": 3.26,
+   "unit_label": "次",
+   "sku_id": "2133100000000800439",
+   "name_cn": "tripo/重拓扑-v2.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥3.26/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价 · 默认",
+     "price": 3.26,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.26/次"
+    }
+   ],
+   "notes": {
+    "基础价 · 默认": 3.26
+   }
+  },
+  "tripo/texture-v2.5": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 1.09,
+   "unit_label": "次",
+   "sku_id": "2133100000000800440",
+   "name_cn": "tripo/模型贴图-v2.5",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（标准贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    }
+   ],
+   "notes": {
+    "基础价（标准贴图） · 默认": 1.09
+   }
+  },
+  "tripo/texture-v3.0": {
+   "billing": "per_unit",
+   "unit_cny": 1.09,
+   "low_cny": 1.09,
+   "high_cny": 2.18,
+   "unit_label": "次",
+   "sku_id": "2133100000000800441",
+   "name_cn": "tripo/模型贴图-v3.0",
+   "provider": "",
+   "category": "",
+   "price_text": "¥1.09~2.18/次",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "基础价（标准贴图） · 默认",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.09/次"
+    },
+    {
+     "label": "高清贴图 · 高清贴图",
+     "price": 1.09,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥1.09/次"
+    },
+    {
+     "label": "8K 超清贴图 · 8K 超清贴图",
+     "price": 2.18,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "+¥2.18/次"
+    }
+   ],
+   "notes": {
+    "基础价（标准贴图） · 默认": 1.09,
+    "高清贴图 · 高清贴图": 1.09,
+    "8K 超清贴图 · 8K 超清贴图": 2.18
    }
   },
   "vidu/image-to-video-q2-pro": {
@@ -5975,6 +8422,408 @@
    "category": "",
    "price_text": "¥0.01/次",
    "note": "官方标价（国际站）"
+  },
+  "volc-enhance-fast/video": {
+   "billing": "per_second",
+   "unit_cny": 0.0032,
+   "low_cny": 0.0032,
+   "high_cny": 0.1013,
+   "unit_label": "秒",
+   "sku_id": "2133100000000800374",
+   "name_cn": "火山画质增强-极速版",
+   "provider": "ByteDance",
+   "category": "video-tools",
+   "price_text": "¥0.0032~0.1013/秒",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "极速版 · 720p",
+     "price": 0.0032,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0032/秒"
+    },
+    {
+     "label": "极速版 · 720p",
+     "price": 0.0063,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0063/秒"
+    },
+    {
+     "label": "极速版 · 720p",
+     "price": 0.0127,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0127/秒"
+    },
+    {
+     "label": "极速版 · 1080p",
+     "price": 0.0063,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0063/秒"
+    },
+    {
+     "label": "极速版 · 1080p",
+     "price": 0.0127,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0127/秒"
+    },
+    {
+     "label": "极速版 · 1080p",
+     "price": 0.0253,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0253/秒"
+    },
+    {
+     "label": "极速版 · 2k",
+     "price": 0.0127,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0127/秒"
+    },
+    {
+     "label": "极速版 · 2k",
+     "price": 0.0253,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0253/秒"
+    },
+    {
+     "label": "极速版 · 2k",
+     "price": 0.0507,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0507/秒"
+    },
+    {
+     "label": "极速版 · 4k",
+     "price": 0.0253,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0253/秒"
+    },
+    {
+     "label": "极速版 · 4k",
+     "price": 0.0507,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0507/秒"
+    },
+    {
+     "label": "极速版 · 4k",
+     "price": 0.1013,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.1013/秒"
+    }
+   ]
+  },
+  "volc-enhance-generative/video": {
+   "billing": "per_second",
+   "unit_cny": 0.0397,
+   "low_cny": 0.0397,
+   "high_cny": 0.6333,
+   "unit_label": "秒",
+   "sku_id": "2133100000000800372",
+   "name_cn": "火山画质增强-大模型版",
+   "provider": "ByteDance",
+   "category": "video-tools",
+   "price_text": "¥0.0397~0.6333/秒",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "大模型版 · 720p",
+     "price": 0.0397,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0397/秒"
+    },
+    {
+     "label": "大模型版 · 720p",
+     "price": 0.0792,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0792/秒"
+    },
+    {
+     "label": "大模型版 · 720p",
+     "price": 0.1583,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.1583/秒"
+    },
+    {
+     "label": "大模型版 · 1080p",
+     "price": 0.0792,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0792/秒"
+    },
+    {
+     "label": "大模型版 · 1080p",
+     "price": 0.1583,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.1583/秒"
+    },
+    {
+     "label": "大模型版 · 1080p",
+     "price": 0.3167,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.3167/秒"
+    },
+    {
+     "label": "大模型版 · 2k",
+     "price": 0.1583,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.1583/秒"
+    },
+    {
+     "label": "大模型版 · 2k",
+     "price": 0.3167,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.3167/秒"
+    },
+    {
+     "label": "大模型版 · 2k",
+     "price": 0.6333,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.6333/秒"
+    }
+   ]
+  },
+  "volc-enhance/video": {
+   "billing": "per_second",
+   "unit_cny": 0.0118,
+   "low_cny": 0.0118,
+   "high_cny": 15.2,
+   "unit_label": "秒",
+   "sku_id": "2133100000000800373",
+   "name_cn": "火山画质增强-标准专业版",
+   "provider": "ByteDance",
+   "category": "video-tools",
+   "price_text": "¥0.0118~15.2/秒",
+   "note": "官方标价",
+   "tiers": [
+    {
+     "label": "标准版 · 720p",
+     "price": 0.0118,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0118/秒"
+    },
+    {
+     "label": "标准版 · 720p",
+     "price": 0.0238,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0238/秒"
+    },
+    {
+     "label": "标准版 · 720p",
+     "price": 0.0475,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0475/秒"
+    },
+    {
+     "label": "标准版 · 1080p",
+     "price": 0.0238,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0238/秒"
+    },
+    {
+     "label": "标准版 · 1080p",
+     "price": 0.0475,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0475/秒"
+    },
+    {
+     "label": "标准版 · 1080p",
+     "price": 0.095,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.095/秒"
+    },
+    {
+     "label": "标准版 · 2k",
+     "price": 0.0475,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.0475/秒"
+    },
+    {
+     "label": "标准版 · 2k",
+     "price": 0.095,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.095/秒"
+    },
+    {
+     "label": "标准版 · 2k",
+     "price": 0.19,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.19/秒"
+    },
+    {
+     "label": "标准版 · 4k",
+     "price": 0.095,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.095/秒"
+    },
+    {
+     "label": "标准版 · 4k",
+     "price": 0.19,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.19/秒"
+    },
+    {
+     "label": "标准版 · 4k",
+     "price": 0.38,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.38/秒"
+    },
+    {
+     "label": "标准版 · 8k",
+     "price": 0.38,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.38/秒"
+    },
+    {
+     "label": "标准版 · 8k",
+     "price": 0.76,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.76/秒"
+    },
+    {
+     "label": "标准版 · 8k",
+     "price": 1.52,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥1.52/秒"
+    },
+    {
+     "label": "专业版 · 720p",
+     "price": 0.118,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.118/秒"
+    },
+    {
+     "label": "专业版 · 720p",
+     "price": 0.238,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.238/秒"
+    },
+    {
+     "label": "专业版 · 720p",
+     "price": 0.475,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.475/秒"
+    },
+    {
+     "label": "专业版 · 1080p",
+     "price": 0.238,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.238/秒"
+    },
+    {
+     "label": "专业版 · 1080p",
+     "price": 0.475,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.475/秒"
+    },
+    {
+     "label": "专业版 · 1080p",
+     "price": 0.95,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.95/秒"
+    },
+    {
+     "label": "专业版 · 2k",
+     "price": 0.475,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.475/秒"
+    },
+    {
+     "label": "专业版 · 2k",
+     "price": 0.95,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.95/秒"
+    },
+    {
+     "label": "专业版 · 2k",
+     "price": 1.9,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥1.9/秒"
+    },
+    {
+     "label": "专业版 · 4k",
+     "price": 0.95,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥0.95/秒"
+    },
+    {
+     "label": "专业版 · 4k",
+     "price": 1.9,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥1.9/秒"
+    },
+    {
+     "label": "专业版 · 4k",
+     "price": 3.8,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥3.8/秒"
+    },
+    {
+     "label": "专业版 · 8k",
+     "price": 3.8,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥3.8/秒"
+    },
+    {
+     "label": "专业版 · 8k",
+     "price": 7.6,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥7.6/秒"
+    },
+    {
+     "label": "专业版 · 8k",
+     "price": 15.2,
+     "unit": "秒",
+     "billing": "per_second",
+     "note": "¥15.2/秒"
+    }
+   ]
   },
   "volc-subtitle-erase-pro/video": {
    "billing": "per_second",

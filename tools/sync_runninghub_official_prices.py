@@ -84,6 +84,7 @@ UNIT_HINTS = (
     ("图", "per_unit", "张"),
     ("次", "per_unit", "次"),
     ("call", "per_unit", "次"),
+    ("帧", "per_unit", "帧"),
     ("字符", "per_unit", "千字符"),
     ("char", "per_unit", "千字符"),
     ("秒", "per_second", "秒"),
@@ -103,6 +104,10 @@ def _money(text: Any) -> Optional[float]:
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+# 单价比同表其他档低两个数量级，基本是把“计价系数”当成了单价。
+_ANOMALY_PRICE = 0.01
 
 
 def _unit_of(text: Any) -> tuple:
@@ -196,19 +201,65 @@ def fetch_price_table(client: httpx.Client, sku_id: str) -> Dict[str, Any]:
     return payload.get("data") or {}
 
 
+def _is_header_row(cells: List[Any], ncols: int) -> bool:
+    """跨列的“小标题”行：只用来标注下面的分组（模型名/参数名）。
+
+    Topaz 这类多维表的样式是：表头行只填第一格（``Proteus系列（常规）``），
+    下面若干行才是真实价格。表头行不能当档位，否则会被挑成可选价。
+    """
+    filled = [cell for cell in cells if str(cell or "").strip()]
+    return len(filled) == 1 and len(cells) >= ncols
+
+
+def _table_ncols(table: Dict[str, Any]) -> int:
+    """这份价格表最宽的行有几列，用来识别跨列小标题。"""
+    return max((len(row.get("cells") or []) for row in table.get("rows") or []), default=0)
+
+
 def tiers_from_table(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     tiers: List[Dict[str, Any]] = []
+    ncols = _table_ncols(table)
+    group = ""
     for row in table.get("rows") or []:
         cells = row.get("cells") or []
+        if _is_header_row(cells, ncols):
+            group = str(cells[0] or "").strip()
+            continue
+        # 有些表（火山画质增强）一行里横向排了多档价格：第 1 列是分组，
+        # 第 2 列才是档位（分辨率），后面若干列各是一个价。前两格都没有
+        # 金额时，按“每列一个档”拆开，否则会被当成无价行整行丢掉。
+        if len(cells) >= 3 and _money(cells[1]) is None and any(_money(c) for c in cells[2:]):
+            row_group = str(cells[0] or "").strip() or group
+            tier_label = str(cells[1] or "").strip()
+            for cell in cells[2:]:
+                price = _money(cell)
+                if price is None:
+                    continue
+                billing, label = _unit_of(cell)
+                head = " · ".join(part for part in (row_group, tier_label) if part)
+                tiers.append(
+                    {
+                        "label": head,
+                        "price": price,
+                        "unit": label,
+                        "billing": billing,
+                        "note": str(cell).strip(),
+                    }
+                )
+            continue
         if len(cells) < 2:
             continue
         price = _money(cells[1])
         if price is None:
             continue
         billing, label = _unit_of(cells[1])
+        label_text = str(cells[0] or "").strip()
+        if group:
+            # 分组标题给出选型（用哪个模型），行标题给出规格（几秒/多少像素）。
+            label_text = f"{group} · {label_text}" if label_text else group
         tiers.append(
             {
-                "label": str(cells[0] or "").strip(),
+                "label": label_text,
                 "price": price,
                 "unit": label,
                 "billing": billing,
@@ -218,13 +269,114 @@ def tiers_from_table(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     return tiers
 
 
+# 个别 SKU 把计算口径写在单价列、把真实单价写进说明列，
+# 所以单价列取不到金额时再退回说明列找“¥x/单位”。
+
+
+def _is_input_tier(label: Any) -> bool:
+    """分档行是否属于输入侧（上传素材）计费，而非这次生成的输出价。"""
+    text = str(label or "")
+    if "输出" in text:
+        return False
+    return any(word in text for word in ("输入图", "参考图", "输入视频", "输入音频"))
+
+
+def _is_grid_tier(tier: Dict[str, Any]) -> bool:
+    """一格一价的规格表（分辨率/时长），不是可变倍率的计价系数。
+
+    计价系数行的说明里会写“单价×时长”“= min(...)` 这类乘法口径，
+    而规格表的说明多是“按秒计费”“按张计费”这类口径说明。
+    """
+    note = str(tier.get("note") or "")
+    if "×" in note or re.search(r"(?<!数)\d\s*\*\s*\d", note):
+        return False
+    return tier.get("price") is not None
+
+
+def _is_anomalous_tier(tier: Dict[str, Any], peers: List[float], grid_mode: bool = False) -> bool:
+    """单价比同表其他档低两个数量级以上，基本是把计价系数当成了单价。
+
+    只看绝对阈值会把合法的低价模型（参考生视频 ¥0.001、音频 ¥0.004/秒）
+    一起误杀，所以拿同表其他档位做参照；只有一个档位时不猜。
+
+    规格表（一格一价）本身价差就大（分辨率越高越贵），不按这个规则丢档。
+    """
+    if grid_mode:
+        return False
+    price = float(tier.get("price") or 0)
+    others = [p for p in peers if p > 0 and abs(p - price) > 1e-12]
+    if not others:
+        return False
+    return price * 100 < min(others)
+
+
+def _fallback_tier(table: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """单价列没有金额时，从说明列里挖“¥x/单位”。"""
+    tiers: List[Dict[str, Any]] = []
+    for row in table.get("rows") or []:
+        cells = [str(cell if not isinstance(cell, dict) else cell.get("value", "")) for cell in (row.get("cells") or [])]
+        if len(cells) < 2:
+            continue
+        price = _money(cells[1])
+        if price is None:
+            for text in cells[2:]:
+                price = _money(text)
+                if price is not None:
+                    billing, label = _unit_of(text)
+                    tiers.append(
+                        {
+                            "label": cells[0].strip(),
+                            "price": price,
+                            "unit": label,
+                            "billing": billing,
+                            "note": text.strip(),
+                        }
+                    )
+                    break
+    return tiers
+
+
+def _pick_tiers(sku: Dict[str, Any], table: Dict[str, Any]) -> List[Dict[str, Any]]:
+    tiers = tiers_from_table(table)
+    if not tiers:
+        tiers = _fallback_tier(table)
+    if not tiers:
+        return []
+    used = [tier for tier in tiers if not _is_input_tier(tier.get("label"))]
+    if not used:
+        return tiers
+    # 只有全部档位都像“规格表”时才按格取价；否则一律按横向比价剔除
+    # 计价系数行——系数的说明也可能写得像规格（“按秒计费”）。
+    grid_mode = len(used) > 1 and all(_is_grid_tier(tier) for tier in used) and not any(
+        _is_anomalous_tier(tier, [float(t.get("price") or 0) for t in used]) for tier in used
+    )
+    if grid_mode:
+        # 一格一价的规格表：每个规格都是独立定价，不能互相折算。
+        return used
+    peers = [float(tier.get("price") or 0) for tier in used]
+    usable = [tier for tier in used if not _is_anomalous_tier(tier, peers)]
+    return usable or used
+
+
 def entry_from_sku(sku: Dict[str, Any], tiers: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     price = sku.get("price") or {}
     simple = price.get("price")
     unit_label = price.get("unitName") or price.get("unitNameEn") or ""
     billing, label = _unit_of(unit_label or price.get("unitKey") or "")
+    # “一格一价”的规格表（MULTI_DIMENSION）列表处只写一句“价格表”，
+    # 没有代表单价，按真实档位算。其余情况一律以列表价为准。
+    simple_text = str(price.get("simplePriceText") or "").strip()
+    if simple_text in ("价格表",) or (
+        simple_text and _money(simple_text) is None and "价格表" in simple_text
+    ):
+        simple = None
     candidates = [float(simple)] if isinstance(simple, (int, float)) and simple > 0 else []
-    for tier in tiers:
+    # 分档表里除了“输出图”，还会单列“输入图”“参考图”等输入侧计费项。
+    # 它们是上传素材按张收的钱，不是这次生成本身的报价：并进最低价会把
+    # 输出价压成 ¥0.018 这种假低价，挑档时也会错档，所以只留输出侧档位。
+    output_tiers = [tier for tier in tiers if not _is_input_tier(tier.get("label"))]
+    priced_tiers = output_tiers or tiers
+    for tier in priced_tiers:
         candidates.append(tier["price"])
         if label in ("次", "") and tier.get("unit"):
             label = tier["unit"]
@@ -251,12 +403,13 @@ def entry_from_sku(sku: Dict[str, Any], tiers: List[Dict[str, Any]]) -> Optional
         entry["tiers"] = tiers
         # 分档说明（“单张 ≤260万像素，含 1K、1.5K 档”）是挑档的唯一依据，
         # 按“档位名 → 单价”落盘，估价时据此把区间收敛成单一档位。
+        # 只收输出侧档位：输入图单价混进来会让挑档按 ¥0.018 命中。
         notes = {}
-        for tier in tiers:
+        for tier in priced_tiers:
             key = tier.get("label") or tier.get("note") or ""
             if key and key not in notes:
                 notes[str(key)] = tier["price"]
-        if notes and len(notes) == len(tiers):
+        if notes and len(notes) == len(priced_tiers):
             entry["notes"] = notes
     return entry
 
@@ -308,7 +461,7 @@ def main() -> int:
         def work(item):
             endpoint, sku = item
             table = fetch_price_table(client, str(sku.get("id") or ""))
-            return endpoint, sku, tiers_from_table(table)
+            return endpoint, sku, _pick_tiers(sku, table)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
             for endpoint, sku, tiers in pool.map(work, need_table):
@@ -341,7 +494,7 @@ def main() -> int:
         def work_ai(item):
             endpoint, sku = item
             table = fetch_price_table(client, str(sku.get("id") or ""))
-            return endpoint, sku, tiers_from_table(table)
+            return endpoint, sku, _pick_tiers(sku, table)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
             for endpoint, sku, tiers in pool.map(work_ai, need_table_ai):

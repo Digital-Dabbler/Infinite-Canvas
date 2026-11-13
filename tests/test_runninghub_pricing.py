@@ -796,5 +796,72 @@ class DisplayNameEndpointTests(unittest.TestCase):
         self.assertEqual(main.runninghub_model_entry_id("workflow:456"), "")
 
 
+class OfficialTierParsingTests(unittest.TestCase):
+    """官网价目表解析：输入图单价、分组小标题、计价系数都不能当成生成本身的价格。"""
+
+    def _entry(self, rows, simple=None, simple_text=""):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "sync_off", Path(__file__).resolve().parents[1] / "tools" / "sync_runninghub_official_prices.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        table = {"rows": [{"cells": row} for row in rows]}
+        if simple_text:
+            return mod, mod.entry_from_sku(
+                {"id": "1", "name": "x", "price": {"price": simple, "simplePriceText": simple_text}},
+                mod._pick_tiers({}, table),
+            )
+        return mod, mod.entry_from_sku(
+            {"id": "1", "name": "x", "price": {"price": simple, "simplePriceText": simple_text}},
+            mod._pick_tiers({}, table),
+        )
+
+    def test_input_image_price_is_not_the_generation_price(self):
+        _, entry = self._entry([
+            ["输入图", "¥0.018/张", "首张免费，超出部分按张计费"],
+            ["输出图（≤236万像素）", "¥0.27/张", ""],
+            ["输出图（>236万像素）", "¥0.54/张", ""],
+        ])
+        self.assertEqual(entry["low_cny"], 0.27)
+        self.assertEqual(entry["high_cny"], 0.54)
+        self.assertNotIn("输入图", entry["notes"])
+
+    def test_header_row_is_group_label_not_a_tier(self):
+        _, entry = self._entry([
+            ["Proteus系列（常规）", "", "", ""],
+            ["1s", "¥0.56", "¥0.56", "¥0.56"],
+            ["5s", "¥0.56", "¥0.56", "¥1.68"],
+        ])
+        labels = [tier["label"] for tier in entry["tiers"]]
+        self.assertNotIn("Proteus系列（常规）", labels)
+        self.assertIn("Proteus系列（常规） · 1s", labels)
+
+    def test_billing_coefficient_is_dropped(self):
+        _, entry = self._entry([
+            ["720P", "¥0.51/秒", "按秒计费"],
+            ["1080P", "¥0.85/秒", "按秒计费"],
+            ["", "¥0.001/次", "计价系数"],
+        ])
+        self.assertEqual(entry["low_cny"], 0.51)
+        self.assertEqual(entry["high_cny"], 0.85)
+
+    def test_price_in_note_column_is_picked_up(self):
+        _, entry = self._entry([
+            ["按视频时长计费，", "按音频时长计费", "¥0.016/秒，总价=单价×billingSeconds"],
+        ])
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry["low_cny"], 0.016)
+        self.assertEqual(entry["billing"], "per_second")
+
+    def test_frame_unit_is_understood(self):
+        _, entry = self._entry([
+            ["Proteus系列（常规）", "", ""],
+            ["帧价", "约¥0.0217/帧", ""],
+        ])
+        self.assertEqual(entry["unit_label"], "帧")
+
+
 if __name__ == "__main__":
     unittest.main()
