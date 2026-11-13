@@ -356,14 +356,16 @@ class EstimateRouteTests(unittest.IsolatedAsyncioTestCase):
             result = await main.runninghub_estimate(request=None, kind="bogus", id="x", quantity="")
         self.assertEqual(result["estimate"]["confidence"], "unknown")
 
-    async def test_route_maps_display_model_to_endpoint(self):
+    async def test_route_passes_model_id_through_for_key_expansion(self):
+        # 路由不再提前把产品名换成端点名：候选键展开（产品名 → 官网 SKU 名 → 端点）
+        # 统一由 runninghub_price_lookup_keys 负责，否则渠道版价格会被别名吃掉档位。
         with patch.object(main, "request_api_profile", return_value={"id": "p"}), \
              patch.object(main, "runninghub_estimate_for_profile",
                           return_value={"confidence": "high", "amount": 0.2}) as estimate:
             await main.runninghub_estimate(
                 request=None, kind="model", id="gpt-image-2.0/text-to-image-channel-low-price", quantity=""
             )
-        estimate.assert_called_once_with("p", "model", "rhart-image-g-2/text-to-image", None)
+        estimate.assert_called_once_with("p", "model", "gpt-image-2.0/text-to-image-channel-low-price", None)
 
     async def test_unassigned_profile_gets_403(self):
         request = object()
@@ -477,6 +479,95 @@ class OfficialPriceTests(unittest.TestCase):
         estimate = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep/a")
         self.assertEqual(estimate["confidence"], "unknown")
         self.assertEqual(estimate["source"], "unknown")
+
+
+class ChannelModelPriceTests(unittest.TestCase):
+    """渠道版模型（nano-banana / gpt-image-2 等）按官网 SKU 命名命中官方价。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.table_path = str(Path(self.temp_dir.name) / "prices.json")
+        self.stats_path = str(Path(self.temp_dir.name) / "stats.json")
+        self.official_path = str(Path(self.temp_dir.name) / "official.json")
+        self.patchers = [
+            patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
+            patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
+            patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", self.official_path),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp_dir.cleanup()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
+
+    def _write_official(self, models):
+        Path(self.official_path).write_text(
+            json.dumps({"schema_version": 1, "models": models}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
+
+    def test_model_price_keys_expand_tier_suffix(self):
+        self.assertEqual(
+            rp.model_price_keys("nano-banana/text-to-image-channel-low-price"),
+            [
+                "nano-banana/text-to-image-channel-low-price",
+                "nano-banana/text-to-image/economy",
+                "nano-banana/text-to-image/stable",
+            ],
+        )
+        self.assertEqual(
+            rp.model_price_keys("gpt-image-2/text-to-image-official-stable")[1],
+            "gpt-image-2/text-to-image/stable",
+        )
+        # 不带档位后缀的端点只回自己，避免乱猜。
+        self.assertEqual(rp.model_price_keys("seedream-v5.5/text-to-image"),
+                         ["seedream-v5.5/text-to-image"])
+        self.assertEqual(rp.model_price_keys(""), [])
+
+    def test_channel_model_hits_economy_official_price(self):
+        self._write_official({"nano-banana/text-to-image/economy": {
+            "billing": "per_unit", "unit_cny": 0.07, "unit_label": "张", "note": "官方标价（国际站渠道）",
+        }})
+        estimate = main.runninghub_estimate_for_profile(
+            "legacy-shared", "model", "nano-banana/text-to-image-channel-low-price"
+        )
+        self.assertEqual(estimate["source"], "official")
+        self.assertEqual(estimate["amount"], 0.07)
+
+    def test_official_stable_model_hits_stable_price(self):
+        self._write_official({"nano-banana/text-to-image/stable": {
+            "billing": "per_unit", "unit_cny": 0.2, "unit_label": "张",
+        }})
+        estimate = main.runninghub_estimate_for_profile(
+            "legacy-shared", "model", "nano-banana/text-to-image-official-stable"
+        )
+        self.assertEqual(estimate["amount"], 0.2)
+
+    def test_alias_endpoint_key_still_resolves(self):
+        # 管理员/官方价目也可能以实际调用端点（rhart-*）为键，别名要能兜住。
+        self._write_official({"rhart-image-g-2/text-to-image": {
+            "billing": "per_unit", "unit_cny": 0.1, "unit_label": "次",
+        }})
+        estimate = main.runninghub_estimate_for_profile(
+            "legacy-shared", "model", "gpt-image-2.0/text-to-image-channel-low-price"
+        )
+        self.assertEqual(estimate["amount"], 0.1)
+
+    def test_estimate_cache_keeps_quantity_apart(self):
+        self._write_official({"ep/video": {
+            "billing": "per_second", "unit_cny": 0.5, "unit_label": "秒",
+        }})
+        four = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep/video", 4)
+        one = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep/video")
+        self.assertAlmostEqual(four["amount"], 2.0)
+        self.assertAlmostEqual(one["amount"], 0.5)
 
 
 class AdminPriceRouteTests(unittest.IsolatedAsyncioTestCase):

@@ -36,10 +36,34 @@ import httpx  # noqa: E402  (必须在清理环境变量之后导入)
 BASE = "https://www.runninghub.cn"
 SKU_LIST_URL = BASE + "/api/sku/list"
 PRICE_TABLE_URL = BASE + "/api/area/price/table"
+# 国际站目录包含国内站没有的“渠道版”型号（nano-banana / gpt-image / veo / grok），
+# 名称直接就是 ``<产品>/<操作>/<economy|stable>``，是我们唯一能拿到的渠道价来源。
+AI_BASE = "https://www.runninghub.ai"
+AI_SKU_LIST_URL = AI_BASE + "/api/sku/list"
 REGISTRY_URL = (
     "https://raw.githubusercontent.com/HM-RunningHub/ComfyUI_RH_OpenAPI/main/models_registry.json"
 )
+REGISTRY_MIRRORS = [REGISTRY_URL, "https://ghproxy.net/" + REGISTRY_URL]
 OUTPUT_PATH = os.path.join("static", "runninghub", "official_prices.json")
+
+# 官网档位段 → 画布模型 ID 的后缀
+TIER_TO_MODEL_SUFFIX = {"economy": "-channel-low-price", "stable": "-official-stable"}
+SKU_NAME_RE = re.compile(r"^(?P<base>.+)/(?P<op>[a-z0-9][a-z0-9-]*)/(?P<tier>economy|stable)$")
+
+# 画布模型 ID ↔ 实际调用端点，和 main.RUNNINGHUB_MODEL_ENDPOINT_ALIASES /
+# runninghub_registry_fallback 保持一致：同一个模型两种写法都要能命中价格。
+MODEL_ID_ENDPOINTS = {
+    "gpt-image-2.0/text-to-image-channel-low-price": "rhart-image-g-2/text-to-image",
+    "gpt-image-2.0/edit-channel-low-price": "rhart-image-g-2/image-to-image",
+    "gpt-image-2/text-to-image-official-stable": "rhart-image-g-2-official/text-to-image",
+    "gpt-image-2/image-to-image-official-stable": "rhart-image-g-2-official/image-to-image",
+    "nano-banana/text-to-image-channel-low-price": "rhart-image-v1/text-to-image",
+    "nano-banana/edit-channel-low-price": "rhart-image-v1/edit",
+    "nano-banana/text-to-image-official-stable": "rhart-image-v1-official/text-to-image",
+    "nano-banana/edit-official-stable": "rhart-image-v1-official/edit",
+    "google/veo3.1-fast/text-to-video-channel-low-price": "rhart-video-v3.1-fast/text-to-video",
+    "sora-2/text-to-video-official-stable": "rhart-video-s-official/text-to-video",
+}
 
 WEB_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126",
@@ -89,11 +113,11 @@ def _unit_of(text: Any) -> tuple:
     return "per_unit", "次"
 
 
-def fetch_sku_catalog(client: httpx.Client) -> List[Dict[str, Any]]:
+def fetch_sku_catalog(client: httpx.Client, url: str = SKU_LIST_URL) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     page = 1
     while True:
-        resp = client.post(SKU_LIST_URL, json={"pageNum": page, "pageSize": 100})
+        resp = client.post(url, json={"pageNum": page, "pageSize": 100})
         payload = resp.json() or {}
         data = ((payload.get("data") or {}).get("page") or {})
         batch = data.get("records") or []
@@ -102,6 +126,39 @@ def fetch_sku_catalog(client: httpx.Client) -> List[Dict[str, Any]]:
             break
         page += 1
     return records
+
+
+def app_model_ids_from_sku_name(name: Any) -> List[str]:
+    """官网 SKU 名 ``nano-banana/text-to-image/economy`` → 画布模型 ID 候选。
+
+    画布里的渠道模型 ID 是 ``<产品>/<操作>-channel-low-price`` /
+    ``-official-stable``；同时保留官网写法本身，两种键都能命中价格表。
+    """
+    text = str(name or "").strip()
+    match = SKU_NAME_RE.match(text)
+    if not match:
+        return [text] if text else []
+    suffix = TIER_TO_MODEL_SUFFIX.get(match.group("tier"))
+    ids = [text]
+    if suffix:
+        ids.insert(0, f"{match.group('base')}/{match.group('op')}{suffix}")
+    return ids
+
+
+def fetch_registry(client: httpx.Client) -> List[Dict[str, Any]]:
+    last_error: Optional[Exception] = None
+    for url in REGISTRY_MIRRORS:
+        try:
+            data = client.get(url, headers={"Accept": "application/json"}, timeout=60).json()
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+        items = data.get("models") if isinstance(data, dict) else data
+        if isinstance(items, dict):
+            items = list(items.values())
+        if isinstance(items, list) and items:
+            return [item for item in items if isinstance(item, dict)]
+    raise RuntimeError(f"模型注册表拉取失败：{last_error}")
 
 
 def fetch_price_table(client: httpx.Client, sku_id: str) -> Dict[str, Any]:
@@ -171,29 +228,25 @@ def entry_from_sku(sku: Dict[str, Any], tiers: List[Dict[str, Any]]) -> Optional
 
 def main() -> int:
     started = time.time()
+    endpoint_pick: Dict[str, Dict[str, Any]] = {}
+    unmapped: List[str] = []
     with httpx.Client(headers=WEB_HEADERS, timeout=40, follow_redirects=True) as client:
-        skus = fetch_sku_catalog(client)
-        print(f"SKU 目录: {len(skus)} 条")
-
-        registry = client.get(REGISTRY_URL, headers={"Accept": "application/json"}).json()
-        by_name = {}
-        endpoint_pick: Dict[str, Dict[str, Any]] = {}
+        registry = fetch_registry(client)
+        by_name: Dict[str, Dict[str, Any]] = {}
         for item in registry:
             for field in ("name_cn", "display_name", "name_en"):
                 key = _norm(item.get(field))
                 if key:
                     by_name.setdefault(key, item)
 
+        # 1) 国内站：中文名与注册表 name_cn 对齐，覆盖标准模型。
+        skus = fetch_sku_catalog(client)
+        print(f"国内站 SKU: {len(skus)} 条")
         need_table = []
-        entries: Dict[str, Dict[str, Any]] = {}
-        unmapped: List[str] = []
         for sku in skus:
             name = str(sku.get("name") or "").strip()
             matched = by_name.get(_norm(name))
-            if not matched:
-                unmapped.append(name)
-                continue
-            endpoint = str(matched.get("endpoint") or "").strip()
+            endpoint = str(matched.get("endpoint") or "").strip() if matched else ""
             if not endpoint:
                 unmapped.append(name)
                 continue
@@ -205,8 +258,8 @@ def main() -> int:
             if entry:
                 endpoint_pick.setdefault(endpoint, entry)
 
-        print(f"名称匹配到注册表: {len(skus) - len(unmapped)}，直接用列表价: {len(endpoint_pick)}，"
-              f"需要分档价格表: {len(need_table)}，未匹配: {len(unmapped)}")
+        print(f"  匹配注册表: {len(skus) - len(unmapped)}，列表价命中: {len(endpoint_pick)}，"
+              f"需取分档价: {len(need_table)}，未匹配: {len(unmapped)}")
 
         def work(item):
             endpoint, sku = item
@@ -219,19 +272,46 @@ def main() -> int:
                 if entry:
                     endpoint_pick.setdefault(endpoint, entry)
 
+        # 2) 国际站：渠道版型号，SKU 名本身就是 ``<产品>/<操作>/<档位>``。
+        ai_skus = fetch_sku_catalog(client, AI_SKU_LIST_URL)
+        print(f"国际站 SKU: {len(ai_skus)} 条")
+        channel_keys = 0
+        for sku in ai_skus:
+            name = str(sku.get("name") or "").strip()
+            if not SKU_NAME_RE.match(name):
+                continue
+            entry = entry_from_sku(sku, [])
+            if not entry:
+                continue
+            entry["note"] = "官方标价（国际站渠道）"
+            for key in app_model_ids_from_sku_name(name):
+                if key and key not in endpoint_pick:
+                    endpoint_pick[key] = dict(entry)
+                    channel_keys += 1
+        print(f"  渠道版写入: {channel_keys} 个键")
+
+        # 3) 同一个模型的端点写法也补一份价，画布/注册表两套 ID 都能出价。
+        mirrored = 0
+        for model_id, endpoint in MODEL_ID_ENDPOINTS.items():
+            entry = endpoint_pick.get(model_id)
+            if entry and endpoint not in endpoint_pick:
+                endpoint_pick[endpoint] = dict(entry)
+                mirrored += 1
+        print(f"  端点别名补价: {mirrored} 个")
+
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     payload = {
         "schema_version": 1,
         "generated_at": int(time.time()),
         "generated_note": "由 tools/sync_runninghub_official_prices.py 抓取 RunningHub 官网标价生成",
-        "source": [SKU_LIST_URL, PRICE_TABLE_URL],
+        "source": [SKU_LIST_URL, PRICE_TABLE_URL, AI_SKU_LIST_URL],
         "count": len(endpoint_pick),
         "models": dict(sorted(endpoint_pick.items())),
         "unmatched_skus": sorted(set(unmapped)),
     }
     with open(OUTPUT_PATH, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=1)
-    print(f"写入 {OUTPUT_PATH}：{len(endpoint_pick)} 个端点，用时 {time.time() - started:.1f}s")
+    print(f"写入 {OUTPUT_PATH}：{len(endpoint_pick)} 个键，用时 {time.time() - started:.1f}s")
     return 0
 
 

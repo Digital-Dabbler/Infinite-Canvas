@@ -272,6 +272,41 @@ def stats_key(profile_id: str, kind: str, entry_id: str) -> str:
     return "::".join((profile, kind, entry))
 
 
+# 画布模型 ID 的档位后缀 → 官网 SKU 名里的档位段。
+# 渠道低价版在官网目录（国际站）记作 /economy，官方稳定版记作 /stable。
+MODEL_TIER_SUFFIXES = (
+    ("-channel-low-price", "economy"),
+    ("-official-stable", "stable"),
+)
+
+
+def model_price_keys(model_id: str) -> List[str]:
+    """把一个画布模型 ID 展开成价格表候选键，原始 ID 始终排在最前。
+
+    RunningHub 的模型 ID 是 ``<产品>/<操作>-<档位后缀>``，例如
+    ``nano-banana/text-to-image-channel-low-price``；官网价目表用的是
+    ``<产品>/<操作>/<档位>``，例如 ``nano-banana/text-to-image/economy``。
+    这里补齐两种写法，调用方按顺序命中第一个有价的键。
+    """
+    raw = str(model_id or "").strip().strip("/")
+    if not raw:
+        return []
+    keys = [raw]
+    for suffix, tier in MODEL_TIER_SUFFIXES:
+        if not raw.endswith(suffix):
+            continue
+        base = raw[: -len(suffix)].strip("/")
+        if base:
+            keys.append(f"{base}/{tier}")
+            keys.append(f"{base}/{'stable' if tier == 'economy' else 'economy'}")
+        break
+    ordered: List[str] = []
+    for key in keys:
+        if key and key not in ordered:
+            ordered.append(key)
+    return ordered
+
+
 def _valid_unit(value: Any) -> Optional[float]:
     money = _as_money(value)
     if money is None:

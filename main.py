@@ -15360,19 +15360,49 @@ def record_runninghub_observed_cost(profile_id, kind, entry_id, amount):
         _write_json_file(RUNNINGHUB_PRICE_STATS_FILE, data)
         RUNNINGHUB_ESTIMATE_CACHE.clear()
 
+def runninghub_price_lookup_keys(kind, entry_id):
+    """价格表/统计的候选键：先按官网 SKU 命名展开，再退到实际调用端点。
+
+    画布传进来的模型名既可能是 ``nano-banana/text-to-image-channel-low-price``
+    这种产品名，也可能已经是 ``rhart-image-v1/text-to-image`` 端点名。两种都要
+    能命中价格表，否则渠道版模型会永远停在“费用待定”。
+    """
+    keys = []
+
+    def add(value):
+        value = str(value or "").strip().strip("/")
+        if value and value not in keys:
+            keys.append(value)
+
+    for value in runninghub_pricing.model_price_keys(entry_id):
+        add(value)
+    if kind == "model":
+        for value in runninghub_pricing.model_price_keys(runninghub_model_entry_id(entry_id)):
+            add(value)
+    return keys
+
 def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None):
-    """三档闸门的估价：实测历史 → 单价表/手工价 → GPU 分钟兜底 → unknown。"""
-    cache_key = f"{profile_id}|{kind}|{entry_id}"
+    """三档闸门的估价：实测历史 → 单价表/官方价 → GPU 分钟兜底 → unknown。"""
+    cache_key = f"{profile_id}|{kind}|{entry_id}|{quantity}"
     now = time.monotonic()
     with RUNNINGHUB_PRICING_LOCK:
         cached = RUNNINGHUB_ESTIMATE_CACHE.get(cache_key)
         if cached and now - float(cached.get("at") or 0) < RUNNINGHUB_ESTIMATE_CACHE_TTL:
             return cached.get("result")
         stats = load_runninghub_price_stats()
-        key = runninghub_pricing.stats_key(profile_id, kind, entry_id)
-        result = runninghub_pricing.estimate_price(
-            load_runninghub_price_table(), stats["entries"].get(key), kind, entry_id, quantity
-        )
+        table = load_runninghub_price_table()
+        result = None
+        for key in runninghub_price_lookup_keys(kind, entry_id) or [entry_id]:
+            lookup = runninghub_pricing.stats_key(profile_id, kind, key)
+            candidate = runninghub_pricing.estimate_price(
+                table, stats["entries"].get(lookup), kind, key, quantity
+            )
+            if result is None:
+                result = candidate
+            if candidate.get("source") != runninghub_pricing.SOURCE_UNKNOWN:
+                result = candidate
+                break
+        result = result or runninghub_pricing.empty_estimate()
         RUNNINGHUB_ESTIMATE_CACHE[cache_key] = {"at": now, "result": result}
         return result
 
@@ -19520,8 +19550,8 @@ async def runninghub_estimate(request: Request, kind: str = "", id: str = "", qu
     if kind not in runninghub_pricing.KINDS or not entry_id:
         return {"success": True, "estimate": runninghub_pricing.empty_estimate()}
     if kind == "model":
-        # 前端传的是画布上的模型显示名，价格表/统计以端点 ID 为键，这里统一换算。
-        entry_id = runninghub_model_entry_id(entry_id) or entry_id
+        # 前端传的是画布上的模型名（产品名或端点名），估价内部会展开成候选键。
+        entry_id = entry_id.strip("/")
     qty = None
     if quantity:
         try:
