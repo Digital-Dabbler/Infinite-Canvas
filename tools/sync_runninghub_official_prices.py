@@ -128,6 +128,32 @@ def fetch_sku_catalog(client: httpx.Client, url: str = SKU_LIST_URL) -> List[Dic
     return records
 
 
+def _trim_model_name(name: Any) -> str:
+    """``f-2-klein-9b/text-to-image`` → ``klein-9b/text-to-image``。
+
+    部分是"通用名+版本号"的写法，注册表里的端点不带厂商前缀，去掉首段
+    数字/版本前缀后再比一次，仍然要求操作名完全一致。
+    """
+    text = str(name or "").strip()
+    parts = [part for part in text.split("/") if part]
+    if len(parts) < 2:
+        return text
+    head = re.sub(r"^[a-z]-\d+-", "", parts[0], flags=re.I)
+    head = re.sub(r"^\d+-", "", head)
+    return "/".join([head, *parts[1:]]) if head != parts[0] else text
+
+
+# 官网 SKU 名与注册表端点完全对不上、但经人工核对确认是同一个模型的，
+# 显式登记在这里。只放核实过的条目，不靠模糊匹配猜。
+SKU_TO_ENDPOINT = {
+    # FLUX 3 Image Klein：官网 SKU 名带厂商前缀 f-2-，注册表端点没有。
+    "f-2-klein-9b/text-to-image": "rhart-image-flux3-klein/text-to-image",
+    "f-2-klein-4b/text-to-image": "rhart-image-flux3-klein/text-to-image",
+    "f-2-klein-9b/edit": "rhart-image-flux3-klein/image-to-image",
+    "f-2-klein-4b/edit": "rhart-image-flux3-klein/image-to-image",
+}
+
+
 def app_model_ids_from_sku_name(name: Any) -> List[str]:
     """官网 SKU 名 ``nano-banana/text-to-image/economy`` → 画布模型 ID 候选。
 
@@ -262,8 +288,9 @@ def main() -> int:
         need_table = []
         for sku in skus:
             name = str(sku.get("name") or "").strip()
-            matched = by_name.get(_norm(name))
+            matched = by_name.get(_norm(name)) or by_name.get(_norm(_trim_model_name(name)))
             endpoint = str(matched.get("endpoint") or "").strip() if matched else ""
+            endpoint = endpoint or SKU_TO_ENDPOINT.get(name, "")
             if not endpoint:
                 unmapped.append(name)
                 continue
@@ -297,8 +324,9 @@ def main() -> int:
         need_table_ai = []
         for sku in ai_skus:
             name = str(sku.get("name") or "").strip()
-            matched = by_name.get(_norm(name))
+            matched = by_name.get(_norm(name)) or by_name.get(_norm(_trim_model_name(name)))
             endpoint = str(matched.get("endpoint") or "").strip() if matched else ""
+            endpoint = endpoint or SKU_TO_ENDPOINT.get(name, "")
             if not endpoint or endpoint in endpoint_pick:
                 continue
             price = sku.get("price") or {}

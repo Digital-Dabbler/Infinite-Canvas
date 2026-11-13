@@ -474,6 +474,7 @@ RUNNINGHUB_PRICE_STATS_FILE = os.path.join(DATA_DIR, "runninghub_price_stats.jso
 RUNNINGHUB_OFFICIAL_PRICES_FILE = os.path.join(STATIC_DIR, "runninghub", "official_prices.json")
 RUNNINGHUB_PRICING_LOCK = RLock()
 RUNNINGHUB_OFFICIAL_PRICE_CACHE: Dict[str, Any] = {"mtime": None, "models": {}}
+RUNNINGHUB_REGISTRY_SNAPSHOT_CACHE: Dict[str, Any] = {"mtime": None, "items": []}
 RUNNINGHUB_ESTIMATE_CACHE_TTL = 60
 RUNNINGHUB_ESTIMATE_CACHE: Dict[str, Dict[str, Any]] = {}
 UPSTREAM_TASK_SCOPES_FILE = os.path.join(DATA_DIR, "upstream_task_scopes.json")
@@ -15460,15 +15461,65 @@ def runninghub_response_usage(raw_response):
     return None
 
 def runninghub_model_entry_id(model):
-    """把画布选中的 RunningHub 模型名解析成价格表/统计使用的端点 ID。"""
+    """把画布选中的 RunningHub 模型名解析成价格表/统计使用的端点 ID。
+
+    画布上有些模型（如 MiniMax-H3 系列）存的是展示名，官方价目表用的是
+    端点名 ``minimax/hailuo-h3/text-to-video``；先用注册表的展示名反查，
+    再退回端点别名表。
+    """
     raw = str(model or "").strip()
     if not raw or raw.startswith(("app:", "workflow:")):
         return ""
+    try:
+        endpoint = runninghub_endpoint_from_display_name(raw)
+    except Exception:
+        endpoint = ""
+    if endpoint:
+        return endpoint
     try:
         alias = runninghub_endpoint_alias_for_model(raw)
     except Exception:
         alias = ""
     return str(alias or raw).strip()
+
+def runninghub_endpoint_from_display_name(name):
+    """按注册表展示名（name_en / name_cn / display_name）反查端点名。
+
+    画布上 MiniMax-H3 这类模型存的是展示名，官方价目表用的是端点名。估价是
+    同步路径，这里只读本地注册表快照，不发网络请求；映射不到就返回空串，
+    不做模糊猜测，避免把别的模型价格张冠李戴。
+    """
+    raw = str(name or "").strip()
+    if not raw:
+        return ""
+    folded = "".join(ch for ch in raw.lower() if ch.isalnum())
+    if not folded:
+        return ""
+    for item in load_runninghub_registry_snapshot():
+        for field in ("name_en", "name_cn", "display_name"):
+            value = "".join(ch for ch in str(item.get(field) or "").lower() if ch.isalnum())
+            if value and value == folded:
+                return str(item.get("endpoint") or "").strip()
+    return ""
+
+def load_runninghub_registry_snapshot():
+    """读取本地注册表快照（按 mtime 缓存），缺失时返回空列表。"""
+    path = STATIC_RUNNINGHUB_MODEL_REGISTRY_FILE
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return []
+    cached = RUNNINGHUB_REGISTRY_SNAPSHOT_CACHE
+    if cached.get("mtime") == mtime and isinstance(cached.get("items"), list):
+        return cached["items"]
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = json.load(handle)
+        items = runninghub_registry_items_from_raw(raw)
+    except Exception:
+        return []
+    RUNNINGHUB_REGISTRY_SNAPSHOT_CACHE.update({"mtime": mtime, "items": items})
+    return items
 
 def runninghub_recall_observed_cost(scope, raw_response):
     """任务成功收口时从上游 usage 提取实扣金额并回流统计；任何异常不影响主流程。"""

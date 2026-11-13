@@ -1,13 +1,13 @@
 {
  "schema_version": 1,
- "generated_at": 1794566623,
+ "generated_at": 1794567310,
  "generated_note": "由 tools/sync_runninghub_official_prices.py 抓取 RunningHub 官网标价生成",
  "source": [
   "https://www.runninghub.cn/api/sku/list",
   "https://www.runninghub.cn/api/area/price/table",
   "https://www.runninghub.ai/api/sku/list"
  ],
- "count": 366,
+ "count": 368,
  "models": {
   "alibaba/happyhorse-1.0/image-to-video": {
    "billing": "per_second",
@@ -3927,6 +3927,32 @@
    "category": "text-to-audio",
    "price_text": "¥3.12/千字符",
    "note": "官方标价"
+  },
+  "rhart-image-flux3-klein/image-to-image": {
+   "billing": "per_unit",
+   "unit_cny": 0.05,
+   "low_cny": 0.05,
+   "high_cny": 0.05,
+   "unit_label": "次",
+   "sku_id": "2034877792577191938",
+   "name_cn": "f-2-klein-9b/edit",
+   "provider": "Black Forest Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.05/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-image-flux3-klein/text-to-image": {
+   "billing": "per_unit",
+   "unit_cny": 0.05,
+   "low_cny": 0.05,
+   "high_cny": 0.05,
+   "unit_label": "次",
+   "sku_id": "2034882738118787074",
+   "name_cn": "f-2-klein-9b/text-to-image",
+   "provider": "Black Forest Labs",
+   "category": "text-to-image",
+   "price_text": "¥0.05/次",
+   "note": "官方标价（国际站）"
   },
   "rhart-image-g-2-official/image-to-image": {
    "billing": "per_unit",

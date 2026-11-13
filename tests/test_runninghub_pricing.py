@@ -732,5 +732,69 @@ class ModelNameFallbackTests(unittest.TestCase):
         )
 
 
+class DisplayNameEndpointTests(unittest.TestCase):
+    """画布上存的是展示名（MiniMax-H3 ...），官方价目表用端点名，必须能对上。"""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.registry_path = str(Path(self.tmpdir) / "models_registry.json")
+        Path(self.registry_path).write_text(
+            json.dumps(
+                {
+                    "models": [
+                        {
+                            "endpoint": "minimax/hailuo-h3/image-to-video",
+                            "name_en": "MiniMax-H3 Image-to-Video (first/last frame)",
+                            "name_cn": "MiniMax-H3 图生视频（首尾帧）",
+                        },
+                        {
+                            "endpoint": "rhart-image-flux3-klein/text-to-image",
+                            "name_en": "flux-3-image-klein/text-to-image",
+                            "name_cn": "FLUX 3 Image Klein 文生图",
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        self.patch = patch.object(
+            main, "STATIC_RUNNINGHUB_MODEL_REGISTRY_FILE", self.registry_path
+        )
+        self.patch.start()
+        main.RUNNINGHUB_REGISTRY_SNAPSHOT_CACHE.update({"mtime": None, "items": []})
+
+    def tearDown(self):
+        self.patch.stop()
+        main.RUNNINGHUB_REGISTRY_SNAPSHOT_CACHE.update({"mtime": None, "items": []})
+
+    def test_display_name_maps_to_endpoint(self):
+        self.assertEqual(
+            main.runninghub_model_entry_id("MiniMax-H3 图生视频（首尾帧）"),
+            "minimax/hailuo-h3/image-to-video",
+        )
+        self.assertEqual(
+            main.runninghub_model_entry_id("MiniMax-H3 Image-to-Video (first/last frame)"),
+            "minimax/hailuo-h3/image-to-video",
+        )
+
+    def test_model_id_passes_through(self):
+        self.assertEqual(
+            main.runninghub_model_entry_id("flux-3-image-klein/text-to-image"),
+            "rhart-image-flux3-klein/text-to-image",
+        )
+
+    def test_unknown_name_falls_back_to_itself(self):
+        # 注册表里没有的名字不做猜测，原样返回，查不到价就继续显示待定。
+        self.assertEqual(
+            main.runninghub_model_entry_id("some-unlisted-model/text-to-image"),
+            "some-unlisted-model/text-to-image",
+        )
+
+    def test_app_and_workflow_have_no_price_key(self):
+        self.assertEqual(main.runninghub_model_entry_id("app:123"), "")
+        self.assertEqual(main.runninghub_model_entry_id("workflow:456"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
