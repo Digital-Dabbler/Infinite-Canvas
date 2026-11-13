@@ -628,6 +628,22 @@ class RunButtonMarkupTests(unittest.TestCase):
         self.assertIn('params.set("res"', self.badge_js)
         self.assertIn("runningHubPriceResolution", self.canvas_js)
 
+    def test_badge_attach_is_idempotent(self):
+        # 重复 attach 会插出第二个徽标、且旧闭包停在过期参数上，金额看起来永远不变。
+        self.assertIn("anchor._rhPriceAttached", self.badge_js)
+        self.assertIn("if (existing) return existing;", self.badge_js)
+
+    def test_run_state_sync_refreshes_price_spec(self):
+        # 切节点时 syncRunButtonState(subject) 不带参数，composerActionNode() 会回退到
+        # 画布选中节点，报价就会停在上一个节点上。同步状态后必须再刷新一次徽标。
+        self.assertIn("dispatchEvent(new Event('smart-run-state-sync'))", self.canvas_js)
+        self.assertIn("addEventListener('smart-run-state-sync'", self.canvas_js)
+
+    def test_price_model_id_falls_back_to_provider_list(self):
+        # 节点残留的 model 不在该 provider 清单里时，估价退回清单首项，避免查到一个永远没价的键。
+        self.assertIn("function runningHubPriceModelId", self.canvas_js)
+        self.assertIn("configured.includes(current)", self.canvas_js)
+
 
 class ResolutionTierTests(unittest.TestCase):
     """官方分档价（1.5K/2K/3K）按输出像素收敛成单一档位。"""

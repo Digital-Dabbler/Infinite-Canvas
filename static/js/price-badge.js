@@ -157,6 +157,10 @@
 
     function attach(anchor, specFn) {
         if (!anchor || typeof specFn !== "function") return { refresh() {} };
+        // 重复挂载时复用同一个徽标：旧版会再插一个 span，两个徽标同抢 .run-pill 的
+        // has-price，且旧闭包永远停在最后一次 spec 上。
+        const existing = anchor._rhPriceAttached;
+        if (existing) return existing;
         const badge = ensureBadge(anchor);
         if (!badge) return { refresh() {} };
         let timer = 0;
@@ -185,8 +189,10 @@
             timer = setTimeout(refresh, DEBOUNCE_MS);
         }
         anchor._rhPriceRefresh = schedule;
+        const handle = { refresh: schedule };
+        anchor._rhPriceAttached = handle;
         refresh();
-        return { refresh: schedule };
+        return handle;
     }
 
     window.RHPriceBadge = { attach, refreshAnchor(anchor) { if (anchor && anchor._rhPriceRefresh) anchor._rhPriceRefresh(); } };

@@ -7316,6 +7316,7 @@ function syncRunButtonState(node=composerActionNode()){
         : tr('smart.run');
     // RunningHub 事前估价徽标：参数/模型/配置组任何一处变化都会走到这里刷新。
     window.RHPriceBadge?.refreshAnchor(runBtn);
+    if(runBtn.isConnected) runBtn.dispatchEvent(new Event('smart-run-state-sync'));
 }
 // 当前 Composer 若走 RunningHub，返回本次调用的估价身份 {kind,id,quantity,multiplier}；否则 null（徽标隐藏）。
 // quantity 是"单次提交"的计费量（视频=时长秒），multiplier 是本次点击要提交的次数（图片张数）。
@@ -7323,14 +7324,33 @@ function runningHubPriceResolution(source=null){
     // 预算价用的分辨率标签：优先 Composer 的宽高，其次 "2k"/"1k" 这类档位标签。
     // 官方分档价按输出像素定价，传对档位才不会高估或低估，所以这里把能拿到的
     // 尺寸信息一并交给后端，拿不准时传空串、由后端保留区间。
+    // 节点 runSettings 里可能残留空白/历史值，一律当没填，避免盖掉当前 Composer 的选择。
     const src = source || {};
-    const width = Number(src.imageWidth ?? src.width ?? settings?.imageWidth);
-    const height = Number(src.imageHeight ?? src.height ?? settings?.imageHeight);
+    const pick = (...values) => {
+        for(const value of values){
+            if(value === null || value === undefined) continue;
+            if(typeof value === 'string' && !value.trim()) continue;
+            return value;
+        }
+        return null;
+    };
+    const width = Number(pick(src.imageWidth, src.width, settings?.imageWidth, settings?.width));
+    const height = Number(pick(src.imageHeight, src.height, settings?.imageHeight, settings?.height));
     if(Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0){
         return `${Math.round(width)}x${Math.round(height)}`;
     }
-    const label = String(src.imageSize || src.size || src.resolution || settings?.imageSize || settings?.resolution || '').trim();
+    const label = String(pick(src.imageSize, src.size, src.resolution, settings?.imageSize, settings?.resolution) || '').trim();
     return /^\d+(\.\d+)?x\d+(\.\d+)?$/i.test(label) ? '' : label;
+}
+function runningHubPriceModelId(source){
+    // 估价按"模型键"查价：优先取 Composer 当前模型，不在该 provider 清单里时才退回清单首项。
+    // 这样即使节点残留了别的 provider 字段，按钮上的金额仍与下拉框里看到的模型一致。
+    const providerId = source?.apiKind === 'video' ? source?.videoProvider : source?.provider_id;
+    const provider = (apiProviders || []).find(item => item.id === providerId);
+    const configured = source?.apiKind === 'video' ? provider?.video_models : provider?.image_models;
+    const current = String((source?.apiKind === 'video' ? source.videoModel : source.model) || '').trim();
+    if(current && (!configured || !configured.length || configured.includes(current))) return current;
+    return String(configured?.[0] || '').trim();
 }
 function runningHubRunPriceSpec(node=null){
     const source = node ? smartSettingsForNode(node) : settings;
@@ -7344,11 +7364,11 @@ function runningHubRunPriceSpec(node=null){
     if(isApiLikeEngine(source.engine)){
         if(source.apiKind === 'video' && isRunningHubVideoProvider(source.videoProvider)){
             const duration = Math.max(1, Math.min(60, Number(source.videoDuration) || 5));
-            return {kind:'model', id:String(source.videoModel || '').trim(), quantity:duration, multiplier:1, res};
+            return {kind:'model', id:runningHubPriceModelId(source), quantity:duration, multiplier:1, res};
         }
         if(source.apiKind !== 'video' && isRunningHubVideoProvider(source.provider_id)){
             const count = Math.max(1, Math.min(8, Number(source.count || 1)));
-            return {kind:'model', id:String(source.model || '').trim(), quantity:'', multiplier:count, res};
+            return {kind:'model', id:runningHubPriceModelId(source), quantity:'', multiplier:count, res};
         }
     }
     return null;
@@ -27896,6 +27916,9 @@ runBtn.onclick = () => {
 };
 // RunningHub 估价徽标：紧贴运行按钮显示本次调用的预估金额，非 RH 路线自动隐藏。
 window.RHPriceBadge?.attach(runBtn, () => runningHubRunPriceSpec(composerActionNode()));
+// 节点切换不带参数（noNode）时 composerActionNode() 会先回退到画布选中节点，
+// 报价随之跳到选中节点而不是 Composer 正在编辑的节点，所以同步按钮状态后统一刷新一次。
+if(runBtn) runBtn.addEventListener('smart-run-state-sync', () => window.RHPriceBadge?.refreshAnchor(runBtn));
 if(cascadeRunBtn) cascadeRunBtn.onclick = () => {
     const node = composerActionNode();
     const loopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';
