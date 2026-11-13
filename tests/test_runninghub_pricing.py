@@ -1,0 +1,381 @@
+# -*- coding: utf-8 -*-
+"""RunningHub 事前估价体系测试：纯逻辑层 + main.py 收口链路，全部离线，不触网。"""
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import main
+import runninghub_pricing as rp
+
+
+class EstimatePriorityTests(unittest.TestCase):
+    """三档闸门：实测历史 > 单价表/手工价 > GPU 分钟兜底 > unknown。"""
+
+    def test_no_evidence_returns_unknown(self):
+        result = rp.estimate_price(rp.empty_price_table(), None, "model", "rhart-image-g-2/text-to-image")
+        self.assertEqual(result["confidence"], "unknown")
+        self.assertIsNone(result["amount"])
+
+    def test_invalid_kind_or_id_returns_unknown(self):
+        self.assertEqual(rp.estimate_price({}, None, "bogus", "x")["confidence"], "unknown")
+        self.assertEqual(rp.estimate_price({}, None, "model", "")["confidence"], "unknown")
+
+    def test_dense_history_beats_table(self):
+        table = {"models": {"ep": {"billing": "per_unit", "unit_cny": 9.99}}}
+        stats = {"samples": [0.17, 0.21, 0.16, 0.19], "count": 4}
+        result = rp.estimate_price(table, stats, "model", "ep")
+        self.assertEqual(result["source"], "history")
+        self.assertEqual(result["confidence"], "high")
+        self.assertEqual(result["amount"], 0.18)  # 中位数 (0.17+0.19)/2
+        self.assertEqual(result["samples"], 4)
+
+    def test_sparse_history_gives_range_and_medium_confidence(self):
+        result = rp.estimate_price({}, {"samples": [0.30, 0.50], "count": 2}, "model", "ep")
+        self.assertEqual(result["source"], "history_sparse")
+        self.assertEqual(result["confidence"], "medium")
+        self.assertEqual(result["low"], 0.30)
+        self.assertEqual(result["high"], 0.50)
+
+    def test_zero_only_samples_do_not_count_as_history(self):
+        # 失败任务实扣为 0/None，绝不能污染实测路线。
+        result = rp.estimate_price(
+            {"models": {"ep": {"billing": "per_unit", "unit_cny": 0.2}}},
+            {"samples": [0, None], "count": 2},
+            "model", "ep",
+        )
+        self.assertEqual(result["source"], "table")
+
+    def test_table_multiplies_unit_price_by_quantity(self):
+        table = {"models": {"ep": {"billing": "per_unit", "unit_cny": 0.2, "unit_quantity_param": "n", "default_quantity": 1}}}
+        result = rp.estimate_price(table, None, "model", "ep", quantity=3)
+        self.assertEqual(result["source"], "table")
+        self.assertEqual(result["amount"], 0.6)
+
+    def test_table_quantity_falls_back_to_default(self):
+        table = {"models": {"ep": {"billing": "per_second", "unit_cny": 0.5, "default_quantity": 5}}}
+        result = rp.estimate_price(table, None, "model", "ep", quantity=None)
+        self.assertEqual(result["amount"], 2.5)
+
+    def test_fixed_billing_ignores_quantity(self):
+        table = {"models": {"ep": {"billing": "fixed", "unit_cny": 0.42}}}
+        result = rp.estimate_price(table, None, "model", "ep", quantity=8)
+        self.assertEqual(result["amount"], 0.42)
+
+    def test_app_manual_price(self):
+        table = {"apps": {"1877265245566922800": {"manual_cny": 0.35}}}
+        result = rp.estimate_price(table, None, "app", "1877265245566922800")
+        self.assertEqual(result["source"], "manual")
+        self.assertEqual(result["amount"], 0.35)
+        self.assertEqual(result["confidence"], "medium")
+
+    def test_gpu_minute_fallback_only_for_apps_and_workflows(self):
+        table = {"fallback": {"gpu_minute_cny": 0.28}}
+        app_result = rp.estimate_price(table, None, "app", "123")
+        self.assertEqual(app_result["source"], "fallback")
+        self.assertEqual(app_result["confidence"], "low")
+        model_result = rp.estimate_price(table, None, "model", "ep")
+        self.assertEqual(model_result["confidence"], "unknown")
+
+    def test_history_isolates_by_profile_key(self):
+        key_a = rp.stats_key("Profile-A", "model", "ep")
+        key_b = rp.stats_key("profile-b", "model", "ep")
+        self.assertNotEqual(key_a, key_b)
+        self.assertEqual(key_a, "profile-a::model::ep")
+
+
+class ObservedRecallTests(unittest.TestCase):
+    def test_apply_observed_appends_and_recomputes(self):
+        entry = rp.apply_observed(None, 0.17, 1000.0)
+        self.assertEqual(entry["samples"], [0.17])
+        self.assertEqual(entry["median"], 0.17)
+        entry = rp.apply_observed(entry, 0.21, 2000.0)
+        self.assertEqual(entry["count"], 2)
+        self.assertEqual(entry["p25"], 0.17)
+        self.assertEqual(entry["p75"], 0.21)
+
+    def test_apply_observed_skips_invalid_amounts(self):
+        self.assertIsNone(rp.apply_observed(None, 0, 1.0))
+        self.assertIsNone(rp.apply_observed(None, None, 1.0))
+        self.assertIsNone(rp.apply_observed(None, "abc", 1.0))
+        self.assertIsNone(rp.apply_observed(None, -1, 1.0))
+
+    def test_apply_observed_caps_samples_fifo(self):
+        entry = None
+        for i in range(rp.HISTORY_SAMPLE_CAP + 10):
+            entry = rp.apply_observed(entry, 0.1 + (i % 5) * 0.01, float(i))
+        self.assertEqual(len(entry["samples"]), rp.HISTORY_SAMPLE_CAP)
+        # 只保留最近 HISTORY_SAMPLE_CAP 条：最后写入的 i=CAP+9 仍在，最早的已被挤掉。
+        self.assertEqual(entry["samples"][-1], 0.1 + ((rp.HISTORY_SAMPLE_CAP + 9) % 5) * 0.01)
+        self.assertEqual(entry["count"], rp.HISTORY_SAMPLE_CAP)
+
+    def test_apply_observed_does_not_mutate_input(self):
+        original = {"samples": [0.2], "count": 1}
+        rp.apply_observed(original, 0.3, 5.0)
+        self.assertEqual(original["samples"], [0.2])
+
+    def test_extract_consume_money_prefers_consume_then_third_party(self):
+        self.assertEqual(rp.extract_consume_money({"consumeMoney": 0.17}), 0.17)
+        self.assertEqual(rp.extract_consume_money({"consumeMoney": None, "thirdPartyConsumeMoney": 0.5}), 0.5)
+        self.assertIsNone(rp.extract_consume_money({"consumeMoney": None, "thirdPartyConsumeMoney": None}))
+        self.assertIsNone(rp.extract_consume_money({"consumeMoney": 0}))
+        self.assertIsNone(rp.extract_consume_money(None))
+
+
+class PriceTableValidationTests(unittest.TestCase):
+    def test_normalize_accepts_valid_and_drops_noise(self):
+        table, errors = rp.normalize_price_table({
+            "models": {"ep": {"billing": "per_unit", "unit_cny": 0.2, "junk": "x"}},
+            "apps": {"123": {"manual_cny": 0.3}},
+            "workflows": {},
+            "fallback": {"gpu_minute_cny": 0.28},
+            "unexpected": "drop me",
+        })
+        self.assertEqual(errors, [])
+        self.assertEqual(table["models"]["ep"]["unit_cny"], 0.2)
+        self.assertNotIn("junk", table["models"]["ep"])
+        self.assertNotIn("unexpected", table)
+        self.assertEqual(table["schema_version"], rp.PRICING_SCHEMA_VERSION)
+
+    def test_normalize_rejects_bad_values(self):
+        _table, errors = rp.normalize_price_table({
+            "models": {
+                "bad-billing": {"billing": "per-parcel", "unit_cny": 0.2},
+                "bad-price": {"billing": "per_unit", "unit_cny": -1},
+                "huge-price": {"billing": "per_unit", "unit_cny": 99999},
+            },
+        })
+        self.assertEqual(len(errors), 3)
+
+    def test_normalize_garbage_input_yields_empty_table(self):
+        table, errors = rp.normalize_price_table("not a dict")
+        self.assertEqual(errors, [])
+        self.assertEqual(table["models"], {})
+
+
+class MainPricingIntegrationTests(unittest.TestCase):
+    """main.py 侧的持久化、回流与路由收口（临时目录隔离，不碰真实 data/）。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.table_path = str(Path(self.temp_dir.name) / "runninghub_prices.json")
+        self.stats_path = str(Path(self.temp_dir.name) / "runninghub_price_stats.json")
+        self.patchers = [
+            patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
+            patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp_dir.cleanup()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+
+    def test_missing_table_reads_as_empty_without_writing(self):
+        table = main.load_runninghub_price_table()
+        self.assertEqual(table["schema_version"], rp.PRICING_SCHEMA_VERSION)
+        self.assertFalse(Path(self.table_path).exists())
+
+    def test_corrupt_stats_rebuilds_in_memory(self):
+        Path(self.stats_path).write_text("{broken", encoding="utf-8")
+        data = main.load_runninghub_price_stats()
+        self.assertEqual(data["entries"], {})
+
+    def test_save_table_roundtrip_and_rejects_invalid(self):
+        saved = main.save_runninghub_price_table({"models": {"ep": {"billing": "per_unit", "unit_cny": 0.2}}})
+        self.assertEqual(saved["models"]["ep"]["unit_cny"], 0.2)
+        loaded = main.load_runninghub_price_table()
+        self.assertEqual(loaded["models"]["ep"]["billing"], "per_unit")
+        with self.assertRaises(main.HTTPException) as ctx:
+            main.save_runninghub_price_table({"models": {"ep": {"billing": "per_unit", "unit_cny": -5}}})
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_record_observed_persists_and_feeds_estimate(self):
+        main.record_runninghub_observed_cost("legacy-shared", "model", "ep", 0.17)
+        main.record_runninghub_observed_cost("legacy-shared", "model", "ep", 0.21)
+        main.record_runninghub_observed_cost("legacy-shared", "model", "ep", 0.19)
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        estimate = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep")
+        self.assertEqual(estimate["source"], "history")
+        self.assertEqual(estimate["amount"], 0.19)
+        # 别的配置组不能共享样本。
+        other = main.runninghub_estimate_for_profile("other-group", "model", "ep")
+        self.assertEqual(other["confidence"], "unknown")
+
+    def test_record_observed_ignores_zero_cost(self):
+        main.record_runninghub_observed_cost("p1", "model", "ep", 0)
+        main.record_runninghub_observed_cost("p1", "model", "ep", None)
+        data = main.load_runninghub_price_stats()
+        self.assertEqual(data["entries"], {})
+
+    def test_recall_from_query_response_nested_usage(self):
+        scope = {
+            "api_profile_id": "p2",
+            "metadata": {"rh_price_kind": "app", "rh_price_id": "9001"},
+        }
+        response = {"code": 0, "data": {"status": "SUCCESS", "usage": {"consumeMoney": 0.42, "taskCostTime": "12"}}}
+        main.runninghub_recall_observed_cost(scope, response)
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        estimate = main.runninghub_estimate_for_profile("p2", "app", "9001")
+        self.assertEqual(estimate["source"], "history_sparse")
+        self.assertEqual(estimate["amount"], 0.42)
+
+    def test_recall_tolerates_missing_metadata_and_bad_payload(self):
+        main.runninghub_recall_observed_cost({}, None)
+        main.runninghub_recall_observed_cost({"metadata": {}}, {"code": 0})
+        main.runninghub_recall_observed_cost(
+            {"metadata": {"rh_price_kind": "app", "rh_price_id": "1"}, "api_profile_id": "p"},
+            {"data": {"usage": {"consumeMoney": None}}},
+        )
+
+    def test_event_cost_recall_only_for_runninghub_models(self):
+        event = {
+            "provider": "runninghub",
+            "model": "gpt-image-2.0/text-to-image-channel-low-price",
+            "api_profile_id": "p3",
+        }
+        main.runninghub_record_event_cost(event, {"consumeMoney": 0.16})
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        estimate = main.runninghub_estimate_for_profile("p3", "model", "rhart-image-g-2/text-to-image")
+        self.assertEqual(estimate["amount"], 0.16)
+
+        # 非 RunningHub / 无模型 / app 事件都不走这条路线。
+        main.runninghub_record_event_cost({**event, "provider": "openai"}, {"consumeMoney": 1})
+        main.runninghub_record_event_cost({**event, "model": ""}, {"consumeMoney": 1})
+        main.runninghub_record_event_cost({**event, "model": "app:123"}, {"consumeMoney": 1})
+        main.runninghub_record_event_cost(event, {"consumeMoney": None})
+
+    def test_finish_usage_event_success_records_cost(self):
+        captured = []
+        event = {
+            "id": "evt-1", "provider": "runninghub", "model": "some-model",
+            "api_profile_id": "p4", "status": "queued",
+        }
+        with patch.object(main, "usage_events", return_value=[]), \
+             patch.object(main, "append_usage_event"), \
+             patch.object(main, "record_runninghub_observed_cost",
+                          side_effect=lambda *args: captured.append(args)):
+            main.finish_usage_event(event, "succeeded", raw_usage={"consumeMoney": 0.25, "taskCostTime": "9"})
+        self.assertEqual(captured, [("p4", "model", "some-model", 0.25)])
+
+        # 失败收口不记录费用。
+        captured.clear()
+        with patch.object(main, "usage_events", return_value=[]), \
+             patch.object(main, "append_usage_event"), \
+             patch.object(main, "record_runninghub_observed_cost",
+                          side_effect=lambda *args: captured.append(args)):
+            main.finish_usage_event(event, "failed", error="boom", raw_usage={"consumeMoney": 0.25})
+        self.assertEqual(captured, [])
+
+    def test_usage_from_response_covers_both_shapes(self):
+        self.assertEqual(main.usage_from_response({"usage": {"consumeMoney": 1}}), {"consumeMoney": 1})
+        self.assertEqual(main.usage_from_response({"data": {"usage": {"consumeMoney": 2}}}), {"consumeMoney": 2})
+        self.assertIsNone(main.usage_from_response({"data": {}}))
+        self.assertIsNone(main.usage_from_response(None))
+        # 传入本身就是 usage 对象也能识别。
+        self.assertEqual(main.usage_from_response({"consumeMoney": 3}), {"consumeMoney": 3})
+
+    def test_seed_price_makes_layer_decompose_priced_immediately(self):
+        # 本项目实测过图层拆分实扣，种子条目保证这条运行按钮首日就有数字。
+        estimate = main.runninghub_estimate_for_profile(
+            "legacy-shared", "model", "seedream-v5.5/layer-decomposition"
+        )
+        self.assertEqual(estimate["source"], "table")
+        self.assertEqual(estimate["amount"], 0.19)
+
+    def test_admin_table_overrides_seed(self):
+        main.save_runninghub_price_table({
+            "models": {"seedream-v5.5/layer-decomposition": {"billing": "fixed", "unit_cny": 0.25}},
+        })
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        estimate = main.runninghub_estimate_for_profile(
+            "legacy-shared", "model", "seedream-v5.5/layer-decomposition"
+        )
+        self.assertEqual(estimate["amount"], 0.25)
+
+    def test_seed_is_not_written_into_admin_file(self):
+        main.load_runninghub_price_table()
+        self.assertFalse(Path(self.table_path).exists())
+
+    def test_model_display_name_normalizes_to_endpoint(self):
+        self.assertEqual(
+            main.runninghub_model_entry_id("gpt-image-2.0/text-to-image-channel-low-price"),
+            "rhart-image-g-2/text-to-image",
+        )
+        self.assertEqual(
+            main.runninghub_model_entry_id("seedream-v5.5-layer-decomposition"),
+            "seedream-v5.5/layer-decomposition",
+        )
+        self.assertEqual(main.runninghub_model_entry_id("app:123"), "")
+
+
+class EstimateRouteTests(unittest.IsolatedAsyncioTestCase):
+    """GET /api/runninghub/estimate 的鉴权与参数行为。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.patchers = [
+            patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", str(Path(self.temp_dir.name) / "prices.json")),
+            patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", str(Path(self.temp_dir.name) / "stats.json")),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp_dir.cleanup()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+
+    async def test_route_returns_estimate_for_current_profile(self):
+        profile = {"id": "Legacy-Shared", "enabled": True}
+        with patch.object(main, "request_api_profile", return_value=profile):
+            result = await main.runninghub_estimate(
+                request=None, kind="model", id="rhart-image-g-2/text-to-image", quantity=""
+            )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["estimate"]["confidence"], "unknown")
+
+    async def test_route_rejects_unknown_kind(self):
+        with patch.object(main, "request_api_profile", return_value={"id": "p"}):
+            result = await main.runninghub_estimate(request=None, kind="bogus", id="x", quantity="")
+        self.assertEqual(result["estimate"]["confidence"], "unknown")
+
+    async def test_route_maps_display_model_to_endpoint(self):
+        with patch.object(main, "request_api_profile", return_value={"id": "p"}), \
+             patch.object(main, "runninghub_estimate_for_profile",
+                          return_value={"confidence": "high", "amount": 0.2}) as estimate:
+            await main.runninghub_estimate(
+                request=None, kind="model", id="gpt-image-2.0/text-to-image-channel-low-price", quantity=""
+            )
+        estimate.assert_called_once_with("p", "model", "rhart-image-g-2/text-to-image", None)
+
+    async def test_unassigned_profile_gets_403(self):
+        request = object()
+        with patch.object(main, "request_api_profile",
+                          side_effect=main.HTTPException(status_code=403, detail="未分配")):
+            with self.assertRaises(main.HTTPException) as ctx:
+                await main.runninghub_estimate(request=request, kind="model", id="ep", quantity="")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+
+class AdminPriceRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_put_validates_before_writing(self):
+        payload = main.RunningHubPriceTableRequest(table={"models": {"ep": {"billing": "per_unit", "unit_cny": -1}}})
+        with patch.object(main, "require_admin", return_value=None), \
+             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", str(Path(tempfile.mkdtemp()) / "prices.json")):
+            with self.assertRaises(main.HTTPException) as ctx:
+                await main.runninghub_prices_put(payload, request=None)
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
+if __name__ == "__main__":
+    unittest.main()

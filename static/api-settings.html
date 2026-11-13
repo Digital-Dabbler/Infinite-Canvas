@@ -21,7 +21,7 @@
     <script src="/static/js/theme.js?v=2026.07.29.861c242af5"></script>
     <script src="/static/js/i18n.js?v=2026.07.29.db80413bd4"></script>
     <link rel="stylesheet" href="/static/css/theme.css?v=2026.07.29.caaf426a2c">
-    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.29.8cc2dd74f8">
+    <link rel="stylesheet" href="/static/css/api-settings.css?v=2026.07.29.3c42472a54">
 </head>
 <body>
     <div class="page">
@@ -330,6 +330,28 @@
                                 <div id="rhWorkflowsList" class="rh-card-list"></div>
                             </div>
                         </div>
+                        <div class="rh-price-panel">
+                            <div class="rh-price-head">
+                                <div class="rh-group-title">事前估价 · 价格表</div>
+                                <button class="action-btn" type="button" onclick="loadRhPriceTable()"><i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i><span>重新读取</span></button>
+                            </div>
+                            <div class="block-desc">运行按钮上的预估金额来源：实测历史优先，其次按这里的单价 × 数量。留空即不启用该档。单位：元。</div>
+                            <div class="rh-price-section">
+                                <div class="rh-price-section-title">模型单价（按端点）</div>
+                                <div id="rhPriceModels" class="rh-price-rows"></div>
+                                <button class="action-btn" type="button" onclick="addRhPriceModelRow()"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span>添加模型单价</span></button>
+                            </div>
+                            <div class="rh-price-section">
+                                <div class="rh-price-section-title">应用 / 工作流单次价格</div>
+                                <div id="rhPriceEntries" class="rh-price-rows"></div>
+                                <button class="action-btn" type="button" onclick="addRhPriceEntryRow()"><i data-lucide="plus" class="w-3.5 h-3.5"></i><span>添加单次价格</span></button>
+                            </div>
+                            <div class="rh-price-section">
+                                <div class="rh-price-section-title">兜底：GPU 分钟单价（应用/工作流无任何依据时）</div>
+                                <input id="rhPriceFallback" class="rh-price-input rh-price-fallback" type="number" min="0" step="0.01" placeholder="留空 = 不兜底">
+                            </div>
+                            <button class="action-btn primary-btn" type="button" onclick="saveRhPriceTable()"><i data-lucide="save" class="w-3.5 h-3.5"></i><span>保存价格表</span></button>
+                        </div>
                     </section>
 
                     <div id="modelsHead" class="block models-toolbar">
@@ -581,6 +603,6 @@
         </div>
     </div>
 
-    <script src="/static/js/api-settings.js?v=2026.07.29.7cad1feee8"></script>
+    <script src="/static/js/api-settings.js?v=2026.07.29.7ef99dd76f"></script>
 </body>
 </html>

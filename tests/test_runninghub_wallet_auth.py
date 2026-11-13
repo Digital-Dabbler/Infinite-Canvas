@@ -86,7 +86,7 @@ class RunningHubWalletAuthTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Authorization", body_only["headers"])
         self.assertNotIn("apiKey", bearer_only["json"])
         self.assertEqual(bearer_only["headers"]["Authorization"], "Bearer wallet-secret")
-        remember_scope.assert_called_once_with(request, "task-1", provider, True)
+        remember_scope.assert_called_once_with(request, "task-1", provider, True, "workflow", "workflow-1")
 
     def test_known_task_uses_submission_profile_and_wallet_mode(self):
         request = SimpleNamespace(

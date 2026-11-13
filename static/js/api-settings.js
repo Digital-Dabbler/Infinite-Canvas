@@ -2681,6 +2681,7 @@ function renderEditor(){
     if(runninghubConfigBlock){
         runninghubConfigBlock.hidden = !isRunningHub;
         runninghubConfigBlock.style.display = isRunningHub ? 'flex' : 'none';
+        if(isRunningHub) loadRhPriceTable();
     }
     if(!isRunningHub){
         if(rhPasteInput) rhPasteInput.value = '';
@@ -4067,6 +4068,184 @@ function escapeHtml(str){
     return String(str || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
 }
 function escapeAttr(str){ return escapeHtml(str).replace(/`/g, '&#96;'); }
+
+// --- RunningHub 事前估价 · 价格表面板 ---
+// 面板只在选中 RunningHub 配置组时出现；数据走 /api/runninghub/prices（管理员）。
+let rhPriceTableState = { models: {}, apps: {}, workflows: {}, fallback: {} };
+
+function rhPriceNumber(value){
+    const text = String(value == null ? '' : value).trim();
+    if(!text) return '';
+    const number = Number(text);
+    return Number.isFinite(number) ? text : '';
+}
+
+function renderRhPriceModels(models){
+    const wrap = document.getElementById('rhPriceModels');
+    if(!wrap) return;
+    const entries = Object.entries(models || {});
+    if(!entries.length){
+        wrap.innerHTML = '<div class="rh-price-empty">暂无模型单价，点下方按钮添加。</div>';
+        return;
+    }
+    wrap.innerHTML = entries.map(([key, entry]) => `
+        <div class="rh-price-row" data-price-model="${escapeAttr(key)}">
+            <input class="rh-price-input rh-price-key" type="text" value="${escapeAttr(key)}" placeholder="端点 ID 或模型显示名" title="端点 ID 或模型显示名都可，保存时自动归一">
+            <select class="rh-price-input rh-price-billing" title="计费方式">
+                <option value="per_unit" ${entry.billing === 'per_unit' ? 'selected' : ''}>按张/次</option>
+                <option value="per_second" ${entry.billing === 'per_second' ? 'selected' : ''}>按秒</option>
+                <option value="per_minute" ${entry.billing === 'per_minute' ? 'selected' : ''}>按分钟</option>
+                <option value="fixed" ${entry.billing === 'fixed' ? 'selected' : ''}>固定单次</option>
+            </select>
+            <input class="rh-price-input rh-price-unit" type="number" min="0" step="0.01" value="${escapeAttr(entry.unit_cny == null ? '' : entry.unit_cny)}" placeholder="单价(元)">
+            <input class="rh-price-input rh-price-qty" type="number" min="0" step="1" value="${escapeAttr(entry.default_quantity == null ? '' : entry.default_quantity)}" placeholder="缺省数量">
+            <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+        </div>`).join('');
+    if(window.lucide) lucide.createIcons();
+}
+
+function renderRhPriceEntries(apps, workflows){
+    const wrap = document.getElementById('rhPriceEntries');
+    if(!wrap) return;
+    const rows = [
+        ...Object.entries(apps || {}).map(([key, entry]) => ({kind:'app', key, entry})),
+        ...Object.entries(workflows || {}).map(([key, entry]) => ({kind:'workflow', key, entry})),
+    ];
+    if(!rows.length){
+        wrap.innerHTML = '<div class="rh-price-empty">暂无应用/工作流单次价格，点下方按钮添加。</div>';
+        return;
+    }
+    wrap.innerHTML = rows.map(row => `
+        <div class="rh-price-row" data-price-entry>
+            <select class="rh-price-input rh-price-kind" title="类型">
+                <option value="app" ${row.kind === 'app' ? 'selected' : ''}>AI 应用</option>
+                <option value="workflow" ${row.kind === 'workflow' ? 'selected' : ''}>工作流</option>
+            </select>
+            <input class="rh-price-input rh-price-key" type="text" value="${escapeAttr(row.key)}" placeholder="webappId / workflowId">
+            <input class="rh-price-input rh-price-manual" type="number" min="0" step="0.01" value="${escapeAttr(row.entry.manual_cny == null ? '' : row.entry.manual_cny)}" placeholder="单次价格(元)">
+            <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
+        </div>`).join('');
+    if(window.lucide) lucide.createIcons();
+}
+
+function renderRhPriceTable(table){
+    rhPriceTableState = {
+        models: table.models || {},
+        apps: table.apps || {},
+        workflows: table.workflows || {},
+        fallback: table.fallback || {},
+    };
+    renderRhPriceModels(rhPriceTableState.models);
+    renderRhPriceEntries(rhPriceTableState.apps, rhPriceTableState.workflows);
+    const fallbackEl = document.getElementById('rhPriceFallback');
+    if(fallbackEl) fallbackEl.value = rhPriceTableState.fallback.gpu_minute_cny == null ? '' : rhPriceTableState.fallback.gpu_minute_cny;
+}
+
+async function loadRhPriceTable(){
+    try {
+        const res = await fetch(adminApiProfileUrl('/api/runninghub/prices'));
+        const data = await res.json();
+        if(!res.ok || data.success === false){
+            setStatus(data.detail || '读取价格表失败', 'error');
+            return;
+        }
+        renderRhPriceTable(data.table || {});
+    } catch (e) {
+        setStatus(`读取价格表失败：${e.message || e}`, 'error');
+    }
+}
+
+function collectRhPriceTable(){
+    const models = {};
+    document.querySelectorAll('#rhPriceModels [data-price-model]').forEach(row => {
+        const key = String(row.querySelector('.rh-price-key')?.value || '').trim();
+        const unit = rhPriceNumber(row.querySelector('.rh-price-unit')?.value);
+        if(!key || unit === '') return;
+        models[key] = {
+            billing: row.querySelector('.rh-price-billing')?.value || 'per_unit',
+            unit_cny: Number(unit),
+            default_quantity: rhPriceNumber(row.querySelector('.rh-price-qty')?.value) || 1,
+        };
+    });
+    const apps = {};
+    const workflows = {};
+    document.querySelectorAll('#rhPriceEntries [data-price-entry]').forEach(row => {
+        const kind = row.querySelector('.rh-price-kind')?.value === 'workflow' ? 'workflows' : 'apps';
+        const key = String(row.querySelector('.rh-price-key')?.value || '').trim();
+        const manual = rhPriceNumber(row.querySelector('.rh-price-manual')?.value);
+        if(!key || manual === '') return;
+        (kind === 'apps' ? apps : workflows)[key] = { manual_cny: Number(manual) };
+    });
+    const fallback = {};
+    const fallbackValue = rhPriceNumber(document.getElementById('rhPriceFallback')?.value);
+    if(fallbackValue !== '') fallback.gpu_minute_cny = Number(fallbackValue);
+    return { models, apps, workflows, fallback };
+}
+
+async function saveRhPriceTable(){
+    const table = collectRhPriceTable();
+    try {
+        const res = await fetch(adminApiProfileUrl('/api/runninghub/prices'), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ table }),
+        });
+        const data = await res.json();
+        if(!res.ok || data.success === false){
+            setStatus(data.detail || '保存价格表失败', 'error');
+            return;
+        }
+        renderRhPriceTable(data.table || {});
+        setStatus('价格表已保存', 'success');
+    } catch (e) {
+        setStatus(`保存价格表失败：${e.message || e}`, 'error');
+    }
+}
+
+function addRhPriceModelRow(){
+    const wrap = document.getElementById('rhPriceModels');
+    if(!wrap) return;
+    if(wrap.querySelector('.rh-price-empty')) wrap.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'rh-price-row';
+    row.setAttribute('data-price-model', '');
+    row.innerHTML = `
+        <input class="rh-price-input rh-price-key" type="text" placeholder="端点 ID 或模型显示名">
+        <select class="rh-price-input rh-price-billing"><option value="per_unit">按张/次</option><option value="per_second">按秒</option><option value="per_minute">按分钟</option><option value="fixed">固定单次</option></select>
+        <input class="rh-price-input rh-price-unit" type="number" min="0" step="0.01" placeholder="单价(元)">
+        <input class="rh-price-input rh-price-qty" type="number" min="0" step="1" placeholder="缺省数量">
+        <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>`;
+    wrap.appendChild(row);
+    if(window.lucide) lucide.createIcons();
+    row.querySelector('.rh-price-key')?.focus?.();
+}
+
+function addRhPriceEntryRow(){
+    const wrap = document.getElementById('rhPriceEntries');
+    if(!wrap) return;
+    if(wrap.querySelector('.rh-price-empty')) wrap.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'rh-price-row';
+    row.setAttribute('data-price-entry', '');
+    row.innerHTML = `
+        <select class="rh-price-input rh-price-kind"><option value="app">AI 应用</option><option value="workflow">工作流</option></select>
+        <input class="rh-price-input rh-price-key" type="text" placeholder="webappId / workflowId">
+        <input class="rh-price-input rh-price-manual" type="number" min="0" step="0.01" placeholder="单次价格(元)">
+        <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>`;
+    wrap.appendChild(row);
+    if(window.lucide) lucide.createIcons();
+    row.querySelector('.rh-price-key')?.focus?.();
+}
+
+function removeRhPriceRow(button){
+    const row = button.closest('.rh-price-row');
+    const wrap = row?.parentElement;
+    row?.remove();
+    if(wrap && !wrap.querySelector('.rh-price-row') && !wrap.querySelector('.rh-price-empty')){
+        wrap.innerHTML = '<div class="rh-price-empty">暂无条目，点下方按钮添加。</div>';
+    }
+}
+
 function syncIconButtonLabels(scope=document){
     scope.querySelectorAll('button[title]').forEach(button => {
         const label = String(button.getAttribute('title') || '').trim();

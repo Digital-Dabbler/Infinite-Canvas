@@ -7312,6 +7312,30 @@ function syncRunButtonState(node=composerActionNode()){
     runBtn.title = !videoSelection.ok
         ? tr(videoSelection.reason === 'provider' ? 'smart.noVideoPlatform' : 'smart.errNoVideoModel')
         : '';
+    // RunningHub 事前估价徽标：参数/模型/配置组任何一处变化都会走到这里刷新。
+    window.RHPriceBadge?.refreshAnchor(runBtn);
+}
+// 当前 Composer 若走 RunningHub，返回本次调用的估价身份 {kind,id,quantity,multiplier}；否则 null（徽标隐藏）。
+// quantity 是"单次提交"的计费量（视频=时长秒），multiplier 是本次点击要提交的次数（图片张数）。
+function runningHubRunPriceSpec(node=null){
+    const source = node ? smartSettingsForNode(node) : settings;
+    if(!source) return null;
+    if(source.engine === 'runninghub'){
+        const ref = selectedRunningHubRef(source);
+        if(!ref) return null;
+        return {kind:ref.kind, id:ref.id, quantity:'', multiplier:1};
+    }
+    if(isApiLikeEngine(source.engine)){
+        if(source.apiKind === 'video' && isRunningHubVideoProvider(source.videoProvider)){
+            const duration = Math.max(1, Math.min(60, Number(source.videoDuration) || 5));
+            return {kind:'model', id:String(source.videoModel || '').trim(), quantity:duration, multiplier:1};
+        }
+        if(source.apiKind !== 'video' && isRunningHubVideoProvider(source.provider_id)){
+            const count = Math.max(1, Math.min(8, Number(source.count || 1)));
+            return {kind:'model', id:String(source.model || '').trim(), quantity:'', multiplier:count};
+        }
+    }
+    return null;
 }
 function smartNodeAllowsConcurrentSubmit(node){
     if(!node || (!isSmartImageGenerationNode(node) && !isSmartVideoGenerationNode(node))) return false;
@@ -12639,6 +12663,8 @@ async function exportPsdFromEditor(){
 }
 psdCreateCloseButton?.addEventListener('click', closePsdCreateModal);
 psdCreateRunButton?.addEventListener('click', () => { submitPsdDecompose(); });
+// 图层拆分固定走 RunningHub 的 seedream-v5.5/layer-decomposition 端点，估价身份恒定。
+if(psdCreateRunButton) window.RHPriceBadge?.attach(psdCreateRunButton, () => ({kind:'model', id:'seedream-v5.5/layer-decomposition', quantity:'', multiplier:1}));
 psdCreateModal?.addEventListener('click', event => { if(event.target === psdCreateModal) closePsdCreateModal(); });
 psdEditCloseButton?.addEventListener('click', closePsdEditor);
 psdEditModal?.addEventListener('click', event => { if(event.target === psdEditModal) closePsdEditor(); });
@@ -27852,6 +27878,8 @@ runBtn.onclick = () => {
     const boundNode = boundNodeId ? nodes.find(node => node.id === boundNodeId) : null;
     runGeneration(boundNode || null);
 };
+// RunningHub 估价徽标：紧贴运行按钮显示本次调用的预估金额，非 RH 路线自动隐藏。
+window.RHPriceBadge?.attach(runBtn, () => runningHubRunPriceSpec(composerActionNode()));
 if(cascadeRunBtn) cascadeRunBtn.onclick = () => {
     const node = composerActionNode();
     const loopId = resolveSmartCascadeLoop(node?.id)?.node?.id || '';

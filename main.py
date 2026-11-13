@@ -56,6 +56,7 @@ if _MAIN_DIR not in sys.path:
     sys.path.insert(0, _MAIN_DIR)
 
 import psd_layers  # 画布图片转 PSD：图层拆分参数与结果解析（纯函数模块）
+import runninghub_pricing  # RunningHub 事前估价：三档估价/实扣统计/价格表清洗（纯函数模块）
 
 QUIET_ACCESS_PATHS = {
     "/api/queue_status",
@@ -466,6 +467,11 @@ API_PROVIDERS_FILE = os.path.join(DATA_DIR, "api_providers.json")
 API_PROFILES_FILE = os.path.join(DATA_DIR, "api_profiles.json")
 DEPARTMENTS_FILE = os.path.join(DATA_DIR, "departments.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
+RUNNINGHUB_PRICE_TABLE_FILE = os.path.join(DATA_DIR, "runninghub_prices.json")
+RUNNINGHUB_PRICE_STATS_FILE = os.path.join(DATA_DIR, "runninghub_price_stats.json")
+RUNNINGHUB_PRICING_LOCK = RLock()
+RUNNINGHUB_ESTIMATE_CACHE_TTL = 60
+RUNNINGHUB_ESTIMATE_CACHE: Dict[str, Dict[str, Any]] = {}
 UPSTREAM_TASK_SCOPES_FILE = os.path.join(DATA_DIR, "upstream_task_scopes.json")
 CANVAS_TASKS_FILE = os.path.join(DATA_DIR, "canvas_tasks.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
@@ -639,6 +645,8 @@ RUNNINGHUB_DEFAULT_VIDEO_MODELS = [
     "seedance-2.0-global/image-to-video",
 ]
 RUNNINGHUB_MODEL_ENDPOINT_ALIASES = {
+    # 图层拆分：前端历史上有横线/斜线两种写法，统一归到实际端点。
+    "seedream-v5.5-layer-decomposition": "seedream-v5.5/layer-decomposition",
     "Seedance2.0 Image to Video": "bytedance/seedance-2.0-global/image-to-video",
     "Seedance2.0 Text to Video": "bytedance/seedance-2.0-global/text-to-video",
     "seedance2.0 image to video": "bytedance/seedance-2.0-global/image-to-video",
@@ -2867,6 +2875,9 @@ def finish_usage_event(event, status="succeeded", error="", raw_usage=None):
     })
     done["duration_ms"] = max(0, int((done["completed_at"] - float(done.get("created_at") or done["completed_at"])) * 1000))
     append_usage_event(done)
+    # RunningHub 事前估价的实扣回流：成功收口且上游带了本次扣费金额时并入历史统计。
+    if status == "succeeded":
+        runninghub_record_event_cost(done, raw_usage)
 
 def finish_usage_event_by_id(event_id, status="succeeded", error="", raw_usage=None):
     target = str(event_id or "")
@@ -5381,6 +5392,9 @@ class RunningHubWorkflowSubmitRequest(BaseModel):
 class RunningHubUploadAssetRequest(BaseModel):
     url: str = ""
     useWallet: bool = False
+
+class RunningHubPriceTableRequest(BaseModel):
+    table: Dict[str, Any] = {}
 
 class JimengHelpRequest(BaseModel):
     command: str = ""
@@ -15224,17 +15238,22 @@ def upstream_context_for_task(
 def load_runninghub_task_scopes():
     return load_upstream_task_scopes()
 
-def remember_runninghub_task_scope(request, task_id, provider, use_wallet=False):
+def remember_runninghub_task_scope(request, task_id, provider, use_wallet=False, price_kind="", price_id=""):
     profile_id = str((provider or {}).get("_api_profile_id") or "").strip().lower()
     context = upstream_context_for_profile_id(
         profile_id, str((provider or {}).get("id") or "runninghub")
     )
+    metadata = {"use_wallet": bool(use_wallet)}
+    # 记录本次调用的估价身份（应用/工作流 ID），供轮询成功后按原配置组回流实扣费用。
+    if price_kind and price_id:
+        metadata["rh_price_kind"] = str(price_kind)
+        metadata["rh_price_id"] = str(price_id)
     remember_upstream_task_scope(
         request,
         task_id,
         context,
         credential_kind="runninghub_wallet" if use_wallet else "api_key",
-        metadata={"use_wallet": bool(use_wallet)},
+        metadata=metadata,
     )
 
 def runninghub_task_provider_for_request(request, task_id, requested_use_wallet=False):
@@ -15251,6 +15270,174 @@ def runninghub_task_provider_for_request(request, task_id, requested_use_wallet=
         if scope else bool(requested_use_wallet)
     )
     return context.provider, use_wallet
+
+def load_runninghub_price_table():
+    """读取管理员维护的 RunningHub 价格表；缺失/损坏时返回只读空表，绝不悄悄覆盖。
+
+    返回的是"视图"：在管理员配置之上补入已知实测价的种子条目，管理员同键值优先。
+    写盘只写管理员配置（save_runninghub_price_table），不会把种子落成用户数据。
+    """
+    with RUNNINGHUB_PRICING_LOCK:
+        raw = _read_json_file(RUNNINGHUB_PRICE_TABLE_FILE, None)
+        if isinstance(raw, dict) and raw.get("schema_version") == runninghub_pricing.PRICING_SCHEMA_VERSION:
+            return runninghub_pricing.merge_seed_models(raw)
+        return runninghub_pricing.merge_seed_models(runninghub_pricing.empty_price_table())
+
+def save_runninghub_price_table(table):
+    clean, errors = runninghub_pricing.normalize_price_table(table)
+    # 模型档的键统一归一成端点 ID：管理员填显示名或渠道名也能命中估价路线。
+    models = {}
+    for key, entry in (clean.get("models") or {}).items():
+        canonical = runninghub_model_entry_id(key) or key
+        models[canonical] = entry
+    clean["models"] = models
+    if errors:
+        raise HTTPException(status_code=400, detail="价格表校验失败：" + "；".join(errors[:8]))
+    clean["updated_at"] = time.time()
+    with RUNNINGHUB_PRICING_LOCK:
+        _write_json_file(RUNNINGHUB_PRICE_TABLE_FILE, clean)
+    with RUNNINGHUB_PRICING_LOCK:
+        RUNNINGHUB_ESTIMATE_CACHE.clear()
+    return clean
+
+def load_runninghub_price_stats():
+    """实扣历史统计是可再生产物：缺失/损坏直接重建空结构。"""
+    with RUNNINGHUB_PRICING_LOCK:
+        raw = _read_json_file(RUNNINGHUB_PRICE_STATS_FILE, None)
+        if isinstance(raw, dict) and isinstance(raw.get("entries"), dict):
+            return raw
+        return {"schema_version": runninghub_pricing.PRICING_SCHEMA_VERSION, "entries": {}}
+
+def record_runninghub_observed_cost(profile_id, kind, entry_id, amount):
+    """把一次任务实扣金额并入历史统计（路线 2 的数据来源），供后续事前估价。"""
+    if not kind or not entry_id:
+        return
+    key = runninghub_pricing.stats_key(profile_id, kind, entry_id)
+    with RUNNINGHUB_PRICING_LOCK:
+        data = load_runninghub_price_stats()
+        entry = data["entries"].get(key)
+        updated = runninghub_pricing.apply_observed(entry, amount, time.time())
+        if updated is None:
+            return
+        data["entries"][key] = updated
+        if len(data["entries"]) > 5000:
+            oldest = sorted(
+                data["entries"],
+                key=lambda item: float((data["entries"].get(item) or {}).get("last_at") or 0),
+            )
+            for item in oldest[:len(data["entries"]) - 5000]:
+                data["entries"].pop(item, None)
+        _write_json_file(RUNNINGHUB_PRICE_STATS_FILE, data)
+        RUNNINGHUB_ESTIMATE_CACHE.clear()
+
+def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None):
+    """三档闸门的估价：实测历史 → 单价表/手工价 → GPU 分钟兜底 → unknown。"""
+    cache_key = f"{profile_id}|{kind}|{entry_id}"
+    now = time.monotonic()
+    with RUNNINGHUB_PRICING_LOCK:
+        cached = RUNNINGHUB_ESTIMATE_CACHE.get(cache_key)
+        if cached and now - float(cached.get("at") or 0) < RUNNINGHUB_ESTIMATE_CACHE_TTL:
+            return cached.get("result")
+        stats = load_runninghub_price_stats()
+        key = runninghub_pricing.stats_key(profile_id, kind, entry_id)
+        result = runninghub_pricing.estimate_price(
+            load_runninghub_price_table(), stats["entries"].get(key), kind, entry_id, quantity
+        )
+        RUNNINGHUB_ESTIMATE_CACHE[cache_key] = {"at": now, "result": result}
+        return result
+
+def usage_from_response(raw):
+    """从上游响应里定位 usage 对象：优先顶层 usage，回退 data.usage。
+
+    OpenAI 协议在顶层，RunningHub query 在 data.usage；两种都吃，取不到返回
+    None。入参若本身就是 usage 对象（带 consumeMoney 等计费键）也直接认。收口
+    链路的调用方不再各自假设层级，避免 RunningHub 实扣被漏记。
+    """
+    if not isinstance(raw, dict):
+        return None
+    if "consumeMoney" in raw or "thirdPartyConsumeMoney" in raw or "tokenUsage" in raw:
+        return raw
+    usage = raw.get("usage")
+    if isinstance(usage, dict):
+        return usage
+    data = raw.get("data")
+    if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+        return data["usage"]
+    return None
+
+def runninghub_response_usage(raw_response):
+    """从提交/查询响应里定位 usage 对象（v2 在 data.usage，部分响应在顶层）。
+
+    入参既可能是完整响应，也可能已经就是 usage 对象本身；两种都吃，取不到返回
+    None。收口链路里的 raw_usage 来源不统一，这里做归一。
+    """
+    if not isinstance(raw_response, dict):
+        return None
+    if "consumeMoney" in raw_response or "thirdPartyConsumeMoney" in raw_response:
+        return raw_response
+    usage = raw_response.get("usage")
+    if isinstance(usage, dict):
+        return usage
+    data = raw_response.get("data")
+    if isinstance(data, dict) and isinstance(data.get("usage"), dict):
+        return data["usage"]
+    return None
+
+def runninghub_model_entry_id(model):
+    """把画布选中的 RunningHub 模型名解析成价格表/统计使用的端点 ID。"""
+    raw = str(model or "").strip()
+    if not raw or raw.startswith(("app:", "workflow:")):
+        return ""
+    try:
+        alias = runninghub_endpoint_alias_for_model(raw)
+    except Exception:
+        alias = ""
+    return str(alias or raw).strip()
+
+def runninghub_recall_observed_cost(scope, raw_response):
+    """任务成功收口时从上游 usage 提取实扣金额并回流统计；任何异常不影响主流程。"""
+    try:
+        if not isinstance(scope, dict) or not scope:
+            return
+        metadata = scope.get("metadata") if isinstance(scope.get("metadata"), dict) else {}
+        kind = str(metadata.get("rh_price_kind") or "")
+        entry_id = str(metadata.get("rh_price_id") or "")
+        if not kind or not entry_id:
+            return
+        amount = runninghub_pricing.extract_consume_money(
+            runninghub_response_usage(raw_response)
+        )
+        if amount is not None:
+            record_runninghub_observed_cost(
+                str(scope.get("api_profile_id") or ""), kind, entry_id, amount
+            )
+    except Exception:
+        return
+
+def runninghub_record_event_cost(event, raw_usage):
+    """从用量事件收口处回流实扣金额（标准模型路线）。
+
+    只对 provider=runninghub、事件带模型端点、且本次确有一次性扣费的收口记录；
+    app/workflow 走 /api/runninghub/query 的 scope 路线，不在这里重复计费。
+    """
+    try:
+        if not isinstance(event, dict) or not event:
+            return
+        provider = str(event.get("provider") or event.get("provider_id") or "").strip().lower()
+        if provider != "runninghub":
+            return
+        model = str(event.get("model") or "").strip()
+        if not model or model.startswith(("app:", "workflow:")):
+            return
+        amount = runninghub_pricing.extract_consume_money(raw_usage)
+        if amount is None:
+            return
+        record_runninghub_observed_cost(
+            str(event.get("api_profile_id") or ""), "model",
+            runninghub_model_entry_id(model), amount,
+        )
+    except Exception:
+        return
 
 def runninghub_api_key(provider, use_wallet=False, prefer_wallet=False):
     if not isinstance(provider, dict):
@@ -19082,7 +19269,7 @@ async def runninghub_submit(payload: RunningHubSubmitRequest, request: Request):
         task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
         if not task_id:
             raise HTTPException(status_code=502, detail=f"RunningHub 未返回 taskId：{raw}")
-        remember_runninghub_task_scope(request, task_id, provider, payload.useWallet)
+        remember_runninghub_task_scope(request, task_id, provider, payload.useWallet, "app", webapp_id)
         return {"success": True, "data": {"taskId": task_id, "raw": raw}}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 提交失败：{raw}")
 
@@ -19129,7 +19316,7 @@ async def runninghub_workflow_submit(payload: RunningHubWorkflowSubmitRequest, r
         task_id = raw.get("data", {}).get("taskId") if isinstance(raw.get("data"), dict) else ""
         if not task_id:
             raise HTTPException(status_code=502, detail=f"RunningHub 工作流未返回 taskId：{raw}")
-        remember_runninghub_task_scope(request, task_id, provider, payload.useWallet)
+        remember_runninghub_task_scope(request, task_id, provider, payload.useWallet, "workflow", workflow_id)
         return {"success": True, "data": {"taskId": task_id, "raw": raw}}
     raise HTTPException(status_code=400, detail=(raw.get("msg") if isinstance(raw, dict) else "") or f"RunningHub 工作流提交失败：{raw}")
 
@@ -19292,12 +19479,53 @@ def delete_runninghub_workflow(workflow_id: str, request: Request):
     remove_runninghub_workflow_from_provider(key, profile_id)
     return {"success": True}
 
+@app.get("/api/runninghub/estimate")
+async def runninghub_estimate(request: Request, kind: str = "", id: str = "", quantity: str = ""):
+    # 事前估价：只读、按当前用户配置组隔离，不产生费用、不泄露他组数据。
+    # 管理员可用 api_profile_id 查询参数选择目标组（治理查看），普通用户忽略该参数。
+    profile = request_api_profile(request, allow_admin_selection=True)
+    profile_id = str(profile.get("id") or "").strip().lower()
+    kind = str(kind or "").strip().lower()
+    entry_id = str(id or "").strip()
+    if kind not in runninghub_pricing.KINDS or not entry_id:
+        return {"success": True, "estimate": runninghub_pricing.empty_estimate()}
+    if kind == "model":
+        # 前端传的是画布上的模型显示名，价格表/统计以端点 ID 为键，这里统一换算。
+        entry_id = runninghub_model_entry_id(entry_id) or entry_id
+    qty = None
+    if quantity:
+        try:
+            qty = float(quantity)
+        except (TypeError, ValueError):
+            qty = None
+    estimate = runninghub_estimate_for_profile(profile_id, kind, entry_id, qty)
+    return {"success": True, "estimate": estimate}
+
+@app.get("/api/runninghub/prices")
+async def runninghub_prices_get(request: Request):
+    require_admin(request)
+    return {"success": True, "table": load_runninghub_price_table()}
+
+@app.put("/api/runninghub/prices")
+async def runninghub_prices_put(payload: RunningHubPriceTableRequest, request: Request):
+    require_admin(request)
+    clean = save_runninghub_price_table(payload.table)
+    return {"success": True, "table": clean}
+
 @app.get("/api/runninghub/query")
 async def runninghub_query(request: Request, taskId: str = "", useWallet: bool = False):
     task_id = str(taskId or "").strip()
     if not task_id:
         raise HTTPException(status_code=400, detail="taskId 必填")
     provider, effective_use_wallet = runninghub_task_provider_for_request(request, task_id, useWallet)
+    query_scope = {}
+    try:
+        _ctx, query_scope = upstream_context_for_task(
+            request, task_id, fallback_provider_id="runninghub",
+            allow_admin_selection=True, allow_unknown=True,
+        )
+    except Exception:
+        query_scope = {}
     api_key = runninghub_api_key(provider, use_wallet=effective_use_wallet)
     url = runninghub_endpoint_url(provider, "/task/openapi/outputs")
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=20.0, read=240.0, write=30.0, pool=20.0)) as client:
@@ -19331,6 +19559,8 @@ async def runninghub_query(request: Request, taskId: str = "", useWallet: bool =
                     local_url = remote
                 urls.append(local_url)
                 image_items.append(image_output_meta(local_url))
+            # 应用/工作流由浏览器轮询本接口收口：在这里把实扣金额回流估价统计。
+            runninghub_recall_observed_cost(query_scope, raw)
         elif code in (804, "804"):
             status = "RUNNING"
         elif code in (813, "813"):
@@ -20627,7 +20857,7 @@ async def build_online_image_result(payload: OnlineImageRequest, api_profile_id=
         "task_id": extract_task_id(raw) if isinstance(raw, dict) else None,
         "request_id": raw.get("id") if isinstance(raw, dict) else None,
         "params": {"provider_id": provider["id"], "model": model, "size": request_size, "requested_size": payload.size, "aspect_ratio": payload.aspect_ratio, "resolution": payload.resolution, "quality": payload.quality, "n": count, "reference_images": refs},
-        "raw_usage": raw.get("usage") if isinstance(raw, dict) else None,
+        "raw_usage": usage_from_response(raw),
     }
     save_to_history(result)
     if GLOBAL_LOOP:
@@ -20722,7 +20952,7 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
                     finish_scoped_usage_event(
                         _task_scope,
                         "succeeded",
-                        raw_usage=raw.get("usage") if isinstance(raw, dict) else None,
+                        raw_usage=usage_from_response(raw),
                     )
                     if GLOBAL_LOOP:
                         asyncio.run_coroutine_threadsafe(
@@ -20804,7 +21034,7 @@ async def query_image_task(payload: ImageTaskQueryRequest, request: Request):
         finish_scoped_usage_event(
             _task_scope,
             "succeeded",
-            raw_usage=raw.get("usage") if isinstance(raw, dict) else None,
+            raw_usage=usage_from_response(raw),
         )
         if GLOBAL_LOOP:
             asyncio.run_coroutine_threadsafe(
@@ -21133,7 +21363,9 @@ async def run_canvas_psd_task(task_id: str, payload: CanvasPsdRequest, event=Non
         }
         if event:
             result["usage_event_id"] = event["id"]
-            finish_usage_event(event, "succeeded", raw_usage={"layerCount": len(stored_layers)})
+            psd_usage = {"layerCount": len(stored_layers)}
+            psd_usage.update(usage_from_response(result_raw) or {})
+            finish_usage_event(event, "succeeded", raw_usage=psd_usage)
         canvas_task_update(task_id, {"status": "succeeded", "result": result, "error": "", "stage": "done"})
         canvas = finalize_bound_canvas_task(task_id, result)
         if canvas:
@@ -22953,7 +23185,7 @@ async def run_canvas_video_task(task_id: str, payload: CanvasVideoRequest, event
             finish_usage_event(
                 event,
                 "succeeded",
-                raw_usage=raw.get("usage") if isinstance(raw, dict) else None,
+                raw_usage=usage_from_response(raw),
             )
         canvas_task_update(task_id, {
             "status": "succeeded",
@@ -23134,7 +23366,7 @@ async def canvas_video(payload: CanvasVideoRequest, request: Request):
     if isinstance(result, dict):
         result["usage_event_id"] = event["id"]
         raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
-        finish_usage_event(event, "succeeded", raw_usage=raw.get("usage") if isinstance(raw, dict) else None)
+        finish_usage_event(event, "succeeded", raw_usage=usage_from_response(raw))
         request.state.usage_event = None
     return result
 
@@ -27077,7 +27309,7 @@ async def chat(payload: ChatRequest, request: Request, x_user_id: str = Header(d
             "created_at": now_ms(),
             "model": model,
             "size": image_size,
-            "raw_usage": raw.get("usage") if isinstance(raw, dict) else None,
+            "raw_usage": usage_from_response(raw),
         }
     else:
         _codex_provider = get_api_provider(payload.provider, api_profile_id)
