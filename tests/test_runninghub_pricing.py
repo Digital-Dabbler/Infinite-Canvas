@@ -164,19 +164,23 @@ class MainPricingIntegrationTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.table_path = str(Path(self.temp_dir.name) / "runninghub_prices.json")
         self.stats_path = str(Path(self.temp_dir.name) / "runninghub_price_stats.json")
+        self.official_path = str(Path(self.temp_dir.name) / "official_prices.json")
         self.patchers = [
             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
             patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
+            patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", self.official_path),
         ]
         for patcher in self.patchers:
             patcher.start()
         main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
 
     def tearDown(self):
         for patcher in reversed(self.patchers):
             patcher.stop()
         self.temp_dir.cleanup()
         main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
 
     def test_missing_table_reads_as_empty_without_writing(self):
         table = main.load_runninghub_price_table()
@@ -324,16 +328,19 @@ class EstimateRouteTests(unittest.IsolatedAsyncioTestCase):
         self.patchers = [
             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", str(Path(self.temp_dir.name) / "prices.json")),
             patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", str(Path(self.temp_dir.name) / "stats.json")),
+            patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", str(Path(self.temp_dir.name) / "official.json")),
         ]
         for patcher in self.patchers:
             patcher.start()
         main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
 
     def tearDown(self):
         for patcher in reversed(self.patchers):
             patcher.stop()
         self.temp_dir.cleanup()
         main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
 
     async def test_route_returns_estimate_for_current_profile(self):
         profile = {"id": "Legacy-Shared", "enabled": True}
@@ -365,6 +372,111 @@ class EstimateRouteTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(main.HTTPException) as ctx:
                 await main.runninghub_estimate(request=request, kind="model", id="ep", quantity="")
         self.assertEqual(ctx.exception.status_code, 403)
+
+
+class OfficialPriceTests(unittest.TestCase):
+    """官方标价（static/runninghub/official_prices.json）并入估价视图的行为。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.table_path = str(Path(self.temp_dir.name) / "prices.json")
+        self.stats_path = str(Path(self.temp_dir.name) / "stats.json")
+        self.official_path = str(Path(self.temp_dir.name) / "official.json")
+        self.patchers = [
+            patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
+            patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
+            patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", self.official_path),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp_dir.cleanup()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
+
+    def _write_official(self, models):
+        Path(self.official_path).write_text(
+            json.dumps({"schema_version": 1, "models": models}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
+
+    def test_normalize_keeps_tier_range_and_drops_invalid(self):
+        cleaned = rp.normalize_official_prices({
+            "models": {
+                "ep/tiered": {
+                    "billing": "per_unit",
+                    "unit_cny": 0.13,
+                    "low_cny": 0.13,
+                    "high_cny": 0.52,
+                    "price_text": "¥0.13~0.52/张",
+                    "unit_label": "张",
+                },
+                "ep/tokens": {"billing": "per_unit", "unit_cny": 0.063, "unit_label": "千tokens"},
+                "ep/bad-billing": {"billing": "per_hour", "unit_cny": 1},
+                "ep/bad-unit": {"billing": "per_unit", "unit_cny": 0},
+            }
+        })
+        self.assertEqual(set(cleaned), {"ep/tiered", "ep/tokens"})
+        self.assertEqual(cleaned["ep/tiered"]["low_cny"], 0.13)
+        self.assertEqual(cleaned["ep/tiered"]["high_cny"], 0.52)
+        self.assertEqual(cleaned["ep/tiered"]["source"], "official")
+        self.assertEqual(cleaned["ep/tiered"]["confidence"], "high")
+        # 按 token 计价的单价依赖实际用量，只能给中等置信度。
+        self.assertEqual(cleaned["ep/tokens"]["confidence"], "medium")
+
+    def test_official_price_surfaces_as_range_without_history(self):
+        self._write_official({"ep/tiered": {
+            "billing": "per_unit", "unit_cny": 0.13, "low_cny": 0.13, "high_cny": 0.52,
+            "price_text": "¥0.13~0.52/张", "unit_label": "张",
+        }})
+        estimate = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep/tiered")
+        self.assertEqual(estimate["source"], "official")
+        self.assertEqual(estimate["amount"], 0.13)
+        self.assertEqual((estimate["low"], estimate["high"]), (0.13, 0.52))
+
+    def test_official_price_respects_quantity(self):
+        self._write_official({"ep/video": {
+            "billing": "per_second", "unit_cny": 0.69, "unit_label": "秒",
+        }})
+        estimate = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep/video", quantity=8)
+        self.assertAlmostEqual(estimate["amount"], 5.52)
+
+    def test_admin_table_overrides_official(self):
+        self._write_official({"ep/a": {"billing": "per_unit", "unit_cny": 0.13}})
+        main.save_runninghub_price_table({"models": {"ep/a": {"billing": "fixed", "unit_cny": 0.99}}})
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        estimate = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep/a")
+        self.assertEqual(estimate["amount"], 0.99)
+        self.assertEqual(estimate["source"], "table")
+
+    def test_seed_beats_official_for_measured_entry(self):
+        # 图层拆分我们真扣过 ¥0.19，官方列表价是一段区间，实测值更贴近账单。
+        self._write_official({"seedream-v5.5/layer-decomposition": {
+            "billing": "per_unit", "unit_cny": 0.05, "low_cny": 0.05, "high_cny": 0.52,
+        }})
+        estimate = main.runninghub_estimate_for_profile(
+            "legacy-shared", "model", "seedream-v5.5/layer-decomposition"
+        )
+        self.assertEqual(estimate["amount"], 0.19)
+
+    def test_admin_read_never_contains_official_entries(self):
+        self._write_official({"ep/a": {"billing": "per_unit", "unit_cny": 0.13}})
+        self.assertEqual(main.load_runninghub_admin_price_table()["models"], {})
+        # 保存一次空表也不能把官方价固化进 data/runninghub_prices.json。
+        main.save_runninghub_price_table({"models": {}})
+        written = json.loads(Path(self.table_path).read_text(encoding="utf-8"))
+        self.assertEqual(written["models"], {})
+
+    def test_missing_official_file_falls_back_to_unknown(self):
+        estimate = main.runninghub_estimate_for_profile("legacy-shared", "model", "ep/a")
+        self.assertEqual(estimate["confidence"], "unknown")
+        self.assertEqual(estimate["source"], "unknown")
 
 
 class AdminPriceRouteTests(unittest.IsolatedAsyncioTestCase):

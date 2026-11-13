@@ -313,6 +313,7 @@
         "smart.price.historyTip": { zh: "基于最近 {n} 次实测扣费的中位数", en: "Median of the last {n} actual charges" },
         "smart.price.sparseTip": { zh: "实测样本较少，仅供参考", en: "Few samples — estimate only" },
         "smart.price.tableTip": { zh: "按官方单价 × 本次数量估算", en: "Unit price × quantity" },
+        "smart.price.officialTip": { zh: "按 RunningHub 官方标价估算，实际以扣费为准", en: "RunningHub list price; actual charge may differ" },
         "smart.price.manualTip": { zh: "按管理员录入的单次价格估算", en: "Admin-entered per-run price" },
         "smart.price.fallbackTip": { zh: "按 GPU 时长粗略兜底，实际以扣费为准", en: "Rough GPU-time fallback; actual charge may differ" },
         "smart.price.multiplierTip": { zh: "本次点击提交 {n} 次", en: "{n} submissions this click" },

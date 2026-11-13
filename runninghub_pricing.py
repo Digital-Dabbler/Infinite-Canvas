@@ -39,6 +39,7 @@ SOURCE_HISTORY = "history"
 SOURCE_HISTORY_SPARSE = "history_sparse"
 SOURCE_TABLE = "table"
 SOURCE_MANUAL = "manual"
+SOURCE_OFFICIAL = "official"
 SOURCE_FALLBACK = "fallback"
 SOURCE_UNKNOWN = "unknown"
 
@@ -152,11 +153,30 @@ def _table_result(table: Dict[str, Any], kind: str, entry_id: str, quantity: Any
     if unit is None or unit <= 0:
         return None
     billing = str(entry.get("billing") or "per_unit").strip().lower()
-    if billing == "fixed":
-        amount = unit
-    else:
-        amount = unit * _resolve_quantity(quantity, entry.get("default_quantity"))
-    return _result(amount, amount, amount, CONFIDENCE_HIGH, SOURCE_TABLE)
+    factor = 1.0 if billing == "fixed" else _resolve_quantity(quantity, entry.get("default_quantity"))
+    amount = unit * factor
+    # 官方分档价（1.5K/2K/3K 不同单价）天然是一段区间：最低档到最高档。
+    low = _as_money(entry.get("low_cny"))
+    high = _as_money(entry.get("high_cny"))
+    low_amount = low * factor if (low is not None and low > 0) else amount
+    high_amount = high * factor if (high is not None and high > 0) else amount
+    if low_amount > high_amount:
+        low_amount, high_amount = high_amount, low_amount
+    source = str(entry.get("source") or "").strip().lower()
+    if source not in {SOURCE_TABLE, SOURCE_MANUAL, SOURCE_OFFICIAL}:
+        source = SOURCE_TABLE
+    confidence = str(entry.get("confidence") or "").strip().lower()
+    if confidence not in {CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, CONFIDENCE_LOW}:
+        confidence = CONFIDENCE_HIGH
+    return _result(
+        amount,
+        low_amount,
+        high_amount,
+        confidence,
+        source,
+        0,
+        str(entry.get("note") or "")[:120],
+    )
 
 
 def _fallback_result(table: Dict[str, Any], kind: str, quantity: Any):
@@ -359,6 +379,57 @@ def merge_seed_models(table: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(table or {})
     models = dict(merged.get("models") or {})
     for key, entry in SEED_MODELS.items():
+        if key not in models:
+            models[key] = dict(entry)
+    merged["models"] = models
+    return merged
+
+
+def normalize_official_prices(raw: Any) -> Dict[str, Dict[str, Any]]:
+    """把官方价目表清洗成可直接并进价格表 models 的条目。
+
+    官方价来自 RunningHub 的 SKU 目录（tools/sync_runninghub_official_prices.py
+    抓取），分档价（1.5K/2K/3K 不同单价）保留成 low_cny/high_cny 区间；带 token
+    单位的单价依赖实际用量，只能给 medium 置信度。
+    """
+    models: Dict[str, Dict[str, Any]] = {}
+    source = raw if isinstance(raw, dict) else {}
+    entries = source.get("models") if isinstance(source.get("models"), dict) else {}
+    for key, entry in entries.items():
+        key = str(key or "").strip()
+        if not key or not isinstance(entry, dict):
+            continue
+        billing = str(entry.get("billing") or "per_unit").strip().lower()
+        if billing not in BILLING_MODES:
+            continue
+        unit = _valid_unit(entry.get("unit_cny"))
+        if unit is None:
+            continue
+        clean: Dict[str, Any] = {
+            "billing": billing,
+            "unit_cny": unit,
+            "unit_quantity_param": "",
+            "default_quantity": 1,
+            "source": SOURCE_OFFICIAL,
+            "confidence": CONFIDENCE_MEDIUM if "token" in str(entry.get("unit_label") or "").lower() else CONFIDENCE_HIGH,
+        }
+        low = _valid_unit(entry.get("low_cny"))
+        high = _valid_unit(entry.get("high_cny"))
+        if low is not None and high is not None:
+            clean["low_cny"] = min(low, high)
+            clean["high_cny"] = max(low, high)
+        label = str(entry.get("price_text") or entry.get("unit_label") or "").strip()[:40]
+        if label:
+            clean["note"] = f"官方标价 {label}"
+        models[key] = clean
+    return models
+
+
+def merge_official_prices(table: Dict[str, Any], official: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """官方标价并入价格表视图；管理员已配置的同键条目优先。"""
+    merged = dict(table or {})
+    models = dict(merged.get("models") or {})
+    for key, entry in (official or {}).items():
         if key not in models:
             models[key] = dict(entry)
     merged["models"] = models

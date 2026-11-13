@@ -469,7 +469,11 @@ DEPARTMENTS_FILE = os.path.join(DATA_DIR, "departments.json")
 RUNNINGHUB_WORKFLOW_STORE_FILE = os.path.join(DATA_DIR, "runninghub_workflows.json")
 RUNNINGHUB_PRICE_TABLE_FILE = os.path.join(DATA_DIR, "runninghub_prices.json")
 RUNNINGHUB_PRICE_STATS_FILE = os.path.join(DATA_DIR, "runninghub_price_stats.json")
+# 官方标价由 tools/sync_runninghub_official_prices.py 离线抓取后落到静态目录，
+# 只作为只读"视图"参与估价，绝不写进管理员的 data/runninghub_prices.json。
+RUNNINGHUB_OFFICIAL_PRICES_FILE = os.path.join(STATIC_DIR, "runninghub", "official_prices.json")
 RUNNINGHUB_PRICING_LOCK = RLock()
+RUNNINGHUB_OFFICIAL_PRICE_CACHE: Dict[str, Any] = {"mtime": None, "models": {}}
 RUNNINGHUB_ESTIMATE_CACHE_TTL = 60
 RUNNINGHUB_ESTIMATE_CACHE: Dict[str, Dict[str, Any]] = {}
 UPSTREAM_TASK_SCOPES_FILE = os.path.join(DATA_DIR, "upstream_task_scopes.json")
@@ -15271,17 +15275,43 @@ def runninghub_task_provider_for_request(request, task_id, requested_use_wallet=
     )
     return context.provider, use_wallet
 
-def load_runninghub_price_table():
-    """读取管理员维护的 RunningHub 价格表；缺失/损坏时返回只读空表，绝不悄悄覆盖。
+def load_runninghub_official_prices():
+    """读取离线抓取的 RunningHub 官方标价（只读视图，缺失/损坏返回空）。
 
-    返回的是"视图"：在管理员配置之上补入已知实测价的种子条目，管理员同键值优先。
-    写盘只写管理员配置（save_runninghub_price_table），不会把种子落成用户数据。
+    文件由 tools/sync_runninghub_official_prices.py 生成，mtime 变化才重新解析，
+    避免每次估价都读盘。
     """
+    try:
+        mtime = os.path.getmtime(RUNNINGHUB_OFFICIAL_PRICES_FILE)
+    except OSError:
+        return {}
+    with RUNNINGHUB_PRICING_LOCK:
+        if RUNNINGHUB_OFFICIAL_PRICE_CACHE.get("mtime") == mtime:
+            return RUNNINGHUB_OFFICIAL_PRICE_CACHE.get("models") or {}
+        raw = _read_json_file(RUNNINGHUB_OFFICIAL_PRICES_FILE, None)
+        models = runninghub_pricing.normalize_official_prices(raw)
+        RUNNINGHUB_OFFICIAL_PRICE_CACHE["mtime"] = mtime
+        RUNNINGHUB_OFFICIAL_PRICE_CACHE["models"] = models
+        return models
+
+def load_runninghub_admin_price_table():
+    """管理员维护的价格表原文（GET/PUT 用）；缺失/损坏返回空表，绝不悄悄覆盖。"""
     with RUNNINGHUB_PRICING_LOCK:
         raw = _read_json_file(RUNNINGHUB_PRICE_TABLE_FILE, None)
-        if isinstance(raw, dict) and raw.get("schema_version") == runninghub_pricing.PRICING_SCHEMA_VERSION:
-            return runninghub_pricing.merge_seed_models(raw)
-        return runninghub_pricing.merge_seed_models(runninghub_pricing.empty_price_table())
+    if isinstance(raw, dict) and raw.get("schema_version") == runninghub_pricing.PRICING_SCHEMA_VERSION:
+        return raw
+    return runninghub_pricing.empty_price_table()
+
+def load_runninghub_price_table():
+    """估价用的价格表视图：管理员配置 > 本项目实测种子 > 官方标价。
+
+    只有管理员那一层会被 save_runninghub_price_table 写回磁盘；官方价与种子都
+    是只读叠加，避免把上游标价固化成本地用户数据。实测种子优先于官方列表价：
+    同一个型号我们真扣过多少钱，比官网标价更贴近这台部署的实际账单。
+    """
+    table = load_runninghub_admin_price_table()
+    table = runninghub_pricing.merge_seed_models(table)
+    return runninghub_pricing.merge_official_prices(table, load_runninghub_official_prices())
 
 def save_runninghub_price_table(table):
     clean, errors = runninghub_pricing.normalize_price_table(table)
@@ -19504,13 +19534,25 @@ async def runninghub_estimate(request: Request, kind: str = "", id: str = "", qu
 @app.get("/api/runninghub/prices")
 async def runninghub_prices_get(request: Request):
     require_admin(request)
-    return {"success": True, "table": load_runninghub_price_table()}
+    official = load_runninghub_official_prices()
+    return {
+        "success": True,
+        # 只回管理员自己维护的那一层，PUT 原样回写才不会把官方价固化成本地数据。
+        "table": load_runninghub_admin_price_table(),
+        "official": {
+            "count": len(official),
+            "samples": [
+                {"id": key, "unit_cny": entry.get("unit_cny"), "note": entry.get("note")}
+                for key, entry in list(official.items())[:8]
+            ],
+        },
+    }
 
 @app.put("/api/runninghub/prices")
 async def runninghub_prices_put(payload: RunningHubPriceTableRequest, request: Request):
     require_admin(request)
     clean = save_runninghub_price_table(payload.table)
-    return {"success": True, "table": clean}
+    return {"success": True, "table": clean, "official": {"count": len(load_runninghub_official_prices())}}
 
 @app.get("/api/runninghub/query")
 async def runninghub_query(request: Request, taskId: str = "", useWallet: bool = False):

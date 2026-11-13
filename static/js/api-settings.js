@@ -4150,6 +4150,14 @@ async function loadRhPriceTable(){
             return;
         }
         renderRhPriceTable(data.table || {});
+        const official = data.official || {};
+        const officialEl = document.getElementById('rhPriceOfficial');
+        if(officialEl){
+            const count = Number(official.count || 0);
+            officialEl.textContent = count
+                ? `已内置 ${count} 条 RunningHub 官方标价（只读）。在上面填同一端点时以你填的价格为准。`
+                : '尚未导入官方标价，可运行 tools/sync_runninghub_official_prices.py 生成。';
+        }
     } catch (e) {
         setStatus(`读取价格表失败：${e.message || e}`, 'error');
     }

@@ -86,7 +86,8 @@
         const low = money(Number(estimate.low || 0) * factor);
         const high = money(Number(estimate.high || 0) * factor);
         let label = `≈${amount}`;
-        if (confidence === "medium" && low && high && low !== high) {
+        // 官方分档价（1.5K/2K/3K 单价不同）本身就是一个区间，低置信度或只有单值时显示单值。
+        if (low && high && low !== high) {
             label = `≈${low}~${high}`;
         }
         let title;
@@ -95,6 +96,8 @@
             title = count >= 3
                 ? trfLite("smart.price.historyTip", count, "基于最近 {n} 次实测扣费的中位数")
                 : tr("smart.price.sparseTip", "实测样本较少，仅供参考");
+        } else if (estimate.source === "official") {
+            title = tr("smart.price.officialTip", "按 RunningHub 官方标价估算，实际以扣费为准");
         } else if (estimate.source === "table") {
             title = tr("smart.price.tableTip", "按官方单价 × 本次数量估算");
         } else if (estimate.source === "manual") {
