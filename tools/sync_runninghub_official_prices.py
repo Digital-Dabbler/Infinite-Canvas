@@ -223,7 +223,38 @@ def entry_from_sku(sku: Dict[str, Any], tiers: List[Dict[str, Any]]) -> Optional
     }
     if tiers:
         entry["tiers"] = tiers
+        # 分档说明（“单张 ≤260万像素，含 1K、1.5K 档”）是挑档的唯一依据，
+        # 按“档位名 → 单价”落盘，估价时据此把区间收敛成单一档位。
+        notes = {}
+        for tier in tiers:
+            key = tier.get("label") or tier.get("note") or ""
+            if key and key not in notes:
+                notes[str(key)] = tier["price"]
+        if notes and len(notes) == len(tiers):
+            entry["notes"] = notes
     return entry
+
+
+# 官网/i2i 写法不一致的型号别名：把同一款模型多种名字都对到端点。
+# Dola-Seedream-5.5 与 seedream-v5.5 是同一条 SKU（¥0.13~0.52/张），注册表里
+# 却是两个端点名，不补别名就永远查不到价。
+MODEL_NAME_ALIASES = {
+    "Dola-Seedream-5.5/text-to-image": "dola-Seedream-5.5/text-to-image",
+    "Dola-Seedream-5.5/image-to-image": "dola-Seedream-5.5/image-to-image",
+    "Dola-Seedream-5.5/layer-decomposition": "dola-Seedream-5.5/layer-decomposition",
+    "Dola-Seedream-5.0-flash/text-to-image": "dola-Seedream-5.0-flash/text-to-image",
+    "Dola-Seedream-5.0-flash/image-to-image": "dola-Seedream-5.0-flash/image-to-image",
+    "Dola-Seedream-5.0-flash/layer-decomposition": "dola-Seedream-5.0-flash/layer-decomposition",
+}
+# 这些端点在官网用的是另一个型号名（seedream-v5.5 / seedream-v5-flash）。
+ALIAS_SOURCE_KEYS = {
+    "dola-Seedream-5.5/text-to-image": "seedream-v5.5/text-to-image",
+    "dola-Seedream-5.5/image-to-image": "seedream-v5.5/image-to-image",
+    "dola-Seedream-5.5/layer-decomposition": "seedream-v5.5/layer-decomposition",
+    "dola-Seedream-5.0-flash/text-to-image": "seedream-v5-flash/text-to-image",
+    "dola-Seedream-5.0-flash/image-to-image": "seedream-v5-flash/image-to-image",
+    "dola-Seedream-5.0-flash/layer-decomposition": "seedream-v5-flash/layer-decomposition",
+}
 
 
 def main() -> int:
@@ -298,6 +329,20 @@ def main() -> int:
                 endpoint_pick[endpoint] = dict(entry)
                 mirrored += 1
         print(f"  端点别名补价: {mirrored} 个")
+
+        # 4) 同款模型不同命名（Dola-Seedream-5.5 ↔ seedream-v5.5）：对到同一个价。
+        aliased = 0
+        for target, source in ALIAS_SOURCE_KEYS.items():
+            entry = endpoint_pick.get(source)
+            if entry and target not in endpoint_pick:
+                endpoint_pick[target] = dict(entry)
+                aliased += 1
+        for target, source in MODEL_NAME_ALIASES.items():
+            entry = endpoint_pick.get(source)
+            if entry and target not in endpoint_pick:
+                endpoint_pick[target] = dict(entry)
+                aliased += 1
+        print(f"  型号别名补价: {aliased} 个")
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     payload = {

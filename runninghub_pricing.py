@@ -20,6 +20,10 @@ HTTP 路由都在 main.py 里，复用既有 helper。
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import re
+
+PRICING_SCHEMA_VERSION = 1
+
 PRICING_SCHEMA_VERSION = 1
 
 # 历史样本达到这个数量才给 high 置信；少于它但 >=1 给 medium（样本较少）。
@@ -144,6 +148,7 @@ def _table_result(table: Dict[str, Any], kind: str, entry_id: str, quantity: Any
         entry = (table.get("workflows") or {}).get(entry_id)
     if not isinstance(entry, dict):
         return None
+    tiers = parse_tier_notes(entry.get("notes"))
     # 应用/工作流走 manual_cny（手工单次总价），模型走 unit_cny × 数量。
     if "manual_cny" in entry and entry.get("manual_cny") is not None:
         manual = _as_money(entry.get("manual_cny"))
@@ -168,7 +173,7 @@ def _table_result(table: Dict[str, Any], kind: str, entry_id: str, quantity: Any
     confidence = str(entry.get("confidence") or "").strip().lower()
     if confidence not in {CONFIDENCE_HIGH, CONFIDENCE_MEDIUM, CONFIDENCE_LOW}:
         confidence = CONFIDENCE_HIGH
-    return _result(
+    result = _result(
         amount,
         low_amount,
         high_amount,
@@ -177,6 +182,10 @@ def _table_result(table: Dict[str, Any], kind: str, entry_id: str, quantity: Any
         0,
         str(entry.get("note") or "")[:120],
     )
+    if tiers:
+        # 档位价由 fit_resolution 按本次分辨率收敛成单一档位。
+        result["_tiers"] = tiers
+    return result
 
 
 def _fallback_result(table: Dict[str, Any], kind: str, quantity: Any):
@@ -456,8 +465,119 @@ def normalize_official_prices(raw: Any) -> Dict[str, Dict[str, Any]]:
         label = str(entry.get("price_text") or entry.get("unit_label") or "").strip()[:40]
         if label:
             clean["note"] = f"官方标价 {label}"
+        notes_raw = entry.get("notes") or entry.get("tiers")
+        notes = _tier_notes(notes_raw)
+        if notes:
+            clean["notes"] = notes
         models[key] = clean
     return models
+
+
+def _tier_notes(raw: Any) -> Dict[str, float]:
+    """从官方条目里取“档位名 → 单价”，兼容 notes 字典与 tiers 列表两种写法。"""
+    notes: Dict[str, float] = {}
+    if isinstance(raw, dict):
+        for label, amount in raw.items():
+            money = _as_money(amount)
+            if str(label).strip() and money is not None and money > 0:
+                notes[str(label)] = money
+        return notes
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()
+            money = _as_money(item.get("price"))
+            if label and money is not None and money > 0:
+                notes.setdefault(label, money)
+    return notes
+
+
+# 同一模型在官网/i2i 等处的写法差异：估价时按“规范化模型名”互相兜底。
+# 实测确认的例子：画布上的 Dola-Seedream-5.5/text-to-image 与官网的
+# seedream-v5.5-文生图 是同一条 SKU（¥0.13~0.52/张），但端点名不一致，
+# 只按字符串相等就查不到价。
+_OPERATION_ALIASES = {
+    "text2image": "text-to-image",
+    "t2i": "text-to-image",
+    "txt2img": "text-to-image",
+    "image2image": "image-to-image",
+    "i2i": "image-to-image",
+    "img2img": "image-to-image",
+    "edit": "image-to-image",
+    "text2video": "text-to-video",
+    "t2v": "text-to-video",
+    "image2video": "image-to-video",
+    "i2v": "image-to-video",
+    "layerdecomposition": "layer-decomposition",
+}
+_DOLA_PREFIXES = ("dola-", "dola_", "dola ")
+# 版本号里的 "v" 是写法差异（seedream-v5.5 与 seedream-5.5 是同一款），
+# 规范化产品名时删掉，否则兜底匹配永远对不上。
+_VERSION_V_RE = re.compile(r"v(?=\d)")
+
+
+def _fold_name(text: str) -> str:
+    """去掉分隔符并转小写，只用于比较。"""
+    return "".join(ch for ch in str(text or "").lower() if ch.isalnum())
+
+
+def _fold_product(text: str) -> str:
+    """产品名规范化：除分隔符外再去掉版本号后的 v。"""
+    return _VERSION_V_RE.sub("", _fold_name(text))
+
+
+def _normalize_model_name(model_id: str) -> Tuple[str, str]:
+    """把模型 ID 拆成（规范化产品名, 规范化操作名）。
+
+    不可靠的部分返回空串，调用方据此放弃兜底，绝不硬猜。
+    """
+    raw = str(model_id or "").strip().strip("/")
+    if not raw:
+        return "", ""
+    parts = [part for part in raw.replace("_", "-").split("/") if part]
+    if not parts:
+        return "", ""
+    operation = parts[-1] if len(parts) > 1 else ""
+    product = "/".join(parts[:-1]) if len(parts) > 1 else parts[0]
+    return _fold_product(product), _fold_name(_OPERATION_ALIASES.get(operation, operation))
+
+
+def model_name_variants(model_id: str) -> List[str]:
+    """给出同一模型可能的等价写法（不含原始 ID）。"""
+    raw = str(model_id or "").strip().strip("/")
+    if not raw:
+        return []
+    variants: List[str] = []
+    lowered = raw.lower()
+    for prefix in _DOLA_PREFIXES:
+        if lowered.startswith(prefix):
+            variants.append(raw[len(prefix):].strip())
+            break
+    return [item for item in variants if item and item != raw]
+
+
+def loose_model_keys(table: Dict[str, Any], candidates: List[str]) -> List[str]:
+    """在价格表里按规范化名找出与给定候选键指向同一模型的所有键。"""
+    models = (table or {}).get("models")
+    if not isinstance(models, dict) or not models:
+        return []
+    wanted = set()
+    for candidate in candidates or []:
+        product, operation = _normalize_model_name(candidate)
+        if product and operation:
+            wanted.add((product, operation))
+    if not wanted:
+        return []
+    matches: List[str] = []
+    skip = set(candidates or [])
+    for key in models:
+        if key in skip:
+            continue
+        product, operation = _normalize_model_name(key)
+        if product and operation and (product, operation) in wanted:
+            matches.append(key)
+    return matches
 
 
 def merge_official_prices(table: Dict[str, Any], official: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
@@ -469,6 +589,105 @@ def merge_official_prices(table: Dict[str, Any], official: Dict[str, Dict[str, A
             models[key] = dict(entry)
     merged["models"] = models
     return merged
+
+
+def fit_resolution(result: Dict[str, Any], res: Any) -> Dict[str, Any]:
+    """按本次分辨率把分档价（1.5K/2K/3K）收敛成单一档位单价。
+
+    档位由官网价目表给出（如 2K = ¥0.23/张），这里只做区间 → 单值的收敛：能
+    确定档位就换成该档单价；分辨率小于最低档或大于最高档取端点档；含 token 等
+    无法归一的计价保持区间不动。任何无法判断的情况原样返回。
+    """
+    if not isinstance(result, dict) or result.get("confidence") == CONFIDENCE_UNKNOWN:
+        return result
+    label = str(result.get("note") or "")
+    if "token" in label.lower():
+        return result
+    tiers = result.get("_tiers")
+    if not isinstance(tiers, list) or not tiers:
+        return result
+    amount = pick_tier_amount(tiers, res)
+    if amount is None:
+        return result
+    fitted = dict(result)
+    fitted["amount"] = amount
+    fitted["low"] = amount
+    fitted["high"] = amount
+    return fitted
+
+
+def parse_tier_notes(notes: Any) -> List[Tuple[float, float]]:
+    """把官网分档说明解析成 [(最低像素, 单价)]，按像素升序。
+
+    官网说明形如“单张 ≤260万像素，含 1K、1.5K 档”“单张 >462万像素，或分辨率
+    传 3K”。“万元”是金额单位，必须先剔除，否则“260万像素”会被读成 2600000。
+    解析不出像素阈值时，再从档位名里取“1.5K / 2K”这类分辨率，换算成方形像素。
+    """
+    if not isinstance(notes, dict) or not notes:
+        return []
+    parsed: List[Tuple[float, float]] = []
+    for index, (label, amount) in enumerate(notes.items()):
+        money = _as_money(amount)
+        if money is None or money <= 0:
+            continue
+        text = str(label).replace(" ", "")
+        found = re.search(r"(\d+(?:\.\d+)?)万像素", text)
+        if found:
+            # 阈值换成百万像素，口径与 _res_megapixels 一致（后者返回 MP）。
+            floor = float(found.group(1)) * 10000.0 / 1_000_000.0
+        else:
+            tier = re.search(r"(\d+(?:\.\d+)?)[Kk]", text)
+            if tier:
+                floor = (float(tier.group(1)) * 1024.0) ** 2 / 1_000_000.0
+            else:
+                # 没有像素阈值（如“按次计费”），排进最低档，由调用方兜底。
+                floor = float(index)
+        parsed.append((floor, money))
+    parsed.sort(key=lambda item: item[0])
+    return parsed
+
+
+def _res_megapixels(res: Any) -> Optional[float]:
+    """把画布上的 2K / 1024x1024 之类收敛成像素数（百万像素）。"""
+    text = str(res or "").strip().lower()
+    if not text:
+        return None
+    numeric = re.findall(r"\d+(?:\.\d+)?", text)
+    if "x" in text and len(numeric) >= 2:
+        try:
+            return float(numeric[0]) * float(numeric[1]) / 1_000_000.0
+        except ValueError:
+            return None
+    if not numeric:
+        return None
+    try:
+        value = float(numeric[0])
+    except ValueError:
+        return None
+    if "k" in text or (value <= 8):
+        # 2K = 2048×2048 之类的方形近似，与官网“≤260万 / ≤462万像素”口径对齐。
+        return (value * 1024.0) ** 2 / 1_000_000.0
+    if value >= 100000:
+        return value / 1_000_000.0
+    return None
+
+
+def pick_tier_amount(tiers: List[Tuple[float, float]], res: Any) -> Optional[float]:
+    """按分辨率挑档；分辨率无法解析时返回 None（保留区间）。"""
+    if not tiers:
+        return None
+    megapixels = _res_megapixels(res)
+    if megapixels is None:
+        return None
+    chosen = tiers[0][1]
+    for floor, amount in tiers:
+        if megapixels >= floor:
+            chosen = amount
+    return chosen
+
+
+def _unused_placeholder():
+    return None
 
 
 def extract_consume_money(raw_usage: Any) -> Optional[float]:

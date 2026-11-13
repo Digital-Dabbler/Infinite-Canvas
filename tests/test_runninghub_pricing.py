@@ -363,9 +363,11 @@ class EstimateRouteTests(unittest.IsolatedAsyncioTestCase):
              patch.object(main, "runninghub_estimate_for_profile",
                           return_value={"confidence": "high", "amount": 0.2}) as estimate:
             await main.runninghub_estimate(
-                request=None, kind="model", id="gpt-image-2.0/text-to-image-channel-low-price", quantity=""
+                request=None, kind="model", id="gpt-image-2.0/text-to-image-channel-low-price", quantity="", res="2k"
             )
-        estimate.assert_called_once_with("p", "model", "gpt-image-2.0/text-to-image-channel-low-price", None)
+        estimate.assert_called_once_with(
+            "p", "model", "gpt-image-2.0/text-to-image-channel-low-price", None, res="2k"
+        )
 
     async def test_unassigned_profile_gets_403(self):
         request = object()
@@ -620,6 +622,107 @@ class RunButtonMarkupTests(unittest.TestCase):
         self.assertIn(".run-pill {", self.css)
         self.assertIn(".run-pill.has-price", self.css)
         self.assertIn(".run-pill .rh-price-badge {", self.css)
+
+    def test_badge_sends_resolution(self):
+        # 分辨率要随请求发给后端，否则 2K 与 3K 会共用同一档位价。
+        self.assertIn('params.set("res"', self.badge_js)
+        self.assertIn("runningHubPriceResolution", self.canvas_js)
+
+
+class ResolutionTierTests(unittest.TestCase):
+    """官方分档价（1.5K/2K/3K）按输出像素收敛成单一档位。"""
+
+    def tiers(self):
+        return rp.parse_tier_notes(
+            {
+                "输出图 1.5K": 0.13,
+                "输出图 2K": 0.23,
+                "输出图 3K": 0.52,
+            }
+        )
+
+    def test_megapixels_matches_floor_unit(self):
+        # 阈值与输入必须是同一量纲（百万像素），否则所有档位都会退到最低价。
+        tiers = self.tiers()
+        self.assertAlmostEqual(tiers[0][0], 2.359296, places=5)
+        self.assertEqual(rp.pick_tier_amount(tiers, "2k"), 0.23)
+        self.assertEqual(rp.pick_tier_amount(tiers, "3k"), 0.52)
+        self.assertEqual(rp.pick_tier_amount(tiers, "1k"), 0.13)
+
+    def test_tier_notes_from_tiers_list(self):
+        notes = rp._tier_notes(
+            [{"label": "输出图 2K", "price": 0.23}, {"label": "输出图 3K", "price": 0.52}]
+        )
+        self.assertEqual(notes, {"输出图 2K": 0.23, "输出图 3K": 0.52})
+
+    def test_wan_pixel_threshold_not_confused_by_money(self):
+        # “260万像素”里的“万元”是金额单位，不能被读成 2600000 元。
+        tiers = rp.parse_tier_notes(
+            {"单张 ≤260万像素，含 1K、1.5K 档": 0.13, "单张 >462万像素": 0.52}
+        )
+        self.assertEqual(tiers, [(2.6, 0.13), (4.62, 0.52)])
+
+    def test_unknown_resolution_keeps_range(self):
+        tiers = self.tiers()
+        self.assertIsNone(rp.pick_tier_amount(tiers, ""))
+        self.assertIsNone(rp.pick_tier_amount(tiers, "auto"))
+
+    def test_fit_resolution_collapses_range(self):
+        table = {
+            "models": {
+                "m/text-to-image": {
+                    "billing": "per_unit",
+                    "unit_cny": 0.13,
+                    "low_cny": 0.13,
+                    "high_cny": 0.52,
+                    "source": rp.SOURCE_OFFICIAL,
+                    "notes": {"输出图 1.5K": 0.13, "输出图 2K": 0.23, "输出图 3K": 0.52},
+                }
+            }
+        }
+        raw = rp.estimate_price(table, None, "model", "m/text-to-image")
+        self.assertEqual((raw["low"], raw["high"]), (0.13, 0.52))
+        fitted = rp.fit_resolution(raw, "2k")
+        self.assertEqual(fitted["amount"], 0.23)
+        self.assertEqual((fitted["low"], fitted["high"]), (0.23, 0.23))
+        kept = rp.fit_resolution(raw, "")
+        self.assertEqual((kept["low"], kept["high"]), (0.13, 0.52))
+        self.assertIn("_tiers", kept)
+
+
+class ModelNameFallbackTests(unittest.TestCase):
+    """模型名写法不一致时按规范化名兜底，绝不落空成“费用待定”。"""
+
+    def test_normalize_aliases_operation_names(self):
+        self.assertEqual(
+            rp._normalize_model_name("nano-banana/edit"),
+            rp._normalize_model_name("nano-banana/image-to-image"),
+        )
+        self.assertEqual(
+            rp._normalize_model_name("dola-seedream-5.5/text-to-image"),
+            rp._normalize_model_name("Dola-Seedream-5.5/text-to-image"),
+        )
+
+    def test_dola_variant_strips_prefix(self):
+        self.assertEqual(
+            rp.model_name_variants("Dola-Seedream-5.5/text-to-image"),
+            ["Seedream-5.5/text-to-image"],
+        )
+        self.assertEqual(rp.model_name_variants("seedream-v5.5/text-to-image"), [])
+
+    def test_loose_keys_find_same_model(self):
+        table = {"models": {"seedream-v5.5/text-to-image": {"unit_cny": 0.13}}}
+        keys = rp.loose_model_keys(
+            table,
+            ["Dola-Seedream-5.5/text-to-image", "Seedream-5.5/text-to-image"],
+        )
+        self.assertEqual(keys, ["seedream-v5.5/text-to-image"])
+
+    def test_loose_keys_ignore_different_model(self):
+        table = {"models": {"seedream-v5.5/image-to-image": {"unit_cny": 0.05}}}
+        self.assertEqual(
+            rp.loose_model_keys(table, ["Dola-Seedream-5.5/text-to-image"]), []
+        )
 
 
 if __name__ == "__main__":

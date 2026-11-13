@@ -40,9 +40,10 @@
         return `¥${number.toFixed(2)}`;
     }
 
-    // 后端估价身份：kind|id|quantity（不含 multiplier，次数只在客户端乘算）。
+    // 后端估价身份：kind|id|quantity|res（不含 multiplier，次数只在客户端乘算）。
     function backendKey(spec) {
-        return `${spec.kind}|${spec.id}|${spec.quantity == null ? "" : spec.quantity}`;
+        const res = spec.res == null ? "" : String(spec.res);
+        return `${spec.kind}|${spec.id}|${spec.quantity == null ? "" : spec.quantity}|${res}`;
     }
     // 前端渲染身份：再带上 multiplier，次数变化时复用缓存结果重绘、不重复请求。
     function specKey(spec) {
@@ -58,6 +59,8 @@
         if (inflight.has(key)) return inflight.get(key);
         const params = new URLSearchParams({ kind: spec.kind, id: spec.id });
         if (spec.quantity != null && spec.quantity !== "") params.set("quantity", String(spec.quantity));
+        // 分辨率标签（2k / 1371x2589）用于在官方分档价里挑到对应档位。
+        if (spec.res != null && spec.res !== "") params.set("res", String(spec.res));
         const request = fetch(`/api/runninghub/estimate?${params.toString()}`, { credentials: "same-origin" })
             .then(response => response.ok ? response.json() : null)
             .then(body => {

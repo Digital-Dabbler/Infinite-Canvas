@@ -15377,13 +15377,20 @@ def runninghub_price_lookup_keys(kind, entry_id):
     for value in runninghub_pricing.model_price_keys(entry_id):
         add(value)
     if kind == "model":
+        for value in runninghub_pricing.model_name_variants(entry_id):
+            for expanded in runninghub_pricing.model_price_keys(value):
+                add(expanded)
         for value in runninghub_pricing.model_price_keys(runninghub_model_entry_id(entry_id)):
             add(value)
     return keys
 
-def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None):
-    """三档闸门的估价：实测历史 → 单价表/官方价 → GPU 分钟兜底 → unknown。"""
-    cache_key = f"{profile_id}|{kind}|{entry_id}|{quantity}"
+def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None, res=""):
+    """三档闸门的估价：实测历史 → 单价表/官方价 → GPU 分钟兜底 → unknown。
+
+    ``entry_id`` 先按官网 SKU 命名展开、再退到规范化模型名兜底；``res`` 是画布上
+    的分辨率/尺寸标签，用来在分档价（1.5K/2K/3K）里挑到对应档位。
+    """
+    cache_key = f"{profile_id}|{kind}|{entry_id}|{quantity}|{res or ''}"
     now = time.monotonic()
     with RUNNINGHUB_PRICING_LOCK:
         cached = RUNNINGHUB_ESTIMATE_CACHE.get(cache_key)
@@ -15391,18 +15398,27 @@ def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None):
             return cached.get("result")
         stats = load_runninghub_price_stats()
         table = load_runninghub_price_table()
+        keys = runninghub_price_lookup_keys(kind, entry_id) or [entry_id]
+        if kind == "model":
+            # 端点名/官网名对不上的同款模型（如 Dola-Seedream-5.5 与 seedream-v5.5），
+            # 按规范化产品名+操作名兜底，仍然命中真实标价，不编造数字。
+            variants = runninghub_pricing.model_name_variants(entry_id)
+            keys = keys + runninghub_pricing.loose_model_keys(table, keys + variants)
         result = None
-        for key in runninghub_price_lookup_keys(kind, entry_id) or [entry_id]:
+        for key in keys:
             lookup = runninghub_pricing.stats_key(profile_id, kind, key)
             candidate = runninghub_pricing.estimate_price(
                 table, stats["entries"].get(lookup), kind, key, quantity
             )
+            candidate = runninghub_pricing.fit_resolution(candidate, res)
             if result is None:
                 result = candidate
             if candidate.get("source") != runninghub_pricing.SOURCE_UNKNOWN:
                 result = candidate
                 break
         result = result or runninghub_pricing.empty_estimate()
+        result = dict(result)
+        result.pop("_tiers", None)
         RUNNINGHUB_ESTIMATE_CACHE[cache_key] = {"at": now, "result": result}
         return result
 
@@ -19540,9 +19556,12 @@ def delete_runninghub_workflow(workflow_id: str, request: Request):
     return {"success": True}
 
 @app.get("/api/runninghub/estimate")
-async def runninghub_estimate(request: Request, kind: str = "", id: str = "", quantity: str = ""):
+async def runninghub_estimate(
+    request: Request, kind: str = "", id: str = "", quantity: str = "", res: str = ""
+):
     # 事前估价：只读、按当前用户配置组隔离，不产生费用、不泄露他组数据。
     # 管理员可用 api_profile_id 查询参数选择目标组（治理查看），普通用户忽略该参数。
+    # res 是画布上的尺寸/分辨率标签（如 2K、1024x1024），用于在分档价里挑档位。
     profile = request_api_profile(request, allow_admin_selection=True)
     profile_id = str(profile.get("id") or "").strip().lower()
     kind = str(kind or "").strip().lower()
@@ -19558,7 +19577,7 @@ async def runninghub_estimate(request: Request, kind: str = "", id: str = "", qu
             qty = float(quantity)
         except (TypeError, ValueError):
             qty = None
-    estimate = runninghub_estimate_for_profile(profile_id, kind, entry_id, qty)
+    estimate = runninghub_estimate_for_profile(profile_id, kind, entry_id, qty, res=res)
     return {"success": True, "estimate": estimate}
 
 @app.get("/api/runninghub/prices")

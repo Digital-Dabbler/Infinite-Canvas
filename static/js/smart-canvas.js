@@ -7319,22 +7319,36 @@ function syncRunButtonState(node=composerActionNode()){
 }
 // 当前 Composer 若走 RunningHub，返回本次调用的估价身份 {kind,id,quantity,multiplier}；否则 null（徽标隐藏）。
 // quantity 是"单次提交"的计费量（视频=时长秒），multiplier 是本次点击要提交的次数（图片张数）。
+function runningHubPriceResolution(source=null){
+    // 预算价用的分辨率标签：优先 Composer 的宽高，其次 "2k"/"1k" 这类档位标签。
+    // 官方分档价按输出像素定价，传对档位才不会高估或低估，所以这里把能拿到的
+    // 尺寸信息一并交给后端，拿不准时传空串、由后端保留区间。
+    const src = source || {};
+    const width = Number(src.imageWidth ?? src.width ?? settings?.imageWidth);
+    const height = Number(src.imageHeight ?? src.height ?? settings?.imageHeight);
+    if(Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0){
+        return `${Math.round(width)}x${Math.round(height)}`;
+    }
+    const label = String(src.imageSize || src.size || src.resolution || settings?.imageSize || settings?.resolution || '').trim();
+    return /^\d+(\.\d+)?x\d+(\.\d+)?$/i.test(label) ? '' : label;
+}
 function runningHubRunPriceSpec(node=null){
     const source = node ? smartSettingsForNode(node) : settings;
     if(!source) return null;
+    const res = runningHubPriceResolution(source);
     if(source.engine === 'runninghub'){
         const ref = selectedRunningHubRef(source);
         if(!ref) return null;
-        return {kind:ref.kind, id:ref.id, quantity:'', multiplier:1};
+        return {kind:ref.kind, id:ref.id, quantity:'', multiplier:1, res};
     }
     if(isApiLikeEngine(source.engine)){
         if(source.apiKind === 'video' && isRunningHubVideoProvider(source.videoProvider)){
             const duration = Math.max(1, Math.min(60, Number(source.videoDuration) || 5));
-            return {kind:'model', id:String(source.videoModel || '').trim(), quantity:duration, multiplier:1};
+            return {kind:'model', id:String(source.videoModel || '').trim(), quantity:duration, multiplier:1, res};
         }
         if(source.apiKind !== 'video' && isRunningHubVideoProvider(source.provider_id)){
             const count = Math.max(1, Math.min(8, Number(source.count || 1)));
-            return {kind:'model', id:String(source.model || '').trim(), quantity:'', multiplier:count};
+            return {kind:'model', id:String(source.model || '').trim(), quantity:'', multiplier:count, res};
         }
     }
     return null;
