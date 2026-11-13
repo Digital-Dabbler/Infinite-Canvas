@@ -1393,17 +1393,29 @@ body.smart-canvas-interacting .smart-node-floating-menu { box-shadow:0 6px 16px 
     .prompt-template-list { max-height:220px; }
     .prompt-template-group-list { grid-template-columns:1fr; }
 }
-.run-btn { width:56px; height:var(--ctrl-height); border-radius:999px; background:var(--strong); color:var(--strong-text); display:flex; align-items:center; justify-content:center; gap:4px; font-size:calc(var(--ctrl-font) * var(--canvas-font-scale, 1)); line-height:1; font-weight:500; justify-self:end; white-space:nowrap; transition:transform .12s ease, box-shadow .12s ease; }
-.run-btn:hover:not(:disabled) { transform:translateY(-1px); box-shadow:0 6px 14px rgba(15,23,42,.18); }
-.run-btn span { white-space:nowrap; }
-.run-btn i,.run-btn svg { width:var(--ctrl-icon) !important; height:var(--ctrl-icon) !important; stroke-width:2; flex:0 0 auto; }
-.run-btn:disabled { opacity:.55; cursor:wait; }
+/* 运行 + 估价组合胶囊（参考 UI）：左侧 ✦金额，右侧白色圆形箭头上箭。
+   没有估价时胶囊退回透明，只剩圆形按钮，避免空白边框噪声。 */
+.run-pill { justify-self:end; align-self:center; display:inline-flex; align-items:center; gap:8px; height:32px; padding:3px; border-radius:999px; border:1px solid transparent; background:transparent; transition:border-color .16s ease, background .16s ease, padding .16s ease; }
+.run-pill.has-price { padding:3px 3px 3px 11px; border-color:var(--line); background:color-mix(in srgb, var(--text) 7%, var(--card)); }
+.run-pill.has-price:hover { border-color:color-mix(in srgb, var(--text) 20%, var(--line)); }
+.run-pill:focus-within { border-color:color-mix(in srgb, var(--text) 26%, var(--line)); }
+.run-btn { width:26px; height:26px; padding:0; border:0; border-radius:999px; background:#f4f5f7; color:#15171c; display:inline-flex; align-items:center; justify-content:center; line-height:1; box-shadow:0 1px 2px rgba(0,0,0,.24); transition:transform .12s ease, box-shadow .12s ease, background .12s ease; }
+.run-btn:hover:not(:disabled) { background:#ffffff; transform:translateY(-1px); box-shadow:0 6px 14px rgba(0,0,0,.26); }
+.run-btn:active:not(:disabled) { transform:translateY(0) scale(.94); }
+.run-btn i,.run-btn svg { width:14px !important; height:14px !important; stroke-width:2.6; flex:0 0 auto; }
+.run-btn:disabled { opacity:.45; cursor:wait; box-shadow:none; }
 /* RunningHub 事前估价徽标：紧贴运行按钮左侧的小胶囊（参考图2 花费额度样式）。 */
 .rh-price-badge { align-self:center; height:22px; display:inline-flex; align-items:center; padding:0 9px; border-radius:999px; font-size:calc(11px * var(--canvas-font-scale, 1)); font-weight:600; line-height:1; white-space:nowrap; cursor:default; border:1px solid var(--line); background:var(--card); color:var(--muted, var(--text)); transition:opacity .15s ease; }
 .rh-price-badge[hidden] { display:none; }
 .rh-price-badge[data-tone="ok"] { color:#d8b45a; border-color:rgba(216,180,90,.45); }
 .rh-price-badge[data-tone="weak"] { color:#d8b45a; opacity:.75; }
 .rh-price-badge[data-tone="muted"] { color:var(--muted, var(--text)); opacity:.8; }
+/* 组合胶囊内的徽标：去掉自身边框/底色，只留 ✦ + 金额，避免"胶囊套胶囊"。 */
+.run-pill .rh-price-badge { align-self:center; flex:0 0 auto; height:auto; padding:0; border:0; border-radius:0; background:none; font-size:calc(11.5px * var(--canvas-font-scale, 1)); font-weight:650; line-height:1; letter-spacing:.01em; color:var(--muted, var(--text)); }
+.run-pill .rh-price-badge::before { content:"✦"; margin-right:5px; font-size:.95em; opacity:.9; }
+.run-pill .rh-price-badge[data-tone="ok"] { color:#e8cd82; }
+.run-pill .rh-price-badge[data-tone="weak"] { color:#cbb075; }
+.run-pill .rh-price-badge[data-tone="muted"] { color:var(--muted, var(--text)); opacity:.85; }
 .cascade-run-btn { width:76px; background:var(--card); color:var(--text); border:1px solid var(--line); }
 .cascade-run-btn:hover:not(:disabled) { border-color:var(--text); }
 .param-row { grid-area:params; min-width:0; margin-top:0; display:flex; align-items:center; gap:var(--ctrl-gap); overflow:visible; flex-wrap:wrap; row-gap:4px; }

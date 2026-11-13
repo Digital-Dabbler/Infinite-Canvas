@@ -3921,8 +3921,10 @@ function composerPromptLimitElement(){
     el.id = 'composerPromptLength';
     el.className = 'composer-prompt-length';
     el.hidden = true;
-    const runBtn = actions.querySelector('#runBtn');
-    if(runBtn) actions.insertBefore(el, runBtn);
+    // 运行按钮现在包在 .run-pill 里，锚点要取胶囊本身，否则 insertBefore 会因
+    // reference 不是 actions 的直接子节点而抛 NotFoundError。
+    const anchorEl = actions.querySelector('.run-pill') || actions.querySelector('#runBtn');
+    if(anchorEl) actions.insertBefore(el, anchorEl);
     else actions.appendChild(el);
     return el;
 }
@@ -7311,7 +7313,7 @@ function syncRunButtonState(node=composerActionNode()){
     runBtn.disabled = !isSmartRunnableNode(node) || !videoSelection.ok || (smartNodeInFlight(node) && !smartNodeAllowsConcurrentSubmit(node)) || smartCascadeIsLoopRunning(node?.id);
     runBtn.title = !videoSelection.ok
         ? tr(videoSelection.reason === 'provider' ? 'smart.noVideoPlatform' : 'smart.errNoVideoModel')
-        : '';
+        : tr('smart.run');
     // RunningHub 事前估价徽标：参数/模型/配置组任何一处变化都会走到这里刷新。
     window.RHPriceBadge?.refreshAnchor(runBtn);
 }

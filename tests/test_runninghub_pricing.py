@@ -489,5 +489,47 @@ class AdminPriceRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.status_code, 400)
 
 
+class RunButtonMarkupTests(unittest.TestCase):
+    """运行按钮与估价徽标的静态接线：任何一处漏掉，按钮上就不会出现金额。"""
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.html = (root / "static" / "smart-canvas.html").read_text(encoding="utf-8")
+        cls.badge_js = (root / "static" / "js" / "price-badge.js").read_text(encoding="utf-8")
+        cls.canvas_js = (root / "static" / "js" / "smart-canvas.js").read_text(encoding="utf-8")
+        cls.css = (root / "static" / "css" / "smart-canvas.css").read_text(encoding="utf-8")
+
+    def test_price_badge_loads_before_canvas_script(self):
+        # 曾经因为顺序颠倒，attach 时 RHPriceBadge 还不存在，可选链静默跳过 → 一个金额都不显示。
+        self.assertIn('src="/static/js/price-badge.js', self.html)
+        self.assertLess(self.html.index("js/price-badge.js"), self.html.index("js/smart-canvas.js"))
+
+    def test_run_button_wrapped_in_price_pill(self):
+        # 参考 UI：一个胶囊里左边 ✦金额、右边白色圆形箭头。
+        self.assertIn('class="run-pill"', self.html)
+        self.assertIn('id="runBtn" class="run-btn"', self.html)
+        self.assertLess(self.html.index('class="run-pill"'), self.html.index('id="runBtn"'))
+        # 按钮本身只剩图标，文字标签走 aria-label（i18n label），避免胶囊里塞文字。
+        run_tag = self.html[self.html.index('id="runBtn"'):]
+        run_tag = run_tag[:run_tag.index("</button>")]
+        self.assertNotIn('data-i18n="smart.run"', run_tag)
+        self.assertIn('data-i18n-label="smart.run"', run_tag)
+
+    def test_badge_sits_inside_pill_and_toggles_frame(self):
+        self.assertIn('anchor.parentElement', self.badge_js)
+        self.assertIn('badge.closest(".run-pill")', self.badge_js)
+        self.assertIn('classList.add("has-price")', self.badge_js)
+
+    def test_prompt_length_anchor_skips_pill(self):
+        # 字数提示必须插在胶囊之前；直接拿 #runBtn 当 reference 会抛 NotFoundError。
+        self.assertIn("actions.querySelector('.run-pill') || actions.querySelector('#runBtn')", self.canvas_js)
+
+    def test_pill_styles_present(self):
+        self.assertIn(".run-pill {", self.css)
+        self.assertIn(".run-pill.has-price", self.css)
+        self.assertIn(".run-pill .rh-price-badge {", self.css)
+
+
 if __name__ == "__main__":
     unittest.main()

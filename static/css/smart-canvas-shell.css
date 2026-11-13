@@ -139,7 +139,9 @@ body.smart-canvas-interacting .rh-agent-panel {
     box-shadow:none !important;
 }
 body.smart-canvas-interacting .image-action-toolbar { display:none !important; }
-.run-btn { background:var(--rh-brand) !important; color:#07110b !important; }
+/* 运行按钮改成参考 UI 的白色圆形箭头，品牌色不再填充按钮本身。 */
+.run-btn { background:#f4f5f7 !important; color:#101318 !important; }
+.run-btn:hover:not(:disabled) { background:#ffffff !important; }
 @media(max-width:720px){
     .rh-canvas-header { padding:0 10px; gap:8px; }
     .rh-brand { padding:0 6px; }

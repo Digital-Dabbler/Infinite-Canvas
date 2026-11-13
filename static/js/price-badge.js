@@ -134,11 +134,14 @@
     }
 
     function render(badge, described) {
+        // 组合胶囊（参考 UI）只有真有钱数时才撑起边框；没有估价就退回单个圆形按钮。
+        const pill = badge.closest(".run-pill");
         if (!described) {
             badge.hidden = true;
             badge.textContent = "";
             badge.removeAttribute("title");
             badge.dataset.tone = "";
+            if (pill) pill.classList.remove("has-price");
             return;
         }
         badge.hidden = false;
@@ -146,6 +149,7 @@
         badge.dataset.tone = described.tone;
         if (described.title) badge.title = described.title;
         else badge.removeAttribute("title");
+        if (pill) pill.classList.add("has-price");
     }
 
     function attach(anchor, specFn) {
