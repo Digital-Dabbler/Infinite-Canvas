@@ -15400,8 +15400,8 @@ def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None, r
         table = load_runninghub_price_table()
         keys = runninghub_price_lookup_keys(kind, entry_id) or [entry_id]
         if kind == "model":
-            # 端点名/官网名对不上的同款模型（如 Dola-Seedream-5.5 与 seedream-v5.5），
-            # 按规范化产品名+操作名兜底，仍然命中真实标价，不编造数字。
+            # 画布/注册表与官网 SKU 的写法差异（Dola-Seedream-5.5 对 dola-Seedream-5.5），
+            # 只收敛大小写与分隔符，仍然命中该型号自己的真实标价，不跨型号借价。
             variants = runninghub_pricing.model_name_variants(entry_id)
             keys = keys + runninghub_pricing.loose_model_keys(table, keys + variants)
         result = None

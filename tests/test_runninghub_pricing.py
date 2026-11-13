@@ -691,7 +691,7 @@ class ResolutionTierTests(unittest.TestCase):
 
 
 class ModelNameFallbackTests(unittest.TestCase):
-    """模型名写法不一致时按规范化名兜底，绝不落空成“费用待定”。"""
+    """只收敛同一模型的写法差异；不同型号（Dola / Seedream）绝不互相顶替价格。"""
 
     def test_normalize_aliases_operation_names(self):
         self.assertEqual(
@@ -703,20 +703,27 @@ class ModelNameFallbackTests(unittest.TestCase):
             rp._normalize_model_name("Dola-Seedream-5.5/text-to-image"),
         )
 
-    def test_dola_variant_strips_prefix(self):
+    def test_variants_only_case_changes(self):
+        # 官网 Dola Seedream 5.5 与 Seedream V5.5 是两条独立 SKU，
+        # 即便价目相同也不能通过剥前缀互换。
+        # 大小写归一只用于更宽容地命中同一条 SKU，不剥型号前缀。
         self.assertEqual(
             rp.model_name_variants("Dola-Seedream-5.5/text-to-image"),
-            ["Seedream-5.5/text-to-image"],
+            ["dola-seedream-5.5/text-to-image"],
         )
         self.assertEqual(rp.model_name_variants("seedream-v5.5/text-to-image"), [])
 
-    def test_loose_keys_find_same_model(self):
+    def test_loose_keys_never_cross_models(self):
+        # Dola 与 Seedream 价格一样，但不是同一个模型，不许借用。
         table = {"models": {"seedream-v5.5/text-to-image": {"unit_cny": 0.13}}}
-        keys = rp.loose_model_keys(
-            table,
-            ["Dola-Seedream-5.5/text-to-image", "Seedream-5.5/text-to-image"],
+        self.assertEqual(rp.loose_model_keys(table, ["Dola-Seedream-5.5/text-to-image"]), [])
+
+    def test_loose_keys_match_case_and_separators(self):
+        table = {"models": {"dola-Seedream-5.5/text2image": {"unit_cny": 0.13}}}
+        self.assertEqual(
+            rp.loose_model_keys(table, ["Dola-Seedream-5.5/text-to-image"]),
+            ["dola-Seedream-5.5/text2image"],
         )
-        self.assertEqual(keys, ["seedream-v5.5/text-to-image"])
 
     def test_loose_keys_ignore_different_model(self):
         table = {"models": {"seedream-v5.5/image-to-image": {"unit_cny": 0.05}}}

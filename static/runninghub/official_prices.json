@@ -1,252 +1,14 @@
 {
  "schema_version": 1,
- "generated_at": 1794565128,
+ "generated_at": 1794566623,
  "generated_note": "由 tools/sync_runninghub_official_prices.py 抓取 RunningHub 官网标价生成",
  "source": [
   "https://www.runninghub.cn/api/sku/list",
   "https://www.runninghub.cn/api/area/price/table",
   "https://www.runninghub.ai/api/sku/list"
  ],
- "count": 322,
+ "count": 366,
  "models": {
-  "Dola-Seedream-5.0-flash/image-to-image": {
-   "billing": "per_unit",
-   "unit_cny": 0.11,
-   "low_cny": 0.11,
-   "high_cny": 0.11,
-   "unit_label": "张",
-   "sku_id": "2133100000000800390",
-   "name_cn": "seedream-v5-flash-图生图",
-   "provider": "ByteDance",
-   "category": "image-to-image",
-   "price_text": "¥0.11/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输出图（≤236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 ≤236万像素按此价计费"
-    },
-    {
-     "label": "输出图（>236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >236万像素按此价计费"
-    }
-   ],
-   "notes": {
-    "输出图（≤236万像素）": 0.11,
-    "输出图（>236万像素）": 0.11
-   }
-  },
-  "Dola-Seedream-5.0-flash/layer-decomposition": {
-   "billing": "per_unit",
-   "unit_cny": 0.11,
-   "low_cny": 0.11,
-   "high_cny": 0.11,
-   "unit_label": "张",
-   "sku_id": "2133100000000800391",
-   "name_cn": "seedream-v5-flash-图层拆分",
-   "provider": "ByteDance",
-   "category": "image-to-image",
-   "price_text": "¥0.11/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输出图（≤236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "每张照片 ≤236万像素按此价计费"
-    },
-    {
-     "label": "输出图（>236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "每张照片 >236万像素按此价计费"
-    }
-   ],
-   "notes": {
-    "输出图（≤236万像素）": 0.11,
-    "输出图（>236万像素）": 0.11
-   }
-  },
-  "Dola-Seedream-5.0-flash/text-to-image": {
-   "billing": "per_unit",
-   "unit_cny": 0.11,
-   "low_cny": 0.11,
-   "high_cny": 0.11,
-   "unit_label": "张",
-   "sku_id": "2133100000000800389",
-   "name_cn": "seedream-v5-flash-文生图",
-   "provider": "ByteDance",
-   "category": "text-to-image",
-   "price_text": "¥0.11/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输出图（≤236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 ≤236万像素按此价计费"
-    },
-    {
-     "label": "输出图（>236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >236万像素按此价计费"
-    }
-   ],
-   "notes": {
-    "输出图（≤236万像素）": 0.11,
-    "输出图（>236万像素）": 0.11
-   }
-  },
-  "Dola-Seedream-5.5/image-to-image": {
-   "billing": "per_unit",
-   "unit_cny": 0.05,
-   "low_cny": 0.05,
-   "high_cny": 0.52,
-   "unit_label": "张",
-   "sku_id": "2134102100000100016",
-   "name_cn": "seedream-v5.5-图生图",
-   "provider": "ByteDance",
-   "category": "image-to-image",
-   "price_text": "¥0.05~0.52/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输入图",
-     "price": 0.05,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "按张计费，首张也计费"
-    },
-    {
-     "label": "输出图 1.5K",
-     "price": 0.13,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 ≤260万像素，含 1K、1.5K 档"
-    },
-    {
-     "label": "输出图 2K",
-     "price": 0.23,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >260万且 ≤462万像素，含 2K 档"
-    },
-    {
-     "label": "输出图 3K",
-     "price": 0.52,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >462万像素，或分辨率传 3K"
-    }
-   ],
-   "notes": {
-    "输入图": 0.05,
-    "输出图 1.5K": 0.13,
-    "输出图 2K": 0.23,
-    "输出图 3K": 0.52
-   }
-  },
-  "Dola-Seedream-5.5/layer-decomposition": {
-   "billing": "per_unit",
-   "unit_cny": 0.05,
-   "low_cny": 0.05,
-   "high_cny": 0.52,
-   "unit_label": "张",
-   "sku_id": "2134102100000100017",
-   "name_cn": "seedream-v5.5-图层拆分",
-   "provider": "ByteDance",
-   "category": "image-tools",
-   "price_text": "¥0.05~0.52/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输入图",
-     "price": 0.05,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "按张计费，首张也计费"
-    },
-    {
-     "label": "输出图 1.5K",
-     "price": 0.13,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "每张照片 ≤260万像素，含 1K、1.5K 档"
-    },
-    {
-     "label": "输出图 2K",
-     "price": 0.23,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "每张照片 >260万且 ≤462万像素，含 2K、auto 档"
-    },
-    {
-     "label": "输出图 3K",
-     "price": 0.52,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "每张照片 >462万像素"
-    }
-   ],
-   "notes": {
-    "输入图": 0.05,
-    "输出图 1.5K": 0.13,
-    "输出图 2K": 0.23,
-    "输出图 3K": 0.52
-   }
-  },
-  "Dola-Seedream-5.5/text-to-image": {
-   "billing": "per_unit",
-   "unit_cny": 0.13,
-   "low_cny": 0.13,
-   "high_cny": 0.52,
-   "unit_label": "张",
-   "sku_id": "2134102100000100015",
-   "name_cn": "seedream-v5.5-文生图",
-   "provider": "ByteDance",
-   "category": "text-to-image",
-   "price_text": "¥0.13~0.52/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输出图 1.5K",
-     "price": 0.13,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 ≤260万像素，含 1K、1.5K 档"
-    },
-    {
-     "label": "输出图 2K",
-     "price": 0.23,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >260万且 ≤462万像素，含 2K 档"
-    },
-    {
-     "label": "输出图 3K",
-     "price": 0.52,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >462万像素，或分辨率传 3K"
-    }
-   ],
-   "notes": {
-    "输出图 1.5K": 0.13,
-    "输出图 2K": 0.23,
-    "输出图 3K": 0.52
-   }
-  },
   "alibaba/happyhorse-1.0/image-to-video": {
    "billing": "per_second",
    "unit_cny": 0.67,
@@ -1326,39 +1088,6 @@
     "4k": 87.5
    }
   },
-  "dola-Seedream-5.0-flash/image-to-image": {
-   "billing": "per_unit",
-   "unit_cny": 0.11,
-   "low_cny": 0.11,
-   "high_cny": 0.11,
-   "unit_label": "张",
-   "sku_id": "2133100000000800390",
-   "name_cn": "seedream-v5-flash-图生图",
-   "provider": "ByteDance",
-   "category": "image-to-image",
-   "price_text": "¥0.11/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输出图（≤236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 ≤236万像素按此价计费"
-    },
-    {
-     "label": "输出图（>236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >236万像素按此价计费"
-    }
-   ],
-   "notes": {
-    "输出图（≤236万像素）": 0.11,
-    "输出图（>236万像素）": 0.11
-   }
-  },
   "dola-Seedream-5.0-flash/layer-decomposition": {
    "billing": "per_unit",
    "unit_cny": 0.11,
@@ -1366,11 +1095,11 @@
    "high_cny": 0.11,
    "unit_label": "张",
    "sku_id": "2133100000000800391",
-   "name_cn": "seedream-v5-flash-图层拆分",
+   "name_cn": "Dola Seedream 5.0 Flash Layer Decomposition",
    "provider": "ByteDance",
    "category": "image-to-image",
    "price_text": "¥0.11/张",
-   "note": "官方标价",
+   "note": "官方标价（国际站）",
    "tiers": [
     {
      "label": "输出图（≤236万像素）",
@@ -1392,51 +1121,18 @@
     "输出图（>236万像素）": 0.11
    }
   },
-  "dola-Seedream-5.0-flash/text-to-image": {
-   "billing": "per_unit",
-   "unit_cny": 0.11,
-   "low_cny": 0.11,
-   "high_cny": 0.11,
-   "unit_label": "张",
-   "sku_id": "2133100000000800389",
-   "name_cn": "seedream-v5-flash-文生图",
-   "provider": "ByteDance",
-   "category": "text-to-image",
-   "price_text": "¥0.11/张",
-   "note": "官方标价",
-   "tiers": [
-    {
-     "label": "输出图（≤236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 ≤236万像素按此价计费"
-    },
-    {
-     "label": "输出图（>236万像素）",
-     "price": 0.11,
-     "unit": "张",
-     "billing": "per_unit",
-     "note": "单张 >236万像素按此价计费"
-    }
-   ],
-   "notes": {
-    "输出图（≤236万像素）": 0.11,
-    "输出图（>236万像素）": 0.11
-   }
-  },
   "dola-Seedream-5.5/image-to-image": {
    "billing": "per_unit",
    "unit_cny": 0.05,
    "low_cny": 0.05,
    "high_cny": 0.52,
    "unit_label": "张",
-   "sku_id": "2134102100000100016",
-   "name_cn": "seedream-v5.5-图生图",
+   "sku_id": "2134102100000100019",
+   "name_cn": "Dola Seedream 5.5 Image To Image",
    "provider": "ByteDance",
    "category": "image-to-image",
    "price_text": "¥0.05~0.52/张",
-   "note": "官方标价",
+   "note": "官方标价（国际站）",
    "tiers": [
     {
      "label": "输入图",
@@ -1480,12 +1176,12 @@
    "low_cny": 0.05,
    "high_cny": 0.52,
    "unit_label": "张",
-   "sku_id": "2134102100000100017",
-   "name_cn": "seedream-v5.5-图层拆分",
+   "sku_id": "2134102100000100020",
+   "name_cn": "Dola Seedream 5.5 Layer Decomposition",
    "provider": "ByteDance",
    "category": "image-tools",
    "price_text": "¥0.05~0.52/张",
-   "note": "官方标价",
+   "note": "官方标价（国际站）",
    "tiers": [
     {
      "label": "输入图",
@@ -1529,12 +1225,12 @@
    "low_cny": 0.13,
    "high_cny": 0.52,
    "unit_label": "张",
-   "sku_id": "2134102100000100015",
-   "name_cn": "seedream-v5.5-文生图",
+   "sku_id": "2134102100000100018",
+   "name_cn": "Dola Seedream 5.5 Text To Image",
    "provider": "ByteDance",
    "category": "text-to-image",
    "price_text": "¥0.13~0.52/张",
-   "note": "官方标价",
+   "note": "官方标价（国际站）",
    "tiers": [
     {
      "label": "输出图 1.5K",
@@ -2731,6 +2427,214 @@
    "price_text": "¥0.81/秒",
    "note": "官方标价"
   },
+  "marble-1.0/image-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.08,
+   "low_cny": 10.08,
+   "high_cny": 10.08,
+   "unit_label": "次",
+   "sku_id": "2049102783988453380",
+   "name_cn": "marble-1.0 单图生3D世界",
+   "provider": "World Labs",
+   "category": "image-to-world",
+   "price_text": "¥10.08/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.0/multi-image-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.75,
+   "low_cny": 10.75,
+   "high_cny": 10.75,
+   "unit_label": "次",
+   "sku_id": "2049102783988453381",
+   "name_cn": "marble-1.0 多图生3D世界",
+   "provider": "World Labs",
+   "category": "multi-image-to-world",
+   "price_text": "¥10.75/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.0/text-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.62,
+   "low_cny": 10.62,
+   "high_cny": 10.62,
+   "unit_label": "次",
+   "sku_id": "2049102783988453378",
+   "name_cn": "marble-1.0 文生3D世界",
+   "provider": "World Labs",
+   "category": "text-to-world",
+   "price_text": "¥10.62/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.0/video-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.75,
+   "low_cny": 10.75,
+   "high_cny": 10.75,
+   "unit_label": "次",
+   "sku_id": "2049102783988453382",
+   "name_cn": "marble-1.0 视频生3D世界",
+   "provider": "World Labs",
+   "category": "video-to-world",
+   "price_text": "¥10.75/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1-plus/image-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 20.16,
+   "low_cny": 20.16,
+   "high_cny": 20.16,
+   "unit_label": "次",
+   "sku_id": "2049125960420511745",
+   "name_cn": "marble-1.1-plus 单图生3D世界",
+   "provider": "World Labs",
+   "category": "image-to-world",
+   "price_text": "¥20.16/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1-plus/multi-image-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 20.83,
+   "low_cny": 20.83,
+   "high_cny": 20.83,
+   "unit_label": "次",
+   "sku_id": "2049125216288067586",
+   "name_cn": "marble-1.1-plus 多图生3D世界",
+   "provider": "World Labs",
+   "category": "multi-image-to-world",
+   "price_text": "¥20.83/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1-plus/text-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 20.7,
+   "low_cny": 20.7,
+   "high_cny": 20.7,
+   "unit_label": "次",
+   "sku_id": "2049127537332015106",
+   "name_cn": "marble-1.1-plus 文生3D世界",
+   "provider": "World Labs",
+   "category": "text-to-world",
+   "price_text": "¥20.7/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1-plus/video-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 20.83,
+   "low_cny": 20.83,
+   "high_cny": 20.83,
+   "unit_label": "次",
+   "sku_id": "2049124491315204098",
+   "name_cn": "marble-1.1-plus 视频生3D世界",
+   "provider": "World Labs",
+   "category": "video-to-world",
+   "price_text": "¥20.83/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1/image-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.08,
+   "low_cny": 10.08,
+   "high_cny": 10.08,
+   "unit_label": "次",
+   "sku_id": "2049125781764132866",
+   "name_cn": "marble-1.1 单图生3D世界",
+   "provider": "World Labs",
+   "category": "image-to-world",
+   "price_text": "¥10.08/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1/multi-image-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.75,
+   "low_cny": 10.75,
+   "high_cny": 10.75,
+   "unit_label": "次",
+   "sku_id": "2049125028609740802",
+   "name_cn": "marble-1.1 多图生3D世界",
+   "provider": "World Labs",
+   "category": "multi-image-to-world",
+   "price_text": "¥10.75/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1/text-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.62,
+   "low_cny": 10.62,
+   "high_cny": 10.62,
+   "unit_label": "次",
+   "sku_id": "2049127309220597761",
+   "name_cn": "marble-1.1 文生3D世界",
+   "provider": "World Labs",
+   "category": "text-to-world",
+   "price_text": "¥10.62/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble-1.1/video-to-world": {
+   "billing": "per_unit",
+   "unit_cny": 10.75,
+   "low_cny": 10.75,
+   "high_cny": 10.75,
+   "unit_label": "次",
+   "sku_id": "2049124265967833089",
+   "name_cn": "marble-1.1 视频生3D世界",
+   "provider": "World Labs",
+   "category": "video-to-world",
+   "price_text": "¥10.75/次",
+   "note": "官方标价（国际站）"
+  },
+  "marble/upload-media-asset": {
+   "billing": "per_unit",
+   "unit_cny": 9999.0,
+   "low_cny": 9999.0,
+   "high_cny": 9999.0,
+   "unit_label": "次",
+   "sku_id": "2049102783988453379",
+   "name_cn": "Marble 上传媒体资源",
+   "provider": "World Labs",
+   "category": "upload-media-asset",
+   "price_text": "¥9999.0/次",
+   "note": "官方标价（国际站）"
+  },
+  "meshy6/image-to-3d": {
+   "billing": "per_unit",
+   "unit_cny": 5.04,
+   "low_cny": 5.04,
+   "high_cny": 5.04,
+   "unit_label": "次",
+   "sku_id": "2049745693465419780",
+   "name_cn": "Meshy 6 图生 3D",
+   "provider": "Meshy",
+   "category": "image-to-3D",
+   "price_text": "¥5.04/次",
+   "note": "官方标价（国际站）"
+  },
+  "meshy6/text-to-3d": {
+   "billing": "per_unit",
+   "unit_cny": 5.04,
+   "low_cny": 5.04,
+   "high_cny": 5.04,
+   "unit_label": "次",
+   "sku_id": "2049745693465419779",
+   "name_cn": "Meshy 6 文生 3D",
+   "provider": "Meshy",
+   "category": "text-to-3D",
+   "price_text": "¥5.04/次",
+   "note": "官方标价（国际站）"
+  },
+  "meta/muse-video/economy": {
+   "billing": "per_unit",
+   "unit_cny": 0.2,
+   "low_cny": 0.2,
+   "high_cny": 0.2,
+   "unit_label": "次",
+   "sku_id": "2134110200000200005",
+   "name_cn": "muse-video/economy",
+   "provider": "Meta",
+   "category": "image-to-video",
+   "price_text": "¥0.2/次",
+   "note": "官方标价（国际站）"
+  },
   "minimax/h3-max-turbo/image-to-video": {
    "billing": "per_second",
    "unit_cny": 0.22,
@@ -3829,6 +3733,97 @@
    "price_text": "¥0.16/秒",
    "note": "官方标价"
   },
+  "rhart-audio/suno-v4.5/custom": {
+   "billing": "per_unit",
+   "unit_cny": 0.72,
+   "low_cny": 0.72,
+   "high_cny": 0.72,
+   "unit_label": "次",
+   "sku_id": "2046514150500524051",
+   "name_cn": "suno-custom-v4.5",
+   "provider": "Suno",
+   "category": "text-to-music",
+   "price_text": "¥0.72/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-audio/suno-v4.5/single": {
+   "billing": "per_unit",
+   "unit_cny": 0.72,
+   "low_cny": 0.72,
+   "high_cny": 0.72,
+   "unit_label": "次",
+   "sku_id": "2046514150500524050",
+   "name_cn": "suno-single-v4.5",
+   "provider": "Suno",
+   "category": "text-to-music",
+   "price_text": "¥0.72/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-audio/suno-v5.5/custom": {
+   "billing": "per_unit",
+   "unit_cny": 0.72,
+   "low_cny": 0.72,
+   "high_cny": 0.72,
+   "unit_label": "次",
+   "sku_id": "2046514150500524046",
+   "name_cn": "suno-custom-v5.5",
+   "provider": "Suno",
+   "category": "text-to-music",
+   "price_text": "¥0.72/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-audio/suno-v5.5/single": {
+   "billing": "per_unit",
+   "unit_cny": 0.72,
+   "low_cny": 0.72,
+   "high_cny": 0.72,
+   "unit_label": "次",
+   "sku_id": "2046514150500524045",
+   "name_cn": "suno-single-v5.5",
+   "provider": "Suno",
+   "category": "text-to-music",
+   "price_text": "¥0.72/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-audio/suno-v5/custom": {
+   "billing": "per_unit",
+   "unit_cny": 0.72,
+   "low_cny": 0.72,
+   "high_cny": 0.72,
+   "unit_label": "次",
+   "sku_id": "2046514150500524049",
+   "name_cn": "suno-custom-v5",
+   "provider": "Suno",
+   "category": "text-to-music",
+   "price_text": "¥0.72/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-audio/suno-v5/single": {
+   "billing": "per_unit",
+   "unit_cny": 0.72,
+   "low_cny": 0.72,
+   "high_cny": 0.72,
+   "unit_label": "次",
+   "sku_id": "2046514150500524048",
+   "name_cn": "suno-single-v5",
+   "provider": "Suno",
+   "category": "text-to-music",
+   "price_text": "¥0.72/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-audio/suno/lyrics": {
+   "billing": "per_unit",
+   "unit_cny": 0.02,
+   "low_cny": 0.02,
+   "high_cny": 0.02,
+   "unit_label": "次",
+   "sku_id": "2046514150500524047",
+   "name_cn": "suno-歌词生成",
+   "provider": "Suno",
+   "category": "text-to-lyrics",
+   "price_text": "¥0.02/次",
+   "note": "官方标价（国际站）"
+  },
   "rhart-audio/text-to-audio/music-2.5": {
    "billing": "per_unit",
    "unit_cny": 0.8,
@@ -3985,6 +3980,32 @@
    "price_text": "¥0.1/次",
    "note": "官方标价（国际站渠道）"
   },
+  "rhart-image-g/image-to-image": {
+   "billing": "per_unit",
+   "unit_cny": 0.08,
+   "low_cny": 0.08,
+   "high_cny": 0.08,
+   "unit_label": "次",
+   "sku_id": "2031353763945897986",
+   "name_cn": "grok-imagine-image/image-to-image/economy",
+   "provider": "xAI",
+   "category": "image-to-image",
+   "price_text": "¥0.08/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-image-g/text-to-image": {
+   "billing": "per_unit",
+   "unit_cny": 0.08,
+   "low_cny": 0.08,
+   "high_cny": 0.08,
+   "unit_label": "次",
+   "sku_id": "2031354034474311682",
+   "name_cn": "grok-imagine-image/text-to-image/economy",
+   "provider": "xAI",
+   "category": "text-to-image",
+   "price_text": "¥0.08/次",
+   "note": "官方标价（国际站）"
+  },
   "rhart-image-v1-official/edit": {
    "billing": "per_unit",
    "unit_cny": 0.2,
@@ -4036,6 +4057,45 @@
    "category": "text-to-image",
    "price_text": "¥0.07/张",
    "note": "官方标价（国际站渠道）"
+  },
+  "rhart-image/f-dev": {
+   "billing": "per_unit",
+   "unit_cny": 0.04,
+   "low_cny": 0.04,
+   "high_cny": 0.04,
+   "unit_label": "次",
+   "sku_id": "2034577474668724226",
+   "name_cn": "f-dev",
+   "provider": "Black Forest Labs",
+   "category": "text-to-image",
+   "price_text": "¥0.04/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-image/f-dev-lora": {
+   "billing": "per_unit",
+   "unit_cny": 0.03,
+   "low_cny": 0.03,
+   "high_cny": 0.03,
+   "unit_label": "次",
+   "sku_id": "2034579103547654146",
+   "name_cn": "f-dev-lora",
+   "provider": "Black Forest Labs",
+   "category": "text-to-image",
+   "price_text": "¥0.03/次",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-imagine-image-2.0/text-to-image": {
+   "billing": "per_unit",
+   "unit_cny": 0.15,
+   "low_cny": 0.15,
+   "high_cny": 0.15,
+   "unit_label": "张",
+   "sku_id": "2133100000000700032",
+   "name_cn": "xai/grok-imagine-2.0/text-to-image/economy",
+   "provider": "xAI",
+   "category": "text-to-image",
+   "price_text": "¥0.15/张",
+   "note": "官方标价（国际站）"
   },
   "rhart-video-v3.1-fast/text-to-video": {
    "billing": "per_unit",
@@ -4350,6 +4410,32 @@
    "category": "text-to-video",
    "price_text": "¥0.6/秒",
    "note": "官方标价"
+  },
+  "rhart-video/video-fps-increaser": {
+   "billing": "per_second",
+   "unit_cny": 0.07,
+   "low_cny": 0.07,
+   "high_cny": 0.07,
+   "unit_label": "秒",
+   "sku_id": "2038503362263322628",
+   "name_cn": "RH视频帧率增强",
+   "provider": "rh-ai",
+   "category": "video-tools",
+   "price_text": "¥0.07/秒",
+   "note": "官方标价（国际站）"
+  },
+  "rhart-video/video-upscaler": {
+   "billing": "per_second",
+   "unit_cny": 0.14,
+   "low_cny": 0.14,
+   "high_cny": 0.14,
+   "unit_label": "秒",
+   "sku_id": "2038503362263322627",
+   "name_cn": "RH视频超分",
+   "provider": "rh-ai",
+   "category": "video-tools",
+   "price_text": "¥0.14/秒",
+   "note": "官方标价（国际站）"
   },
   "seedream-v4.7/image-to-image": {
    "billing": "per_unit",
@@ -4800,6 +4886,734 @@
    "price_text": "¥0.39/秒",
    "note": "官方标价"
   },
+  "topazlabs/image-gigapixel-art-and-cgi": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700011",
+   "name_cn": "topazlabs图像放大Art and CGI",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/image-gigapixel-text-and-shapes": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700013",
+   "name_cn": "topazlabs图像放大Text and Shapes",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/image-upscale-detail-faces": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700002",
+   "name_cn": "topazlabs图像放大Detail Faces",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/image-upscale-high-fidelity-v2": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700012",
+   "name_cn": "topazlabs图像放大High Fidelity v2",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/image-upscale-high-fidelity-v3": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700001",
+   "name_cn": "topazlabs图像放大High Fidelity V3",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/image-upscale-standard-v2": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700009",
+   "name_cn": "topazlabs图像放大Standard v2",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/image-upscale-transparent": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700003",
+   "name_cn": "topazlabs图像放大Transparent",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/image-upscale/low-resolution-v2": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 2.24,
+   "unit_label": "次",
+   "sku_id": "2133100000000700010",
+   "name_cn": "topazlabs图像放大Low Resolution v2",
+   "provider": "Topaz Labs",
+   "category": "image-to-image",
+   "price_text": "¥0.56~2.24/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "≤ 24",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "24 < MP ≤ 48",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "48 < MP ≤ 72",
+     "price": 1.68,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    },
+    {
+     "label": "72 < MP ≤ 96",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "本模型按输出总像素计费"
+    }
+   ],
+   "notes": {
+    "≤ 24": 0.56,
+    "24 < MP ≤ 48": 1.12,
+    "48 < MP ≤ 72": 1.68,
+    "72 < MP ≤ 96": 2.24
+   }
+  },
+  "topazlabs/video-astra": {
+   "billing": "per_unit",
+   "unit_cny": 0.056,
+   "low_cny": 0.056,
+   "high_cny": 0.093,
+   "unit_label": "次",
+   "sku_id": "2133100000000700007",
+   "name_cn": "topazlabs视频放大Astra",
+   "provider": "Topaz Labs",
+   "category": "video-to-video",
+   "price_text": "¥0.056~0.093/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "1080p",
+     "price": 0.056,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": ""
+    },
+    {
+     "label": "4K",
+     "price": 0.093,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": ""
+    }
+   ],
+   "notes": {
+    "1080p": 0.056,
+    "4K": 0.093
+   }
+  },
+  "topazlabs/video-denoise": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 19.04,
+   "unit_label": "次",
+   "sku_id": "2133100000000700006",
+   "name_cn": "topazlabs视频降噪Denoise",
+   "provider": "Topaz Labs",
+   "category": "video-to-video",
+   "price_text": "¥0.56~19.04/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "1s",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.56"
+    },
+    {
+     "label": "5s",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.56"
+    },
+    {
+     "label": "10s",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "1m",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.48"
+    },
+    {
+     "label": "5m",
+     "price": 9.52,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥21.28"
+    },
+    {
+     "label": "10m",
+     "price": 19.04,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥42.56"
+    },
+    {
+     "label": "1s",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "5s",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "10s",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "1m",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥3.36"
+    },
+    {
+     "label": "5m",
+     "price": 6.72,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥13.44"
+    },
+    {
+     "label": "10m",
+     "price": 12.32,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥26.88"
+    }
+   ]
+  },
+  "topazlabs/video-frame-interpolation": {
+   "billing": "per_unit",
+   "unit_cny": 0.56,
+   "low_cny": 0.56,
+   "high_cny": 3.36,
+   "unit_label": "次",
+   "sku_id": "2133100000000700008",
+   "name_cn": "topazlabs视频补帧Frame Interpolation",
+   "provider": "Topaz Labs",
+   "category": "video-to-video",
+   "price_text": "¥0.56~3.36/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "Aion (aion-1)",
+     "price": 3.36,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": ""
+    },
+    {
+     "label": "Apollo/Chronos Quality (apo-8/chr-2)",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": ""
+    },
+    {
+     "label": "Apollo/Chronos Fast (apf-2/chf-3)",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": ""
+    }
+   ],
+   "notes": {
+    "Aion (aion-1)": 3.36,
+    "Apollo/Chronos Quality (apo-8/chr-2)": 1.12,
+    "Apollo/Chronos Fast (apf-2/chf-3)": 0.56
+   }
+  },
+  "topazlabs/video-proteus": {
+   "billing": "per_unit",
+   "unit_cny": 0.00189,
+   "low_cny": 0.00189,
+   "high_cny": 20.16,
+   "unit_label": "次",
+   "sku_id": "2133100000000700004",
+   "name_cn": "topazlabs视频增强Proteus",
+   "provider": "Topaz Labs",
+   "category": "video-to-video",
+   "price_text": "¥0.00189~20.16/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "1s",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.56"
+    },
+    {
+     "label": "5s",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥0.56"
+    },
+    {
+     "label": "10s",
+     "price": 0.56,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "1m",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥4.48"
+    },
+    {
+     "label": "5m",
+     "price": 9.52,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥21.28"
+    },
+    {
+     "label": "10m",
+     "price": 19.04,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥42.56"
+    },
+    {
+     "label": "1s",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "5s",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "10s",
+     "price": 1.12,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥1.12"
+    },
+    {
+     "label": "1m",
+     "price": 2.24,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥5.6"
+    },
+    {
+     "label": "5m",
+     "price": 10.08,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥23.52"
+    },
+    {
+     "label": "10m",
+     "price": 20.16,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "¥45.92"
+    },
+    {
+     "label": "",
+     "price": 0.00189,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "约¥0.00189/帧"
+    }
+   ]
+  },
+  "topazlabs/video-starlight": {
+   "billing": "per_unit",
+   "unit_cny": 0.0105,
+   "low_cny": 0.0105,
+   "high_cny": 0.0217,
+   "unit_label": "次",
+   "sku_id": "2133100000000700005",
+   "name_cn": "topazlabs视频增强Starlight",
+   "provider": "Topaz Labs",
+   "category": "video-to-video",
+   "price_text": "¥0.0105~0.0217/次",
+   "note": "官方标价（国际站）",
+   "tiers": [
+    {
+     "label": "Starlight Precise 2.5(slp-2.5)",
+     "price": 0.0217,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "约¥0.0217/帧"
+    },
+    {
+     "label": "Starlight HQ(slhq-1)",
+     "price": 0.0217,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "约¥0.0217/帧"
+    },
+    {
+     "label": "Starlight Mini(slm-1)",
+     "price": 0.0217,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "约¥0.0217/帧"
+    },
+    {
+     "label": "Starlight Sharp(wonder-1)",
+     "price": 0.0217,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "约¥0.0217/帧"
+    },
+    {
+     "label": "Starlight Fast 2(slf-2)",
+     "price": 0.0105,
+     "unit": "次",
+     "billing": "per_unit",
+     "note": "约¥0.0105/帧"
+    }
+   ],
+   "notes": {
+    "Starlight Precise 2.5(slp-2.5)": 0.0217,
+    "Starlight HQ(slhq-1)": 0.0217,
+    "Starlight Mini(slm-1)": 0.0217,
+    "Starlight Sharp(wonder-1)": 0.0217,
+    "Starlight Fast 2(slf-2)": 0.0105
+   }
+  },
   "vidu/image-to-video-q2-pro": {
    "billing": "per_unit",
    "unit_cny": 0.18,
@@ -5122,6 +5936,19 @@
    "category": "text-to-video",
    "price_text": "¥0.18/秒",
    "note": "官方标价"
+  },
+  "volc-analyze-video-storyline": {
+   "billing": "per_unit",
+   "unit_cny": 0.01,
+   "low_cny": 0.01,
+   "high_cny": 0.01,
+   "unit_label": "次",
+   "sku_id": "2133100000000700135",
+   "name_cn": "火山剧情故事线分析",
+   "provider": "",
+   "category": "",
+   "price_text": "¥0.01/次",
+   "note": "官方标价（国际站）"
   },
   "volc-subtitle-erase-pro/video": {
    "billing": "per_second",
@@ -5538,6 +6365,110 @@
    "category": "video-extend",
    "price_text": "¥1.89/次",
    "note": "官方标价（国际站渠道）"
+  },
+  "youchuan/image-to-video": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2016785492810731522",
+   "name_cn": "悠船图生视频",
+   "provider": "Midjourney",
+   "category": "image-to-video",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
+  },
+  "youchuan/text-to-image-niji6": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2016832698641092610",
+   "name_cn": "悠船文生图-niji6",
+   "provider": "Midjourney",
+   "category": "text-to-image",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
+  },
+  "youchuan/text-to-image-niji7": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2016833484322312193",
+   "name_cn": "悠船文生图-niji7",
+   "provider": "Midjourney",
+   "category": "text-to-image",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
+  },
+  "youchuan/text-to-image-v6": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2016813986152255489",
+   "name_cn": "悠船文生图-v6",
+   "provider": "Midjourney",
+   "category": "text-to-image",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
+  },
+  "youchuan/text-to-image-v61": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2016831146606006273",
+   "name_cn": "悠船文生图-v61",
+   "provider": "Midjourney",
+   "category": "text-to-image",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
+  },
+  "youchuan/text-to-image-v7": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2016834293520994306",
+   "name_cn": "悠船文生图-v7",
+   "provider": "Midjourney",
+   "category": "text-to-image",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
+  },
+  "youchuan/text-to-image-v81": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2052634166820159490",
+   "name_cn": "悠船文生图-v8.1",
+   "provider": "Midjourney",
+   "category": "text-to-image",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
+  },
+  "youchuan/text-to-image-v82": {
+   "billing": "per_unit",
+   "unit_cny": 0.54,
+   "low_cny": 0.54,
+   "high_cny": 0.54,
+   "unit_label": "次",
+   "sku_id": "2071530047002677250",
+   "name_cn": "悠船文生图-v8.2预览版",
+   "provider": "Midjourney",
+   "category": "text-to-image",
+   "price_text": "¥0.54/次",
+   "note": "官方标价（国际站）"
   }
  },
  "unmatched_skus": [

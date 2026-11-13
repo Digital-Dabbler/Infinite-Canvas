@@ -235,26 +235,12 @@ def entry_from_sku(sku: Dict[str, Any], tiers: List[Dict[str, Any]]) -> Optional
     return entry
 
 
-# 官网/i2i 写法不一致的型号别名：把同一款模型多种名字都对到端点。
-# Dola-Seedream-5.5 与 seedream-v5.5 是同一条 SKU（¥0.13~0.52/张），注册表里
-# 却是两个端点名，不补别名就永远查不到价。
-MODEL_NAME_ALIASES = {
-    "Dola-Seedream-5.5/text-to-image": "dola-Seedream-5.5/text-to-image",
-    "Dola-Seedream-5.5/image-to-image": "dola-Seedream-5.5/image-to-image",
-    "Dola-Seedream-5.5/layer-decomposition": "dola-Seedream-5.5/layer-decomposition",
-    "Dola-Seedream-5.0-flash/text-to-image": "dola-Seedream-5.0-flash/text-to-image",
-    "Dola-Seedream-5.0-flash/image-to-image": "dola-Seedream-5.0-flash/image-to-image",
-    "Dola-Seedream-5.0-flash/layer-decomposition": "dola-Seedream-5.0-flash/layer-decomposition",
-}
-# 这些端点在官网用的是另一个型号名（seedream-v5.5 / seedream-v5-flash）。
-ALIAS_SOURCE_KEYS = {
-    "dola-Seedream-5.5/text-to-image": "seedream-v5.5/text-to-image",
-    "dola-Seedream-5.5/image-to-image": "seedream-v5.5/image-to-image",
-    "dola-Seedream-5.5/layer-decomposition": "seedream-v5.5/layer-decomposition",
-    "dola-Seedream-5.0-flash/text-to-image": "seedream-v5-flash/text-to-image",
-    "dola-Seedream-5.0-flash/image-to-image": "seedream-v5-flash/image-to-image",
-    "dola-Seedream-5.0-flash/layer-decomposition": "seedream-v5-flash/layer-decomposition",
-}
+# 国际站标准模型 SKU 用英文名（"Dola Seedream 5.5 Text To Image"），
+# 与注册表 name_cn 字段的写法差异只在大小写和空格，_norm 后可直接对上。
+# 不要在这里把 A 型号的价格套给 B 型号：Dola 系列和 Seedream 系列是两条
+# 不同的 SKU，价格相同也不代表同一个模型，必须各取各的价目表。
+MODEL_NAME_ALIASES = {}
+ALIAS_SOURCE_KEYS = {}
 
 
 def main() -> int:
@@ -303,9 +289,43 @@ def main() -> int:
                 if entry:
                     endpoint_pick.setdefault(endpoint, entry)
 
-        # 2) 国际站：渠道版型号，SKU 名本身就是 ``<产品>/<操作>/<档位>``。
+        # 2) 国际站：渠道版型号 + 用英文名标价的标准模型。
         ai_skus = fetch_sku_catalog(client, AI_SKU_LIST_URL)
         print(f"国际站 SKU: {len(ai_skus)} 条")
+        # 2a) 英文名标准模型（如 Dola Seedream 5.5 Text To Image）走名字匹配，
+        # 与国内站同一套逻辑，绝不跨型号借价。
+        need_table_ai = []
+        for sku in ai_skus:
+            name = str(sku.get("name") or "").strip()
+            matched = by_name.get(_norm(name))
+            endpoint = str(matched.get("endpoint") or "").strip() if matched else ""
+            if not endpoint or endpoint in endpoint_pick:
+                continue
+            price = sku.get("price") or {}
+            if not isinstance(price.get("price"), (int, float)):
+                need_table_ai.append((endpoint, sku))
+                continue
+            entry = entry_from_sku(sku, [])
+            if entry:
+                entry["note"] = "官方标价（国际站）"
+                endpoint_pick.setdefault(endpoint, entry)
+
+        def work_ai(item):
+            endpoint, sku = item
+            table = fetch_price_table(client, str(sku.get("id") or ""))
+            return endpoint, sku, tiers_from_table(table)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+            for endpoint, sku, tiers in pool.map(work_ai, need_table_ai):
+                if endpoint in endpoint_pick:
+                    continue
+                entry = entry_from_sku(sku, tiers)
+                if entry:
+                    entry["note"] = "官方标价（国际站）"
+                    endpoint_pick.setdefault(endpoint, entry)
+        print(f"  国际站英文名标准模型补价: {len(need_table_ai)} 个待取分档价")
+
+        # 2b) 渠道版型号，SKU 名本身就是 ``<产品>/<操作>/<档位>``。
         channel_keys = 0
         for sku in ai_skus:
             name = str(sku.get("name") or "").strip()

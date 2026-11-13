@@ -493,10 +493,10 @@ def _tier_notes(raw: Any) -> Dict[str, float]:
     return notes
 
 
-# 同一模型在官网/i2i 等处的写法差异：估价时按“规范化模型名”互相兜底。
-# 实测确认的例子：画布上的 Dola-Seedream-5.5/text-to-image 与官网的
-# seedream-v5.5-文生图 是同一条 SKU（¥0.13~0.52/张），但端点名不一致，
-# 只按字符串相等就查不到价。
+# 模型 ID 的写法归一：同一款模型可能被写成 text2image / t2i / txt2img 等。
+# 只处理“同一个名字的不同写法”，绝不把两条不同型号的 SKU 合并——
+# 例如 Dola-Seedream-5.5 与 Seedream-5.5 是官网上两条独立 SKU，价格相同
+# 也必须各查各的价目表，不能互相顶替。
 _OPERATION_ALIASES = {
     "text2image": "text-to-image",
     "t2i": "text-to-image",
@@ -511,9 +511,9 @@ _OPERATION_ALIASES = {
     "i2v": "image-to-video",
     "layerdecomposition": "layer-decomposition",
 }
-_DOLA_PREFIXES = ("dola-", "dola_", "dola ")
-# 版本号里的 "v" 是写法差异（seedream-v5.5 与 seedream-5.5 是同一款），
-# 规范化产品名时删掉，否则兜底匹配永远对不上。
+# 版本号里的 "v" 只是写法差异（seedream-v5.5 与 seedream-5.5 同一个名字），
+# 规范化产品名时删掉；注意这只作用于同一型号内部，不会把 Dola- 前缀去掉，
+# 因为 Dola Seedream 与 Seedream 在官网是两条不同的 SKU。
 _VERSION_V_RE = re.compile(r"v(?=\d)")
 
 
@@ -544,21 +544,22 @@ def _normalize_model_name(model_id: str) -> Tuple[str, str]:
 
 
 def model_name_variants(model_id: str) -> List[str]:
-    """给出同一模型可能的等价写法（不含原始 ID）。"""
+    """同一模型名的字母大小写写法（不含原始 ID）。
+
+    只在大小写上做等价，不改型号本身：Dola Seedream 与 Seedream 是官网
+    两条独立 SKU，绝不通过剥掉前缀来互相顶替价格。
+    """
     raw = str(model_id or "").strip().strip("/")
     if not raw:
         return []
-    variants: List[str] = []
-    lowered = raw.lower()
-    for prefix in _DOLA_PREFIXES:
-        if lowered.startswith(prefix):
-            variants.append(raw[len(prefix):].strip())
-            break
-    return [item for item in variants if item and item != raw]
+    return [raw.lower()] if raw.lower() != raw else []
 
 
 def loose_model_keys(table: Dict[str, Any], candidates: List[str]) -> List[str]:
-    """在价格表里按规范化名找出与给定候选键指向同一模型的所有键。"""
+    """按规范化模型名，在价格表里找出与候选键同名同操作的键。
+
+    只收敛写法（分隔符、大小写、版本号 v、操作同义词），跨型号不借价。
+    """
     models = (table or {}).get("models")
     if not isinstance(models, dict) or not models:
         return []
