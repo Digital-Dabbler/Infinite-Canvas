@@ -1,0 +1,15 @@
+{
+  "name": "修补衔接",
+  "owner_id": "44cd4a316277481b9dfc9124293fc0a8",
+  "owner_name": "系统管理员",
+  "node_count": 2,
+  "connection_count": 1,
+  "resource_count": 1,
+  "created_at": 1794565398511,
+  "updated_at": 1794565382373,
+  "id": "published_91820b1939fb4e",
+  "source_workflow_id": "workflow_d95579c4085040",
+  "archive_url": "/static/workflow-library/published/published_91820b1939fb4e.zip",
+  "cover_url": "/static/images/workflow-library/published/published_91820b1939fb4e_cover.webp",
+  "published_at": 1794565398511
+}
