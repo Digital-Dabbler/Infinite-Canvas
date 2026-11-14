@@ -74,10 +74,18 @@
 
 ### 5.5 验证
 
-- 新增 `tests/test_performance_optimizations.py`：`CanvasMetaIndexCacheTests`（5）、`CanvasListPageTests`（4）、`CanvasListPagingContractTests`（4），共 13 项全部通过。
+- 新增 `tests/test_performance_optimizations.py`：`CanvasMetaIndexCacheTests`（7）、`CanvasListPageTests`（4）、`CanvasListPagingContractTests`（4）、`CanvasAssetIndexCacheTests`（2），共 17 项全部通过（含 skip 缓存：经典画布只解析一次、命中后不重写索引、不进入项目计数）。
 - 回归：`tests/test_project_canvas_deletion.py`（10）、`tests/test_smart_canvas_only.py`（23）通过；`main.py` 语法检查、全部 `static/js/**/*.js` 的 `node --check`、`node static/js/i18n/validate-i18n.js`（1568 keys）、`git diff --check` 均通过。
 
-### 5.6 遗留事项
+### 5.6 补充：旧版经典画布与索引 skip 缓存（2026-11-15 追补）
 
-- `data/canvases/7122875e2b4d4c4baabf6db62ad905c2.json` 已损坏（`JSONDecodeError ... line 981 column 15`，32 KB），旧代码同样静默跳过，本机列表里少一张画布；本次未改动该数据，建议后续单独处理或归档到 `.recovery/`。
+清点 `data/canvases/` 时发现 **16 个 `kind: "classic"` 的旧版经典画布（5.85 MB）**，其中 `7122875e2b4d4c4baabf6db62ad905c2.json`（标题「徐豪康」，2026-06-25 最后一次保存时被截断，解码后 30939 字符即报错位置）已损坏。
+
+它们与列表无关：`list_canvases()` 只收 `smart`，`load_canvas()`（[main.py:6470](main.py#L6470)）对非 smart 直接 404，因此这批文件既不可见也不可打开；`data/` 下唯一引用这些 id 的只有会自动重建的 `canvas_asset_index_cache.json`。处理方式：
+
+1. **全部归档而非删除**：移动到 `data/canvases/.recovery/<id>.json.classic-archived-20261115`（沿用既有 recovery 命名，字节保留；`.recovery/` 不参与列表、恢复或媒体索引，`archive_orphan_canvas_files()` 也不会再动它们）。归档后画布目录为 **184 个全部 smart / 157.9 MB**。
+2. **索引补 skip 缓存**：`build_canvas_meta_index()` 与 `canvas_assets_index()` 现在都会为非 smart、不可解析的文件写入 `{"mtime_ns", "size", "skip": True}` 条目并持久化。此前这些文件没有条目可命中，**每次回工作台都要重新解析**（本机实测 16 个文件 / 5.85 MB / 48 ms），是"热路径 5 ms"名不副实的来源。现在热路径真正只剩 `os.stat`；`canvas_meta_entries()` 会过滤掉 skip 条目，项目计数与回收站列表不受影响。
+
+### 5.7 遗留事项
+
 - `tests/test_performance_optimizations.py` 中的 `SmartCanvasPerformanceContractTests` 因引用已删除的 `static/js/asset-manager.js` 而无法运行（与本次改动无关），未在本次修复。

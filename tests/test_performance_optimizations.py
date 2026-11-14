@@ -72,6 +72,29 @@ class CanvasAssetIndexCacheTests(unittest.TestCase):
             self.assertEqual(extractor.call_count, 3)
             self.assertEqual(len(refreshed["items"]), 3)
 
+    def test_legacy_classic_canvas_is_cached_as_skip(self):
+        self.write_canvas("first", ["/assets/output/first.png"])
+        with open(os.path.join(self.canvas_dir, "legacy.json"), "w", encoding="utf-8") as handle:
+            json.dump({"id": "legacy", "kind": "classic", "nodes": []}, handle)
+
+        with (
+            patch.object(main, "CANVAS_DIR", self.canvas_dir),
+            patch.object(main, "CANVAS_ASSET_INDEX_CACHE_PATH", self.cache_path),
+            patch.object(main, "cleanup_expired_canvas_trash", lambda: None),
+            patch.object(main, "extract_canvas_assets", wraps=main.extract_canvas_assets) as extractor,
+        ):
+            first = main.canvas_assets_index()
+            with open(self.cache_path, "r", encoding="utf-8") as handle:
+                cached = json.load(handle)["entries"]
+            self.assertTrue(cached["legacy.json"].get("skip"))
+            self.assertEqual([c["id"] for c in first["canvases"]], ["first"])
+
+            cache_stat = os.stat(self.cache_path)
+            second = main.canvas_assets_index()
+            self.assertEqual(extractor.call_count, 1)
+            self.assertEqual(first, second)
+            self.assertEqual(os.stat(self.cache_path).st_mtime_ns, cache_stat.st_mtime_ns)
+
 
 class SmartCanvasPerformanceContractTests(unittest.TestCase):
     @classmethod
@@ -189,9 +212,38 @@ class CanvasMetaIndexCacheTests(unittest.TestCase):
     def test_non_smart_files_are_not_listed(self):
         self.write_canvas("smart-one")
         with open(os.path.join(self.canvas_dir, "legacy.json"), "w", encoding="utf-8") as handle:
-            json.dump({"id": "legacy", "kind": "legacy", "nodes": []}, handle)
+            json.dump({"id": "legacy", "title": "旧版", "kind": "legacy", "nodes": []}, handle)
 
         self.assertEqual([item["id"] for item in main.list_canvases()], ["smart-one"])
+
+    def test_legacy_classic_canvas_is_parsed_once_then_cached_as_skip(self):
+        # A real install carries legacy classic boards that can never be listed
+        # (list/load only accept kind=smart) but used to be re-parsed on every
+        # workspace load: ~6 MB / ~50 ms of dead weight per visit.
+        self.write_canvas("smart-one")
+        legacy_path = os.path.join(self.canvas_dir, "legacy.json")
+        with open(legacy_path, "w", encoding="utf-8") as handle:
+            json.dump({"id": "legacy", "title": "旧版", "kind": "classic", "nodes": [{"id": "n1"}]}, handle)
+
+        main.list_canvases()
+        entries = main.load_canvas_meta_index_cache()["entries"]
+        self.assertTrue(entries["legacy.json"].get("skip"))
+        self.assertNotIn("record", entries["legacy.json"])
+
+        cache_stat = os.stat(main.canvas_meta_index_cache_path())
+        self.assertEqual(main.list_canvases(), main.list_canvases())
+        self.assertEqual(main.list_deleted_canvases(), [])
+        # A re-parse would mark the index changed and rewrite it.
+        self.assertEqual(os.stat(main.canvas_meta_index_cache_path()).st_mtime_ns, cache_stat.st_mtime_ns)
+
+    def test_skip_entries_do_not_leak_into_project_counts(self):
+        self.write_canvas("smart-one", project="p1")
+        with open(os.path.join(self.canvas_dir, "legacy.json"), "w", encoding="utf-8") as handle:
+            json.dump({"id": "legacy", "kind": "classic", "project": "p1", "nodes": []}, handle)
+
+        page = main.canvas_list_page({"id": "u1", "role": "user"}, project_id="p1", limit=60)
+        self.assertEqual([item["id"] for item in page["canvases"]], ["smart-one"])
+        self.assertEqual(page["counts"]["p1"]["total"], 1)
 
     def test_corrupt_canvas_is_skipped_without_rewriting_the_index(self):
         self.write_canvas("good")

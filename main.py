@@ -7138,6 +7138,11 @@ def build_canvas_meta_index():
     cost is the "stuck for ages" delay.  Entries are validated by the canvas
     file's ``(mtime_ns, size)`` signature — the same invalidation contract
     ``canvas_assets_index()`` uses — so a warm load only stats the directory.
+
+    Files that are not smart canvases (legacy ``classic`` boards) or cannot be
+    parsed are cached with ``skip: True``.  Without that marker they would be
+    re-read on every load, which on a real install is ~6 MB / ~50 ms of dead
+    weight per workspace visit.
     """
     with CANVAS_META_INDEX_LOCK:
         cached_entries = load_canvas_meta_index_cache().get("entries") or {}
@@ -7161,8 +7166,10 @@ def build_canvas_meta_index():
                 isinstance(entry, dict)
                 and entry.get("mtime_ns") == int(stat.st_mtime_ns)
                 and entry.get("size") == int(stat.st_size)
-                and isinstance(entry.get("record"), dict)
-                and isinstance(entry.get("sharing"), dict)
+                and (
+                    entry.get("skip") is True
+                    or (isinstance(entry.get("record"), dict) and isinstance(entry.get("sharing"), dict))
+                )
             ):
                 next_entries[filename] = entry
                 continue
@@ -7171,11 +7178,22 @@ def build_canvas_meta_index():
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
             except Exception:
-                # Unreadable/corrupt canvas: skip it like the previous list path did.
-                # The filename-set check below still drops a stale cached entry, so
-                # a persistently broken file does not force a cache write per call.
+                # Unreadable/corrupt canvas: keep it out of the listing like the
+                # previous list path did, but remember the decision.
+                next_entries[filename] = {
+                    "mtime_ns": int(stat.st_mtime_ns),
+                    "size": int(stat.st_size),
+                    "skip": True,
+                }
+                changed = True
                 continue
             if not isinstance(data, dict) or str(data.get("kind") or "").strip().lower() != "smart":
+                next_entries[filename] = {
+                    "mtime_ns": int(stat.st_mtime_ns),
+                    "size": int(stat.st_size),
+                    "skip": True,
+                }
+                changed = True
                 continue
             if ensure_canvas_cover(data):
                 with CANVAS_LOCK:
@@ -7211,11 +7229,15 @@ def cleanup_expired_canvas_trash():
     build_canvas_meta_index()
 
 def canvas_meta_entries(include_deleted=False):
-    """Index entries for live (or trashed) canvases, with their sharing fields."""
+    """Index entries for live (or trashed) canvases, with their sharing fields.
+
+    ``skip`` entries (legacy classic boards, unreadable files) carry no record and
+    are only kept so a warm load can stat them instead of re-parsing them.
+    """
     return [
         entry
         for entry in build_canvas_meta_index().values()
-        if bool(entry.get("deleted")) == bool(include_deleted)
+        if not entry.get("skip") and bool(entry.get("deleted")) == bool(include_deleted)
     ]
 
 def iter_canvas_records(include_deleted=False):
@@ -7376,30 +7398,35 @@ def canvas_assets_index():
                 isinstance(entry, dict)
                 and entry.get("mtime_ns") == signature["mtime_ns"]
                 and entry.get("size") == signature["size"]
-                and isinstance(entry.get("items"), list)
+                and (isinstance(entry.get("items"), list) or entry.get("skip") is True)
             ):
                 try:
                     with CANVAS_LOCK:
                         with open(path, "r", encoding="utf-8") as f:
                             canvas = json.load(f)
                     if str(canvas.get("kind") or "").strip().lower() != "smart":
+                        # Legacy classic board: remember it so warm loads only stat.
+                        entry = {**signature, "skip": True}
                         changed = True
-                        continue
-                    deleted = bool(canvas.get("deleted_at"))
-                    record = canvas_record(canvas)
-                    canvas_items = [] if deleted else extract_canvas_assets(canvas)
-                    if not deleted:
-                        record["asset_count"] = len(canvas_items)
-                    entry = {
-                        **signature,
-                        "deleted": deleted,
-                        "record": record,
-                        "items": canvas_items,
-                    }
-                    changed = True
+                    else:
+                        deleted = bool(canvas.get("deleted_at"))
+                        record = canvas_record(canvas)
+                        canvas_items = [] if deleted else extract_canvas_assets(canvas)
+                        if not deleted:
+                            record["asset_count"] = len(canvas_items)
+                        entry = {
+                            **signature,
+                            "deleted": deleted,
+                            "record": record,
+                            "items": canvas_items,
+                        }
+                        changed = True
                 except Exception:
-                    continue
+                    entry = {**signature, "skip": True}
+                    changed = True
             next_entries[filename] = entry
+            if entry.get("skip"):
+                continue
             if entry.get("deleted"):
                 continue
             record = entry.get("record") or {}
