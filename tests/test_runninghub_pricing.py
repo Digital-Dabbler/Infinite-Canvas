@@ -2,6 +2,7 @@
 """RunningHub 事前估价体系测试：纯逻辑层 + main.py 收口链路，全部离线，不触网。"""
 
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -169,6 +170,9 @@ class MainPricingIntegrationTests(unittest.TestCase):
             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
             patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
             patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", self.official_path),
+            # 币种跟随配置组的 RunningHub Base URL；测试里固定成国内站（人民币），
+            # 免得本机把平台切到 .ai 后断言全被汇率改写。
+            patch.object(main, "runninghub_profile_currency", lambda profile_id: "CNY"),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -390,6 +394,9 @@ class OfficialPriceTests(unittest.TestCase):
             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
             patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
             patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", self.official_path),
+            # 币种跟随配置组的 RunningHub Base URL；测试里固定成国内站（人民币），
+            # 免得本机把平台切到 .ai 后断言全被汇率改写。
+            patch.object(main, "runninghub_profile_currency", lambda profile_id: "CNY"),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -405,7 +412,7 @@ class OfficialPriceTests(unittest.TestCase):
 
     def _write_official(self, models):
         Path(self.official_path).write_text(
-            json.dumps({"schema_version": 1, "models": models}, ensure_ascii=False),
+            json.dumps({"schema_version": 1, "models": models.get("models") or models}, ensure_ascii=False),
             encoding="utf-8",
         )
         main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
@@ -495,6 +502,9 @@ class ChannelModelPriceTests(unittest.TestCase):
             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
             patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
             patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", self.official_path),
+            # 币种跟随配置组的 RunningHub Base URL；测试里固定成国内站（人民币），
+            # 免得本机把平台切到 .ai 后断言全被汇率改写。
+            patch.object(main, "runninghub_profile_currency", lambda profile_id: "CNY"),
         ]
         for patcher in self.patchers:
             patcher.start()
@@ -510,7 +520,7 @@ class ChannelModelPriceTests(unittest.TestCase):
 
     def _write_official(self, models):
         Path(self.official_path).write_text(
-            json.dumps({"schema_version": 1, "models": models}, ensure_ascii=False),
+            json.dumps({"schema_version": 1, "models": models.get("models") or models}, ensure_ascii=False),
             encoding="utf-8",
         )
         main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}})
@@ -575,8 +585,10 @@ class ChannelModelPriceTests(unittest.TestCase):
 class AdminPriceRouteTests(unittest.IsolatedAsyncioTestCase):
     async def test_put_validates_before_writing(self):
         payload = main.RunningHubPriceTableRequest(table={"models": {"ep": {"billing": "per_unit", "unit_cny": -1}}})
+        temp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, temp_dir, True)
         with patch.object(main, "require_admin", return_value=None), \
-             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", str(Path(tempfile.mkdtemp()) / "prices.json")):
+             patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", str(Path(temp_dir) / "prices.json")):
             with self.assertRaises(main.HTTPException) as ctx:
                 await main.runninghub_prices_put(payload, request=None)
         self.assertEqual(ctx.exception.status_code, 400)
@@ -644,6 +656,11 @@ class RunButtonMarkupTests(unittest.TestCase):
         self.assertIn("function runningHubPriceModelId", self.canvas_js)
         self.assertIn("configured.includes(current)", self.canvas_js)
 
+    def test_price_badge_preserves_subcent_usd_precision(self):
+        # 国际站大量单价是千分位/万分位美元（$0.015、$0.027、$0.009），不能被固定两位小数截成 $0.02 / $0.00。
+        self.assertIn("toFixed(4)", self.badge_js)
+        self.assertIn("decimals <= 2", self.badge_js)
+
 
 class ResolutionTierTests(unittest.TestCase):
     """官方分档价（1.5K/2K/3K）按输出像素收敛成单一档位。"""
@@ -672,11 +689,28 @@ class ResolutionTierTests(unittest.TestCase):
         self.assertEqual(notes, {"输出图 2K": 0.23, "输出图 3K": 0.52})
 
     def test_wan_pixel_threshold_not_confused_by_money(self):
-        # “260万像素”里的“万元”是金额单位，不能被读成 2600000 元。
+        # “260万像素”里的“万元”是金额单位，不能被读成 2600000 元；
+        # 首档“≤260万像素”从 0 MP 起算，次档“>462万像素”严格大于 4.62 MP 才命中。
         tiers = rp.parse_tier_notes(
             {"单张 ≤260万像素，含 1K、1.5K 档": 0.13, "单张 >462万像素": 0.52}
         )
-        self.assertEqual(tiers, [(2.6, 0.13), (4.62, 0.52)])
+        self.assertEqual(tiers[0], (0.0, 0.13))
+        self.assertAlmostEqual(tiers[1][0], 4.62, places=4)
+        self.assertEqual(tiers[1][1], 0.52)
+        self.assertEqual(rp.pick_tier_amount(tiers, "1k"), 0.13)
+        self.assertEqual(rp.pick_tier_amount(tiers, "3k"), 0.52)
+
+    def test_english_mp_and_dimension_tiers_parsed(self):
+        tiers = rp.parse_tier_notes(
+            {"Output image (≤2.36MP)": 0.0405, "Output image (>2.36MP)": 0.081}
+        )
+        self.assertEqual(rp.pick_tier_amount(tiers, "1k"), 0.0405)
+        self.assertEqual(rp.pick_tier_amount(tiers, "2k"), 0.081)
+        dim_tiers = rp.parse_tier_notes(
+            {"1024×1024": 0.045, "1024×1536": 0.0675, "2048×2048": 0.18}
+        )
+        self.assertEqual(rp.pick_tier_amount(dim_tiers, "1024x1024"), 0.045)
+        self.assertEqual(rp.pick_tier_amount(dim_tiers, "2048x2048"), 0.18)
 
     def test_unknown_resolution_keeps_range(self):
         tiers = self.tiers()
@@ -753,6 +787,8 @@ class DisplayNameEndpointTests(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
+        # 测试跑完必须清理临时目录，否则每次执行都在仓库根留下 tmp* 噪声。
+        self.addCleanup(shutil.rmtree, self.tmpdir, True)
         self.registry_path = str(Path(self.tmpdir) / "models_registry.json")
         Path(self.registry_path).write_text(
             json.dumps(
@@ -877,6 +913,212 @@ class OfficialTierParsingTests(unittest.TestCase):
             ["帧价", "约¥0.0217/帧", ""],
         ])
         self.assertEqual(entry["unit_label"], "帧")
+
+    def test_international_dollar_tiers_and_addons_handled(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "sync_off", Path(__file__).resolve().parents[1] / "tools" / "sync_runninghub_official_prices.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        # 1) 英文 Input image 过滤 + $ 金额解析
+        table_img = {
+            "rows": [
+                {"cells": ["Input image", "$0.008/piece", "Billed per input image"]},
+                {"cells": ["Output image 1.5K", "$0.02/piece", "Per output image ≤ 2.6MP"]},
+                {"cells": ["Output image 2K", "$0.035/piece", "Per output image > 2.6MP"]},
+            ]
+        }
+        entry_img = mod.entry_from_sku(
+            {"id": "2", "name": "Dola-Seedream-5.5/image-to-image", "price": {}},
+            mod._pick_tiers({}, table_img),
+            currency="USD",
+            site="ai",
+        )
+        self.assertEqual(entry_img["currency"], "USD")
+        self.assertEqual((entry_img["low_cny"], entry_img["high_cny"]), (0.02, 0.035))
+        self.assertTrue(entry_img["price_text"].startswith("$"))
+
+        # 2) +$0.16 附加项增量不能拉低基础价
+        table_3d = {
+            "rows": [
+                {"cells": ["Base (no texture)", "Default", "$1.6/times"]},
+                {"cells": ["Standard texture", "texture = true", "+$0.16/times"]},
+            ]
+        }
+        entry_3d = mod.entry_from_sku(
+            {"id": "3", "name": "tripo-global/text-to-3d-P2", "price": {}},
+            mod._pick_tiers({}, table_3d),
+            currency="USD",
+            site="ai",
+        )
+        self.assertEqual((entry_3d["low_cny"], entry_3d["high_cny"]), (1.6, 1.6))
+
+        # 3) 按百万 Token 计费的表不冒充单张/单次固定价
+        table_tok = {
+            "columns": [{"name": "Modality"}, {"name": "Input (per 1M tokens)"}, {"name": "Output (per 1M tokens)"}],
+            "simplePriceText": "Token pricing",
+            "rows": [{"cells": ["Image", "$8.00", "$30.00"]}],
+        }
+        sku_tok = {"id": "4", "name": "gpt-image-2.6/flare/text-to-image/stable-token", "price": {}}
+        self.assertEqual(mod._pick_tiers(sku_tok, table_tok), [])
+        self.assertIsNone(mod.entry_from_sku(sku_tok, mod._pick_tiers(sku_tok, table_tok), currency="USD", site="ai"))
+
+
+class CurrencyTests(unittest.TestCase):
+    """币种按接入站点判定（.ai 收美元、.cn 收人民币），官方价与历史实扣均与站点结算币种对齐。"""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.table_path = str(Path(self.temp_dir.name) / "prices.json")
+        self.stats_path = str(Path(self.temp_dir.name) / "stats.json")
+        self.official_path = str(Path(self.temp_dir.name) / "official.json")
+        self.patchers = [
+            patch.object(main, "RUNNINGHUB_PRICE_TABLE_FILE", self.table_path),
+            patch.object(main, "RUNNINGHUB_PRICE_STATS_FILE", self.stats_path),
+            patch.object(main, "RUNNINGHUB_OFFICIAL_PRICES_FILE", self.official_path),
+        ]
+        for patcher in self.patchers:
+            patcher.start()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}, "by_site": {}})
+
+    def tearDown(self):
+        for patcher in reversed(self.patchers):
+            patcher.stop()
+        self.temp_dir.cleanup()
+        main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}, "by_site": {}})
+
+    def _write_official(self, payload):
+        body = {"schema_version": 1}
+        if "models_by_site" in payload or "models" in payload:
+            body.update(payload)
+            body.setdefault("models", {})
+        else:
+            body["models"] = payload
+        Path(self.official_path).write_text(
+            json.dumps(body, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        main.RUNNINGHUB_OFFICIAL_PRICE_CACHE.update({"mtime": None, "models": {}, "by_site": {}})
+
+    def _profile(self, base_url):
+        return {
+            "profiles": [
+                {
+                    "id": "cur-group",
+                    "name": "币种测试组",
+                    "enabled": True,
+                    "providers": [{"id": "runninghub", "base_url": base_url, "enabled": True}],
+                }
+            ]
+        }
+
+    def test_site_currency_follows_domain(self):
+        self.assertEqual(main.runninghub_pricing.site_currency("https://www.runninghub.ai"), "USD")
+        self.assertEqual(main.runninghub_pricing.site_currency("https://www.runninghub.cn"), "CNY")
+        self.assertEqual(main.runninghub_pricing.site_currency("ai"), "USD")
+        self.assertEqual(main.runninghub_pricing.site_currency("cn"), "CNY")
+        self.assertEqual(main.runninghub_pricing.currency_symbol("USD"), "$")
+        self.assertEqual(main.runninghub_pricing.currency_symbol("CNY"), "¥")
+
+    def test_profile_currency_is_usd_for_international_site(self):
+        with patch.object(main, "api_profile_by_id", lambda pid: self._profile("https://www.runninghub.ai")["profiles"][0]):
+            self.assertEqual(main.runninghub_profile_currency("cur-group"), "USD")
+        with patch.object(main, "api_profile_by_id", lambda pid: self._profile("https://www.runninghub.cn")["profiles"][0]):
+            self.assertEqual(main.runninghub_profile_currency("cur-group"), "CNY")
+
+    def test_missing_profile_falls_back_to_default_site(self):
+        with patch.object(main, "api_profile_by_id", lambda pid: None):
+            self.assertEqual(main.runninghub_profile_currency("nope"), "CNY")
+
+    def test_usd_official_price_kept_when_account_is_usd(self):
+        # 国际站标价就是美元，美元账号看到的应当还是 $0.10，不能被当成 0.1 元换算。
+        self._write_official({"models": {"ep/usd": {
+            "billing": "per_unit", "unit_cny": 0.1, "low_cny": 0.1, "high_cny": 0.1,
+            "unit_label": "次", "currency": "USD",
+        }}})
+        with patch.object(main, "api_profile_by_id", lambda pid: self._profile("https://www.runninghub.ai")["profiles"][0]):
+            result = main.runninghub_estimate_for_profile("cur-group", "model", "ep/usd")
+        self.assertEqual(result["currency"], "USD")
+        self.assertEqual(result["amount"], 0.1)
+
+    def test_cny_official_price_converted_for_usd_account(self):
+        self._write_official({"models": {"ep/cny": {
+            "billing": "per_unit", "unit_cny": 7.1, "low_cny": 7.1, "high_cny": 7.1,
+            "unit_label": "次", "currency": "CNY",
+        }}})
+        with patch.object(main, "api_profile_by_id", lambda pid: self._profile("https://www.runninghub.ai")["profiles"][0]), \
+                patch.dict(main.RUNNINGHUB_CURRENCY_RATES, {"CNY": 1.0, "USD": 7.1}, clear=False):
+            result = main.runninghub_estimate_for_profile("cur-group", "model", "ep/cny")
+        self.assertEqual(result["currency"], "USD")
+        self.assertAlmostEqual(result["amount"], 1.0, places=4)
+        self.assertEqual(result["native"]["amount"], 7.1)
+
+    def test_convert_estimate_without_rate_keeps_native_currency(self):
+        base = rp.estimate_price({"models": {"ep": {"billing": "per_unit", "unit_cny": 0.2}}}, None, "model", "ep")
+        converted = rp.convert_estimate(base, {}, "USD")
+        self.assertEqual(converted["currency"], base.get("currency") or rp.DEFAULT_CURRENCY)
+        self.assertTrue(converted["rateMissing"])
+
+    def test_history_money_follows_profile_settlement_currency(self):
+        # 国际站账号的 consumeMoney 本身就是美元（如 $0.015），绝不能再当成人民币除以 7.1！
+        with patch.object(main, "api_profile_by_id", lambda pid: self._profile("https://www.runninghub.ai")["profiles"][0]):
+            main.record_runninghub_observed_cost("cur-group", "model", "rhart-image-g-2/text-to-image", 0.015)
+            main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+            result = main.runninghub_estimate_for_profile("cur-group", "model", "gpt-image-2.0/text-to-image-channel-low-price")
+        self.assertEqual(result["currency"], "USD")
+        self.assertEqual(result["amount"], 0.015)
+        self.assertEqual(result["source"], "history_sparse")
+
+        # 早期未带 currency 字段的历史样本也按当前配置组结算币种读取，避免二次除汇率
+        legacy_result = rp.estimate_price({}, {"samples": [0.027], "count": 1}, "model", "ep", default_currency="USD")
+        self.assertEqual(legacy_result["currency"], "USD")
+        self.assertEqual(legacy_result["amount"], 0.027)
+
+    def test_models_by_site_picks_native_usd_over_cny_without_exchange_rate_drift(self):
+        # 同一个标准模型国内站 ¥0.13~0.52，国际站 $0.02~0.079；.ai 账号直接命中 $0.035 (2K)，不拿人民币除汇率。
+        self._write_official({
+            "models_by_site": {
+                "cn": {
+                    "seedream-v5.5/text-to-image": {
+                        "billing": "per_unit", "unit_cny": 0.13, "low_cny": 0.13, "high_cny": 0.52,
+                        "currency": "CNY", "site": "cn",
+                        "notes": {"输出图 1.5K": 0.13, "输出图 2K": 0.23, "输出图 3K": 0.52},
+                    }
+                },
+                "ai": {
+                    "seedream-v5.5/text-to-image": {
+                        "billing": "per_unit", "unit_cny": 0.02, "low_cny": 0.02, "high_cny": 0.079,
+                        "currency": "USD", "site": "ai",
+                        "notes": {"Output image 1.5K": 0.02, "Output image 2K": 0.035, "Output image 3K": 0.079},
+                    }
+                },
+            }
+        })
+        with patch.object(main, "api_profile_by_id", lambda pid: self._profile("https://www.runninghub.ai")["profiles"][0]):
+            ai_est = main.runninghub_estimate_for_profile("cur-group", "model", "seedream-v5.5/text-to-image", res="2k")
+        self.assertEqual(ai_est["currency"], "USD")
+        self.assertEqual(ai_est["amount"], 0.035)
+
+        with patch.object(main, "api_profile_by_id", lambda pid: self._profile("https://www.runninghub.cn")["profiles"][0]):
+            main.RUNNINGHUB_ESTIMATE_CACHE.clear()
+            cn_est = main.runninghub_estimate_for_profile("cur-group", "model", "seedream-v5.5/text-to-image", res="2k")
+        self.assertEqual(cn_est["currency"], "CNY")
+        self.assertEqual(cn_est["amount"], 0.23)
+
+    def test_bundled_official_prices_have_real_usd_values_for_ai_site(self):
+        # 校验仓库内置的 static/runninghub/official_prices.json：国际站渠道价必须是真实美元（$0.015），而非人民币 0.10。
+        bundled_path = Path(__file__).resolve().parents[1] / "static" / "runninghub" / "official_prices.json"
+        raw = json.loads(bundled_path.read_text(encoding="utf-8"))
+        ai_models = raw.get("models_by_site", {}).get("ai", {})
+        self.assertIn("gpt-image-2.0/text-to-image-channel-low-price", ai_models)
+        gpt2 = ai_models["gpt-image-2.0/text-to-image-channel-low-price"]
+        self.assertEqual(gpt2["currency"], "USD")
+        self.assertEqual(gpt2["unit_cny"], 0.015)
+        self.assertTrue(gpt2["price_text"].startswith("$"))
 
 
 if __name__ == "__main__":

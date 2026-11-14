@@ -32,12 +32,27 @@
         return fallback;
     }
 
-    function money(value) {
+    // 币种跟着账号结算站点走：runninghub.ai 是美元、runninghub.cn 是人民币。
+    // 后端把官方价换算成该配置组的结算币种后才返回 currency，这里只负责符号。
+    function symbolOf(currency) {
+        return String(currency || "").toUpperCase() === "USD" ? "$" : "¥";
+    }
+
+    function money(value, currency) {
         const number = Number(value);
         if (!Number.isFinite(number) || number <= 0) return "";
-        if (number >= 10) return `¥${number.toFixed(0)}`;
-        if (number >= 1) return `¥${number.toFixed(2)}`;
-        return `¥${number.toFixed(2)}`;
+        const sign = symbolOf(currency);
+        if (number >= 10) return `${sign}${number.toFixed(1)}`;
+        if (number >= 1) return `${sign}${number.toFixed(2)}`;
+        // 国际站大量图片模型单价带有效千分位/万分位（如 $0.015、$0.027、$0.009、$0.0077）：
+        // 常规 2 位小数金额仍展示两位（如 $0.06、$0.10），有第 3~4 位非零数字时如实保留，
+        // 避免 $0.015 被粗暴四舍五入成 $0.02、或 <$0.005 时变成 $0.00 消失。
+        const fixed4 = number.toFixed(4);
+        const trimmed = fixed4.replace(/0+$/, "");
+        const dotIndex = trimmed.indexOf(".");
+        const decimals = dotIndex >= 0 ? trimmed.length - dotIndex - 1 : 0;
+        if (decimals <= 2) return `${sign}${number.toFixed(2)}`;
+        return `${sign}${trimmed}`;
     }
 
     // 后端估价身份：kind|id|quantity|res（不含 multiplier，次数只在客户端乘算）。
@@ -64,7 +79,11 @@
         const request = fetch(`/api/runninghub/estimate?${params.toString()}`, { credentials: "same-origin" })
             .then(response => response.ok ? response.json() : null)
             .then(body => {
-                const estimate = (body && body.estimate) || { confidence: "unknown" };
+                const raw = (body && body.estimate) || { confidence: "unknown" };
+                const estimate = Object.assign({}, raw);
+                if (!estimate.currency && body && body.currency) {
+                    estimate.currency = body.currency;
+                }
                 cache.set(key, { at: Date.now(), estimate });
                 return estimate;
             })
@@ -84,10 +103,11 @@
         if (confidence === "unknown") {
             return { label: tr("smart.price.pending", "费用待定"), tone: "muted", title: tr("smart.price.pendingTip", "首次运行，暂无历史价格参考") };
         }
-        const amount = money(Number(estimate.amount || 0) * factor);
+        const currency = String(estimate.currency || "CNY");
+        const amount = money(Number(estimate.amount || 0) * factor, currency);
         if (!amount) return { label: tr("smart.price.pending", "费用待定"), tone: "muted", title: "" };
-        const low = money(Number(estimate.low || 0) * factor);
-        const high = money(Number(estimate.high || 0) * factor);
+        const low = money(Number(estimate.low || 0) * factor, currency);
+        const high = money(Number(estimate.high || 0) * factor, currency);
         let label = `≈${amount}`;
         // 官方分档价（1.5K/2K/3K 单价不同）本身就是一个区间，低置信度或只有单值时显示单值。
         if (low && high && low !== high) {
@@ -112,6 +132,9 @@
         }
         if (factor > 1) {
             title = trfLite("smart.price.multiplierTip", factor, "本次点击提交 {n} 次") + " · " + title;
+        }
+        if (estimate.rateMissing) {
+            title = tr("smart.price.rateMissingTip", "缺少汇率，按原始标价币种显示");
         }
         const tone = confidence === "low" ? "weak" : "ok";
         return { label, tone, title };

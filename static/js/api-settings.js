@@ -4071,7 +4071,11 @@ function escapeAttr(str){ return escapeHtml(str).replace(/`/g, '&#96;'); }
 
 // --- RunningHub 事前估价 · 价格表面板 ---
 // 面板只在选中 RunningHub 配置组时出现；数据走 /api/runninghub/prices（管理员）。
-let rhPriceTableState = { models: {}, apps: {}, workflows: {}, fallback: {} };
+let rhPriceTableState = { models: {}, apps: {}, workflows: {}, fallback: {}, currency: 'CNY' };
+
+function rhPriceCurrencyUnit(){
+    return String(rhPriceTableState.currency || 'CNY').toUpperCase() === 'USD' ? '美元 $' : '元 ¥';
+}
 
 function rhPriceNumber(value){
     const text = String(value == null ? '' : value).trim();
@@ -4097,7 +4101,7 @@ function renderRhPriceModels(models){
                 <option value="per_minute" ${entry.billing === 'per_minute' ? 'selected' : ''}>按分钟</option>
                 <option value="fixed" ${entry.billing === 'fixed' ? 'selected' : ''}>固定单次</option>
             </select>
-            <input class="rh-price-input rh-price-unit" type="number" min="0" step="0.01" value="${escapeAttr(entry.unit_cny == null ? '' : entry.unit_cny)}" placeholder="单价(元)">
+            <input class="rh-price-input rh-price-unit" type="number" min="0" step="0.001" value="${escapeAttr(entry.unit_cny == null ? '' : entry.unit_cny)}" placeholder="单价(${rhPriceCurrencyUnit()})">
             <input class="rh-price-input rh-price-qty" type="number" min="0" step="1" value="${escapeAttr(entry.default_quantity == null ? '' : entry.default_quantity)}" placeholder="缺省数量">
             <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
         </div>`).join('');
@@ -4122,18 +4126,19 @@ function renderRhPriceEntries(apps, workflows){
                 <option value="workflow" ${row.kind === 'workflow' ? 'selected' : ''}>工作流</option>
             </select>
             <input class="rh-price-input rh-price-key" type="text" value="${escapeAttr(row.key)}" placeholder="webappId / workflowId">
-            <input class="rh-price-input rh-price-manual" type="number" min="0" step="0.01" value="${escapeAttr(row.entry.manual_cny == null ? '' : row.entry.manual_cny)}" placeholder="单次价格(元)">
+            <input class="rh-price-input rh-price-manual" type="number" min="0" step="0.001" value="${escapeAttr(row.entry.manual_cny == null ? '' : row.entry.manual_cny)}" placeholder="单次价格(${rhPriceCurrencyUnit()})">
             <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>
         </div>`).join('');
     if(window.lucide) lucide.createIcons();
 }
 
-function renderRhPriceTable(table){
+function renderRhPriceTable(table, currency='CNY'){
     rhPriceTableState = {
         models: table.models || {},
         apps: table.apps || {},
         workflows: table.workflows || {},
         fallback: table.fallback || {},
+        currency: String(currency || rhPriceTableState.currency || 'CNY').toUpperCase() === 'USD' ? 'USD' : 'CNY',
     };
     renderRhPriceModels(rhPriceTableState.models);
     renderRhPriceEntries(rhPriceTableState.apps, rhPriceTableState.workflows);
@@ -4149,13 +4154,15 @@ async function loadRhPriceTable(){
             setStatus(data.detail || '读取价格表失败', 'error');
             return;
         }
-        renderRhPriceTable(data.table || {});
+        const activeCurrency = String(data.currency || (data.official && data.official.currency) || 'CNY').toUpperCase();
+        renderRhPriceTable(data.table || {}, activeCurrency);
         const official = data.official || {};
         const officialEl = document.getElementById('rhPriceOfficial');
         if(officialEl){
             const count = Number(official.count || 0);
+            const siteLabel = activeCurrency === 'USD' ? '国际站 USD' : '国内站 CNY';
             officialEl.textContent = count
-                ? `已内置 ${count} 条 RunningHub 官方标价（只读）。在上面填同一端点时以你填的价格为准。`
+                ? `已内置 ${count} 条 RunningHub 官方标价（${siteLabel}，只读）。在上面填同一端点时以你填的价格为准。`
                 : '尚未导入官方标价，可运行 tools/sync_runninghub_official_prices.py 生成。';
         }
     } catch (e) {
@@ -4220,7 +4227,7 @@ function addRhPriceModelRow(){
     row.innerHTML = `
         <input class="rh-price-input rh-price-key" type="text" placeholder="端点 ID 或模型显示名">
         <select class="rh-price-input rh-price-billing"><option value="per_unit">按张/次</option><option value="per_second">按秒</option><option value="per_minute">按分钟</option><option value="fixed">固定单次</option></select>
-        <input class="rh-price-input rh-price-unit" type="number" min="0" step="0.01" placeholder="单价(元)">
+        <input class="rh-price-input rh-price-unit" type="number" min="0" step="0.001" placeholder="单价(${rhPriceCurrencyUnit()})">
         <input class="rh-price-input rh-price-qty" type="number" min="0" step="1" placeholder="缺省数量">
         <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>`;
     wrap.appendChild(row);
@@ -4238,7 +4245,7 @@ function addRhPriceEntryRow(){
     row.innerHTML = `
         <select class="rh-price-input rh-price-kind"><option value="app">AI 应用</option><option value="workflow">工作流</option></select>
         <input class="rh-price-input rh-price-key" type="text" placeholder="webappId / workflowId">
-        <input class="rh-price-input rh-price-manual" type="number" min="0" step="0.01" placeholder="单次价格(元)">
+        <input class="rh-price-input rh-price-manual" type="number" min="0" step="0.001" placeholder="单次价格(${rhPriceCurrencyUnit()})">
         <button class="action-btn danger-btn rh-price-del" type="button" onclick="removeRhPriceRow(this)"><i data-lucide="trash-2" class="w-3.5 h-3.5"></i></button>`;
     wrap.appendChild(row);
     if(window.lucide) lucide.createIcons();

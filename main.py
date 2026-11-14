@@ -477,6 +477,9 @@ RUNNINGHUB_OFFICIAL_PRICE_CACHE: Dict[str, Any] = {"mtime": None, "models": {}}
 RUNNINGHUB_REGISTRY_SNAPSHOT_CACHE: Dict[str, Any] = {"mtime": None, "items": []}
 RUNNINGHUB_ESTIMATE_CACHE_TTL = 60
 RUNNINGHUB_ESTIMATE_CACHE: Dict[str, Dict[str, Any]] = {}
+# 换算用的基准汇率：1 单位币种值多少人民币。官方价来自 .ai 站点时按美元计价，
+# 实际扣费也走美元账户，所以按钮金额必须换算成配置组的结算币种再展示。
+RUNNINGHUB_CURRENCY_RATES = {"CNY": 1.0, "USD": 7.1}
 UPSTREAM_TASK_SCOPES_FILE = os.path.join(DATA_DIR, "upstream_task_scopes.json")
 CANVAS_TASKS_FILE = os.path.join(DATA_DIR, "canvas_tasks.json")
 SHARED_FOLDERS_FILE = os.path.join(DATA_DIR, "shared_folders.json")
@@ -15276,24 +15279,32 @@ def runninghub_task_provider_for_request(request, task_id, requested_use_wallet=
     )
     return context.provider, use_wallet
 
-def load_runninghub_official_prices():
+def load_runninghub_official_prices(site=None):
     """读取离线抓取的 RunningHub 官方标价（只读视图，缺失/损坏返回空）。
 
     文件由 tools/sync_runninghub_official_prices.py 生成，mtime 变化才重新解析，
-    避免每次估价都读盘。
+    避免每次估价都读盘。传入 ``site``（``'cn'`` 或 ``'ai'``）时优先返回对应站点的原生币种表。
     """
     try:
         mtime = os.path.getmtime(RUNNINGHUB_OFFICIAL_PRICES_FILE)
     except OSError:
         return {}
+    bucket = runninghub_pricing.site_key(site) if site else "merged"
     with RUNNINGHUB_PRICING_LOCK:
-        if RUNNINGHUB_OFFICIAL_PRICE_CACHE.get("mtime") == mtime:
-            return RUNNINGHUB_OFFICIAL_PRICE_CACHE.get("models") or {}
-        raw = _read_json_file(RUNNINGHUB_OFFICIAL_PRICES_FILE, None)
-        models = runninghub_pricing.normalize_official_prices(raw)
-        RUNNINGHUB_OFFICIAL_PRICE_CACHE["mtime"] = mtime
-        RUNNINGHUB_OFFICIAL_PRICE_CACHE["models"] = models
-        return models
+        if RUNNINGHUB_OFFICIAL_PRICE_CACHE.get("mtime") != mtime:
+            raw = _read_json_file(RUNNINGHUB_OFFICIAL_PRICES_FILE, None)
+            by_site = {
+                "merged": runninghub_pricing.normalize_official_prices(raw),
+                "cn": runninghub_pricing.normalize_official_prices(raw, site="cn"),
+                "ai": runninghub_pricing.normalize_official_prices(raw, site="ai"),
+            }
+            RUNNINGHUB_OFFICIAL_PRICE_CACHE["mtime"] = mtime
+            RUNNINGHUB_OFFICIAL_PRICE_CACHE["models"] = by_site["merged"]
+            RUNNINGHUB_OFFICIAL_PRICE_CACHE["by_site"] = by_site
+        by_site = RUNNINGHUB_OFFICIAL_PRICE_CACHE.get("by_site")
+        if isinstance(by_site, dict) and bucket in by_site:
+            return by_site[bucket] or {}
+        return RUNNINGHUB_OFFICIAL_PRICE_CACHE.get("models") or {}
 
 def load_runninghub_admin_price_table():
     """管理员维护的价格表原文（GET/PUT 用）；缺失/损坏返回空表，绝不悄悄覆盖。"""
@@ -15303,16 +15314,15 @@ def load_runninghub_admin_price_table():
         return raw
     return runninghub_pricing.empty_price_table()
 
-def load_runninghub_price_table():
-    """估价用的价格表视图：管理员配置 > 本项目实测种子 > 官方标价。
+def load_runninghub_price_table(site="cn"):
+    """估价用的价格表视图：管理员配置 > 本项目国内站实测种子 > 对应站点官方标价。
 
     只有管理员那一层会被 save_runninghub_price_table 写回磁盘；官方价与种子都
-    是只读叠加，避免把上游标价固化成本地用户数据。实测种子优先于官方列表价：
-    同一个型号我们真扣过多少钱，比官网标价更贴近这台部署的实际账单。
+    是只读叠加，避免把上游标价固化成本地用户数据。国际站（ai）直接优先取国际站原生 USD 标价。
     """
     table = load_runninghub_admin_price_table()
-    table = runninghub_pricing.merge_seed_models(table)
-    return runninghub_pricing.merge_official_prices(table, load_runninghub_official_prices())
+    table = runninghub_pricing.merge_seed_models(table, site=site)
+    return runninghub_pricing.merge_official_prices(table, load_runninghub_official_prices(site=site))
 
 def save_runninghub_price_table(table):
     clean, errors = runninghub_pricing.normalize_price_table(table)
@@ -15339,15 +15349,18 @@ def load_runninghub_price_stats():
             return raw
         return {"schema_version": runninghub_pricing.PRICING_SCHEMA_VERSION, "entries": {}}
 
-def record_runninghub_observed_cost(profile_id, kind, entry_id, amount):
-    """把一次任务实扣金额并入历史统计（路线 2 的数据来源），供后续事前估价。"""
+def record_runninghub_observed_cost(profile_id, kind, entry_id, amount, currency=None):
+    """把一次任务实扣金额并入历史统计（路线 1 的数据来源），供后续事前估价。"""
     if not kind or not entry_id:
         return
+    resolved_currency = currency or runninghub_profile_currency(profile_id)
     key = runninghub_pricing.stats_key(profile_id, kind, entry_id)
     with RUNNINGHUB_PRICING_LOCK:
         data = load_runninghub_price_stats()
         entry = data["entries"].get(key)
-        updated = runninghub_pricing.apply_observed(entry, amount, time.time())
+        updated = runninghub_pricing.apply_observed(
+            entry, amount, time.time(), currency=resolved_currency
+        )
         if updated is None:
             return
         data["entries"][key] = updated
@@ -15385,20 +15398,62 @@ def runninghub_price_lookup_keys(kind, entry_id):
             add(value)
     return keys
 
+def runninghub_profile_base_url(profile_id):
+    """配置组里 RunningHub 平台的 Base URL；找不到就退回默认站点。"""
+    profile = api_profile_by_id(str(profile_id or "").strip().lower())
+    if isinstance(profile, dict):
+        for provider in profile.get("providers") or []:
+            if not isinstance(provider, dict):
+                continue
+            if str(provider.get("id") or "").strip().lower() == "runninghub":
+                base = str(provider.get("base_url") or "").strip()
+                if base:
+                    return base
+    return RUNNINGHUB_DEFAULT_BASE_URL
+
+def runninghub_profile_site(profile_id):
+    """配置组接入的 RunningHub 站点键（``'cn'`` 或 ``'ai'``）。"""
+    return runninghub_pricing.site_key(runninghub_profile_base_url(profile_id))
+
+def runninghub_profile_currency(profile_id):
+    """配置组实际结算币种：接 runninghub.ai 的账号按美元计费，接 .cn 的按人民币。"""
+    base = runninghub_profile_base_url(profile_id)
+    return runninghub_pricing.site_currency(base)
+
+def runninghub_currency_rates():
+    """汇率表（1 单位外币值多少人民币）；可用 API/.env 的 RUNNINGHUB_CURRENCY_RATES 覆盖。"""
+    rates = dict(RUNNINGHUB_CURRENCY_RATES)
+    raw = os.getenv("RUNNINGHUB_CURRENCY_RATES", "")
+    if raw:
+        try:
+            override = json.loads(raw)
+        except Exception:
+            override = None
+        if isinstance(override, dict):
+            for key, value in override.items():
+                amount = runninghub_pricing._as_money(value)
+                if amount and amount > 0:
+                    rates[str(key).strip().upper()] = amount
+    return rates
+
 def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None, res=""):
     """三档闸门的估价：实测历史 → 单价表/官方价 → GPU 分钟兜底 → unknown。
 
     ``entry_id`` 先按官网 SKU 命名展开、再退到规范化模型名兜底；``res`` 是画布上
     的分辨率/尺寸标签，用来在分档价（1.5K/2K/3K）里挑到对应档位。
+    优先读取与配置组同站点的官方原生价格表（.ai 直接取 USD，.cn 直接取 CNY），
+    跨币种兜底时再换算成该配置组的实际结算币种。
     """
-    cache_key = f"{profile_id}|{kind}|{entry_id}|{quantity}|{res or ''}"
+    currency = runninghub_profile_currency(profile_id)
+    site = "ai" if str(currency).upper() == "USD" else "cn"
+    cache_key = f"{profile_id}|{kind}|{entry_id}|{quantity}|{res or ''}|{currency}"
     now = time.monotonic()
     with RUNNINGHUB_PRICING_LOCK:
         cached = RUNNINGHUB_ESTIMATE_CACHE.get(cache_key)
         if cached and now - float(cached.get("at") or 0) < RUNNINGHUB_ESTIMATE_CACHE_TTL:
             return cached.get("result")
         stats = load_runninghub_price_stats()
-        table = load_runninghub_price_table()
+        table = load_runninghub_price_table(site=site)
         keys = runninghub_price_lookup_keys(kind, entry_id) or [entry_id]
         if kind == "model":
             # 画布/注册表与官网 SKU 的写法差异（Dola-Seedream-5.5 对 dola-Seedream-5.5），
@@ -15409,7 +15464,12 @@ def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None, r
         for key in keys:
             lookup = runninghub_pricing.stats_key(profile_id, kind, key)
             candidate = runninghub_pricing.estimate_price(
-                table, stats["entries"].get(lookup), kind, key, quantity
+                table,
+                stats["entries"].get(lookup),
+                kind,
+                key,
+                quantity,
+                default_currency=currency,
             )
             candidate = runninghub_pricing.fit_resolution(candidate, res)
             if result is None:
@@ -15420,6 +15480,9 @@ def runninghub_estimate_for_profile(profile_id, kind, entry_id, quantity=None, r
         result = result or runninghub_pricing.empty_estimate()
         result = dict(result)
         result.pop("_tiers", None)
+        result = runninghub_pricing.convert_estimate(
+            result, runninghub_currency_rates(), currency
+        )
         RUNNINGHUB_ESTIMATE_CACHE[cache_key] = {"at": now, "result": result}
         return result
 
@@ -19629,20 +19692,41 @@ async def runninghub_estimate(
         except (TypeError, ValueError):
             qty = None
     estimate = runninghub_estimate_for_profile(profile_id, kind, entry_id, qty, res=res)
-    return {"success": True, "estimate": estimate}
+    return {
+        "success": True,
+        "currency": runninghub_profile_currency(profile_id),
+        "estimate": estimate,
+    }
 
 @app.get("/api/runninghub/prices")
 async def runninghub_prices_get(request: Request):
     require_admin(request)
-    official = load_runninghub_official_prices()
+    currency = runninghub_pricing.DEFAULT_CURRENCY
+    site = "cn"
+    try:
+        profile = request_api_profile(request, allow_admin_selection=True)
+        profile_id = str(profile.get("id") or "").strip().lower()
+        currency = runninghub_profile_currency(profile_id)
+        site = "ai" if currency == "USD" else "cn"
+    except HTTPException:
+        pass
+    official = load_runninghub_official_prices(site=site)
     return {
         "success": True,
+        "currency": currency,
         # 只回管理员自己维护的那一层，PUT 原样回写才不会把官方价固化成本地数据。
         "table": load_runninghub_admin_price_table(),
         "official": {
             "count": len(official),
+            "site": site,
+            "currency": currency,
             "samples": [
-                {"id": key, "unit_cny": entry.get("unit_cny"), "note": entry.get("note")}
+                {
+                    "id": key,
+                    "unit_cny": entry.get("unit_cny"),
+                    "currency": entry.get("currency"),
+                    "note": entry.get("note"),
+                }
                 for key, entry in list(official.items())[:8]
             ],
         },

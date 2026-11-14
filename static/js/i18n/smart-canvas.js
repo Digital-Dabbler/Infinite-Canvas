@@ -317,6 +317,7 @@
         "smart.price.manualTip": { zh: "按管理员录入的单次价格估算", en: "Admin-entered per-run price" },
         "smart.price.fallbackTip": { zh: "按 GPU 时长粗略兜底，实际以扣费为准", en: "Rough GPU-time fallback; actual charge may differ" },
         "smart.price.multiplierTip": { zh: "本次点击提交 {n} 次", en: "{n} submissions this click" },
+        "smart.price.rateMissingTip": { zh: "缺少汇率，按原始标价币种显示", en: "No exchange rate — showing the original price currency" },
         "smart.workflowGroupActions": { zh: "工作流分组操作", en: "Workflow group actions" },
         "smart.workflowGroupColor": { zh: "工作流分组颜色", en: "Workflow group color" },
         "smart.workflowGroupColorSlate": { zh: "灰蓝", en: "Slate" },
