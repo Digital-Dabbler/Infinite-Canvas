@@ -421,6 +421,31 @@ html[data-studio-scale="off"].studio-scale-managed .workspace { height:100vh !im
 .ws-search-wrap.expanded input { opacity:1; pointer-events:auto; background:var(--ws-layer); border-color:var(--ws-line); }
 .ws-filter-empty { grid-column:1/-1; min-height:240px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--ws-muted); }
 .ws-filter-empty svg { width:30px; height:30px; }
+/* Paged board: the "load more" tile reuses the new-canvas tile frame, and the
+   first-page placeholder keeps the grid from collapsing while data arrives. */
+.ws-load-more-tile { border-style:solid; border-color:var(--ws-line); }
+.ws-load-more-tile .ws-new-canvas-icon { background:rgba(142,157,179,.12); color:var(--ws-muted); border-color:var(--ws-line-strong); }
+.ws-load-more-tile:hover .ws-new-canvas-icon { color:var(--ws-brand); }
+.ws-board-loading {
+    grid-column:1/-1;
+    min-height:180px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    color:var(--ws-muted);
+    font-size:13px;
+}
+.ws-board-spinner {
+    width:16px;
+    height:16px;
+    border-radius:50%;
+    border:2px solid var(--ws-line-strong);
+    border-top-color:var(--ws-brand);
+    animation:ws-board-spin .7s linear infinite;
+}
+@keyframes ws-board-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce){ .ws-board-spinner { animation-duration:2s; } }
 .ws-mobile-project-toggle,.ws-mobile-close { display:none; }
 .ws-sidebar-backdrop { display:none; }
 .ws-trash-panel { background:var(--ws-bg); }

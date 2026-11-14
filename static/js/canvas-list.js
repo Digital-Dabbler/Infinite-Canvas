@@ -94,13 +94,25 @@ const projectDeleteCancelBtn = document.getElementById('projectDeleteCancel');
 
 /* ===== State ===== */
 let projects = [];
-let canvases = [];          // all canvases across projects
+let canvases = [];          // cards of the CURRENT project page(s) only
 let deletedCanvases = [];
 let currentProjectId = rememberedProjectId();
 let pendingDeleteProjectId = null;
 let statusTimer = null;
 let clipboardCanvasId = null;   // 剪切的画布（切到别的项目后粘贴）
+let clipboardCanvas = null;     // 该画布卡片的快照：切项目后本页已不含它
 let canvasSearchQuery = '';
+// Server-paged board: the workspace only ever holds one page of cards. Project
+// badge/dialog numbers come from `canvasCounts`, never from the loaded cards.
+const CANVAS_PAGE_SIZE = 60;
+let canvasPageOffset = 0;       // cards already loaded for the current query
+let canvasPageTotal = 0;        // matches for the current project + query
+let canvasHasMore = false;
+let canvasPageLoading = false;
+let canvasPageRequestId = 0;    // drops out-of-order responses
+let canvasPageQuery = '';       // query the loaded page was fetched with
+let canvasCounts = {};          // { project_id: { total, editable } }
+let searchDebounceTimer = null;
 
 // board viewport (mirrors smart-canvas math)
 const viewport = { x: 0, y: 0, scale: 1 };
@@ -205,28 +217,113 @@ function onBoardWheel(e){
 function currentProject(){ return projects.find(p => p.id === currentProjectId) || projects[0] || null; }
 function canvasesInProject(pid){ return canvases.filter(c => (c.project || 'default') === pid); }
 
+function canvasCountsFor(pid){
+    const bucket = canvasCounts[pid];
+    const total = Number(bucket?.total);
+    return Number.isFinite(total) ? total : null;
+}
+function canvasEditableCountFor(pid){
+    const bucket = canvasCounts[pid];
+    const editable = Number(bucket?.editable);
+    return Number.isFinite(editable) ? editable : null;
+}
+function adjustCanvasCounts(pid, delta, editableDelta){
+    if(!pid) return;
+    const bucket = canvasCounts[pid] || (canvasCounts[pid] = { total: 0, editable: 0 });
+    bucket.total = Math.max(0, Number(bucket.total || 0) + Number(delta || 0));
+    if(editableDelta) bucket.editable = Math.max(0, Number(bucket.editable || 0) + Number(editableDelta));
+}
+
+function buildCanvasPageUrl(pid, offset, query){
+    const params = new URLSearchParams();
+    params.set('project_id', pid || 'default');
+    params.set('limit', String(CANVAS_PAGE_SIZE));
+    params.set('offset', String(Math.max(0, Number(offset) || 0)));
+    if(query) params.set('q', query);
+    return `/api/canvases?${params.toString()}`;
+}
+
+// One page of the active project. `reset:false` appends (load more / 无限滚动).
+// Only this page's cards live in `canvases`; all badge and dialog numbers come
+// from the server's per-project `counts`, so they stay correct while paging.
+async function loadBoardPage(options){
+    const opts = options || {};
+    const reset = opts.reset !== false;
+    const pid = opts.projectId || currentProjectId;
+    const query = opts.query != null ? opts.query : canvasSearchQuery;
+    const offset = reset ? 0 : canvasPageOffset;
+    const requestId = ++canvasPageRequestId;
+    canvasPageLoading = true;
+    if(reset){
+        canvases = [];
+        canvasPageOffset = 0;
+        canvasPageTotal = 0;
+        canvasHasMore = false;
+        canvasPageQuery = '';
+        renderBoard();
+    }
+    try {
+        const res = await fetch(buildCanvasPageUrl(pid, offset, query));
+        if(!res.ok) throw new Error('canvas page failed');
+        const data = await res.json();
+        if(requestId !== canvasPageRequestId) return;   // a newer request won
+        const incoming = Array.isArray(data.canvases) ? data.canvases : [];
+        if(reset){
+            canvases = incoming;
+            canvasPageQuery = (query || '').trim();
+        } else {
+            const seen = new Set(canvases.map(c => c.id));
+            canvases = canvases.concat(incoming.filter(c => !seen.has(c.id)));
+        }
+        canvasPageOffset = Number(data.offset || offset) + incoming.length;
+        canvasPageTotal = Number(data.total || canvases.length);
+        // An empty page must stop paging even if the server still reports has_more,
+        // otherwise auto-fill would loop forever on the same offset.
+        canvasHasMore = Boolean(data.has_more) && incoming.length > 0;
+        if(data.counts && typeof data.counts === 'object') canvasCounts = data.counts;
+    } catch(e){
+        console.error(e);
+        setStatus(L('画布列表加载失败','Failed to load canvases'));
+    } finally {
+        if(requestId === canvasPageRequestId){
+            canvasPageLoading = false;
+            renderProjects();
+            renderBoard();
+            maybeFillBoard();
+        }
+    }
+}
+
+// Auto-fill: keep pulling pages while the board still has room to scroll.
+// Called after every render that could leave the viewport half empty, so a small
+// screen is never stuck with a short page and a "load more" tile it cannot see.
+function maybeFillBoard(){
+    if(!canvasHasMore || canvasPageLoading) return;
+    if(board.scrollHeight > board.clientHeight + 8) return;
+    loadBoardPage({ reset: false });
+}
+
 async function loadAll(){
     try {
-        const [pRes, cRes, appInfoRes] = await Promise.all([
+        const [pRes, appInfoRes] = await Promise.all([
             fetch('/api/projects'),
-            fetch('/api/canvases'),
             fetch('/api/app-info', { cache:'no-store' }).catch(() => null)
         ]);
         const pData = pRes.ok ? await pRes.json() : { projects: [] };
-        const cData = cRes.ok ? await cRes.json() : { canvases: [] };
         const appInfo = appInfoRes?.ok ? await appInfoRes.json().catch(() => ({})) : {};
         canvasStaticVersion = String(appInfo.canvas_static_version || appInfo.version || 'current');
         projects = (pData.projects || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
         if(!projects.length) projects = [{ id: 'default', name: L('默认项目','Default'), order: 0, canvas_count: 0 }];
-        canvases = cData.canvases || [];
         // pick first project (prefer default / order 0)
         if(!projects.find(p => p.id === currentProjectId)){
             const def = projects.find(p => p.id === 'default') || projects.slice().sort((a, b) => (a.order || 0) - (b.order || 0))[0];
             currentProjectId = def ? def.id : 'default';
         }
         rememberProjectId(currentProjectId);
+        // Sidebar first (cheap), then only the active project's first page.
         renderProjects();
-        renderBoard();
+        await loadBoardPage({ reset: true });
+        maybeFillBoard();
         refreshTrashCount();
     } catch(e){
         console.error(e);
@@ -235,10 +332,12 @@ async function loadAll(){
 }
 
 function projectCanvasCount(pid){
+    // Whole-project number from the server; the local cards are only one page.
+    const counted = canvasCountsFor(pid);
+    if(counted != null) return counted;
+    if(pid === currentProjectId && canvasPageTotal) return canvasPageTotal;
     const p = projects.find(x => x.id === pid);
-    // prefer live count from canvases array; fall back to server count
-    const live = canvasesInProject(pid).length;
-    return canvases.length ? live : (p?.canvas_count || 0);
+    return p?.canvas_count || canvasesInProject(pid).length;
 }
 
 /* ===== Project sidebar rendering ===== */
@@ -276,10 +375,11 @@ function selectProject(pid){
     currentProjectId = pid;
     rememberProjectId(pid);
     closeTrashView();
-    renderProjects();
-    renderBoard();
     canvasSearchQuery = '';
     if(canvasSearchInput) canvasSearchInput.value = '';
+    renderProjects();
+    // Cards are paged per project, so switching projects must fetch its first page.
+    loadBoardPage({ reset: true });
 }
 
 function startProjectRename(pid, row){
@@ -358,6 +458,10 @@ async function renameProject(pid, name){
 function projectTrashableCount(pid){
     // The server only trashes canvases this user may edit; mirror that here so the
     // dialog never promises more than the DELETE request will actually do.
+    // Once cards are paged, the loaded slice is not the whole project, so the
+    // authoritative per-project numbers come from the list response.
+    const counted = canvasEditableCountFor(pid);
+    if(counted != null) return counted;
     return canvasesInProject(pid).filter(c => ['owner', 'editor'].includes(c.sharing?.role)).length;
 }
 
@@ -365,7 +469,7 @@ function paintProjectDeleteDialog(){
     const pid = pendingDeleteProjectId;
     const p = projects.find(x => x.id === pid);
     if(!p) return;
-    const total = canvasesInProject(pid).length;
+    const total = projectCanvasCount(pid);
     const removable = projectTrashableCount(pid);
     const blocked = total - removable;
     projectDeleteTitle.textContent = L(`删除项目「${p.name}」？`, `Delete project "${p.name}"?`);
@@ -437,18 +541,36 @@ async function confirmDeleteProject(withCanvases){
 function updateBoardHeader(){
     const p = currentProject();
     boardProjectName.textContent = p ? p.name : L('默认项目','Default');
-    boardCanvasCount.textContent = String(canvasesInProject(currentProjectId).length);
+    // Whole-project count; while searching, the number of matches is what matters.
+    const searching = canvasSearchQuery.trim() !== '';
+    boardCanvasCount.textContent = String((searching ? canvasPageTotal : projectCanvasCount(currentProjectId)) || 0);
+}
+
+function buildLoadMoreTile(){
+    const tile = document.createElement('button');
+    tile.className = 'ws-new-canvas-tile ws-load-more-tile';
+    tile.type = 'button';
+    const remaining = Math.max(0, canvasPageTotal - canvasPageOffset);
+    tile.innerHTML = `<span class="ws-new-canvas-content"><span class="ws-new-canvas-icon"><i data-lucide="chevrons-down"></i></span><strong>${L('加载更多','Load more')}</strong><span>${L(`还有 ${remaining} 张画布`, `${remaining} more canvas${remaining === 1 ? '' : 'es'}`)}</span></span>`;
+    tile.onclick = () => loadBoardPage({ reset: false });
+    return tile;
 }
 
 function renderBoard(){
     updateBoardHeader();
-    const query = canvasSearchQuery.trim().toLocaleLowerCase();
-    const filtered = canvasesInProject(currentProjectId).filter(c => !query || String(c.title || '').toLocaleLowerCase().includes(query));
     const sorted = items => items.slice().sort((a, b) => {
         const pinned = Number(Boolean(b.pinned)) - Number(Boolean(a.pinned));
         return pinned || Number(b.updated_at || b.created_at || 0) - Number(a.updated_at || a.created_at || 0);
     });
-    const smartItems = sorted(filtered);
+    // The server already filtered by project + query. Only fall back to a local
+    // title filter while the typed query is newer than the loaded page, so typing
+    // narrows the visible cards immediately instead of waiting for the round trip.
+    const liveQuery = canvasSearchQuery.trim();
+    let smartItems = sorted(canvasesInProject(currentProjectId));
+    if(liveQuery && canvasPageQuery !== liveQuery){
+        const lowered = liveQuery.toLocaleLowerCase();
+        smartItems = smartItems.filter(c => String(c.title || '').toLocaleLowerCase().includes(lowered));
+    }
     boardWorld.innerHTML = '';
     const grid = document.createElement('section');
     grid.className = 'ws-cover-grid';
@@ -459,8 +581,15 @@ function renderBoard(){
     create.onclick = () => openCreateCard();
     grid.appendChild(create);
     smartItems.forEach(c => grid.appendChild(buildCard(c)));
+    if(canvasHasMore) grid.appendChild(buildLoadMoreTile());
     boardWorld.appendChild(grid);
-    if(query && !smartItems.length){
+    if(canvasPageLoading && !smartItems.length){
+        const loading = document.createElement('div');
+        loading.className = 'ws-board-loading';
+        loading.innerHTML = `<span class="ws-board-spinner"></span><span>${L('正在加载画布…','Loading canvases…')}</span>`;
+        boardWorld.appendChild(loading);
+    }
+    if(liveQuery && !smartItems.length && !canvasPageLoading){
         const empty = document.createElement('div');
         empty.className = 'ws-filter-empty';
         empty.innerHTML = `<i data-lucide="search-x"></i><span>${L('没有匹配的画布','No matching canvases')}</span>`;
@@ -647,6 +776,9 @@ async function createCanvasOnBoard(title, overlay=createCardEl){
         if(!nc?.id) throw new Error(L('创建失败','Create failed'));
         if(nc.project == null) nc.project = currentProjectId;
         canvases.push(nc);
+        adjustCanvasCounts(currentProjectId, 1, 1);   // the creator owns it
+        canvasPageTotal += 1;
+        canvasPageOffset += 1;
         closeCreateCard(true);
         renderBoard();
         renderProjects();
@@ -737,7 +869,13 @@ async function copyCanvas(id){
         const res = await fetch(`/api/canvases/${encodeURIComponent(id)}/copy`, {method:'POST'});
         const data = await res.json().catch(() => ({}));
         if(!res.ok) throw new Error(data.detail || L('复制失败','Copy failed'));
-        if(data.canvas){ canvases.push({...data.canvas, sharing:data.sharing}); renderBoard(); openCanvas(data.canvas); }
+        if(data.canvas){
+            canvases.push({...data.canvas, sharing:data.sharing});
+            adjustCanvasCounts(currentProjectId, 1, 1);
+            canvasPageTotal += 1;
+            canvasPageOffset += 1;
+            renderBoard(); renderProjects(); openCanvas(data.canvas);
+        }
     } catch(e){ setStatus(e.message || L('复制失败','Copy failed')); }
 }
 
@@ -940,23 +1078,29 @@ async function exportCanvasWithResources(id){
 
 /* ===== Cut / paste a canvas across projects ===== */
 function cutCanvas(id){
+    const c = canvases.find(x => x.id === id);
+    if(!c) return;
     clipboardCanvasId = id;
+    // Keep a snapshot: the board only holds the current project's page, so after
+    // switching projects the cut canvas is no longer in `canvases`.
+    clipboardCanvas = { ...c };
     setStatus(L('已剪切，切换到目标项目后点“粘贴到此项目”','Cut — open another project, then Paste'));
     renderBoard();
 }
 function updatePasteBtn(){
     if(!pasteCanvasBtn) return;
-    const show = !!clipboardCanvasId && canvases.some(x => x.id === clipboardCanvasId);
+    const inCurrent = !!clipboardCanvas && (clipboardCanvas.project || 'default') === currentProjectId;
+    const show = !!clipboardCanvasId && !!clipboardCanvas && !inCurrent;
     pasteCanvasBtn.style.display = show ? 'inline-flex' : 'none';
 }
 async function pasteCanvas(){
-    if(!clipboardCanvasId) return;
-    const c = canvases.find(x => x.id === clipboardCanvasId);
+    if(!clipboardCanvasId || !clipboardCanvas) { updatePasteBtn(); return; }
+    const c = clipboardCanvas;
     const targetPid = currentProjectId;
     clipboardCanvasId = null;
-    if(!c){ updatePasteBtn(); renderBoard(); return; }
-    if((c.project || 'default') === targetPid){ renderBoard(); setStatus(L('已在当前项目','Already in this project')); return; }
-    await moveCanvasToProject(c.id, targetPid);
+    clipboardCanvas = null;
+    if((c.project || 'default') === targetPid){ updatePasteBtn(); renderBoard(); setStatus(L('已在当前项目','Already in this project')); return; }
+    await moveCanvasToProject(c.id, targetPid, c);
 }
 
 function startCardRename(canvasId){
@@ -994,9 +1138,29 @@ async function setCanvasTitle(id, title){
     await persistMeta(id, { title });
 }
 
-async function moveCanvasToProject(id, projectId){
-    const c = canvases.find(x => x.id === id);
+async function moveCanvasToProject(id, projectId, known){
+    const c = canvases.find(x => x.id === id) || known || null;
+    const fromPid = c ? (c.project || 'default') : '';
+    const editable = ['owner', 'editor'].includes(c?.sharing?.role);
     if(c) c.project = projectId;
+    if(fromPid && fromPid !== projectId){
+        // Keep the sidebar badges and delete-project dialog exact without a reload.
+        adjustCanvasCounts(fromPid, -1, editable ? -1 : 0);
+        adjustCanvasCounts(projectId, 1, editable ? 1 : 0);
+    }
+    if(projectId === currentProjectId){
+        // Paste target: refetch the first page so the moved card and header agree.
+        await persistMeta(id, { project: projectId });
+        await loadBoardPage({ reset: true });
+        setStatus(L('已移动','Moved'));
+        return;
+    }
+    const wasHere = fromPid === currentProjectId;
+    canvases = canvases.filter(x => x.id !== id);
+    if(wasHere){
+        canvasPageTotal = Math.max(0, canvasPageTotal - 1);
+        canvasPageOffset = Math.max(0, canvasPageOffset - 1);
+    }
     renderBoard();
     renderProjects();
     setStatus(L('已移动','Moved'));
@@ -1028,6 +1192,10 @@ async function deleteCanvas(id){
         const res = await fetch(`/api/canvases/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if(!res.ok) throw new Error('delete failed');
         canvases = canvases.filter(x => x.id !== id);
+        const editable = ['owner', 'editor'].includes(c.sharing?.role);
+        adjustCanvasCounts(c.project || 'default', -1, editable ? -1 : 0);
+        canvasPageTotal = Math.max(0, canvasPageTotal - 1);
+        canvasPageOffset = Math.max(0, canvasPageOffset - 1);
         renderBoard();
         renderProjects();
         refreshTrashCount();
@@ -1141,12 +1309,14 @@ canvasSearchToggle?.addEventListener('click', () => {
     else {
         canvasSearchQuery = '';
         if(canvasSearchInput) canvasSearchInput.value = '';
-        renderBoard();
+        loadBoardPage({ reset: true });
     }
 });
 canvasSearchInput?.addEventListener('input', () => {
     canvasSearchQuery = canvasSearchInput.value || '';
-    renderBoard();
+    renderBoard();                                   // narrow the loaded page at once
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => loadBoardPage({ reset: true }), 250);
 });
 studioSettingsBtn?.addEventListener('click', () => {
     window.parent.postMessage({ type:'studio:toggle-settings' }, '*');
@@ -1205,6 +1375,19 @@ window.addEventListener('message', event => {
         if(projectDeleteModal.classList.contains('active')) paintProjectDeleteDialog();
         refreshIcons();
     }
+});
+
+// Near-bottom scroll pulls the next page; a resize may leave the page short, so
+// refill then too. Both paths are no-ops when everything is already loaded.
+board.addEventListener('scroll', () => {
+    if(!canvasHasMore || canvasPageLoading) return;
+    if(board.scrollTop + board.clientHeight < board.scrollHeight - 240) return;
+    loadBoardPage({ reset: false });
+}, { passive: true });
+let resizeFillTimer = null;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeFillTimer);
+    resizeFillTimer = setTimeout(maybeFillBoard, 180);
 });
 
 /* ===== Boot ===== */

@@ -420,6 +420,7 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 CONVERSATION_DIR = os.path.join(DATA_DIR, "conversations")
 CANVAS_DIR = os.path.join(DATA_DIR, "canvases")
 CANVAS_ASSET_INDEX_CACHE_PATH = os.path.join(DATA_DIR, "canvas_asset_index_cache.json")
+CANVAS_META_INDEX_CACHE_NAME = "canvas_meta_index_cache.json"
 MEDIA_PREVIEW_DIR = os.path.join(DATA_DIR, "media_previews")
 MEDIA_CONTENT_HASH_CACHE: Dict[Tuple[str, int, int], str] = {}
 MEDIA_CONTENT_HASH_CACHE_LOCK = RLock()
@@ -553,6 +554,7 @@ GLOBAL_CONFIG_LOCK = Lock()
 CONVERSATION_LOCK = Lock()
 CANVAS_LOCK = RLock()
 CANVAS_ASSET_INDEX_LOCK = RLock()
+CANVAS_META_INDEX_LOCK = RLock()
 ASSET_GOVERNANCE_LOCK = RLock()
 ASSET_AI_TASK_LOCK = RLock()
 LOAD_LOCK = Lock()
@@ -7069,48 +7071,155 @@ def canvas_record(data):
         "node_count": len(data.get("nodes", [])),
     }
 
-def cleanup_expired_canvas_trash():
+def canvas_meta_index_cache_path():
+    """Where the workspace metadata index lives.
+
+    Resolved through ``DATA_DIR`` at call time (not imported once) so tests that
+    patch ``DATA_DIR`` — and any deployment that relocates ``data/`` — get a
+    matching cache path instead of writing into the checkout.
+    """
+    return os.path.join(DATA_DIR, CANVAS_META_INDEX_CACHE_NAME)
+
+def load_canvas_meta_index_cache():
+    try:
+        with open(canvas_meta_index_cache_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and data.get("version") == 1 and isinstance(data.get("entries"), dict):
+            return data
+    except Exception:
+        pass
+    return {"version": 1, "entries": {}}
+
+def canvas_meta_sharing_fields(canvas):
+    """The three root fields ``canvas_sharing_public()`` needs from a canvas.
+
+    Cached next to the list record so a warm workspace load never reopens the
+    canvas JSON just to decide owner / editor / viewer.
+    """
+    if "sharing_version" not in canvas:
+        # Legacy boards stay company-readable but unclaimed (see load_canvas).
+        return {"owner_user_id": "", "editor_user_ids": [], "ownership_state": "unclaimed"}
+    return {
+        "owner_user_id": str(canvas.get("owner_user_id") or ""),
+        "editor_user_ids": [str(item) for item in (canvas.get("editor_user_ids") or [])],
+        "ownership_state": str(canvas.get("ownership_state") or "unclaimed"),
+    }
+
+def expire_canvas_trash_entries(entries):
+    """Drop trashed canvases past the retention window using index metadata."""
     cutoff = now_ms() - CANVAS_TRASH_RETENTION_MS
-    with CANVAS_LOCK:
-        for filename in os.listdir(CANVAS_DIR):
-            if not is_canvas_storage_file(filename):
-                continue
+    removed = []
+    for filename, entry in list((entries or {}).items()):
+        record = entry.get("record") or {}
+        deleted_at = int(record.get("deleted_at") or 0)
+        if not deleted_at or deleted_at >= cutoff:
+            continue
+        canvas_id = str(record.get("id") or os.path.splitext(filename)[0])
+        try:
+            with CANVAS_LOCK:
+                os.remove(os.path.join(CANVAS_DIR, filename))
+        except FileNotFoundError:
+            pass
+        except OSError:
+            continue
+        entries.pop(filename, None)
+        clear_canvas_cover_file(canvas_id)
+        delete_canvas_conversations(canvas_id)
+        removed.append(canvas_id)
+    return removed
+
+def build_canvas_meta_index():
+    """Return ``{filename: entry}`` for every stored canvas, parsing changed files only.
+
+    Returning to the workspace used to parse the whole canvas directory several
+    times per visit (``/api/canvases`` read every canvas, then ``load_canvas()``
+    read every canvas again for its sharing block, then ``/api/projects`` and the
+    trash sweep each read it once more).  At ~200 canvases / ~160 MB that parse
+    cost is the "stuck for ages" delay.  Entries are validated by the canvas
+    file's ``(mtime_ns, size)`` signature — the same invalidation contract
+    ``canvas_assets_index()`` uses — so a warm load only stats the directory.
+    """
+    with CANVAS_META_INDEX_LOCK:
+        cached_entries = load_canvas_meta_index_cache().get("entries") or {}
+        next_entries = {}
+        changed = False
+        try:
+            filenames = sorted(
+                filename for filename in os.listdir(CANVAS_DIR)
+                if is_canvas_storage_file(filename)
+            )
+        except OSError:
+            filenames = []
+        for filename in filenames:
             path = os.path.join(CANVAS_DIR, filename)
             try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                deleted_at = int(data.get("deleted_at") or 0)
-                if deleted_at and deleted_at < cutoff:
-                    canvas_id = str(data.get("id") or os.path.splitext(filename)[0])
-                    os.remove(path)
-                    clear_canvas_cover_file(canvas_id)
-                    delete_canvas_conversations(canvas_id)
-            except Exception:
+                stat = os.stat(path)
+            except OSError:
                 continue
+            entry = cached_entries.get(filename)
+            if (
+                isinstance(entry, dict)
+                and entry.get("mtime_ns") == int(stat.st_mtime_ns)
+                and entry.get("size") == int(stat.st_size)
+                and isinstance(entry.get("record"), dict)
+                and isinstance(entry.get("sharing"), dict)
+            ):
+                next_entries[filename] = entry
+                continue
+            try:
+                with CANVAS_LOCK:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+            except Exception:
+                # Unreadable/corrupt canvas: skip it like the previous list path did.
+                # The filename-set check below still drops a stale cached entry, so
+                # a persistently broken file does not force a cache write per call.
+                continue
+            if not isinstance(data, dict) or str(data.get("kind") or "").strip().lower() != "smart":
+                continue
+            if ensure_canvas_cover(data):
+                with CANVAS_LOCK:
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                # The cover backfill rewrote the file; re-stat so the next load
+                # is a cache hit instead of parsing it once more.
+                try:
+                    stat = os.stat(path)
+                except OSError:
+                    pass
+            next_entries[filename] = {
+                "mtime_ns": int(stat.st_mtime_ns),
+                "size": int(stat.st_size),
+                "deleted": bool(data.get("deleted_at")),
+                "record": canvas_record(data),
+                "sharing": canvas_meta_sharing_fields(data),
+            }
+            changed = True
+        if expire_canvas_trash_entries(next_entries):
+            changed = True
+        if set(next_entries) != set(cached_entries):
+            changed = True
+        if changed:
+            _write_json_atomic(
+                canvas_meta_index_cache_path(),
+                {"version": 1, "entries": next_entries, "updated_at": now_ms()},
+            )
+        return next_entries
+
+def cleanup_expired_canvas_trash():
+    """Purge trashed canvases past the retention window (index-driven)."""
+    build_canvas_meta_index()
+
+def canvas_meta_entries(include_deleted=False):
+    """Index entries for live (or trashed) canvases, with their sharing fields."""
+    return [
+        entry
+        for entry in build_canvas_meta_index().values()
+        if bool(entry.get("deleted")) == bool(include_deleted)
+    ]
 
 def iter_canvas_records(include_deleted=False):
-    cleanup_expired_canvas_trash()
-    records = []
-    for filename in os.listdir(CANVAS_DIR):
-        if not is_canvas_storage_file(filename):
-            continue
-        try:
-            path = os.path.join(CANVAS_DIR, filename)
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            continue
-        if str(data.get("kind") or "").strip().lower() != "smart":
-            continue
-        is_deleted = bool(data.get("deleted_at"))
-        if include_deleted != is_deleted:
-            continue
-        if ensure_canvas_cover(data):
-            with CANVAS_LOCK:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-        records.append(canvas_record(data))
-    return records
+    return [dict(entry.get("record") or {}) for entry in canvas_meta_entries(include_deleted)]
 
 def list_canvases():
     records = iter_canvas_records(include_deleted=False)
@@ -24362,20 +24471,74 @@ async def copy_canvas_image_to_system_clipboard(payload: SystemClipboardImageReq
 
 # --- 画布管理 ---
 
-@app.get("/api/canvases")
-async def canvases(request: Request):
-    user = require_authenticated(request)
-    records = list_canvases()
-    for record in records:
-        try:
-            record["sharing"] = canvas_sharing_public(load_canvas(record["id"]), user)
-        except HTTPException:
+CANVAS_LIST_DEFAULT_LIMIT = 60
+
+def canvas_list_project_stats(entries, user):
+    """Per-project ``{total, editable}`` counts, computed from index metadata.
+
+    The sidebar badge and the project-delete dialog need whole-project numbers.
+    Deriving them here keeps the workspace from asking the client to hold every
+    canvas just to count them, which is what forced a full listing before.
+    """
+    stats = {}
+    for entry in entries:
+        record = entry.get("record") or {}
+        pid = str(record.get("project") or DEFAULT_PROJECT_ID)
+        bucket = stats.setdefault(pid, {"total": 0, "editable": 0})
+        bucket["total"] += 1
+        if canvas_access_role(entry.get("sharing") or {}, user) in {"owner", "editor"}:
+            bucket["editable"] += 1
+    return stats
+
+def canvas_list_page(user, project_id="", query="", limit=0, offset=0):
+    """One page of workspace canvas records plus paging/stat metadata.
+
+    ``limit=0`` keeps the original contract (the whole list), which the
+    Photoshop bridge and older clients still rely on; the workspace itself asks
+    for a page so the first paint only waits on one project.
+    """
+    entries = canvas_meta_entries(include_deleted=False)
+    stats = canvas_list_project_stats(entries, user)
+    target_project = str(project_id or "").strip()
+    keyword = str(query or "").strip().lower()
+    records = []
+    for entry in entries:
+        record = dict(entry.get("record") or {})
+        if target_project and str(record.get("project") or DEFAULT_PROJECT_ID) != target_project:
             continue
-    return {"canvases": records}
+        if keyword and keyword not in str(record.get("title") or "").lower():
+            continue
+        record["sharing"] = canvas_sharing_public(entry.get("sharing") or {}, user)
+        records.append(record)
+    records.sort(
+        key=lambda item: (
+            0 if item.get("pinned") else 1,
+            -int(item.get("updated_at") or item.get("created_at") or 0),
+        ),
+    )
+    total = len(records)
+    limit = max(0, int(limit or 0))
+    offset = max(0, int(offset or 0))
+    page = records[offset:offset + limit] if limit else records[offset:]
+    return {
+        "canvases": page,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": bool(limit) and offset + len(page) < total,
+        "counts": stats,
+    }
+
+@app.get("/api/canvases")
+async def canvases(request: Request, project_id: str = "", q: str = "", limit: int = 0, offset: int = 0):
+    user = require_authenticated(request)
+    # A cold meta index still parses every canvas once; keep that off the event
+    # loop so one workspace load cannot stall WebSocket traffic with it.
+    return await asyncio.to_thread(canvas_list_page, user, project_id, q, limit, offset)
 
 @app.get("/api/projects")
 async def get_projects():
-    return {"projects": list_projects()}
+    return {"projects": await asyncio.to_thread(list_projects)}
 
 @app.post("/api/projects")
 async def create_project(payload: ProjectCreateRequest):
