@@ -283,6 +283,24 @@
             <button class="workflow-group-run" type="button" data-workflow-toolbar-action="run" data-i18n-title="smart.workflowGroupRun"><i data-lucide="play"></i><span data-i18n="smart.workflowGroupRun">整组执行</span></button>
             <button class="workflow-group-create" type="button" data-workflow-toolbar-action="create" data-i18n-title="smart.workflowGroupCreate"><i data-lucide="save"></i><span data-i18n="smart.workflowGroupCreate">创建工作流</span></button>
         </div>
+        <div id="layoutToolbar" class="workflow-group-toolbar workflow-group-toolbar-floating layout-toolbar-floating" role="toolbar" aria-labelledby="layoutToolbarLabel" aria-hidden="true">
+            <span id="layoutToolbarLabel" class="sr-only" data-i18n="smart.layoutActions">排版操作</span>
+            <button type="button" data-layout-action="align-left" data-i18n-title="smart.layoutAlignLeft" title="左对齐" aria-label="左对齐"><i data-lucide="align-left"></i></button>
+            <button type="button" data-layout-action="align-hcenter" data-i18n-title="smart.layoutAlignHCenter" title="水平居中对齐" aria-label="水平居中对齐"><i data-lucide="align-center"></i></button>
+            <button type="button" data-layout-action="align-right" data-i18n-title="smart.layoutAlignRight" title="右对齐" aria-label="右对齐"><i data-lucide="align-right"></i></button>
+            <span class="layout-toolbar-sep" aria-hidden="true"></span>
+            <button type="button" data-layout-action="align-top" data-i18n-title="smart.layoutAlignTop" title="顶部对齐" aria-label="顶部对齐"><i data-lucide="align-start-vertical"></i></button>
+            <button type="button" data-layout-action="align-vcenter" data-i18n-title="smart.layoutAlignVCenter" title="垂直居中对齐" aria-label="垂直居中对齐"><i data-lucide="align-center-vertical"></i></button>
+            <button type="button" data-layout-action="align-bottom" data-i18n-title="smart.layoutAlignBottom" title="底部对齐" aria-label="底部对齐"><i data-lucide="align-end-vertical"></i></button>
+            <span class="layout-toolbar-sep" aria-hidden="true"></span>
+            <button type="button" data-layout-action="distribute-h" data-i18n-title="smart.layoutDistributeH" title="水平等距分布" aria-label="水平等距分布"><i data-lucide="align-horizontal-distribute-center"></i></button>
+            <button type="button" data-layout-action="distribute-v" data-i18n-title="smart.layoutDistributeV" title="垂直等距分布" aria-label="垂直等距分布"><i data-lucide="align-vertical-distribute-center"></i></button>
+            <span class="layout-toolbar-sep" aria-hidden="true"></span>
+            <button type="button" data-layout-action="equal-width" data-i18n-title="smart.layoutEqualWidth" title="等宽（以首个选中节点为准）" aria-label="等宽"><i data-lucide="arrow-left-right"></i></button>
+            <button type="button" data-layout-action="equal-height" data-i18n-title="smart.layoutEqualHeight" title="等高（以首个选中节点为准）" aria-label="等高"><i data-lucide="arrow-up-down"></i></button>
+            <span class="layout-toolbar-sep" aria-hidden="true"></span>
+            <button type="button" data-layout-action="grid" data-i18n-title="smart.layoutGrid" title="网格排列（自动等宽等高）" aria-label="网格排列"><i data-lucide="layout-grid"></i></button>
+        </div>
         <div id="photoshopContextMenu" class="photoshop-context-menu" role="menu" aria-hidden="true"></div>
         <div id="photoshopInstallModal" class="photoshop-install-modal" aria-hidden="true">
             <div class="photoshop-install-card" role="dialog" aria-modal="true" aria-labelledby="photoshopInstallTitle">

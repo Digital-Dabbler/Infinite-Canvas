@@ -323,5 +323,87 @@ class SmartCanvasOnlyTests(unittest.TestCase):
         self.assertIn('id="comfyNoPromptHint"', smart_canvas_html)
 
 
+class SmartCanvasAutoLayoutTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(__file__).resolve().parents[1]
+        cls.smart_canvas_js = (cls.root / "static" / "js" / "smart-canvas.js").read_text(encoding="utf-8")
+        cls.smart_canvas_html = (cls.root / "static" / "smart-canvas.html").read_text(encoding="utf-8")
+        cls.smart_canvas_css = (cls.root / "static" / "css" / "smart-canvas.css").read_text(encoding="utf-8")
+        cls.smart_canvas_i18n = (cls.root / "static" / "js" / "i18n" / "smart-canvas.js").read_text(encoding="utf-8")
+
+    def test_layout_actions_mutate_through_undo_render_and_narrow_save(self):
+        # 排版是用户可撤销的批量结构变化：每个动作必须一次 pushUndo，随后 render + scheduleSave，
+        # 由既有 node_fields 窄操作同步 x/y/w/h，不引入整画布回写。
+        source = self.smart_canvas_js
+        start = source.index("// ---- 多选自动排版（对齐 / 等距 / 等尺寸 / 网格，浮动工具栏触发） ----")
+        end = source.index("function applyViewport(){", start)
+        body = source[start:end]
+        for fn in (
+            "function layoutSelectionUnits(){",
+            "function translateLayoutUnit(unit, dx, dy){",
+            "function alignSelectedSmartNodes(mode){",
+            "function distributeSelectedSmartNodes(axis){",
+            "function sizeSelectedSmartNodes(dim){",
+            "function gridSelectedSmartNodes(){",
+        ):
+            self.assertIn(fn, body)
+        self.assertEqual(body.count("pushUndo();"), 4)
+        self.assertEqual(body.count("render();"), 4)
+        self.assertEqual(body.count("scheduleSave();"), 4)
+        self.assertNotIn("saveCanvasOperations(", body)
+        # workflow 组织框是原子单元：整体平移成员后重算框，不参与等宽等高缩放。
+        self.assertIn("fitWorkflowOrganizerBounds(unit);", body)
+        self.assertIn("if(isWorkflowOrganizerNode(unit)) return;", body)
+
+    def test_layout_toolbar_shows_only_for_multi_selection_and_is_wired(self):
+        html = self.smart_canvas_html
+        self.assertIn('id="layoutToolbar"', html)
+        actions = [
+            "align-left", "align-hcenter", "align-right",
+            "align-top", "align-vcenter", "align-bottom",
+            "distribute-h", "distribute-v",
+            "equal-width", "equal-height", "grid",
+        ]
+        for action in actions:
+            self.assertIn(f'data-layout-action="{action}"', html)
+        source = self.smart_canvas_js
+        self.assertIn("const layoutToolbar = document.getElementById('layoutToolbar');", source)
+        self.assertIn("return units.length >= 2 ? units : [];", source)
+        self.assertIn("button.disabled = units.length < 3;", source)
+        # 生命周期钩子：选择变化、渲染、视口平移缩放、拖拽隐藏/恢复。
+        self.assertIn("updateWorkflowGroupToolbar();\n    updateLayoutToolbar();", source)
+        self.assertIn("positionWorkflowGroupToolbar();\n        positionLayoutToolbar();", source)
+        self.assertIn("hideWorkflowGroupToolbarDuringDrag(e);\n    hideLayoutToolbarDuringDrag(e);", source)
+        self.assertIn("restoreWorkflowGroupToolbarAfterDrag();\n        restoreLayoutToolbarAfterDrag();", source)
+        self.assertIn("#layoutToolbar { position:absolute;", self.smart_canvas_css)
+        self.assertIn("#layoutToolbar.open { display:flex; }", self.smart_canvas_css)
+
+    def test_layout_equal_size_uses_first_selected_node_as_reference(self):
+        # 用户确认的规则：等宽/等高/网格统一尺寸以第一个选中的节点为准，不是选区极值。
+        source = self.smart_canvas_js
+        start = source.index("function referenceLayoutRect(){")
+        end = source.index("function sizeSelectedSmartNodes(dim){", start)
+        body = source[start:end]
+        self.assertIn("const refId = selectedNodeIds()[0];", body)
+        grid_start = source.index("function gridSelectedSmartNodes(){")
+        grid_end = source.index("function applyViewport(){", grid_start)
+        self.assertIn("resizeLayoutUnits(units, refRect, 'both');", source[grid_start:grid_end])
+
+    def test_layout_i18n_keys_exist_in_both_locales(self):
+        for key in (
+            "smart.layoutActions", "smart.layoutAlignLeft", "smart.layoutAlignHCenter",
+            "smart.layoutAlignRight", "smart.layoutAlignTop", "smart.layoutAlignVCenter",
+            "smart.layoutAlignBottom", "smart.layoutDistributeH", "smart.layoutDistributeV",
+            "smart.layoutEqualWidth", "smart.layoutEqualHeight", "smart.layoutGrid",
+            "smart.layoutToastAligned", "smart.layoutToastDistributed",
+            "smart.layoutToastEqualSize", "smart.layoutToastGrid",
+        ):
+            self.assertIn(f'"{key}"', self.smart_canvas_i18n)
+        for key in ("smart.layoutAlignLeft", "smart.layoutDistributeH", "smart.layoutGrid"):
+            self.assertIn(f'data-i18n-title="{key}"', self.smart_canvas_html)
+            self.assertIn(f'data-i18n="smart.layoutActions"', self.smart_canvas_html)
+
+
 if __name__ == "__main__":
     unittest.main()

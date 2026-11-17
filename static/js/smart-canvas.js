@@ -62,6 +62,7 @@ const psdCompareToggle = document.getElementById('psdCompareToggle');
 const psdExportButton = document.getElementById('psdExportBtn');
 const psdExportInfoEl = document.getElementById('psdExportInfo');
 const workflowGroupToolbar = document.getElementById('workflowGroupToolbar');
+const layoutToolbar = document.getElementById('layoutToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const photoshopInstallModal = document.getElementById('photoshopInstallModal');
 const photoshopInstallClose = document.getElementById('photoshopInstallClose');
@@ -2072,6 +2073,7 @@ function syncSelectionUi(){
     syncRunButtonState();
     updateImageActionToolbar();
     updateWorkflowGroupToolbar();
+    updateLayoutToolbar();
     scheduleConnectionLayerRefresh();
 }
 function isNodeSelected(id){
@@ -2981,6 +2983,157 @@ function arrangeSelectedSmartNodes(){
     scheduleSave();
     toast('已整理选中节点');
 }
+// ---- 多选自动排版（对齐 / 等距 / 等尺寸 / 网格，浮动工具栏触发） ----
+// 排版以"原子单元"为对象：workflow 组织框整体是一个单元（成员折叠进框，
+// 保持选中顺序去重）；旧 smart-group 成员由 translateSmartNodeWithMembers 处理。
+function layoutSelectionUnits(){
+    const units = [];
+    const seen = new Set();
+    selectedNodeIds().forEach(id => {
+        const node = nodes.find(item => item.id === id);
+        if(!node) return;
+        let unit = node;
+        if(!isWorkflowOrganizerNode(node) && node.workflowGroupId){
+            const group = nodes.find(item => item.id === node.workflowGroupId && isWorkflowOrganizerNode(item));
+            if(group) unit = group;
+        }
+        if(seen.has(unit.id)) return;
+        seen.add(unit.id);
+        units.push(unit);
+    });
+    return units;
+}
+function translateLayoutUnit(unit, dx, dy){
+    if(!unit || (!dx && !dy)) return;
+    if(isWorkflowOrganizerNode(unit)){
+        workflowOrganizerMembers(unit).forEach(member => {
+            member.x = Math.round((Number(member.x) || 0) + dx);
+            member.y = Math.round((Number(member.y) || 0) + dy);
+        });
+        fitWorkflowOrganizerBounds(unit);
+        return;
+    }
+    translateSmartNodeWithMembers(unit, dx, dy);
+}
+// 左/右/顶/底对齐以选区极值节点为准，水平/垂直居中以选区外接框中线为准。
+function alignSelectedSmartNodes(mode){
+    if(!canvas) return;
+    const units = layoutSelectionUnits();
+    if(units.length < 2) return;
+    const rects = units.map(node => nodeRect(node));
+    const minX = Math.min(...rects.map(rect => rect.x));
+    const maxX = Math.max(...rects.map(rect => rect.x + rect.width));
+    const minY = Math.min(...rects.map(rect => rect.y));
+    const maxY = Math.max(...rects.map(rect => rect.y + rect.height));
+    pushUndo();
+    units.forEach((unit, index) => {
+        const rect = rects[index];
+        let dx = 0;
+        let dy = 0;
+        if(mode === 'left') dx = minX - rect.x;
+        else if(mode === 'right') dx = maxX - (rect.x + rect.width);
+        else if(mode === 'hcenter') dx = (minX + maxX) / 2 - (rect.x + rect.width / 2);
+        else if(mode === 'top') dy = minY - rect.y;
+        else if(mode === 'bottom') dy = maxY - (rect.y + rect.height);
+        else if(mode === 'vcenter') dy = (minY + maxY) / 2 - (rect.y + rect.height / 2);
+        translateLayoutUnit(unit, Math.round(dx), Math.round(dy));
+    });
+    render();
+    scheduleSave();
+    toast(tr('smart.layoutToastAligned'));
+}
+// 等距分布（≥3 个单元）：按位置排序后首尾固定，其余均分间隙。
+function distributeSelectedSmartNodes(axis){
+    if(!canvas) return;
+    const units = layoutSelectionUnits();
+    if(units.length < 3) return;
+    const items = units.map(node => ({node, rect:nodeRect(node)}));
+    items.sort((a, b) => axis === 'x'
+        ? (a.rect.x - b.rect.x) || (a.rect.y - b.rect.y)
+        : (a.rect.y - b.rect.y) || (a.rect.x - b.rect.x));
+    const extent = axis === 'x' ? 'width' : 'height';
+    const start = axis === 'x' ? items[0].rect.x : items[0].rect.y;
+    const lastRect = items[items.length - 1].rect;
+    const end = axis === 'x' ? lastRect.x + lastRect.width : lastRect.y + lastRect.height;
+    const content = items.reduce((sum, item) => sum + item.rect[extent], 0);
+    const gap = Math.max(0, (end - start - content) / (items.length - 1));
+    pushUndo();
+    let cursor = start;
+    items.forEach(item => {
+        const current = axis === 'x' ? item.rect.x : item.rect.y;
+        if(axis === 'x') translateLayoutUnit(item.node, Math.round(cursor - current), 0);
+        else translateLayoutUnit(item.node, 0, Math.round(cursor - current));
+        cursor += item.rect[extent] + gap;
+    });
+    render();
+    scheduleSave();
+    toast(tr('smart.layoutToastDistributed'));
+}
+// 等宽/等高的基准 = 第一个选中的节点（用户确认的规则）；workflow 组织框尺寸由成员决定，不参与缩放。
+function referenceLayoutRect(){
+    const refId = selectedNodeIds()[0];
+    const refNode = nodes.find(node => node.id === refId);
+    return refNode ? nodeRect(refNode) : null;
+}
+function resizeLayoutUnits(units, refRect, dim){
+    let changed = 0;
+    units.forEach(unit => {
+        if(isWorkflowOrganizerNode(unit)) return;
+        const rect = nodeRect(unit);
+        const nextW = dim === 'width' || dim === 'both' ? Math.max(48, Math.round(refRect.width)) : rect.width;
+        const nextH = dim === 'height' || dim === 'both' ? Math.max(48, Math.round(refRect.height)) : rect.height;
+        if(nextW === rect.width && nextH === rect.height) return;
+        unit.w = nextW;
+        unit.h = nextH;
+        if(isSmartNoteNode(unit)) unit.sizeMode = 'fixed';
+        changed++;
+    });
+    return changed;
+}
+function sizeSelectedSmartNodes(dim){
+    if(!canvas) return;
+    const units = layoutSelectionUnits();
+    if(units.length < 2) return;
+    const refRect = referenceLayoutRect();
+    if(!refRect) return;
+    pushUndo();
+    const changed = resizeLayoutUnits(units, refRect, dim);
+    render();
+    scheduleSave();
+    if(changed) toast(tr('smart.layoutToastEqualSize'));
+}
+// 网格排列：先按第一个选中节点统一等宽等高，再按选中顺序流式入格（列数≈正方形），锚定选区外接框左上角。
+function gridSelectedSmartNodes(){
+    if(!canvas) return;
+    const units = layoutSelectionUnits();
+    if(units.length < 2) return;
+    pushUndo();
+    const refRect = referenceLayoutRect();
+    if(refRect) resizeLayoutUnits(units, refRect, 'both');
+    const rects = units.map(node => nodeRect(node));
+    const startX = Math.min(...rects.map(rect => rect.x));
+    const startY = Math.min(...rects.map(rect => rect.y));
+    const cols = Math.max(1, Math.ceil(Math.sqrt(units.length)));
+    const gap = 40;
+    let x = startX;
+    let y = startY;
+    let rowHeight = 0;
+    units.forEach((unit, index) => {
+        if(index && index % cols === 0){
+            x = startX;
+            y += rowHeight + gap;
+            rowHeight = 0;
+        }
+        const rect = nodeRect(unit);
+        translateLayoutUnit(unit, Math.round(x - rect.x), Math.round(y - rect.y));
+        const placed = nodeRect(unit);
+        x += Math.max(180, placed.width) + gap;
+        rowHeight = Math.max(rowHeight, Math.max(110, placed.height));
+    });
+    render();
+    scheduleSave();
+    toast(tr('smart.layoutToastGrid'));
+}
 function applyViewport(){
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
     world.style.setProperty('--canvas-ui-inverse-scale', String(Math.max(1, Math.min(3.25, 1 / safeScale(viewport.scale)))));
@@ -2996,6 +3149,7 @@ function applyViewport(){
     requestAnimationFrame(() => {
         positionImageActionToolbar();
         positionWorkflowGroupToolbar();
+        positionLayoutToolbar();
         imageUpscaleMenuClose();
         imageMattingMenuClose();
         imageRedrawMenuClose();
@@ -11794,6 +11948,94 @@ workflowGroupToolbar?.addEventListener('keydown', event => {
         if(target) toggleWorkflowGroupColorMenu(target.id);
     }
 });
+// ---- 多选自动排版浮动工具栏 ----
+let layoutToolbarHiddenDuringDrag = false;
+const LAYOUT_TOOLBAR_ACTIONS = {
+    'align-left': () => alignSelectedSmartNodes('left'),
+    'align-hcenter': () => alignSelectedSmartNodes('hcenter'),
+    'align-right': () => alignSelectedSmartNodes('right'),
+    'align-top': () => alignSelectedSmartNodes('top'),
+    'align-vcenter': () => alignSelectedSmartNodes('vcenter'),
+    'align-bottom': () => alignSelectedSmartNodes('bottom'),
+    'distribute-h': () => distributeSelectedSmartNodes('x'),
+    'distribute-v': () => distributeSelectedSmartNodes('y'),
+    'equal-width': () => sizeSelectedSmartNodes('width'),
+    'equal-height': () => sizeSelectedSmartNodes('height'),
+    'grid': () => gridSelectedSmartNodes(),
+};
+function currentLayoutToolbarUnits(){
+    if(!layoutToolbar || layoutToolbarHiddenDuringDrag || dragState || resizeState) return [];
+    const units = layoutSelectionUnits();
+    return units.length >= 2 ? units : [];
+}
+function layoutSelectionScreenBounds(units){
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    units.forEach(unit => {
+        const el = world.querySelector(`.image-node[data-id="${CSS.escape(unit.id)}"]`);
+        if(!el) return;
+        const rect = el.getBoundingClientRect();
+        left = Math.min(left, rect.left);
+        top = Math.min(top, rect.top);
+        right = Math.max(right, rect.right);
+        bottom = Math.max(bottom, rect.bottom);
+    });
+    if(!Number.isFinite(left) || !Number.isFinite(top)) return null;
+    return {left, top, right, bottom};
+}
+function positionLayoutToolbar(units=currentLayoutToolbarUnits()){
+    if(!layoutToolbar || units.length < 2) return;
+    const bounds = layoutSelectionScreenBounds(units);
+    if(!bounds) return;
+    const shellRect = shell.getBoundingClientRect();
+    const headerRect = shell.querySelector('.rh-canvas-header')?.getBoundingClientRect();
+    const width = layoutToolbar.offsetWidth || 1;
+    const height = layoutToolbar.offsetHeight || 42;
+    const edge = 14;
+    const safeTop = Math.max(edge, (headerRect?.bottom || shellRect.top) - shellRect.top + edge);
+    const centerX = Math.max(width / 2 + edge, Math.min(shellRect.width - width / 2 - edge, (bounds.left + bounds.right) / 2 - shellRect.left));
+    const selectionTop = bounds.top - shellRect.top;
+    const above = selectionTop - height - 12;
+    // 选区顶边贴近固定栏时收进栏下沿，避免工具栏被头部遮挡。
+    const placement = above >= safeTop ? 'above' : 'edge';
+    layoutToolbar.dataset.placement = placement;
+    layoutToolbar.style.left = `${Math.round(centerX)}px`;
+    layoutToolbar.style.top = `${Math.round(placement === 'above' ? above : safeTop)}px`;
+}
+function updateLayoutToolbar(){
+    if(!layoutToolbar) return;
+    const units = currentLayoutToolbarUnits();
+    const open = units.length >= 2;
+    layoutToolbar.classList.toggle('open', open);
+    layoutToolbar.setAttribute('aria-hidden', open ? 'false' : 'true');
+    layoutToolbar.querySelectorAll('[data-layout-action^="distribute-"]').forEach(button => {
+        button.disabled = units.length < 3;
+    });
+    if(open) requestAnimationFrame(() => positionLayoutToolbar(units));
+}
+function hideLayoutToolbarDuringDrag(event){
+    if(!layoutToolbar || layoutToolbarHiddenDuringDrag || !dragState) return;
+    if(Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) < 4) return;
+    layoutToolbarHiddenDuringDrag = true;
+    layoutToolbar.classList.remove('open');
+    layoutToolbar.setAttribute('aria-hidden', 'true');
+}
+function restoreLayoutToolbarAfterDrag(){
+    if(!layoutToolbarHiddenDuringDrag) return;
+    layoutToolbarHiddenDuringDrag = false;
+    updateLayoutToolbar();
+    positionLayoutToolbar();
+}
+layoutToolbar?.addEventListener('mousedown', event => event.stopPropagation());
+layoutToolbar?.addEventListener('click', event => {
+    const button = event.target.closest?.('[data-layout-action]');
+    if(!button || button.disabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    LAYOUT_TOOLBAR_ACTIONS[button.dataset.layoutAction]?.();
+});
 
 function closePhotoshopContextMenu(){
     if(!photoshopContextMenu) return;
@@ -14408,6 +14650,7 @@ function render(){
     refreshRunTimerPills();
     updateImageActionToolbar();
     updateWorkflowGroupToolbar();
+    updateLayoutToolbar();
     applyCanvasPresenceDecorations();
     return;
     world.innerHTML = '';
@@ -27396,6 +27639,7 @@ window.onmousemove = e => {
         n.y = snap ? Math.round(nextY / 20) * 20 : nextY;
     });
     hideWorkflowGroupToolbarDuringDrag(e);
+    hideLayoutToolbarDuringDrag(e);
     if(assetLibraryOpen){
         const hit = document.elementFromPoint(e.clientX, e.clientY);
         if(hit && assetPanel?.contains(hit)){
@@ -27605,6 +27849,7 @@ window.onmouseup = e => {
         loopInsertPreview = null;
         dragState = null;
         restoreWorkflowGroupToolbarAfterDrag();
+        restoreLayoutToolbarAfterDrag();
         const active = selectedNode();
         if(active) positionComposerForNode(active);
         scheduleSave();

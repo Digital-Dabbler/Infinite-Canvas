@@ -86,6 +86,14 @@ body.smart-canvas-panning iframe { pointer-events:none !important; }
 .workflow-group-toolbar-floating .workflow-group-layout-menu.open,.workflow-group-toolbar-floating .workflow-group-color-menu.open { display:grid; }
 .workflow-group-toolbar-floating[data-placement="inside"] { box-shadow:0 14px 34px rgba(0,0,0,.34); }
 .workflow-group-toolbar-floating button:focus-visible { outline:2px solid var(--ui-focus-ring); outline-offset:2px; }
+#layoutToolbar { position:absolute; left:0; top:0; z-index:57; display:none; max-width:min(calc(100vw - 28px), 720px); transform:translateX(-50%); }
+#layoutToolbar.open { display:flex; }
+.layout-toolbar-floating button { width:30px; min-width:30px; justify-content:center; padding:0; }
+.layout-toolbar-floating button svg { width:15px; height:15px; }
+.layout-toolbar-floating button:disabled { opacity:.35; cursor:not-allowed; }
+.layout-toolbar-floating button:disabled:hover { background:transparent; }
+.layout-toolbar-sep { flex:0 0 auto; width:1px; height:18px; margin:0 3px; background:var(--ui-border); }
+@media (pointer:coarse) { .layout-toolbar-floating button { width:40px; min-width:40px; height:40px; } }
 .image-action-toolbar button[hidden] { display:none !important; }
 .image-action-toolbar svg { width:15px; height:15px; }
 .image-toolbar-remove-background .background-removal-mark, .image-matting-menu .background-removal-mark { width:15px; height:15px; box-sizing:border-box; border:1px solid currentColor; border-radius:4px; background:conic-gradient(from 90deg, color-mix(in srgb, currentColor 34%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 34%, transparent) 0 75%, transparent 0) 0 0 / 6px 6px; }
