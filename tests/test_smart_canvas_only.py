@@ -381,18 +381,23 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
         self.assertIn("#layoutToolbar.open { display:flex; }", self.smart_canvas_css)
         # 用户确认的视觉规则：工具栏整体放大，横向对齐图标与纵向同款（对象+基准线风格）。
         self.assertIn(".layout-toolbar-floating button { width:36px;", self.smart_canvas_css)
-        # 图标按用户草图手绘：基准线 + 两个尺寸不同、贴齐基准线的色块，11 个按钮全部内联 SVG。
+        # 图标按用户草图手绘：基准线 + 两个尺寸不同、贴齐基准线的色块。
+        # 用户明确保留等距/等宽/等高四个按钮原有的图标，不要改动它们。
         buttons = re.findall(
             r'<button[^>]*data-layout-action="([^"]+)"[^>]*>(.*?)</button>', html, re.S)
         self.assertEqual(len(buttons), 11)
-        for action, inner in buttons:
+        icon_map = dict(buttons)
+        for action in (
+            "align-left", "align-hcenter", "align-right",
+            "align-top", "align-vcenter", "align-bottom",
+        ):
+            inner = icon_map[action]
             self.assertIn('<svg class="layout-icon"', inner, action)
-            if action == "grid":
-                # 网格排列没有基准线，是 3x3 均分格子。
-                self.assertEqual(inner.count("<rect"), 4, action)
-                continue
             self.assertIn('<path d=', inner, action)
             self.assertEqual(inner.count("<rect"), 2, action)
+        for action in ("distribute-h", "distribute-v", "equal-width", "equal-height"):
+            self.assertIn("<i data-lucide=", icon_map[action], action)
+        self.assertIn("<rect", icon_map["grid"])
         self.assertIn(".layout-toolbar-floating .layout-icon { fill:none; stroke:currentColor;",
                       self.smart_canvas_css)
 
