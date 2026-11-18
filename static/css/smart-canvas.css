@@ -91,6 +91,8 @@ body.smart-canvas-panning iframe { pointer-events:none !important; }
 .layout-toolbar-floating { gap:5px; min-height:42px; padding:6px 9px; border-radius:20px; }
 .layout-toolbar-floating button { width:36px; min-width:36px; height:32px; justify-content:center; padding:0; border-radius:9px; }
 .layout-toolbar-floating button svg { width:18px; height:18px; }
+/* 排版图标为内联手绘 SVG（基准线画在框下方，Lucide 线框图标做不到），填充/描边由这里统一控制。 */
+.layout-toolbar-floating .layout-icon { fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; }
 .layout-toolbar-floating button:disabled { opacity:.35; cursor:not-allowed; }
 .layout-toolbar-floating button:disabled:hover { background:transparent; }
 .layout-toolbar-sep { flex:0 0 auto; width:1px; height:22px; margin:0 3px; background:var(--ui-border); }
