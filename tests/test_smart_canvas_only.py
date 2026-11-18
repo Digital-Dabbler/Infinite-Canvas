@@ -380,7 +380,7 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
         self.assertIn("#layoutToolbar { position:absolute;", self.smart_canvas_css)
         self.assertIn("#layoutToolbar.open { display:flex; }", self.smart_canvas_css)
         # 用户确认的视觉规则：工具栏整体放大，横向对齐图标与纵向同款（对象+基准线风格）。
-        self.assertIn(".layout-toolbar-floating button { width:36px;", self.smart_canvas_css)
+        self.assertIn(".layout-toolbar-floating button { width:44px;", self.smart_canvas_css)
         # 图标按用户草图手绘：基准线 + 两个尺寸不同、贴齐基准线的色块。
         # 用户明确保留等距/等宽/等高四个按钮原有的图标，不要改动它们。
         buttons = re.findall(

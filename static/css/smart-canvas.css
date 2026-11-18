@@ -86,17 +86,17 @@ body.smart-canvas-panning iframe { pointer-events:none !important; }
 .workflow-group-toolbar-floating .workflow-group-layout-menu.open,.workflow-group-toolbar-floating .workflow-group-color-menu.open { display:grid; }
 .workflow-group-toolbar-floating[data-placement="inside"] { box-shadow:0 14px 34px rgba(0,0,0,.34); }
 .workflow-group-toolbar-floating button:focus-visible { outline:2px solid var(--ui-focus-ring); outline-offset:2px; }
-#layoutToolbar { position:absolute; left:0; top:0; z-index:57; display:none; max-width:min(calc(100vw - 28px), 720px); transform:translateX(-50%); }
+#layoutToolbar { position:absolute; left:0; top:0; z-index:57; display:none; max-width:min(calc(100vw - 20px), 860px); transform:translateX(-50%); }
 #layoutToolbar.open { display:flex; }
-.layout-toolbar-floating { gap:5px; min-height:42px; padding:6px 9px; border-radius:20px; }
-.layout-toolbar-floating button { width:36px; min-width:36px; height:32px; justify-content:center; padding:0; border-radius:9px; }
-.layout-toolbar-floating button svg { width:18px; height:18px; }
+.layout-toolbar-floating { gap:6px; min-height:52px; padding:8px 12px; border-radius:24px; }
+.layout-toolbar-floating button { width:44px; min-width:44px; height:40px; justify-content:center; padding:0; border-radius:11px; }
+.layout-toolbar-floating button svg { width:22px; height:22px; }
 /* 排版图标为内联手绘 SVG（基准线画在框下方，Lucide 线框图标做不到），填充/描边由这里统一控制。 */
 .layout-toolbar-floating .layout-icon { fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; }
 .layout-toolbar-floating button:disabled { opacity:.35; cursor:not-allowed; }
 .layout-toolbar-floating button:disabled:hover { background:transparent; }
-.layout-toolbar-sep { flex:0 0 auto; width:1px; height:22px; margin:0 3px; background:var(--ui-border); }
-@media (pointer:coarse) { .layout-toolbar-floating button { width:44px; min-width:44px; height:44px; } }
+.layout-toolbar-sep { flex:0 0 auto; width:1px; height:26px; margin:0 4px; background:var(--ui-border); }
+@media (pointer:coarse) { .layout-toolbar-floating button { width:52px; min-width:52px; height:52px; } }
 .image-action-toolbar button[hidden] { display:none !important; }
 .image-action-toolbar svg { width:15px; height:15px; }
 .image-toolbar-remove-background .background-removal-mark, .image-matting-menu .background-removal-mark { width:15px; height:15px; box-sizing:border-box; border:1px solid currentColor; border-radius:4px; background:conic-gradient(from 90deg, color-mix(in srgb, currentColor 34%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 34%, transparent) 0 75%, transparent 0) 0 0 / 6px 6px; }
