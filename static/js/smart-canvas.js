@@ -3042,7 +3042,8 @@ function alignSelectedSmartNodes(mode){
     scheduleSave();
     toast(tr('smart.layoutToastAligned'));
 }
-// 等距分布（≥3 个单元）：按位置排序后首尾固定，其余均分间隙。
+// 等距分布（≥3 个单元）：按位置排序后从首个单元起，相邻间隙统一为固定间距。
+const LAYOUT_FIXED_GAP = 40;
 function distributeSelectedSmartNodes(axis){
     if(!canvas) return;
     const units = layoutSelectionUnits();
@@ -3052,18 +3053,13 @@ function distributeSelectedSmartNodes(axis){
         ? (a.rect.x - b.rect.x) || (a.rect.y - b.rect.y)
         : (a.rect.y - b.rect.y) || (a.rect.x - b.rect.x));
     const extent = axis === 'x' ? 'width' : 'height';
-    const start = axis === 'x' ? items[0].rect.x : items[0].rect.y;
-    const lastRect = items[items.length - 1].rect;
-    const end = axis === 'x' ? lastRect.x + lastRect.width : lastRect.y + lastRect.height;
-    const content = items.reduce((sum, item) => sum + item.rect[extent], 0);
-    const gap = Math.max(0, (end - start - content) / (items.length - 1));
     pushUndo();
-    let cursor = start;
+    let cursor = axis === 'x' ? items[0].rect.x : items[0].rect.y;
     items.forEach(item => {
         const current = axis === 'x' ? item.rect.x : item.rect.y;
         if(axis === 'x') translateLayoutUnit(item.node, Math.round(cursor - current), 0);
         else translateLayoutUnit(item.node, 0, Math.round(cursor - current));
-        cursor += item.rect[extent] + gap;
+        cursor += item.rect[extent] + LAYOUT_FIXED_GAP;
     });
     render();
     scheduleSave();
@@ -3114,7 +3110,7 @@ function gridSelectedSmartNodes(){
     const startX = Math.min(...rects.map(rect => rect.x));
     const startY = Math.min(...rects.map(rect => rect.y));
     const cols = Math.max(1, Math.ceil(Math.sqrt(units.length)));
-    const gap = 40;
+    const gap = LAYOUT_FIXED_GAP;
     let x = startX;
     let y = startY;
     let rowHeight = 0;

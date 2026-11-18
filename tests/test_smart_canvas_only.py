@@ -378,6 +378,24 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
         self.assertIn("restoreWorkflowGroupToolbarAfterDrag();\n        restoreLayoutToolbarAfterDrag();", source)
         self.assertIn("#layoutToolbar { position:absolute;", self.smart_canvas_css)
         self.assertIn("#layoutToolbar.open { display:flex; }", self.smart_canvas_css)
+        # 用户确认的视觉规则：工具栏整体放大，横向对齐图标与纵向同款（对象+基准线风格）。
+        self.assertIn(".layout-toolbar-floating button { width:36px;", self.smart_canvas_css)
+        self.assertIn('data-lucide="align-horizontal-justify-start"', html)
+        self.assertIn('data-lucide="align-horizontal-justify-center"', html)
+        self.assertIn('data-lucide="align-horizontal-justify-end"', html)
+
+    def test_layout_distribute_uses_fixed_gap_not_first_last_anchor(self):
+        # 用户确认的规则：等距不再以首尾节点为锚均分间隙，而是从首个单元起按固定间距排布。
+        source = self.smart_canvas_js
+        start = source.index("function distributeSelectedSmartNodes(axis){")
+        end = source.index("function referenceLayoutRect(){", start)
+        body = source[start:end]
+        self.assertIn("const LAYOUT_FIXED_GAP = 40;", source[start - 200:end])
+        self.assertIn("cursor += item.rect[extent] + LAYOUT_FIXED_GAP;", body)
+        self.assertNotIn("(end - start - content)", body)
+        grid_start = source.index("function gridSelectedSmartNodes(){")
+        grid_end = source.index("function applyViewport(){", grid_start)
+        self.assertIn("const gap = LAYOUT_FIXED_GAP;", source[grid_start:grid_end])
 
     def test_layout_equal_size_uses_first_selected_node_as_reference(self):
         # 用户确认的规则：等宽/等高/网格统一尺寸以第一个选中的节点为准，不是选区极值。
