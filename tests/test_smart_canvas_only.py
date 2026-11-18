@@ -401,6 +401,41 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
         self.assertIn(".layout-toolbar-floating .layout-icon { fill:none; stroke:currentColor;",
                       self.smart_canvas_css)
 
+    def test_layout_vertical_icons_snap_blocks_to_baseline(self):
+        # 用户拍板（方案B）：顶部/垂直居中/底部三个图标，色块紧贴基准线——
+        # 顶对齐块挂线下、底对齐块坐线上、居中线穿过大块中部；
+        # 且三者墨迹带都在 y2..y18 同一高度，整排视觉齐平不"高高低低"。
+        html = self.smart_canvas_html
+        buttons = re.findall(
+            r'<button[^>]*data-layout-action="([^"]+)"[^>]*>(.*?)</button>', html, re.S)
+        icon_map = dict(buttons)
+
+        def rects(inner):
+            return [tuple(int(v) for v in m) for m in re.findall(
+                r'<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"', inner)]
+
+        top = icon_map["align-top"]
+        self.assertIn('<path d="M3.5 2h17"', top)
+        self.assertEqual(rects(top), [(5, 4, 6, 14), (15, 4, 5, 8)])
+
+        vcenter = icon_map["align-vcenter"]
+        self.assertIn('<path d="M2.5 10h19"', vcenter)
+        big, small = rects(vcenter)
+        self.assertEqual(big[1] + big[3] // 2, 10)  # 基准线穿过大块中部
+
+        bottom = icon_map["align-bottom"]
+        self.assertIn('<path d="M3.5 18h17"', bottom)
+        self.assertEqual(rects(bottom), [(5, 2, 6, 16), (15, 10, 5, 8)])
+
+        # 整排齐平：三个图标的墨迹带都在 y2..y18，同一高度不"高高低低"。
+        for name, inner in (("align-top", top), ("align-vcenter", vcenter),
+                            ("align-bottom", bottom)):
+            ys_min = min(r[1] for r in rects(inner))
+            ys_max = max(r[1] + r[3] for r in rects(inner))
+            line_y = float(re.search(r'M[\d.]+ ([\d.]+)h', inner).group(1))
+            self.assertEqual(min(ys_min, line_y), 2, name)
+            self.assertEqual(max(ys_max, line_y), 18, name)
+
     def test_layout_distribute_uses_fixed_gap_not_first_last_anchor(self):
         # 用户确认的规则：等距不再以首尾节点为锚均分间隙，而是从首个单元起按固定间距排布。
         source = self.smart_canvas_js
