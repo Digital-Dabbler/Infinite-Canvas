@@ -63,6 +63,7 @@ const psdExportButton = document.getElementById('psdExportBtn');
 const psdExportInfoEl = document.getElementById('psdExportInfo');
 const workflowGroupToolbar = document.getElementById('workflowGroupToolbar');
 const layoutToolbar = document.getElementById('layoutToolbar');
+const mergeToolbar = document.getElementById('mergeToolbar');
 const photoshopContextMenu = document.getElementById('photoshopContextMenu');
 const photoshopInstallModal = document.getElementById('photoshopInstallModal');
 const photoshopInstallClose = document.getElementById('photoshopInstallClose');
@@ -3131,6 +3132,7 @@ function gridSelectedSmartNodes(){
     toast(tr('smart.layoutToastGrid'));
 }
 function applyViewport(){
+    closeSplitResultsPanel();
     world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
     world.style.setProperty('--canvas-ui-inverse-scale', String(Math.max(1, Math.min(3.25, 1 / safeScale(viewport.scale)))));
     // world 被 transform:scale 缩放后，其内部带 backdrop-filter 的卡片（参数设置/合成卡等）
@@ -3160,6 +3162,243 @@ function applyViewport(){
         const nodeEl = world.querySelector(`.image-node[data-id="${CSS.escape(active.id)}"]`);
         positionTextNodePanel(nodeEl, null, false);
     });
+}
+// ---- 多图结果拆分 / 合并（徽章面板拆出单图节点；排版工具栏右侧合并药丸收拢回生成节点） ----
+function smartNodeIsBusy(node){
+    return Boolean(node && (node.submitting || node.pending || node.queued || node.running || node.jimengPending || smartPendingTasks(node).length));
+}
+function splitableGenerationNode(node){
+    // 拆分入口只给有 ≥2 个结果、无进行中任务的生成节点；循环轮次产物与历史分组不参与。
+    if(!isSmartGenerationNode(node) || isHistoryGroupNode(node) || smartNodeIsBusy(node)) return null;
+    if(node.loopRootId || Number.isFinite(Number(node.loopRoundIndex))) return null;
+    const indexes = generationResultIndexes(node.images || []);
+    return indexes.length >= 2 ? {node, indexes} : null;
+}
+function splitGenerationResults(nodeId, requestedIndexes){
+    const source = nodes.find(item => item.id === nodeId);
+    const info = splitableGenerationNode(source);
+    if(!info){ toast(tr('smart.splitBusyToast')); return false; }
+    const allowed = new Set(info.indexes);
+    const indexes = [...new Set((requestedIndexes || []).map(Number))]
+        .filter(index => Number.isInteger(index) && allowed.has(index))
+        .sort((a, b) => a - b);
+    if(!indexes.length){ toast(tr('smart.splitNothingSelected')); return false; }
+    pushUndo();
+    const images = source.images || [];
+    const mediaKind = normalizedUploadMediaKind(mediaKindForItem(imageForDisplay(images[indexes[0]] || {})));
+    const sourceRect = nodeRect(source);
+    const gap = LAYOUT_FIXED_GAP;
+    const cols = Math.max(1, Math.ceil(Math.sqrt(indexes.length)));
+    const startX = sourceRect.x + sourceRect.width + gap;
+    let x = startX;
+    let y = sourceRect.y;
+    let rowHeight = 0;
+    indexes.forEach((index, order) => {
+        if(order && order % cols === 0){ x = startX; y += rowHeight + gap; rowHeight = 0; }
+        const child = {
+            id:uid('upload'),
+            type:uploadNodeTypeForMediaKind(mediaKind),
+            x:Math.round(x), y:Math.round(y),
+            title:uploadNodeLabel(mediaKind),
+            images:[stripImageGenerationMeta({...images[index]})],
+            activeImageIndex:0,
+            splitFromNodeId:source.id,
+            splitIndex:index,
+            created_at:Date.now()
+        };
+        child.scale = mediaNodeDefaultScale(child);
+        nodes.push(child);
+        localUnsyncedNodeIds.add(child.id);
+        localDeletedNodeIds.delete(child.id);
+        const placed = nodeRect(child);
+        x += Math.max(180, placed.width) + gap;
+        rowHeight = Math.max(rowHeight, Math.max(110, placed.height));
+    });
+    const removed = new Set(indexes);
+    source.images = images.filter((_, index) => !removed.has(index));
+    const remaining = source.images.length;
+    source.activeImageIndex = remaining ? Math.max(0, Math.min(remaining - 1, Number(source.activeImageIndex) || 0)) : 0;
+    render();
+    scheduleSave();
+    toast(trf('smart.splitToastDone', {n:indexes.length}));
+    return true;
+}
+function mergeableMediaNodes(){
+    // 可合并 = 选中集里的单图上传节点（排除历史分组与组织框）；不限来源，任意素材都能合并。
+    const out = [];
+    selectedNodeIds().forEach(id => {
+        const node = nodes.find(item => item.id === id);
+        if(!node || !isSmartUploadNode(node) || isHistoryGroupNode(node) || isCanvasOrganizerNode(node)) return;
+        if((node.images || []).length !== 1 || !node.images[0]?.url) return;
+        out.push(node);
+    });
+    return out;
+}
+function mergeSelectionKindInfo(){
+    const items = mergeableMediaNodes();
+    const kinds = [...new Set(items.map(node => uploadMediaKindForNode(node)))];
+    return {items, kinds};
+}
+function mergeSelectedMediaNodes(){
+    const {items, kinds} = mergeSelectionKindInfo();
+    if(items.length < 2) return false;
+    if(kinds.length > 1){ toast(tr('smart.mergeMixedKinds')); return false; }
+    pushUndo();
+    const kind = kinds[0] === 'video' ? 'video' : 'image';
+    const sourceIds = [...new Set(items.map(node => node.splitFromNodeId).filter(Boolean))];
+    let host = sourceIds.length === 1 ? nodes.find(node => node.id === sourceIds[0] && isSmartGenerationNode(node)) : null;
+    const ordered = items.slice().sort((a, b) => host && Number.isInteger(a.splitIndex) && Number.isInteger(b.splitIndex)
+        ? a.splitIndex - b.splitIndex
+        : (a.y - b.y) || (a.x - b.x));
+    const singleImage = node => stripImageGenerationMeta({...((node.images || [])[0] || {})});
+    if(host){
+        // 同源且原节点仍在：按拆分序号插回原节点；没有序号的（复制/手工节点）按位置顺序追加。
+        const indexed = [];
+        const loose = [];
+        ordered.forEach(node => {
+            (Number.isInteger(node.splitIndex) && node.splitIndex >= 0)
+                ? indexed.push({image:singleImage(node), index:node.splitIndex})
+                : loose.push(singleImage(node));
+        });
+        indexed.sort((a, b) => a.index - b.index).forEach(entry => {
+            host.images.splice(Math.max(0, Math.min(host.images.length, entry.index)), 0, entry.image);
+        });
+        host.images.push(...loose);
+        host.activeImageIndex = Math.max(0, Math.min((host.images.length || 1) - 1, Number(host.activeImageIndex) || 0));
+    } else {
+        host = ordered[0];
+        const rects = ordered.map(node => nodeRect(node));
+        const centerX = (Math.min(...rects.map(rect => rect.x)) + Math.max(...rects.map(rect => rect.x + rect.width))) / 2;
+        const centerY = (Math.min(...rects.map(rect => rect.y)) + Math.max(...rects.map(rect => rect.y + rect.height))) / 2;
+        host.type = kind === 'video' ? 'smart-video-generation' : 'smart-image-generation';
+        host.title = kind === 'video' ? '视频生成' : '图片生成';
+        host.images = ordered.map(singleImage);
+        host.activeImageIndex = 0;
+        host.runSettings = {apiKind:kind};
+        host.promptPresets = Array.isArray(host.promptPresets) ? host.promptPresets : [];
+        delete host.splitFromNodeId;
+        delete host.splitIndex;
+        const mergedRect = nodeRect(host);
+        host.x = Math.round(centerX - mergedRect.width / 2);
+        host.y = Math.round(centerY - mergedRect.height / 2);
+    }
+    const removedIds = new Set(ordered.map(node => node.id).filter(id => id !== host.id));
+    if(removedIds.size){
+        removedIds.forEach(id => { localDeletedNodeIds.add(id); localUnsyncedNodeIds.delete(id); });
+        nodes = nodes.filter(node => !removedIds.has(node.id));
+        const keptConnections = (canvas.connections || []).filter(conn => !removedIds.has(conn.from) && !removedIds.has(conn.to));
+        const seenKeys = new Set(keptConnections.map(conn => canvasConnectionKey(conn)));
+        (canvas.connections || []).forEach(conn => {
+            if(!removedIds.has(conn.from) && !removedIds.has(conn.to)) return;
+            const from = removedIds.has(conn.from) ? host.id : conn.from;
+            const to = removedIds.has(conn.to) ? host.id : conn.to;
+            if(from === to) return;
+            const key = canvasConnectionKey({from, to, kind:conn.kind});
+            if(seenKeys.has(key)) return;
+            seenKeys.add(key);
+            keptConnections.push({from, to, kind:conn.kind || 'flow'});
+        });
+        canvas.connections = keptConnections;
+        nodes.forEach(node => {
+            if(!Array.isArray(node.inputNodeIds)) return;
+            const mapped = node.inputNodeIds.map(id => removedIds.has(id) ? host.id : id);
+            node.inputNodeIds = [...new Set(mapped)].filter(id => id !== node.id);
+        });
+    }
+    selectedId = host.id;
+    selectedIds = [];
+    selectedImage = {nodeId:host.id, index:Number(host.activeImageIndex) || 0};
+    render();
+    scheduleSave();
+    toast(trf('smart.mergeToastDone', {n:ordered.length}));
+    return true;
+}
+// ---- 拆分结果浮层：锚定「N 个结果」徽章的勾选面板，确认后调用 splitGenerationResults ----
+let splitResultsPanelEl = null;
+let splitResultsPanelNodeId = '';
+function closeSplitResultsPanel(){
+    if(!splitResultsPanelEl) return;
+    splitResultsPanelEl.remove();
+    splitResultsPanelEl = null;
+    splitResultsPanelNodeId = '';
+    document.removeEventListener('pointerdown', onSplitResultsPanelPointerDown, true);
+    document.removeEventListener('keydown', onSplitResultsPanelKeyDown, true);
+}
+function onSplitResultsPanelPointerDown(event){
+    if(!splitResultsPanelEl) return;
+    if(splitResultsPanelEl.contains(event.target)) return;
+    // 徽章自身交给 click 做开/关切换，这里不抢先关闭。
+    if(event.target.closest?.('.generation-result-count[data-split-badge]')) return;
+    closeSplitResultsPanel();
+}
+function onSplitResultsPanelKeyDown(event){
+    if(event.key !== 'Escape') return;
+    event.stopPropagation();
+    closeSplitResultsPanel();
+}
+function openSplitResultsPanel(nodeId, anchorEl){
+    if(splitResultsPanelNodeId === nodeId){ closeSplitResultsPanel(); return; }
+    const source = nodes.find(item => item.id === nodeId);
+    const info = splitableGenerationNode(source);
+    if(!info){ toast(tr('smart.splitBusyToast')); return; }
+    closeSplitResultsPanel();
+    splitResultsPanelNodeId = nodeId;
+    const activeIndex = Number(source.activeImageIndex) || 0;
+    const selected = new Set([info.indexes.includes(activeIndex) ? activeIndex : info.indexes[0]]);
+    const panel = document.createElement('div');
+    panel.className = 'split-results-panel';
+    const renderPanel = () => {
+        const images = source.images || [];
+        panel.innerHTML = `<div class="split-results-header"><span>${escapeHtml(tr('smart.splitPanelTitle'))}</span><button type="button" class="split-results-close" data-split-action="close" title="${escapeHtml(tr('common.close'))}" aria-label="${escapeHtml(tr('common.close'))}"><i data-lucide="x"></i></button></div>
+            <div class="split-results-grid">${info.indexes.map(index => {
+                const img = images[index];
+                return `<button type="button" class="split-results-thumb ${selected.has(index) ? 'checked' : ''}" data-split-index="${index}" title="${escapeAttr(img?.name || `结果 ${index + 1}`)}">${thumbMediaHtml(img, {selectOnly:true})}<span class="split-results-check"><i data-lucide="check"></i></span></button>`;
+            }).join('')}</div>
+            <div class="split-results-footer">
+                <div class="split-results-quick">
+                    <button type="button" data-split-action="all">${escapeHtml(tr('smart.splitSelectAll'))}</button>
+                    <button type="button" data-split-action="none">${escapeHtml(tr('smart.splitSelectNone'))}</button>
+                    <button type="button" data-split-action="current">${escapeHtml(tr('smart.splitSelectCurrent'))}</button>
+                </div>
+                <button type="button" class="split-results-confirm" data-split-action="confirm"${selected.size ? '' : ' disabled'}>${escapeHtml(trf('smart.splitConfirm', {n:selected.size}))}</button>
+            </div>`;
+        refreshIcons?.();
+    };
+    panel.addEventListener('pointerdown', event => event.stopPropagation());
+    panel.addEventListener('click', event => {
+        const thumb = event.target.closest?.('[data-split-index]');
+        if(thumb){
+            const index = Number(thumb.dataset.splitIndex);
+            if(selected.has(index)) selected.delete(index); else selected.add(index);
+            renderPanel();
+            return;
+        }
+        const action = event.target.closest?.('[data-split-action]')?.dataset.splitAction;
+        if(action === 'close') closeSplitResultsPanel();
+        else if(action === 'all'){ info.indexes.forEach(index => selected.add(index)); renderPanel(); }
+        else if(action === 'none'){ selected.clear(); renderPanel(); }
+        else if(action === 'current'){ selected.clear(); if(info.indexes.includes(Number(source.activeImageIndex) || 0)) selected.add(Number(source.activeImageIndex) || 0); renderPanel(); }
+        else if(action === 'confirm'){
+            if(!selected.size) return;
+            const done = splitGenerationResults(nodeId, [...selected]);
+            if(done) closeSplitResultsPanel();
+        }
+    });
+    renderPanel();
+    (shell || document.body).appendChild(panel);
+    const anchorRect = anchorEl?.getBoundingClientRect?.();
+    const panelRect = panel.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = anchorRect ? anchorRect.right - panelRect.width : (vw - panelRect.width) / 2;
+    left = Math.max(12, Math.min(vw - panelRect.width - 12, left));
+    let top = anchorRect ? anchorRect.bottom + 10 : 80;
+    if(top + panelRect.height > vh - 12) top = Math.max(12, (anchorRect?.top || 12) - panelRect.height - 10);
+    panel.style.left = `${Math.round(left)}px`;
+    panel.style.top = `${Math.round(top)}px`;
+    splitResultsPanelEl = panel;
+    document.addEventListener('pointerdown', onSplitResultsPanelPointerDown, true);
+    document.addEventListener('keydown', onSplitResultsPanelKeyDown, true);
 }
 function screenToWorld(event){
     const rect = shell.getBoundingClientRect();
@@ -8767,7 +9006,7 @@ function remapRestoredNodeIds(storageCanvas, base){
         if(!node) return;
         node.id = remap(node.id);
         ['inputNodeIds','items'].forEach(field => { if(Array.isArray(node[field])) node[field] = node[field].map(remap); });
-        ['workflowGroupId','sourceNodeId','historyFor'].forEach(field => { if(node[field]) node[field] = remap(node[field]); });
+        ['workflowGroupId','sourceNodeId','historyFor','splitFromNodeId'].forEach(field => { if(node[field]) node[field] = remap(node[field]); });
         ['manualInputRefs','runInputRefs','runPromptRefs'].forEach(field => {
             if(Array.isArray(node[field])) node[field] = node[field].map(ref => ref && typeof ref === 'object' ? {...ref, nodeId:remap(ref.nodeId)} : ref);
         });
@@ -9795,7 +10034,7 @@ function remapCopiedNodeReferences(copy, idMap){
     const remapId = id => idMap.get(id) || '';
     if(Array.isArray(copy.inputNodeIds)) copy.inputNodeIds = copy.inputNodeIds.map(remapId).filter(Boolean);
     if(Array.isArray(copy.items)) copy.items = copy.items.map(remapId).filter(Boolean);
-    ['sourceNodeId','workflowGroupId','historyFor'].forEach(key => {
+    ['sourceNodeId','workflowGroupId','historyFor','splitFromNodeId'].forEach(key => {
         if(!copy[key]) return;
         const next = remapId(copy[key]);
         if(next) copy[key] = next;
@@ -11288,7 +11527,7 @@ function nodeBodyHtml(node, layout){
         return `<div class="generation-result-card" data-generation-results="1">
             <div class="generation-result-stack" style="--result-stack:${stack}">
                 ${Array.from({length:stack}).map((_, index) => `<span class="generation-result-layer" style="--generation-layer-offset:${index * 3}px"></span>`).join('')}
-                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${mainSize.width}px;--node-img-h:${mainSize.height}px">${singleMediaHtml(active, mainSize.width, mainSize.height)}${imageResolutionBadgeHtml(active)}${resultIndexes.length > 1 ? `<div class="generation-result-count">${resultIndexes.length} 个结果</div>` : ''}</div>
+                <div class="image-wrap generation-result-main ${selectedImage.nodeId === node.id && selectedImage.index === activeIndex ? 'image-selected' : ''}" data-image-index="${activeIndex}" data-media-signature="${escapeAttr(`${mediaKindForItem(active)}:${active?.url || ''}`)}" style="--node-img-w:${mainSize.width}px;--node-img-h:${mainSize.height}px">${singleMediaHtml(active, mainSize.width, mainSize.height)}${imageResolutionBadgeHtml(active)}${resultIndexes.length > 1 ? `<div class="generation-result-count" data-split-badge="${escapeAttr(node.id)}" role="button" tabindex="0" title="${escapeAttr(tr('smart.splitBadgeTitle'))}">${resultIndexes.length} 个结果</div>` : ''}</div>
                 ${isAppending ? generationPendingCellHtml({overlay:true, submitting:Boolean(node.submitting && !node.pending), queued:Boolean(node.queued && !node.pending)}) : (node.lastRunError ? failedGenerationOverlayHtml(node) : '')}
                 ${resultIndexes.length > 1 ? `<button type="button" class="generation-result-nav prev" data-generation-result-nav="-1" aria-label="上一张"><i data-lucide="chevron-left"></i></button><button type="button" class="generation-result-nav next" data-generation-result-nav="1" aria-label="下一张"><i data-lucide="chevron-right"></i></button>` : ''}
             </div>
@@ -11999,6 +12238,7 @@ function positionLayoutToolbar(units=currentLayoutToolbarUnits()){
     layoutToolbar.dataset.placement = placement;
     layoutToolbar.style.left = `${Math.round(centerX)}px`;
     layoutToolbar.style.top = `${Math.round(placement === 'above' ? above : safeTop)}px`;
+    positionMergeToolbar();
 }
 function updateLayoutToolbar(){
     if(!layoutToolbar) return;
@@ -12009,6 +12249,7 @@ function updateLayoutToolbar(){
     layoutToolbar.querySelectorAll('[data-layout-action^="distribute-"]').forEach(button => {
         button.disabled = units.length < 3;
     });
+    updateMergeToolbar();
     if(open) requestAnimationFrame(() => positionLayoutToolbar(units));
 }
 function hideLayoutToolbarDuringDrag(event){
@@ -12017,6 +12258,8 @@ function hideLayoutToolbarDuringDrag(event){
     layoutToolbarHiddenDuringDrag = true;
     layoutToolbar.classList.remove('open');
     layoutToolbar.setAttribute('aria-hidden', 'true');
+    mergeToolbar?.classList.remove('open');
+    mergeToolbar?.setAttribute('aria-hidden', 'true');
 }
 function restoreLayoutToolbarAfterDrag(){
     if(!layoutToolbarHiddenDuringDrag) return;
@@ -12031,6 +12274,46 @@ layoutToolbar?.addEventListener('click', event => {
     event.preventDefault();
     event.stopPropagation();
     LAYOUT_TOOLBAR_ACTIONS[button.dataset.layoutAction]?.();
+});
+// ---- 合并药丸：独立于排版工具栏、贴其右侧、等高；≥2 个单图节点才出现，图/视频混选时置灰 ----
+function updateMergeToolbar(){
+    if(!mergeToolbar) return;
+    const {items, kinds} = mergeSelectionKindInfo();
+    const open = items.length >= 2 && !layoutToolbarHiddenDuringDrag && !dragState && !resizeState;
+    const mixed = kinds.length > 1;
+    mergeToolbar.classList.toggle('open', open);
+    mergeToolbar.setAttribute('aria-hidden', open ? 'false' : 'true');
+    const button = mergeToolbar.querySelector('[data-merge-action="merge"]');
+    if(button){
+        button.disabled = mixed;
+        const label = mixed ? tr('smart.mergeMixedKinds') : tr('smart.mergeAction');
+        button.title = label;
+        button.setAttribute('aria-label', label);
+    }
+    if(open) requestAnimationFrame(() => positionMergeToolbar());
+}
+function positionMergeToolbar(){
+    if(!mergeToolbar || !layoutToolbar || !mergeToolbar.classList.contains('open')) return;
+    if(!layoutToolbar.classList.contains('open')) return;
+    const shellRect = shell.getBoundingClientRect();
+    const edge = 14;
+    const centerX = parseFloat(layoutToolbar.style.left) || 0;
+    const top = parseFloat(layoutToolbar.style.top) || 0;
+    const toolbarWidth = layoutToolbar.offsetWidth || 1;
+    const pillWidth = mergeToolbar.offsetWidth || 64;
+    const gap = 8;
+    let left = centerX + toolbarWidth / 2 + gap;
+    if(left + pillWidth > shellRect.width - edge) left = centerX - toolbarWidth / 2 - gap - pillWidth;
+    mergeToolbar.style.left = `${Math.round(Math.max(edge, left))}px`;
+    mergeToolbar.style.top = `${Math.round(top)}px`;
+}
+mergeToolbar?.addEventListener('mousedown', event => event.stopPropagation());
+mergeToolbar?.addEventListener('click', event => {
+    const button = event.target.closest?.('[data-merge-action]');
+    if(!button || button.disabled) return;
+    event.preventDefault();
+    event.stopPropagation();
+    mergeSelectedMediaNodes();
 });
 
 function closePhotoshopContextMenu(){
@@ -15881,6 +16164,22 @@ function bindGenerationResultControls(nodeEl, nodeId){
             selectGenerationResult(nodeId, indexes[(current + Number(btn.dataset.generationResultNav || 0) + indexes.length) % indexes.length]);
         });
     });
+    // 「N 个结果」徽章兼拆分入口：点击打开勾选面板（pointer-events 由 CSS 的 data-split-badge 规则放开）。
+    nodeEl.querySelectorAll('.generation-result-count[data-split-badge]').forEach(badge => {
+        if(badge.dataset.splitBound === '1') return;
+        badge.dataset.splitBound = '1';
+        badge.addEventListener('click', e => {
+            e.preventDefault();
+            e.stopPropagation();
+            openSplitResultsPanel(nodeId, badge);
+        });
+        badge.addEventListener('keydown', e => {
+            if(e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            e.stopPropagation();
+            openSplitResultsPanel(nodeId, badge);
+        });
+    });
 }
 function selectGenerationResult(nodeId, requestedIndex){
     const node = nodes.find(item => item.id === nodeId);
@@ -15911,7 +16210,7 @@ function selectGenerationResult(nodeId, requestedIndex){
     main.style.setProperty('--node-img-w', `${mediaWidth}px`);
     main.style.setProperty('--node-img-h', `${mediaHeight}px`);
     main.classList.add('image-selected');
-    main.innerHTML = `${singleMediaHtml(active, mediaWidth, mediaHeight)}${imageResolutionBadgeHtml(active)}${count > 1 ? `<div class="generation-result-count">${count} 个结果</div>` : ''}`;
+    main.innerHTML = `${singleMediaHtml(active, mediaWidth, mediaHeight)}${imageResolutionBadgeHtml(active)}${count > 1 ? `<div class="generation-result-count" data-split-badge="${escapeAttr(nodeId)}" role="button" tabindex="0" title="${escapeAttr(tr('smart.splitBadgeTitle'))}">${count} 个结果</div>` : ''}`;
     const strip = nodeEl.querySelector('.generation-result-strip');
     if(strip){
         strip.innerHTML = generationResultThumbnailHtml(node.images, activeIndex);

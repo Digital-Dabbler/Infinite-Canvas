@@ -475,5 +475,130 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
             self.assertIn(f'data-i18n="smart.layoutActions"', self.smart_canvas_html)
 
 
+class SmartCanvasSplitMergeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(__file__).resolve().parents[1]
+        cls.smart_canvas_js = (cls.root / "static" / "js" / "smart-canvas.js").read_text(encoding="utf-8")
+        cls.smart_canvas_html = (cls.root / "static" / "smart-canvas.html").read_text(encoding="utf-8")
+        cls.smart_canvas_css = (cls.root / "static" / "css" / "smart-canvas.css").read_text(encoding="utf-8")
+        cls.smart_canvas_i18n = (cls.root / "static" / "js" / "i18n" / "smart-canvas.js").read_text(encoding="utf-8")
+
+    def split_merge_section(self):
+        source = self.smart_canvas_js
+        start = source.index("// ---- 多图结果拆分 / 合并")
+        end = source.index("// ---- 拆分结果浮层", start)
+        return source[start:end]
+
+    def test_split_merge_core_uses_undo_render_and_narrow_save(self):
+        # 与排版同款生命周期：一次 pushUndo、render、scheduleSave，由既有节点操作 diff 同步，
+        # 绝不直接整画布回写。
+        body = self.split_merge_section()
+        for fn in (
+            "function smartNodeIsBusy(node){",
+            "function splitableGenerationNode(node){",
+            "function splitGenerationResults(nodeId, requestedIndexes){",
+            "function mergeableMediaNodes(){",
+            "function mergeSelectionKindInfo(){",
+            "function mergeSelectedMediaNodes(){",
+        ):
+            self.assertIn(fn, body)
+        self.assertEqual(body.count("pushUndo();"), 2)
+        self.assertEqual(body.count("render();"), 2)
+        self.assertEqual(body.count("scheduleSave();"), 2)
+        self.assertNotIn("saveCanvasOperations(", body)
+        # 拆分落点：原节点右侧、复用排版固定间距；busy/循环/历史节点拒绝拆分。
+        self.assertIn("const gap = LAYOUT_FIXED_GAP;", body)
+        self.assertIn("const startX = sourceRect.x + sourceRect.width + gap;", body)
+        self.assertIn("if(!isSmartGenerationNode(node) || isHistoryGroupNode(node) || smartNodeIsBusy(node)) return null;", body)
+        self.assertIn("if(node.loopRootId || Number.isFinite(Number(node.loopRoundIndex))) return null;", body)
+        # 拆出节点携带来源引用与序号，供合并插回原位。
+        self.assertIn("splitFromNodeId:source.id,", body)
+        self.assertIn("splitIndex:index,", body)
+        # 合并：混合图片+视频拒绝；同源单宿主插回；无宿主时首个节点转生成节点并迁移连线去重。
+        self.assertIn("if(kinds.length > 1){ toast(tr('smart.mergeMixedKinds')); return false; }", body)
+        self.assertIn("host.images.splice(Math.max(0, Math.min(host.images.length, entry.index)), 0, entry.image);", body)
+        self.assertIn("host.type = kind === 'video' ? 'smart-video-generation' : 'smart-image-generation';", body)
+        self.assertIn("const key = canvasConnectionKey({from, to, kind:conn.kind});", body)
+
+    def test_split_badge_is_clickable_entry_in_both_render_paths(self):
+        source = self.smart_canvas_js
+        # 徽章在 nodeBodyHtml 与 selectGenerationResult 两处重建，都带拆分入口属性。
+        self.assertEqual(source.count('data-split-badge="${escapeAttr(node.id)}"'), 1)
+        self.assertEqual(source.count('data-split-badge="${escapeAttr(nodeId)}"'), 1)
+        self.assertIn("role=\"button\" tabindex=\"0\" title=\"${escapeAttr(tr('smart.splitBadgeTitle'))}\"", source)
+        # 绑定在 bindGenerationResultControls 内，dataset 防重绑，支持键盘。
+        start = source.index("function bindGenerationResultControls(nodeEl, nodeId){")
+        end = source.index("function selectGenerationResult(nodeId, requestedIndex){", start)
+        body = source[start:end]
+        self.assertIn(".generation-result-count[data-split-badge]", body)
+        self.assertIn("badge.dataset.splitBound === '1'", body)
+        self.assertIn("openSplitResultsPanel(nodeId, badge);", body)
+        # CSS 只对带 data-split-badge 的徽章放开点击，pending 覆盖层时收回。
+        self.assertIn(".generation-result-count[data-split-badge] { pointer-events:auto; cursor:pointer; }", self.smart_canvas_css)
+        self.assertIn(".generation-result-stack:has(.generation-pending-cell.overlay) .generation-result-count[data-split-badge] { pointer-events:none; }", self.smart_canvas_css)
+
+    def test_split_results_panel_lifecycle_and_placement(self):
+        source = self.smart_canvas_js
+        start = source.index("// ---- 拆分结果浮层")
+        end = source.index("function screenToWorld(event){", start)
+        body = source[start:end]
+        self.assertIn("function closeSplitResultsPanel(){", body)
+        self.assertIn("function openSplitResultsPanel(nodeId, anchorEl){", body)
+        # 外部点击（capture）与 Escape 关闭；视口变化时 applyViewport 首行关闭，避免面板脱离锚点。
+        self.assertIn("document.addEventListener('pointerdown', onSplitResultsPanelPointerDown, true);", body)
+        self.assertIn("document.addEventListener('keydown', onSplitResultsPanelKeyDown, true);", body)
+        self.assertIn("if(event.key !== 'Escape') return;", body)
+        self.assertEqual(body.count("splitGenerationResults(nodeId, [...selected]);"), 1)
+        self.assertIn("function applyViewport(){\n    closeSplitResultsPanel();", source)
+        # 勾选面板动作齐全：全选/清空/仅当前/确认。
+        for action in ("all", "none", "current", "confirm"):
+            self.assertIn(f"action === '{action}'", body)
+        self.assertIn(".split-results-panel { position:fixed; z-index:120;", self.smart_canvas_css)
+
+    def test_merge_pill_is_independent_container_wired_to_layout_toolbar(self):
+        html = self.smart_canvas_html
+        self.assertIn('id="mergeToolbar" class="workflow-group-toolbar workflow-group-toolbar-floating merge-toolbar-floating"', html)
+        self.assertIn('data-merge-action="merge"', html)
+        merge_buttons = re.findall(r'<button[^>]*data-merge-action="([^"]+)"', html)
+        self.assertEqual(merge_buttons, ["merge"])
+        # 独立于 #layoutToolbar：位于其后、photoshopContextMenu 之前。
+        self.assertLess(html.index('id="layoutToolbar"'), html.index('id="mergeToolbar"'))
+        self.assertLess(html.index('id="mergeToolbar"'), html.index('id="photoshopContextMenu"'))
+        source = self.smart_canvas_js
+        self.assertIn("const mergeToolbar = document.getElementById('mergeToolbar');", source)
+        self.assertIn("updateMergeToolbar();\n    if(open) requestAnimationFrame(() => positionLayoutToolbar(units));", source)
+        self.assertIn("positionMergeToolbar();\n}", source)
+        self.assertIn("mergeToolbar?.classList.remove('open');", source)
+        # 混选置灰 + 悬停提示；≥2 个单图节点才显示。
+        self.assertIn("const open = items.length >= 2 && !layoutToolbarHiddenDuringDrag && !dragState && !resizeState;", source)
+        self.assertIn("button.disabled = mixed;", source)
+        self.assertIn("const {items, kinds} = mergeSelectionKindInfo();", source)
+        # CSS：药丸无 translateX 居中（JS 直接给左边缘），与排版工具栏同 z 层。
+        self.assertIn("#mergeToolbar { position:absolute; left:0; top:0; z-index:57; display:none; }", self.smart_canvas_css)
+        self.assertIn("#mergeToolbar.open { display:flex; }", self.smart_canvas_css)
+        self.assertIn(".merge-toolbar-floating { min-height:52px;", self.smart_canvas_css)
+
+    def test_split_from_reference_is_remapped_on_restore_and_paste(self):
+        source = self.smart_canvas_js
+        self.assertIn("['workflowGroupId','sourceNodeId','historyFor','splitFromNodeId'].forEach(field => {", source)
+        self.assertIn("['sourceNodeId','workflowGroupId','historyFor','splitFromNodeId'].forEach(key => {", source)
+
+    def test_split_merge_i18n_keys_exist_in_both_locales(self):
+        for key in (
+            "smart.splitBadgeTitle", "smart.splitPanelTitle", "smart.splitSelectAll",
+            "smart.splitSelectNone", "smart.splitSelectCurrent", "smart.splitConfirm",
+            "smart.splitToastDone", "smart.splitBusyToast", "smart.splitNothingSelected",
+            "smart.mergeAction", "smart.mergeMixedKinds", "smart.mergeToastDone",
+        ):
+            entry = re.search(rf'"{re.escape(key)}": \{{ zh: "(.+?)", en: "(.+?)" \}}', self.smart_canvas_i18n)
+            self.assertIsNotNone(entry, key)
+            self.assertTrue(entry.group(1).strip(), key)
+            self.assertTrue(entry.group(2).strip(), key)
+        # 确认按钮走 trf 的 {n} 占位。
+        self.assertIn('"smart.splitConfirm": { zh: "拆分 {n} 张"', self.smart_canvas_i18n)
+        self.assertIn('data-i18n-title="smart.mergeAction"', self.smart_canvas_html)
+
+
 if __name__ == "__main__":
     unittest.main()

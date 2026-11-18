@@ -97,6 +97,38 @@ body.smart-canvas-panning iframe { pointer-events:none !important; }
 .layout-toolbar-floating button:disabled:hover { background:transparent; }
 .layout-toolbar-sep { flex:0 0 auto; width:1px; height:26px; margin:0 4px; background:var(--ui-border); }
 @media (pointer:coarse) { .layout-toolbar-floating button { width:52px; min-width:52px; height:52px; } }
+/* 合并药丸：独立浮动容器，贴排版工具栏右侧、与其等高（JS 定位，left 为左边缘，不用 translateX 居中）。 */
+#mergeToolbar { position:absolute; left:0; top:0; z-index:57; display:none; }
+#mergeToolbar.open { display:flex; }
+.merge-toolbar-floating { min-height:52px; padding:8px 12px; border-radius:24px; }
+.merge-toolbar-floating button { width:44px; min-width:44px; height:40px; justify-content:center; padding:0; border-radius:11px; }
+.merge-toolbar-floating button svg { width:22px; height:22px; }
+.merge-toolbar-floating .layout-icon { fill:none; stroke:currentColor; stroke-width:1.7; stroke-linecap:round; }
+.merge-toolbar-floating button:disabled { opacity:.35; cursor:not-allowed; }
+.merge-toolbar-floating button:disabled:hover { background:transparent; }
+.merge-toolbar-floating button:focus-visible { outline:2px solid var(--ui-focus-ring); outline-offset:2px; }
+@media (pointer:coarse) { .merge-toolbar-floating button { width:52px; min-width:52px; height:52px; } }
+/* 拆分结果浮层：由 JS 动态创建、position:fixed 锚定「N 个结果」徽章下方。 */
+.split-results-panel { position:fixed; z-index:120; display:flex; flex-direction:column; gap:10px; width:min(420px, calc(100vw - 24px)); max-height:min(480px, calc(100vh - 24px)); padding:12px 14px; border:1px solid var(--ui-border); border-radius:16px; background:var(--ui-surface-raised); box-shadow:var(--ui-shadow-floating); backdrop-filter:blur(16px); color:var(--ui-text); }
+.split-results-header { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; font-weight:800; }
+.split-results-close { width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; border:0; border-radius:8px; background:transparent; color:var(--ui-text); cursor:pointer; }
+.split-results-close:hover { background:var(--ui-hover); }
+.split-results-close svg { width:15px; height:15px; }
+.split-results-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(72px, 1fr)); gap:8px; overflow:auto; padding:2px; }
+.split-results-thumb { position:relative; aspect-ratio:1; padding:0; border:2px solid transparent; border-radius:10px; overflow:hidden; background:var(--ui-surface-sunken); cursor:pointer; }
+.split-results-thumb img, .split-results-thumb video { width:100%; height:100%; object-fit:cover; display:block; }
+.split-results-thumb.checked { border-color:var(--ui-focus-ring); }
+.split-results-check { position:absolute; right:4px; top:4px; width:18px; height:18px; display:none; align-items:center; justify-content:center; border-radius:50%; background:var(--ui-focus-ring); color:var(--ui-surface-raised); }
+.split-results-thumb.checked .split-results-check { display:inline-flex; }
+.split-results-check svg { width:12px; height:12px; }
+.split-results-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.split-results-quick { display:flex; gap:6px; }
+.split-results-quick button { height:28px; padding:0 10px; border:1px solid var(--ui-border); border-radius:8px; background:transparent; color:var(--ui-text); font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
+.split-results-quick button:hover { background:var(--ui-hover); }
+.split-results-confirm { height:32px; padding:0 14px; border:0; border-radius:10px; background:var(--ui-focus-ring); color:var(--ui-surface-raised); font:inherit; font-size:12px; font-weight:800; cursor:pointer; }
+.split-results-confirm:hover { filter:brightness(1.08); }
+.split-results-confirm:disabled { opacity:.45; cursor:not-allowed; }
+.split-results-confirm:disabled:hover { filter:none; }
 .image-action-toolbar button[hidden] { display:none !important; }
 .image-action-toolbar svg { width:15px; height:15px; }
 .image-toolbar-remove-background .background-removal-mark, .image-matting-menu .background-removal-mark { width:15px; height:15px; box-sizing:border-box; border:1px solid currentColor; border-radius:4px; background:conic-gradient(from 90deg, color-mix(in srgb, currentColor 34%, transparent) 25%, transparent 0 50%, color-mix(in srgb, currentColor 34%, transparent) 0 75%, transparent 0) 0 0 / 6px 6px; }
@@ -712,6 +744,10 @@ body.smart-node-resize .smart-node-floating-menu,
 .generation-result-main { position:relative; z-index:3; }
 .generation-result-count { position:absolute; z-index:5; right:7px; top:7px; min-width:34px; height:22px; padding:0 8px; border-radius:999px; background:rgba(15,23,42,.76); color:#fff; display:flex; align-items:center; justify-content:center; font-size:calc(10px * var(--canvas-font-scale, 1)); font-weight:850; pointer-events:none; opacity:0; transform:translateY(-2px); transition:opacity .14s ease, transform .14s ease; }
 .image-node.selected .generation-result-count { opacity:1; transform:translateY(0); }
+/* 徽章兼拆分入口：只有带 data-split-badge 的才放开点击；pending 覆盖层时保持不可点。 */
+.generation-result-count[data-split-badge] { pointer-events:auto; cursor:pointer; }
+.generation-result-count[data-split-badge]:hover { background:rgba(15,23,42,.9); }
+.generation-result-stack:has(.generation-pending-cell.overlay) .generation-result-count[data-split-badge] { pointer-events:none; }
 .generation-result-nav { position:absolute; z-index:6; top:50%; width:28px; height:32px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.32); border-radius:10px; background:rgba(15,23,42,.62); color:#fff; transform:translateY(-50%); opacity:0; transition:opacity .14s ease, background .14s ease; }
 .image-node.selected .generation-result-stack:hover .generation-result-nav { opacity:1; }
 .generation-result-nav:hover { background:rgba(15,23,42,.86); }
