@@ -10900,12 +10900,33 @@ function imageBlobLayerFor(img){
     const opacity = Number(img.maskOpacity);
     return {url, opacity:Number.isFinite(opacity) ? Math.max(0, Math.min(100, opacity)) : 100};
 }
-// 把"底图 + 色块层"叠成一张 PNG；失败返回 null（调用方回退单层结果）。
-async function compositeImageEditLayers(baseUrl, transfer){
-    if(!baseUrl || !transfer?.blobUrl) return null;
-    const [baseEl, blobEl] = await Promise.all([
-        loadCropImageElement(baseUrl),
-        loadCropImageElement(transfer.blobUrl)
+// 统一层规划（预览与传递共用，设计文档决定 2「后画的在上面」）：
+// 输出 {base, layers[]}，layers 自下而上。规则——
+// - 色块笔迹层永远参与（活在裁切/整帧坐标系，同尺寸叠加）。
+// - 无裁切、批注晚于色块、且批注笔迹可重放时：底图退回原图，批注笔迹盖在色块之上。
+// - 其余情况底图用烘焙链（裁切结果>批注结果>原图），批注像素已在底图，色块在上。
+// - 旧画布没有时间戳 → 保持固定顺序（批注在下、色块在上），行为不变。
+function imageEditPaintLayers(img){
+    const blob = imageBlobLayerFor(img);
+    if(!blob) return null;
+    const cropped = Boolean(img.crop?.result?.url);
+    const annotated = Boolean(img.annotation?.url);
+    const annAt = Number(img.annotationEditedAt);
+    const maskAt = Number(img.maskEditedAt);
+    const annPaintUrl = (!cropped && annotated && img.annotationPaint?.url) ? displayMediaUrl(img.annotationPaint) : '';
+    if(annPaintUrl && Number.isFinite(annAt) && Number.isFinite(maskAt) && annAt > maskAt){
+        const localUrl = localDisplayUrlForMediaItem(img);
+        return {base:displayMediaUrl({url:localUrl, name:img.name || ''}), layers:[blob, {url:annPaintUrl, opacity:100}]};
+    }
+    return {base:displayMediaUrl(imageForDisplay(img)), layers:[blob]};
+}
+// 按层规划把各层叠成一张 PNG；失败返回 null（调用方回退单层结果）。
+async function compositeImageEditLayers(transfer){
+    const layers = Array.isArray(transfer?.layers) ? transfer.layers : [];
+    if(!transfer?.base || !layers.length) return null;
+    const [baseEl, ...layerEls] = await Promise.all([
+        loadCropImageElement(transfer.base),
+        ...layers.map(layer => loadCropImageElement(layer.url))
     ]);
     const width = baseEl.naturalWidth || baseEl.width;
     const height = baseEl.naturalHeight || baseEl.height;
@@ -10915,10 +10936,12 @@ async function compositeImageEditLayers(baseUrl, transfer){
     canvasEl.height = height;
     const ctx = canvasEl.getContext('2d');
     ctx.drawImage(baseEl, 0, 0, width, height);
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, Math.min(100, Number(transfer.opacity) || 100)) / 100;
-    ctx.drawImage(blobEl, 0, 0, width, height);
-    ctx.restore();
+    layerEls.forEach((el, i) => {
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(100, Number(transfer.layers[i].opacity) || 100)) / 100;
+        ctx.drawImage(el, 0, 0, width, height);
+        ctx.restore();
+    });
     return await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
 }
 // 生成提交前收口：带 transfer 描述的引用图现场合成成一张临时成品图。
@@ -10932,7 +10955,7 @@ async function resolveTransferRefs(refs){
         if(!ref?.transfer){ out.push(ref); continue; }
         const {transfer, ...plain} = ref;
         try {
-            const blob = await compositeImageEditLayers(plain.url, transfer);
+            const blob = await compositeImageEditLayers(transfer);
             if(!blob){ out.push(plain); continue; }
             const baseName = safeExportFileName(String(plain.name || 'image').replace(/\.[^.]+$/, ''), 'image');
             const file = await uploadCroppedBlob(blob, `${baseName}_composite.png`, {temp:true});
@@ -11155,14 +11178,12 @@ function singleMediaHtml(img, w, h){
     return smartPreviewImgHtml(view, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
 }
 function imageBlobCompositePreviewHtml(img, className='', w=0, h=0){
-    // 色块参与时的统一预览：烘焙底图（裁切>批注>原图）+ 色块层实时叠加，
-    // 与提交前合成（resolveTransferRefs）完全同源——预览怎么显示，下游就拿到什么。
-    const blob = imageBlobLayerFor(img);
-    if(!blob) return '';
+    // 色块参与时的统一预览：消费与提交前合成同一份层规划（imageEditPaintLayers），
+    // 底图 + 有序笔迹层实时叠加——预览怎么显示，下游就拿到什么。
+    const plan = imageEditPaintLayers(img);
+    if(!plan) return '';
     const cropped = Boolean(img?.crop?.result?.url);
     const annotated = Boolean(img?.annotation?.url);
-    const view = imageForDisplay(img);
-    const base = escapeAttr(view.url || '');
     const size = w && h ? `width:${w}px;height:${h}px;` : '';
     const parts = [];
     if(cropped) parts.push(tr('canvas.cropLabel'));
@@ -11170,8 +11191,11 @@ function imageBlobCompositePreviewHtml(img, className='', w=0, h=0){
     parts.push(tr('canvas.maskColorLabel'));
     const dims = cropped ? imageResolutionLabel(img) : '';
     const label = dims ? `${parts.join('+')} · ${dims}` : parts.join('+');
-    const overlayStyle = `position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:${(blob.opacity / 100).toFixed(3)}`;
-    return `<div class="${escapeAttr(className)} mask-overlay-preview mask-color-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${base}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><img src="${escapeAttr(blob.url)}" draggable="false" style="${overlayStyle}"><span class="mask-overlay-label">${escapeHtml(label)}</span></div>`;
+    const overlays = plan.layers.map(layer => {
+        const layerStyle = `position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:${(Math.max(0, Math.min(100, Number(layer.opacity) || 100)) / 100).toFixed(3)}`;
+        return `<img src="${escapeAttr(layer.url)}" draggable="false" style="${layerStyle}">`;
+    }).join('');
+    return `<div class="${escapeAttr(className)} mask-overlay-preview mask-color-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${escapeAttr(plan.base)}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block">${overlays}<span class="mask-overlay-label">${escapeHtml(label)}</span></div>`;
 }
 function cropPreviewHtml(img, className='', w=0, h=0){
     // 裁切结果的预览：图已经是裁切后的真实像素，角标同时给出"已裁切"和裁切尺寸。
@@ -21871,7 +21895,15 @@ function replaceEditedImage(file, extra={}){
     // 派生图不再继承批注/裁切等"源图状态"（源图已烘焙，避免新旧叠加），需要时重新编辑。
     delete image.annotation;
     delete image.annotationPaint;
+    delete image.annotationEditedAt;
     delete image.crop;
+    // 色块/遮罩层同样属于源图状态：不清掉会把旧笔迹叠到新派生图上（预览与传递都会错）。
+    delete image.mask;
+    delete image.maskColor;
+    delete image.maskPaint;
+    delete image.maskMode;
+    delete image.maskOpacity;
+    delete image.maskEditedAt;
     // 预处理永远保留原素材：输出为右侧新的单图上传节点。
     const created = createImageNodeAt({x:rect.x + rect.width + 180, y:rect.y + rect.height / 2}, [image], {skipUndo:true, select:true});
     selectedIds = [];
@@ -22649,11 +22681,13 @@ async function saveMaskEditorResult(node, index, base, result){
         if(typeof updated.maskOpacity !== 'number') delete updated.maskOpacity;
         if(paintFile) updated.maskPaint = {url:paintFile.url, name:paintFile.name, kind:'image'};
         else delete updated.maskPaint;
+        updated.maskEditedAt = nowMs();
     } else {
         delete updated.maskColor;
         delete updated.maskPaint;
         delete updated.maskMode;
         delete updated.maskOpacity;
+        delete updated.maskEditedAt;
     }
     live.images[index] = updated;
     render(); scheduleSave();
@@ -22768,11 +22802,13 @@ async function saveAnnotationEditorResult(node, index, base, result){
     // 清空批注 = 移除已有结果，图片回到原图。
     if(flattenFile){
         updated.annotation = {url:flattenFile.url, name:flattenFile.name, kind:'image'};
+        updated.annotationEditedAt = nowMs();
         if(paintFile) updated.annotationPaint = {url:paintFile.url, name:paintFile.name, kind:'image'};
         else delete updated.annotationPaint;
     } else {
         delete updated.annotation;
         delete updated.annotationPaint;
+        delete updated.annotationEditedAt;
     }
     live.images[index] = updated;
     // 批注改了，已烘焙的裁切图就过期了：按原裁切范围重新裁一遍，节点与下游都拿到最新结果。
@@ -24804,11 +24840,9 @@ function promptRequestRefs(refs){
         const annotated = Boolean(img.annotation?.url);
         // 裁切结果的优先级最高：它已经烘焙了批注，且是用户明确选定的画面范围。
         const cropped = Boolean(img.crop?.result?.url);
-        const blob = imageBlobLayerFor(img);
-        // 色块没有烘焙进裁切/批注底图：两者共存时 url 先按旧的单层结果兜底，
-        // 再由 transfer 描述触发提交前现场合成（resolveTransferRefs），
-        // 保证"预览看到什么、下游拿到什么"。单层场景不挂 transfer，零开销。
-        const needsComposite = Boolean(blob && (cropped || annotated));
+        // 色块参与传递时一律走层规划现场合成（预览同源）；url 保留旧的单层链
+        // 作为合成失败时的兜底，保证不劣于修复前行为。
+        const plan = imageEditPaintLayers(img);
         return {
             // 批注已烘焙进图片，优先向下游传批注后的图，且不再随行遮罩
             // 颜色叠加模式：向下传递的就是"原图上带色块"的那张结果图，遮罩照旧随行
@@ -24825,7 +24859,7 @@ function promptRequestRefs(refs){
             // 画布上绘制的遮罩必须随引用图一起传给生成路径：ComfyUI 的 LoadImage
             // 会从图片 alpha 通道读取遮罩，前端据此把遮罩合成进 PNG 再上传。
             mask:(!annotated && img.mask) ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined,
-            transfer:needsComposite ? {blobUrl:blob.url, opacity:blob.opacity} : undefined
+            transfer:plan ? {base:plan.base, layers:plan.layers} : undefined
         };
     });
 }

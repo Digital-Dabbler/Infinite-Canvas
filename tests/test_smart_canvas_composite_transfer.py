@@ -19,18 +19,36 @@ class CompositeTransferTests(unittest.TestCase):
         self.assertIn("const url = paintUrl || colorUrl;", SMART_CANVAS_JS)
         self.assertIn("opacity:Number.isFinite(opacity) ? Math.max(0, Math.min(100, opacity)) : 100", SMART_CANVAS_JS)
 
-    def test_compositor_overlays_blob_on_baked_base_same_size(self):
-        # 合成 = 同尺寸 alpha 叠加（色块与裁切底图同处裁切像素空间，无需几何反算）。
-        self.assertIn("async function compositeImageEditLayers(baseUrl, transfer)", SMART_CANVAS_JS)
-        self.assertIn("ctx.globalAlpha = Math.max(0, Math.min(100, Number(transfer.opacity) || 100)) / 100;", SMART_CANVAS_JS)
+    def test_compositor_overlays_layers_in_plan_order(self):
+        # commit 3：合成消费统一层规划，layers 自下而上逐层叠加。
+        self.assertIn("async function compositeImageEditLayers(transfer)", SMART_CANVAS_JS)
+        self.assertIn("const layers = Array.isArray(transfer?.layers) ? transfer.layers : [];", SMART_CANVAS_JS)
+        self.assertIn("ctx.globalAlpha = Math.max(0, Math.min(100, Number(transfer.layers[i].opacity) || 100)) / 100;", SMART_CANVAS_JS)
         self.assertIn("canvasEl.toBlob(resolve, 'image/png')", SMART_CANVAS_JS)
 
-    def test_prompt_request_refs_attaches_transfer_descriptor_for_multilayer(self):
-        # 色块与批注/裁切共存时挂 transfer；单层场景不挂，零开销；
-        # 兜底 url 仍保留旧的单层链（合成失败时行为不劣于修复前）。
-        self.assertIn("const blob = imageBlobLayerFor(img);", SMART_CANVAS_JS)
-        self.assertIn("const needsComposite = Boolean(blob && (cropped || annotated));", SMART_CANVAS_JS)
-        self.assertIn("transfer:needsComposite ? {blobUrl:blob.url, opacity:blob.opacity} : undefined", SMART_CANVAS_JS)
+    def test_paint_layer_plan_sorts_annotation_above_blob(self):
+        # 后画的在上面：无裁切、批注晚于色块且笔迹可重放时，底图退回原图、
+        # 批注笔迹盖在色块之上；旧画布无时间戳保持批注在下、色块在上。
+        self.assertIn("function imageEditPaintLayers(img)", SMART_CANVAS_JS)
+        self.assertIn("if(annPaintUrl && Number.isFinite(annAt) && Number.isFinite(maskAt) && annAt > maskAt){", SMART_CANVAS_JS)
+        self.assertIn("return {base:displayMediaUrl({url:localUrl, name:img.name || ''}), layers:[blob, {url:annPaintUrl, opacity:100}]};", SMART_CANVAS_JS)
+        self.assertIn("return {base:displayMediaUrl(imageForDisplay(img)), layers:[blob]};", SMART_CANVAS_JS)
+
+    def test_edit_timestamps_written_and_cleaned(self):
+        self.assertIn("updated.annotationEditedAt = nowMs();", SMART_CANVAS_JS)
+        self.assertIn("delete updated.annotationEditedAt;", SMART_CANVAS_JS)
+        self.assertIn("updated.maskEditedAt = nowMs();", SMART_CANVAS_JS)
+        self.assertIn("delete updated.maskEditedAt;", SMART_CANVAS_JS)
+        # 派生图必须剥掉全部层状态（含色块与时间戳），否则旧笔迹叠到新图上。
+        self.assertIn("delete image.annotationEditedAt;", SMART_CANVAS_JS)
+        self.assertIn("delete image.maskPaint;", SMART_CANVAS_JS)
+        self.assertIn("delete image.maskEditedAt;", SMART_CANVAS_JS)
+
+    def test_prompt_request_refs_attaches_layer_plan_for_transfer(self):
+        # 色块参与时挂层规划 transfer；url 保留旧的单层兜底链（合成失败不劣于修复前）。
+        self.assertIn("const plan = imageEditPaintLayers(img);", SMART_CANVAS_JS)
+        self.assertIn("transfer:plan ? {base:plan.base, layers:plan.layers} : undefined", SMART_CANVAS_JS)
+        self.assertIn(": (img.maskMode === 'color' && img.maskColor?.url) ? img.maskColor.url : img.url,", SMART_CANVAS_JS)
 
     def test_resolve_transfer_refs_is_idempotent_and_falls_back(self):
         self.assertIn("async function resolveTransferRefs(refs)", SMART_CANVAS_JS)
