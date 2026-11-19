@@ -510,6 +510,8 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
         self.assertNotIn("saveCanvasOperations(", gesture_body)
         self.assertIn(".selection-scale-frame", self.smart_canvas_css)
         self.assertIn('"smart.selectionScaleHandle"', self.smart_canvas_i18n)
+        # 缩放手势中合并按钮必须随排版工具栏一起隐藏，不能滞留原位。
+        self.assertIn("&& !resizeState && !selectionScaleState;", source)
 
 
 class SmartCanvasSplitMergeTests(unittest.TestCase):
@@ -619,7 +621,7 @@ class SmartCanvasSplitMergeTests(unittest.TestCase):
         self.assertIn("positionMergeToolbar();\n}", source)
         self.assertIn("mergeToolbar?.classList.remove('open');", source)
         # 混选置灰 + 悬停提示；可合并单元（单图或空闲生成节点）≥2 才显示。
-        self.assertIn("const open = items.length >= 2 && !layoutToolbarHiddenDuringDrag && !dragState && !resizeState;", source)
+        self.assertIn("const open = items.length >= 2 && !layoutToolbarHiddenDuringDrag && !dragState && !resizeState && !selectionScaleState;", source)
         self.assertIn("button.disabled = mixed;", source)
         self.assertIn("const {items, kinds} = mergeSelectionKindInfo();", source)
         # CSS：药丸无 translateX 居中（JS 直接给左边缘），与排版工具栏同 z 层。

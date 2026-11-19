@@ -3334,6 +3334,7 @@ function finishSelectionScaleGesture(){
         scheduleSave();
     } else {
         discardPendingUndo();
+        updateLayoutToolbar();
         updateSelectionScaleFrame();
     }
 }
@@ -12653,7 +12654,7 @@ layoutToolbar?.addEventListener('click', event => {
 function updateMergeToolbar(){
     if(!mergeToolbar) return;
     const {items, kinds} = mergeSelectionKindInfo();
-    const open = items.length >= 2 && !layoutToolbarHiddenDuringDrag && !dragState && !resizeState;
+    const open = items.length >= 2 && !layoutToolbarHiddenDuringDrag && !dragState && !resizeState && !selectionScaleState;
     const mixed = kinds.length > 1;
     mergeToolbar.classList.toggle('open', open);
     mergeToolbar.setAttribute('aria-hidden', open ? 'false' : 'true');
