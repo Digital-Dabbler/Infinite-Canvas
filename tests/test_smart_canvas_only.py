@@ -555,6 +555,10 @@ class SmartCanvasSplitMergeTests(unittest.TestCase):
         for action in ("all", "none", "current", "confirm"):
             self.assertIn(f"action === '{action}'", body)
         self.assertIn(".split-results-panel { position:fixed; z-index:120;", self.smart_canvas_css)
+        # 滚轮在面板内翻阅列表而不是缩放画布：shell 缩放排除列表含面板，面板自身 stopPropagation 并把列表外滚动转发给网格。
+        self.assertIn(".split-results-panel", source[source.index("shell.addEventListener('wheel'"):source.index("shell.ondragover")])
+        self.assertIn("panel.addEventListener('wheel', event => {\n        event.stopPropagation();", body)
+        self.assertIn("grid.scrollTop += event.deltaY;", body)
 
     def test_merge_pill_is_independent_container_wired_to_layout_toolbar(self):
         html = self.smart_canvas_html

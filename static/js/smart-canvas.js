@@ -3365,6 +3365,14 @@ function openSplitResultsPanel(nodeId, anchorEl){
         refreshIcons?.();
     };
     panel.addEventListener('pointerdown', event => event.stopPropagation());
+    // 滚轮只翻阅面板内的缩略图列表：列表区域交给原生滚动，标题/按钮区域手动转发给列表，绝不缩放画布。
+    panel.addEventListener('wheel', event => {
+        event.stopPropagation();
+        const grid = panel.querySelector('.split-results-grid');
+        if(!grid || grid.contains(event.target)) return;
+        event.preventDefault();
+        grid.scrollTop += event.deltaY;
+    }, {passive:false});
     panel.addEventListener('click', event => {
         const thumb = event.target.closest?.('[data-split-index]');
         if(thumb){
@@ -28161,7 +28169,7 @@ window.onmouseup = e => {
 }
 };
 shell.addEventListener('wheel', e => {
-    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.angle-control-modal,.psd-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.workflow-transfer-panel,.log-modal,.shortcut-modal,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
+    if(e.target.closest('.composer,.smart-back,.image-edit-modal,.angle-control-modal,.psd-modal,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.workflow-transfer-panel,.log-modal,.shortcut-modal,.split-results-panel,.prompt-node-segments,.prompt-node-text,.prompt-node-llm,.smart-group-list,[data-thumb-scroll]')) return;
     e.preventDefault();
     const rect = shell.getBoundingClientRect();
     const sx = e.clientX - rect.left;
