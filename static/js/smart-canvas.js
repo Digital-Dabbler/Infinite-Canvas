@@ -18555,11 +18555,20 @@ function generationLogForImage(node, image){
     if(!node || !image) return null;
     const url = String(image?.url || '');
     if(!url || !canvas?.logs) return null;
+    const outputMatches = log => {
+        const outputs = Array.isArray(log.outputs) ? log.outputs : [];
+        return outputs.some(item => String(typeof item === 'string' ? item : (item?.url || item?.path || item?.src || '')) === url);
+    };
     for(let i = 0; i < canvas.logs.length; i++){
         const log = canvas.logs[i];
         if(!log || String(log.nodeId || '') !== node.id) continue;
-        const outputs = Array.isArray(log.outputs) ? log.outputs : [];
-        if(outputs.some(item => String(typeof item === 'string' ? item : (item?.url || item?.path || item?.src || '')) === url)) return log;
+        if(outputMatches(log)) return log;
+    }
+    // 兜底：按图片地址在全部台账里找。升级前拆出的旧单图节点换了编号、合并进宿主的图来自别的节点，
+    // 都靠这一步找回来源/提示词/复刻；每张生成图的地址唯一，不会认错。
+    for(let i = 0; i < canvas.logs.length; i++){
+        const log = canvas.logs[i];
+        if(log && outputMatches(log)) return log;
     }
     return null;
 }

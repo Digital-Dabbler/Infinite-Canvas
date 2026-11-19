@@ -615,6 +615,12 @@ class SmartCanvasSplitMergeTests(unittest.TestCase):
         self.assertIn("settings: logSettings || imageSettings || nodeSettings,", panel)
         self.assertIn("prompt: logPrompt || imagePrompt || String(node?.runPrompt || node?.promptDraftText || '').trim(),", panel)
         self.assertIn("refs: logRefs.length ? logRefs : (imageRefs.length ? imageRefs : nodeRefs)", panel)
+        # 升级前拆出的旧图：节点编号对不上台账时，按图片地址在全部台账里兜底找回来源/提示词/复刻。
+        look_start = self.smart_canvas_js.index("function generationLogForImage(node, image){")
+        lookup = self.smart_canvas_js[look_start:start]
+        self.assertIn("if(!log || String(log.nodeId || '') !== node.id) continue;", lookup)
+        self.assertIn("if(log && outputMatches(log)) return log;", lookup)
+        self.assertEqual(lookup.count("outputMatches(log)"), 2)
 
     def test_split_from_reference_is_remapped_on_restore_and_paste(self):
         source = self.smart_canvas_js

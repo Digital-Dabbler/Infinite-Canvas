@@ -111,3 +111,4 @@ git diff --check; git diff --cached --check
 - 合并搬图用 `carryImage(node, img)`：先保留图自带的 run* 值，缺失时从来源节点级补 stamped 到图上，多源合并后每张图仍可逐图查来源与复刻。
 - 全部拆完（source.images 为空）时，空生成节点随拆分一并删除：连带其历史分组节点、连线、workflowGroupId 与 inputNodeIds 引用清理；复用拆分已有的 pushUndo/render/scheduleSave，撤销仍是一步。拆出节点的 splitFromNodeId 悬空无害（信息已自带）。
 - 已知边界（与现状一致，非本次新增）：台账 500 条上限只影响无自带信息的老图；跨画布复制粘贴不带走台账，但自带信息随节点 JSON 一起走。
+- 补充（用户 m00510 验收后）：`generationLogForImage` 增加按图片地址的全台账兜底——升级前拆出的旧单图节点（换了编号、没带信息）当场找回来源/提示词/复刻，无需迁移；生成图地址唯一不会误匹配。运行当时就没往台账写提示词的（如提示词填在 RunningHub 应用自己的输入框里），属于从未记录，兜底也变不出来，但来源与复刻仍可用。
