@@ -10884,6 +10884,68 @@ function imageForDisplay(img){
     delete view.annotationPaint;
     return view;
 }
+// ---- 图片加工层（批注/裁切/色块）：预览与向下传递的统一层语义 ----
+// imageForDisplay 已把"批注/裁切"烘焙进 url，唯独色块层没有烘焙（保存色块时
+// 从不回写 crop.result，保存裁切时也不烘焙色块）。因此"色块 + 批注/裁切"共存时，
+// 必须把色块层现场叠到烘焙底图上再传递，否则下游只拿到单层结果（历史 bug）。
+// 色块优先用笔迹层（maskPaint，永远可重放），笔迹缺失才退回色块成品图（maskColor，
+// 可能过期）。笔迹/色块与裁切底图活在同一个裁切像素空间（remapMaskForCrop 保证），
+// 所以合成只需同尺寸叠加，不需要几何反算。
+function imageBlobLayerFor(img){
+    if(!img || img.maskMode !== 'color') return null;
+    const paintUrl = img.maskPaint?.url ? displayMediaUrl(img.maskPaint) : '';
+    const colorUrl = img.maskColor?.url ? displayMediaUrl(img.maskColor) : '';
+    const url = paintUrl || colorUrl;
+    if(!url) return null;
+    const opacity = Number(img.maskOpacity);
+    return {url, opacity:Number.isFinite(opacity) ? Math.max(0, Math.min(100, opacity)) : 100};
+}
+// 把"底图 + 色块层"叠成一张 PNG；失败返回 null（调用方回退单层结果）。
+async function compositeImageEditLayers(baseUrl, transfer){
+    if(!baseUrl || !transfer?.blobUrl) return null;
+    const [baseEl, blobEl] = await Promise.all([
+        loadCropImageElement(baseUrl),
+        loadCropImageElement(transfer.blobUrl)
+    ]);
+    const width = baseEl.naturalWidth || baseEl.width;
+    const height = baseEl.naturalHeight || baseEl.height;
+    if(!(width > 0 && height > 0)) return null;
+    const canvasEl = document.createElement('canvas');
+    canvasEl.width = width;
+    canvasEl.height = height;
+    const ctx = canvasEl.getContext('2d');
+    ctx.drawImage(baseEl, 0, 0, width, height);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(100, Number(transfer.opacity) || 100)) / 100;
+    ctx.drawImage(blobEl, 0, 0, width, height);
+    ctx.restore();
+    return await new Promise(resolve => canvasEl.toBlob(resolve, 'image/png'));
+}
+// 生成提交前收口：带 transfer 描述的引用图现场合成成一张临时成品图。
+// 幂等——resolve 过的引用不再带 transfer，重复调用直接透传；合成失败回退
+// 旧的单层结果（与修复前行为一致），绝不因合成失败阻断生成。
+async function resolveTransferRefs(refs){
+    const list = Array.isArray(refs) ? refs : [];
+    if(!list.some(ref => ref?.transfer)) return list;
+    const out = [];
+    for(const ref of list){
+        if(!ref?.transfer){ out.push(ref); continue; }
+        const {transfer, ...plain} = ref;
+        try {
+            const blob = await compositeImageEditLayers(plain.url, transfer);
+            if(!blob){ out.push(plain); continue; }
+            const baseName = safeExportFileName(String(plain.name || 'image').replace(/\.[^.]+$/, ''), 'image');
+            const file = await uploadCroppedBlob(blob, `${baseName}_composite.png`, {temp:true});
+            if(!file?.url){ out.push(plain); continue; }
+            // 合成图是本地临时成品：云端认证素材地址不再对应这张图，必须清空。
+            out.push({...plain, url:file.url, asset_uris:{}});
+        } catch(error){
+            console.warn('多层图片合成失败，已回退单层结果传递：', error);
+            out.push(plain);
+        }
+    }
+    return out;
+}
 function imageCropRect(crop){
     const rect = crop?.rect;
     if(!rect) return null;
@@ -21775,9 +21837,11 @@ function resizeCropFromDrag(dx, dy){
     cropState.w = Math.max(24, right - cropState.x);
     cropState.h = Math.max(24, bottom - cropState.y);
 }
-async function uploadCroppedBlob(blob, name){
+async function uploadCroppedBlob(blob, name, options = {}){
     const form = new FormData();
     form.append('files', blob, name);
+    // temp=1：多层合成的临时成品图，服务端按临时文件定期清扫（commit 4 落地）。
+    if(options.temp) form.append('temp', '1');
     const data = await fetch('/api/ai/upload', {method:'POST', body:form}).then(r => r.json());
     return data.files?.[0];
 }
@@ -24725,8 +24789,13 @@ function originalPromptTextFromParts(parts){
 function promptRequestRefs(refs){
     return (refs || []).map((img, index) => {
         const annotated = Boolean(img.annotation?.url);
-        // 裁切结果的优先级最高：它已经烘焙了批注/色块，且是用户明确选定的画面范围。
+        // 裁切结果的优先级最高：它已经烘焙了批注，且是用户明确选定的画面范围。
         const cropped = Boolean(img.crop?.result?.url);
+        const blob = imageBlobLayerFor(img);
+        // 色块没有烘焙进裁切/批注底图：两者共存时 url 先按旧的单层结果兜底，
+        // 再由 transfer 描述触发提交前现场合成（resolveTransferRefs），
+        // 保证"预览看到什么、下游拿到什么"。单层场景不挂 transfer，零开销。
+        const needsComposite = Boolean(blob && (cropped || annotated));
         return {
             // 批注已烘焙进图片，优先向下游传批注后的图，且不再随行遮罩
             // 颜色叠加模式：向下传递的就是"原图上带色块"的那张结果图，遮罩照旧随行
@@ -24742,7 +24811,8 @@ function promptRequestRefs(refs){
             role:`image_${index + 1}`,
             // 画布上绘制的遮罩必须随引用图一起传给生成路径：ComfyUI 的 LoadImage
             // 会从图片 alpha 通道读取遮罩，前端据此把遮罩合成进 PNG 再上传。
-            mask:(!annotated && img.mask) ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined
+            mask:(!annotated && img.mask) ? {url:img.mask.url || '', name:img.mask.name || '', kind:img.mask.kind || 'image'} : undefined,
+            transfer:needsComposite ? {blobUrl:blob.url, opacity:blob.opacity} : undefined
         };
     });
 }
@@ -26584,7 +26654,8 @@ async function runPromptLLMNode(nodeId){
         render();
         return {status:'error', message:tr('smart.promptLlmNoneHint')};
     }
-    const mediaRefs = promptNodeInputMediaForLLM(node);
+    // 视觉输入与生成路径同源：色块+批注/裁切共存的图先合成再喂给 LLM。
+    const mediaRefs = await resolveTransferRefs(promptRequestRefs(promptNodeInputMediaForLLM(node)));
     const runLogStartedAt = nowMs();
     const runLog = {
         nodeId:node.id,
@@ -26670,6 +26741,7 @@ function comfyFieldKind(field){
 }
 async function runApiGeneration(prompt, refs, runSettings=settings, canvasBinding=null){
     if(!runSettings.provider_id || !runSettings.model) throw new Error(tr('smart.errNoApiModel'));
+    refs = await resolveTransferRefs(refs);
     const count = Math.max(1, Math.min(8, Number(runSettings.count || 1)));
     const runningHub = isRunningHubVideoProvider(runSettings.provider_id);
     // 所有 API 平台从同一份能力缓存读取比例、尺寸和显式宽高；RunningHub
@@ -26754,6 +26826,7 @@ async function submitCanvasImageTask(payload){
     }
 }
 async function runRunningHubGeneration(prompt, refs, runSettings=settings){
+    refs = await resolveTransferRefs(refs);
     const ref = selectedRunningHubRef(runSettings);
     if(!ref) throw new Error(tr('smart.rhNeedConfig'));
     const fields = rhActiveFields(runSettings);
@@ -26799,6 +26872,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=nu
     const videoSelection = configuredVideoSelection(runSettings);
     if(!videoSelection.ok) throw new Error(tr(videoSelection.reason === 'provider' ? 'smart.noVideoPlatform' : 'smart.errNoVideoModel'));
     try {
+        refs = await resolveTransferRefs(refs);
         const uploadedRefs = applyUploadedUrlsToSmartRefs(refs, runSettings);
         const trustedMode = Boolean(runSettings.videoTrustedAsset);
         const trustedSource = trustedMode ? (['library','cloud','manual'].includes(runSettings.videoTrustedSource) ? runSettings.videoTrustedSource : 'library') : 'none';
@@ -26932,7 +27006,7 @@ async function runApiVideoGeneration(prompt, refs, runSettings=settings, node=nu
     }
 }
 async function runModelscopeGeneration(prompt, refs, runSettings=settings){
-    refs = imageRefsOnly(refs);
+    refs = imageRefsOnly(await resolveTransferRefs(refs));
     const modelKey = runSettings.msgenModel || 'zimage';
     const msModel = MS_GEN_MODELS[modelKey] || MS_GEN_MODELS.zimage;
     if(msModel.supportsImage && !refs.length) throw new Error(tr('smart.errMsNeedRefs'));
@@ -27006,7 +27080,7 @@ async function runSmartComfyUpscale(imageUrl, resolution){
     });
 }
 async function runComfyGeneration(node, prompt, refs, pendingNode, meta, runSettings=settings){
-    const allRefs = refs || [];
+    const allRefs = await resolveTransferRefs(refs || []);
     refs = imageRefsOnly(allRefs);
     const mode = runSettings.comfyMode || 'text';
     if(mode === 'text') return runComfyText(node, prompt, pendingNode, meta, runSettings);
