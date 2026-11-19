@@ -2032,6 +2032,23 @@ input[type=range].smart-range::-webkit-slider-thumb { -webkit-appearance:none; w
 .toast.show { opacity:1; transform:translateY(0); }
 .selection-box { position:absolute; z-index:18; border:1px solid var(--strong); background:rgba(15,23,42,.08); border-radius:10px; pointer-events:none; display:none; }
 .theme-dark .selection-box { background:rgba(248,250,252,.1); }
+/* 多选整体等比缩放外框：shell 屏幕坐标层，手柄尺寸与视口缩放无关。 */
+.selection-scale-frame { position:absolute; z-index:19; border:1.5px dashed var(--strong); border-radius:12px; pointer-events:none; display:none; }
+.selection-scale-frame .selection-scale-handle { position:absolute; width:12px; height:12px; margin:-6px 0 0 -6px; box-sizing:border-box; border:1.5px solid var(--strong); border-radius:3px; background:var(--card); box-shadow:0 1px 4px rgba(15,23,42,.25); pointer-events:auto; }
+.theme-dark .selection-scale-frame .selection-scale-handle { background:#0f172a; }
+.selection-scale-handle[data-selection-scale-handle="nw"] { left:0; top:0; cursor:nwse-resize; }
+.selection-scale-handle[data-selection-scale-handle="n"] { left:50%; top:0; cursor:ns-resize; }
+.selection-scale-handle[data-selection-scale-handle="ne"] { left:100%; top:0; cursor:nesw-resize; }
+.selection-scale-handle[data-selection-scale-handle="e"] { left:100%; top:50%; cursor:ew-resize; }
+.selection-scale-handle[data-selection-scale-handle="se"] { left:100%; top:100%; cursor:nwse-resize; }
+.selection-scale-handle[data-selection-scale-handle="s"] { left:50%; top:100%; cursor:ns-resize; }
+.selection-scale-handle[data-selection-scale-handle="sw"] { left:0; top:100%; cursor:nesw-resize; }
+.selection-scale-handle[data-selection-scale-handle="w"] { left:0; top:50%; cursor:ew-resize; }
+/* 扁选区：某一方向屏幕尺寸过小时隐藏该方向的边杆，避免手柄互相贴近误拖。 */
+.selection-scale-frame.selection-scale-flat-x .selection-scale-handle[data-selection-scale-handle="e"],
+.selection-scale-frame.selection-scale-flat-x .selection-scale-handle[data-selection-scale-handle="w"],
+.selection-scale-frame.selection-scale-flat-y .selection-scale-handle[data-selection-scale-handle="n"],
+.selection-scale-frame.selection-scale-flat-y .selection-scale-handle[data-selection-scale-handle="s"] { display:none; }
 .composer-actions { grid-area:run; display:flex; justify-content:flex-end; gap:6px; }
 /* 提示词字数：只在当前模型声明了 maxLength 时出现，接近上限转黄、超出转红。 */
 .composer-prompt-length { align-self:center; margin-right:2px; height:22px; padding:0 9px; border-radius:999px; border:1px solid var(--line); background:var(--soft); color:var(--muted); display:inline-flex; align-items:center; font-size:calc(10px * var(--canvas-font-scale, 1)); font-weight:800; font-variant-numeric:tabular-nums; white-space:nowrap; }

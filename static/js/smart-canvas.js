@@ -87,6 +87,7 @@ const smartOutlineClose = document.getElementById('smartOutlineClose');
 const smartOutlineSearch = document.getElementById('smartOutlineSearch');
 const smartOutlineList = document.getElementById('smartOutlineList');
 const selectionBox = document.getElementById('selectionBox');
+const selectionScaleFrame = document.getElementById('selectionScaleFrame');
 const assetToggle = document.getElementById('assetToggle');
 const assetPanel = document.getElementById('assetPanel');
 const assetCloseBtn = document.getElementById('assetCloseBtn');
@@ -139,6 +140,10 @@ let selectionState = null;
 let isRKeyDown = false;
 let selectionJustFinished = false;
 let resizeState = null;
+// 多选整体等比缩放：外框手柄手势状态（与单节点 resizeState 互斥，一次手势一个撤销快照）
+let selectionScaleState = null;
+let selectionScaleFrameRaf = 0;
+let selectionScalePendingEvent = null;
 let llmInstructionResizeState = null;
 let promptSplitResizeState = null;
 const promptTextEditingIds = new Set();
@@ -2076,6 +2081,7 @@ function syncSelectionUi(){
     updateWorkflowGroupToolbar();
     updateLayoutToolbar();
     scheduleConnectionLayerRefresh();
+    updateSelectionScaleFrame();
 }
 function isNodeSelected(id){
     return selectedId === id || selectedIds.includes(id);
@@ -3016,6 +3022,330 @@ function translateLayoutUnit(unit, dx, dy){
     }
     translateSmartNodeWithMembers(unit, dx, dy);
 }
+// ---- 多选整体等比缩放：拖选区外框手柄，把整组节点（含组织框/分组内部成员）等比缩放 ----
+// 单元归并与自动排版同源：workflow 组织框成员折叠进框，smart-group 成员折叠进组，
+// 保证同一节点不会既作为独立单元、又作为成员被缩放两次。
+function selectionScaleUnits(){
+    const organizerUnits = layoutSelectionUnits();
+    const ids = smartArrangeAtomicIds(organizerUnits.map(unit => unit.id));
+    return ids.map(id => nodes.find(node => node.id === id)).filter(Boolean);
+}
+function selectionScaleRoleAllowed(){
+    const role = canvasSharing?.role;
+    return role === 'editor' || role === 'owner';
+}
+function selectionScaleBounds(units){
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    units.forEach(node => {
+        const rect = nodeRect(node);
+        minX = Math.min(minX, rect.x);
+        minY = Math.min(minY, rect.y);
+        maxX = Math.max(maxX, rect.x + rect.width);
+        maxY = Math.max(maxY, rect.y + rect.height);
+    });
+    return {minX, minY, maxX, maxY};
+}
+function selectionScaleNodeMinSize(node){
+    if(node.type === 'smart-prompt') return {w:260, h:170};
+    if(node.type === 'smart-loop') return {w:252, h:132};
+    if(node.type === 'smart-group') return {w:SMART_GROUP_MIN_WIDTH, h:SMART_GROUP_MIN_HEIGHT};
+    if(isWorkflowOrganizerNode(node)) return {w:300, h:180};
+    if(isSmartNoteNode(node)) return {w:NOTE_MIN_WIDTH, h:NOTE_MIN_HEIGHT};
+    return {w:48, h:48};
+}
+// 手势起始快照：位置/尺寸全部记起始值，过程中每个 factor 都基于快照计算，
+// 来回拖动不累积取整误差，也不会把中途状态当成新基准。
+function selectionScaleUnitSnapshot(node){
+    const rect = nodeRect(node);
+    const snap = {
+        id:node.id,
+        sx:Number(node.x) || 0,
+        sy:Number(node.y) || 0,
+        sw:Math.max(1, rect.width),
+        sh:Math.max(1, rect.height),
+        kind:'node',
+    };
+    if(isSmartNoteNode(node)){
+        snap.kind = 'note';
+        snap.startFontSize = smartNoteFontSize(node);
+    } else if(isWorkflowOrganizerNode(node)){
+        snap.kind = 'organizer';
+        // 组织框成员可能是便签/分组，递归快照按各自类型应用。
+        snap.members = workflowOrganizerMembers(node).map(member => selectionScaleUnitSnapshot(member));
+    } else if(isSmartGroupNode(node)){
+        if(smartGroupImageRefs(node).some(ref => ref.item?.url)){
+            snap.kind = 'imageGroup';
+        } else {
+            snap.kind = 'group';
+            snap.startZoom = smartGroupZoom(node);
+            const gx0 = Number(node.x) || 0, gy0 = Number(node.y) || 0;
+            let maxR = gx0, maxB = gy0, hasM = false;
+            snap.members = smartGroupMembers(node).map(member => {
+                const r = nodeRect(member);
+                const sx = Number(member.x) || 0, sy = Number(member.y) || 0, sw = Number(r.width) || 0, sh = Number(r.height) || 0;
+                hasM = true; maxR = Math.max(maxR, sx + sw); maxB = Math.max(maxB, sy + sh);
+                return {id:member.id, sx, sy, sw:Math.max(1, sw), sh:Math.max(1, sh), isImage:isSmartImageNode(member)};
+            });
+            snap.contentFitW = hasM ? Math.max(1, maxR - gx0 + 16) : (rect.width || 1);
+            snap.contentFitH = hasM ? Math.max(1, maxB - gy0 + 16) : (rect.height || 1);
+        }
+    }
+    return snap;
+}
+// 任何单元触底，整组停住：全局 minFactor 取所有单元各自下限的最大值。
+function selectionScaleSnapMinFactor(snap){
+    const node = nodes.find(item => item.id === snap.id);
+    if(!node) return 0;
+    const min = selectionScaleNodeMinSize(node);
+    let factor = Math.max(min.w / snap.sw, min.h / snap.sh);
+    if(snap.kind === 'note') factor = Math.max(factor, 10 / Math.max(1, snap.startFontSize || 13));
+    if(snap.kind === 'group') snap.members.forEach(member => { factor = Math.max(factor, 40 / member.sw, 40 / member.sh); });
+    if(snap.kind === 'organizer') snap.members.forEach(member => { factor = Math.max(factor, selectionScaleSnapMinFactor(member)); });
+    return factor;
+}
+function selectionScaleMinFactor(snaps){
+    let factor = 0;
+    snaps.forEach(snap => { factor = Math.max(factor, selectionScaleSnapMinFactor(snap)); });
+    // 已有节点本来就低于下限时不反向"撑大"选区：下限最多压到 1（只拦缩小、不强制放大）。
+    return Math.min(1, factor);
+}
+function selectionScaleAnchor(bounds, handle, alt){
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+    if(alt) return {x:cx, y:cy};
+    switch(handle){
+        case 'nw': return {x:bounds.maxX, y:bounds.maxY};
+        case 'n': return {x:cx, y:bounds.maxY};
+        case 'ne': return {x:bounds.minX, y:bounds.maxY};
+        case 'e': return {x:bounds.minX, y:cy};
+        case 'se': return {x:bounds.minX, y:bounds.minY};
+        case 's': return {x:cx, y:bounds.minY};
+        case 'sw': return {x:bounds.maxX, y:bounds.minY};
+        case 'w': return {x:bounds.maxX, y:cy};
+    }
+    return {x:cx, y:cy};
+}
+function selectionScaleHandlePoint(bounds, handle){
+    const cx = (bounds.minX + bounds.maxX) / 2;
+    const cy = (bounds.minY + bounds.maxY) / 2;
+    switch(handle){
+        case 'nw': return {x:bounds.minX, y:bounds.minY};
+        case 'n': return {x:cx, y:bounds.minY};
+        case 'ne': return {x:bounds.maxX, y:bounds.minY};
+        case 'e': return {x:bounds.maxX, y:cy};
+        case 'se': return {x:bounds.maxX, y:bounds.maxY};
+        case 's': return {x:cx, y:bounds.maxY};
+        case 'sw': return {x:bounds.minX, y:bounds.maxY};
+        case 'w': return {x:bounds.minX, y:cy};
+    }
+    return {x:bounds.minX, y:bounds.minY};
+}
+// 等比因子 = 指针在「起始手柄点 - 不动点」方向上的投影比例；角杆沿对角线、边杆沿法线，Alt 时锚点换成中心。
+function selectionScaleFactorAt(state, worldPoint, alt){
+    const anchor = selectionScaleAnchor(state.bounds, state.handle, alt);
+    const start = selectionScaleHandlePoint(state.bounds, state.handle);
+    const dx = start.x - anchor.x, dy = start.y - anchor.y;
+    const dd = dx * dx + dy * dy;
+    if(!(dd > 1)) return 1;
+    const projected = ((worldPoint.x - anchor.x) * dx + (worldPoint.y - anchor.y) * dy) / dd;
+    return Math.max(state.minFactor, projected);
+}
+function moveNodeElementToPosition(node){
+    const el = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+    if(!el) return;
+    el.style.transform = '';
+    el.style.left = `${Number(node.x) || 0}px`;
+    el.style.top = `${Number(node.y) || 0}px`;
+}
+function scaleSelectionSnap(snap, factor, anchor){
+    const node = nodes.find(item => item.id === snap.id);
+    if(!node) return;
+    node.x = Math.round(anchor.x + (snap.sx - anchor.x) * factor);
+    node.y = Math.round(anchor.y + (snap.sy - anchor.y) * factor);
+    moveNodeElementToPosition(node);
+    if(snap.kind === 'organizer'){
+        snap.members.forEach(member => scaleSelectionSnap(member, factor, anchor));
+        fitWorkflowOrganizerBounds(node);
+        updateNodeElementDuringResize(node);
+        return;
+    }
+    if(snap.kind === 'group'){
+        // 沿用单节点缩放的"画布中的画布"数学：成员相对分组原点按 memberRatio 缩放，
+        // 目标框宽由等比 factor 给出；成员到达放大上限后改为让框继续扩大。
+        const targetW = snap.sw * factor;
+        const startZoom = snap.startZoom || 1;
+        const fitBase = snap.contentFitW || snap.sw || 1;
+        const desiredZoom = startZoom * (targetW / fitBase);
+        const effectiveZoom = Math.max(0.2, Math.min(SMART_GROUP_MAX_MEMBER_ZOOM, desiredZoom));
+        const memberRatio = effectiveZoom / startZoom;
+        node._memberZoom = effectiveZoom;
+        let maxRight = node.x, maxBottom = node.y, hasMember = false;
+        snap.members.forEach(memberSnap => {
+            const member = nodes.find(item => item.id === memberSnap.id);
+            if(!member) return;
+            hasMember = true;
+            member.x = node.x + (memberSnap.sx - snap.sx) * memberRatio;
+            member.y = node.y + (memberSnap.sy - snap.sy) * memberRatio;
+            member.w = Math.max(40, Math.round(memberSnap.sw * memberRatio));
+            member.h = Math.max(40, Math.round(memberSnap.sh * memberRatio));
+            if(memberSnap.isImage) member.scale = 1;
+            maxRight = Math.max(maxRight, member.x + member.w);
+            maxBottom = Math.max(maxBottom, member.y + member.h);
+            moveNodeElementToPosition(member);
+            updateNodeElementDuringResize(member);
+        });
+        if(desiredZoom > SMART_GROUP_MAX_MEMBER_ZOOM || !hasMember){
+            node.w = Math.max(SMART_GROUP_MIN_WIDTH, Math.round(targetW));
+            node.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(snap.sh * factor));
+        } else {
+            node.w = Math.max(SMART_GROUP_MIN_WIDTH, Math.round(maxRight - node.x + 16));
+            node.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(maxBottom - node.y + 16));
+        }
+        node.scale = 1;
+        updateNodeElementDuringResize(node);
+        return;
+    }
+    if(snap.kind === 'imageGroup'){
+        node.w = Math.max(SMART_GROUP_MIN_WIDTH, Math.round(snap.sw * factor));
+        node.h = Math.max(SMART_GROUP_MIN_HEIGHT, Math.round(snap.sh * factor));
+        if(smartGroupCompactMembers(node).length) arrangeSmartGroupMembers(node, {skipUndo:true, syncDom:true});
+        node.scale = 1;
+        updateNodeElementDuringResize(node);
+        return;
+    }
+    if(snap.kind === 'note'){
+        node.w = Math.max(NOTE_MIN_WIDTH, Math.round(snap.sw * factor));
+        node.h = Math.max(NOTE_MIN_HEIGHT, Math.round(snap.sh * factor));
+        // 便签框与字号同因子等比（与单节点缩放的等比路径一致），动过框即转固定尺寸模式。
+        node.fontSize = Math.max(10, Math.min(48, Math.round(snap.startFontSize * factor * 10) / 10));
+        node.sizeMode = 'fixed';
+        const noteEl = world.querySelector(`.image-node[data-id="${CSS.escape(node.id)}"]`);
+        noteEl?.style.setProperty('--note-font-size', `${node.fontSize}px`);
+        node.scale = 1;
+        updateNodeElementDuringResize(node);
+        return;
+    }
+    const min = selectionScaleNodeMinSize(node);
+    node.w = Math.max(min.w, Math.round(snap.sw * factor));
+    node.h = Math.max(min.h, Math.round(snap.sh * factor));
+    node.scale = 1;
+    updateNodeElementDuringResize(node);
+}
+function selectionScaleFrameHidden(){
+    if(!canvas) return true;
+    if(!selectionScaleRoleAllowed()) return true;
+    if(dragState || resizeState || selectionState || panState || portDragState || thumbDragState
+        || llmInstructionResizeState || promptSplitResizeState) return true;
+    if(selectionScaleState) return false;
+    return selectionScaleUnits().length < 2;
+}
+function updateSelectionScaleFrame(){
+    if(!selectionScaleFrame) return;
+    if(selectionScaleFrameHidden()){
+        selectionScaleFrame.style.display = 'none';
+        return;
+    }
+    const bounds = selectionScaleBounds(selectionScaleUnits());
+    const scale = Number(viewport.scale) || 1;
+    const left = viewport.x + bounds.minX * scale;
+    const top = viewport.y + bounds.minY * scale;
+    const width = (bounds.maxX - bounds.minX) * scale;
+    const height = (bounds.maxY - bounds.minY) * scale;
+    if(!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0){
+        selectionScaleFrame.style.display = 'none';
+        return;
+    }
+    selectionScaleFrame.style.display = 'block';
+    selectionScaleFrame.style.left = `${left}px`;
+    selectionScaleFrame.style.top = `${top}px`;
+    selectionScaleFrame.style.width = `${width}px`;
+    selectionScaleFrame.style.height = `${height}px`;
+    selectionScaleFrame.classList.toggle('selection-scale-flat-x', width < 40);
+    selectionScaleFrame.classList.toggle('selection-scale-flat-y', height < 40);
+}
+function beginSelectionScaleGesture(handle, e){
+    if(!canvas || selectionScaleState || !handle || e.button !== 0) return;
+    if(!selectionScaleRoleAllowed()) return;
+    if(dragState || resizeState || selectionState || panState || portDragState || thumbDragState) return;
+    const units = selectionScaleUnits();
+    if(units.length < 2) return;
+    const snaps = units.map(selectionScaleUnitSnapshot);
+    selectionScaleState = {
+        handle,
+        bounds: selectionScaleBounds(units),
+        snaps,
+        minFactor: selectionScaleMinFactor(snaps),
+        alt: Boolean(e.altKey),
+        applied: false,
+    };
+    document.body.classList.add('smart-node-resize', 'smart-canvas-interacting');
+    capturePendingUndo();
+    updateLayoutToolbar();
+    updateSelectionScaleFrame();
+}
+function applySelectionScaleMove(e){
+    const state = selectionScaleState;
+    if(!state) return;
+    state.alt = Boolean(e.altKey);
+    const factor = selectionScaleFactorAt(state, screenToWorld(e), state.alt);
+    const anchor = selectionScaleAnchor(state.bounds, state.handle, state.alt);
+    state.snaps.forEach(snap => scaleSelectionSnap(snap, factor, anchor));
+    state.applied = state.applied || Math.abs(factor - 1) > 0.001 || state.alt;
+    scheduleInteractionLayerRefresh();
+    updateSelectionScaleFrame();
+}
+function queueSelectionScaleMove(e){
+    selectionScalePendingEvent = e;
+    if(selectionScaleFrameRaf) return;
+    selectionScaleFrameRaf = requestAnimationFrame(() => {
+        selectionScaleFrameRaf = 0;
+        const pending = selectionScalePendingEvent;
+        selectionScalePendingEvent = null;
+        if(selectionScaleState && pending) applySelectionScaleMove(pending);
+    });
+}
+function finishSelectionScaleGesture(){
+    const state = selectionScaleState;
+    if(!state) return;
+    // 先把还压在 rAF 里的最后一帧同步应用掉，松手位置不丢。
+    if(selectionScaleFrameRaf){
+        cancelAnimationFrame(selectionScaleFrameRaf);
+        selectionScaleFrameRaf = 0;
+    }
+    if(selectionScalePendingEvent){
+        const pending = selectionScalePendingEvent;
+        selectionScalePendingEvent = null;
+        applySelectionScaleMove(pending);
+    }
+    selectionScaleState = null;
+    document.body.classList.remove('smart-node-resize', 'smart-canvas-interacting');
+    // 松手后落回 shell 的 click 会清空选中、让外框消失：沿用框选的收尾抑制。
+    selectionJustFinished = true;
+    setTimeout(() => { selectionJustFinished = false; }, 0);
+    const liveNodes = state.snaps.map(snap => nodes.find(item => item.id === snap.id)).filter(Boolean);
+    const now = liveNodes.length ? selectionScaleBounds(liveNodes) : state.bounds;
+    const changed = Math.abs(now.minX - state.bounds.minX) > 0.5
+        || Math.abs(now.minY - state.bounds.minY) > 0.5
+        || Math.abs(now.maxX - state.bounds.maxX) > 0.5
+        || Math.abs(now.maxY - state.bounds.maxY) > 0.5;
+    if(changed){
+        commitPendingUndo();
+        render();
+        scheduleSave();
+    } else {
+        discardPendingUndo();
+        updateSelectionScaleFrame();
+    }
+}
+selectionScaleFrame?.querySelectorAll('.selection-scale-handle').forEach(handleEl => {
+    handleEl.title = tr('smart.selectionScaleHandle');
+    handleEl.addEventListener('mousedown', e => {
+        if(e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        beginSelectionScaleGesture(handleEl.dataset.selectionScaleHandle, e);
+    });
+});
 // 左/右/顶/底对齐以选区极值节点为准，水平/垂直居中以选区外接框中线为准。
 function alignSelectedSmartNodes(mode){
     if(!canvas) return;
@@ -3148,6 +3478,7 @@ function applyViewport(){
         positionImageActionToolbar();
         positionWorkflowGroupToolbar();
         positionLayoutToolbar();
+        updateSelectionScaleFrame();
         imageUpscaleMenuClose();
         imageMattingMenuClose();
         imageRedrawMenuClose();
@@ -12242,7 +12573,7 @@ const LAYOUT_TOOLBAR_ACTIONS = {
     'grid': () => gridSelectedSmartNodes(),
 };
 function currentLayoutToolbarUnits(){
-    if(!layoutToolbar || layoutToolbarHiddenDuringDrag || dragState || resizeState) return [];
+    if(!layoutToolbar || layoutToolbarHiddenDuringDrag || dragState || resizeState || selectionScaleState) return [];
     const units = layoutSelectionUnits();
     return units.length >= 2 ? units : [];
 }
@@ -14974,6 +15305,7 @@ function render(){
     updateWorkflowGroupToolbar();
     updateLayoutToolbar();
     applyCanvasPresenceDecorations();
+    updateSelectionScaleFrame();
     return;
     world.innerHTML = '';
     if(composerEl) world.appendChild(composerEl);
@@ -15625,6 +15957,7 @@ function bindPromptNodeControls(el, node){
         if(e.button !== 0) return;
         e.preventDefault(); e.stopPropagation();
         llmInstructionResizeState = {id:node.id, startY:e.clientY, startH:promptLlmInstructionHeight(node), startNodeH:promptNodeLayoutSize(node).height};
+        updateSelectionScaleFrame();
         // 拖动期间屏蔽文本框的指针/选区，否则上拉时光标滑到上方输入框会被它抢走（选中文字/失焦）。
         document.body.classList.add('smart-node-resize', 'smart-llm-instr-resize');
         capturePendingUndo();
@@ -15635,6 +15968,7 @@ function bindPromptNodeControls(el, node){
         e.preventDefault();
         e.stopPropagation();
         promptSplitResizeState = {id:node.id, startY:e.clientY, startH:promptNodeSplitPreviewHeight(node), startNodeH:promptNodeLayoutSize(node).height};
+        updateSelectionScaleFrame();
         document.body.classList.add('smart-node-resize', 'smart-prompt-split-resize');
         capturePendingUndo();
     });
@@ -16790,6 +17124,7 @@ function bindNodeEvents(){
                 e.preventDefault(); e.stopPropagation();
                 thumbDragState = {nodeId:id, imgIndex, startX:e.clientX, startY:e.clientY, detached:false};
                 capturePendingUndo();
+                updateSelectionScaleFrame();
             });
         });
         el.querySelector('.node-resize-handle')?.addEventListener('mousedown', e => {
@@ -16822,6 +17157,7 @@ function bindNodeEvents(){
             }
             document.body.classList.add('smart-node-resize', 'smart-canvas-interacting');
             capturePendingUndo();
+            updateSelectionScaleFrame();
         });
         const beginNodeDrag = e => {
             const readonlyTextSurface = Boolean(e.target?.matches?.('.prompt-node-text[readonly]'));
@@ -16863,6 +17199,7 @@ function bindNodeEvents(){
                 return n ? {id:n.id, ox:Number(n.x) || 0, oy:Number(n.y) || 0} : null;
             }).filter(Boolean);
             dragState = {id:node.id, startX:e.clientX, startY:e.clientY, ox:node.x || 0, oy:node.y || 0, group, groupIds:group.map(item => item.id), ctrlGroup:Boolean(e.ctrlKey), fromReadonlyText:readonlyTextSurface};
+            updateSelectionScaleFrame();
             document.body.classList.add('smart-node-drag', 'smart-canvas-interacting');
             capturePendingUndo();
         };
@@ -16887,6 +17224,7 @@ function bindNodeEvents(){
                 };
                 shell.classList.add('port-dragging');
                 capturePendingUndo();
+                updateSelectionScaleFrame();
                 ensurePortDragPathElement();
                 updatePortDragVisual();
             });
@@ -27512,6 +27850,7 @@ function startCanvasPan(e){
     didPan = false;
     panState = {button:e.button, startX:e.clientX, startY:e.clientY, ox:viewport.x, oy:viewport.y};
     shell.classList.add('panning');
+    updateSelectionScaleFrame();
     document.body.classList.add('smart-canvas-panning', 'smart-canvas-interacting');
 }
 function updateCanvasPan(e){
@@ -27605,6 +27944,7 @@ shell.onmousedown = e => {
         selectionState = {startScreen:{x:e.clientX, y:e.clientY}, startWorld:screenToWorld(e)};
         document.body.classList.add('smart-canvas-interacting');
         updateSelectionBox(e);
+        updateSelectionScaleFrame();
         return;
     }
     if(e.button === 0 && (e.ctrlKey || e.metaKey)){
@@ -27613,6 +27953,7 @@ shell.onmousedown = e => {
         selectionState = {startScreen:{x:e.clientX, y:e.clientY}, startWorld:screenToWorld(e)};
         document.body.classList.add('smart-canvas-interacting');
         updateSelectionBox(e);
+        updateSelectionScaleFrame();
         return;
     }
     // 中键已由上面的捕获阶段监听统一处理，这里只保留左键空白处拖拽平移。
@@ -27673,14 +28014,14 @@ shell.oncontextmenu = e => {
     openCreateMenu(e);
 };
 shell.ondblclick = e => {
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-outline-panel,.smart-outline-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu,.selection-scale-frame')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     e.preventDefault();
     openCreateMenu(e);
 };
 shell.onclick = e => {
     if(selectionJustFinished) return;
-    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu')) return;
+    if(didPan || e.target.closest('.image-node,.composer,.smart-back,.asset-panel,.asset-toggle,.smart-log-toggle,.smart-shortcut-toggle,.smart-workflow-toggle,.rh-tool-rail,.rh-view-controls,.rh-canvas-header,.rh-agent-toggle,.rh-agent-panel,.rh-account-popover,.rh-balance-popover,.log-modal,.shortcut-modal,.image-edit-modal,.psd-modal,.create-menu,.port-connect-menu,.selection-scale-frame')) return;
     if(document.getElementById('imageEditModal')?.classList.contains('open')) return;
     closeCreateMenu();
     closePortConnectMenu();
@@ -27812,6 +28153,11 @@ window.onmousemove = e => {
         }
         clampCrop();
         renderCropBox();
+        return;
+    }
+    if(selectionScaleState){
+        e.preventDefault();
+        queueSelectionScaleMove(e);
         return;
     }
     if(resizeState){
@@ -28053,6 +28399,10 @@ window.onmouseup = e => {
             syncOutpaintPadInputs();
             syncOutpaintRunButtonState();
         }
+    }
+    if(selectionScaleState){
+        finishSelectionScaleGesture();
+        return;
     }
     if(resizeState){
         const node = nodes.find(n => n.id === resizeState.id);

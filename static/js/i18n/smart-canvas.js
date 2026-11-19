@@ -346,6 +346,7 @@
         "smart.layoutEqualHeight": { zh: "等高（以首个选中节点为准）", en: "Equal height (first selected node as reference)" },
         "smart.layoutGrid": { zh: "网格排列（自动等宽等高）", en: "Grid arrange (auto equal size)" },
         "smart.layoutToastAligned": { zh: "已对齐选中节点", en: "Selected nodes aligned" },
+        "smart.selectionScaleHandle": { zh: "拖动整体等比缩放 · 按住 Alt 以中心缩放", en: "Drag to scale the selection uniformly · hold Alt to scale from center" },
         "smart.layoutToastDistributed": { zh: "已等距分布选中节点", en: "Selected nodes distributed" },
         "smart.layoutToastEqualSize": { zh: "已统一尺寸（以首个选中节点为准）", en: "Sizes unified to the first selected node" },
         "smart.layoutToastGrid": { zh: "已网格排列选中节点", en: "Selected nodes arranged in a grid" },

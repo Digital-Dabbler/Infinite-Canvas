@@ -339,7 +339,11 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
         source = self.smart_canvas_js
         start = source.index("// ---- 多选自动排版（对齐 / 等距 / 等尺寸 / 网格，浮动工具栏触发） ----")
         end = source.index("function applyViewport(){", start)
-        body = source[start:end]
+        # 多选等比缩放块（selectionScale*）也落在同一区间，但它有自己的收尾约定（pendingUndo 而非 pushUndo），
+        # 切片时跳过，保证这里的 4/4/4 仍严格对应四个排版动作。
+        scale_start = source.index("// ---- 多选整体等比缩放", start)
+        scale_end = source.index("function alignSelectedSmartNodes(", scale_start)
+        body = source[start:scale_start] + source[scale_end:end]
         for fn in (
             "function layoutSelectionUnits(){",
             "function translateLayoutUnit(unit, dx, dy){",
@@ -473,6 +477,39 @@ class SmartCanvasAutoLayoutTests(unittest.TestCase):
         for key in ("smart.layoutAlignLeft", "smart.layoutDistributeH", "smart.layoutGrid"):
             self.assertIn(f'data-i18n-title="{key}"', self.smart_canvas_html)
             self.assertIn(f'data-i18n="smart.layoutActions"', self.smart_canvas_html)
+
+    def test_multi_select_scale_frame_and_gesture_wired(self):
+        # 多选整体等比缩放：HTML 外框含 8 个手柄、JS 手势三件套与单元归并、CSS 样式、双语词条齐备。
+        self.assertIn('id="selectionScaleFrame"', self.smart_canvas_html)
+        self.assertEqual(self.smart_canvas_html.count('data-selection-scale-handle='), 8)
+        source = self.smart_canvas_js
+        for needle in (
+            "let selectionScaleState = null;",
+            "function selectionScaleUnits(){",
+            "function selectionScaleRoleAllowed(){",
+            "function selectionScaleMinFactor(",
+            "function beginSelectionScaleGesture(",
+            "function queueSelectionScaleMove(",
+            "function updateSelectionScaleFrame(",
+            "queueSelectionScaleMove(e);",
+            "finishSelectionScaleGesture();",
+        ):
+            self.assertIn(needle, source)
+        # 手柄按下必须阻止冒泡，避免落进框选/平移；松手复用框选的 click 抑制防清选中。
+        bind_start = source.index("selectionScaleFrame?.querySelectorAll('.selection-scale-handle')")
+        bind_body = source[bind_start:source.index("});", bind_start)]
+        self.assertIn("e.stopPropagation();", bind_body)
+        self.assertIn("tr('smart.selectionScaleHandle')", bind_body)
+        gesture_start = source.index("function finishSelectionScaleGesture(")
+        gesture_body = source[gesture_start:bind_start]
+        self.assertIn("selectionJustFinished = true;", gesture_body)
+        # 缩放手势收尾：一次 commitPendingUndo + render + scheduleSave，走既有 node_fields 窄操作，不整画布回写。
+        self.assertEqual(gesture_body.count("commitPendingUndo();"), 1)
+        self.assertEqual(gesture_body.count("render();"), 1)
+        self.assertEqual(gesture_body.count("scheduleSave();"), 1)
+        self.assertNotIn("saveCanvasOperations(", gesture_body)
+        self.assertIn(".selection-scale-frame", self.smart_canvas_css)
+        self.assertIn('"smart.selectionScaleHandle"', self.smart_canvas_i18n)
 
 
 class SmartCanvasSplitMergeTests(unittest.TestCase):
