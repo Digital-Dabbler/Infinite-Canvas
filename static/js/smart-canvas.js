@@ -2629,7 +2629,9 @@ function smartNodeInputThumbsHtml(images, opts={}){
             ? `<div class="media-thumb audio-thumb"><i data-lucide="file-audio"></i><span>${escapeHtml(img.name || 'Audio')}</span></div>`
             : isVideoMediaItem(img)
             ? smartVideoPreviewHtml(img, 256, 'alt=""')
-            : smartPreviewImgHtml(img, 256, 'alt=""');
+            : (imageBlobLayerFor(img)
+                ? imageBlobCompositePreviewHtml(img, 'input-thumb-stack')
+                : smartPreviewImgHtml(img, 256, 'alt=""'));
         return `<div class="smart-node-input-thumb" title="${escapeHtml(label)}">${media}<span class="smart-node-input-badge">${escapeHtml(label)}</span></div>`;
     }).join('');
     const more = refs.length > limit ? `<div class="smart-node-input-thumb smart-node-input-more">+${refs.length - limit}</div>` : '';

@@ -115,7 +115,18 @@ class CompositeTransferTests(unittest.TestCase):
         # Composer 缩略图签名必须包含层字段，否则只改色块不刷新。
         self.assertIn("@${img.maskPaint?.url || img.maskColor?.url || ''}@${img.maskMode || ''}", SMART_CANVAS_JS)
         css = (ROOT / "static" / "css" / "smart-canvas.css").read_text(encoding="utf-8")
-        self.assertIn(".input-thumb .input-thumb-stack { width:100%; height:100%; border-radius:inherit; }", css)
+        # commit 5：叠层容器内 img 必须清掉占位背景色——透明底笔迹层自带的
+        # background:#0f172a 会把下面的底图整个盖住（Composer 黑底 bug 根因）。
+        self.assertIn(".input-thumb-stack img { object-fit:contain; background:transparent; }", css)
+
+    def test_loop_node_input_thumbs_follow_same_layer_plan(self):
+        # 循环节点顶部的输入参考缩略图也走层规划，兑现"预览怎么显示就怎么传递"。
+        self.assertIn(
+            "            : (imageBlobLayerFor(img)\n"
+            "                ? imageBlobCompositePreviewHtml(img, 'input-thumb-stack')\n"
+            "                : smartPreviewImgHtml(img, 256, 'alt=\"\"'));",
+            SMART_CANVAS_JS,
+        )
 
 
 if __name__ == "__main__":
