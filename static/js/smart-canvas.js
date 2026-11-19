@@ -11069,10 +11069,9 @@ function thumbMediaHtml(img, options={}){
     // 所以这里只需要把底图换成裁切图，遮罩分支逻辑保持不动。
     const cropped = Boolean(img?.crop?.result?.url);
     const view = cropped ? imageForDisplay(img) : img;
+    if(imageBlobLayerFor(img)) return imageBlobCompositePreviewHtml(img, 'media-thumb');
     if(!cropped && view?.annotation?.url) return annotationPreviewHtml(view, 'media-thumb');
-    if(view?.mask?.url) return view.maskMode === 'color' && view?.maskColor?.url
-        ? maskColorPreviewHtml(view, 'media-thumb')
-        : maskOverlayPreviewHtml(view, 'media-thumb');
+    if(view?.mask?.url) return maskOverlayPreviewHtml(view, 'media-thumb');
     if(cropped) return cropPreviewHtml(view, 'media-thumb');
     return smartPreviewImgHtml(view, 512, 'draggable="false"');
 }
@@ -11149,12 +11148,30 @@ function singleMediaHtml(img, w, h){
     if(isVideoMediaItem(img)) return `<div class="node-img media-card media-video-card" style="width:${w}px;height:${h}px">${isInlineVideoActive(img) ? smartVideoPlayerHtml(img.url || '') : `${smartVideoPreviewHtml(img, 768, 'alt=""')}<button class="smart-video-play" type="button" title="播放"><i data-lucide="play"></i></button>`}</div>`;
     const cropped = Boolean(img?.crop?.result?.url);
     const view = cropped ? imageForDisplay(img) : img;
+    if(imageBlobLayerFor(img)) return imageBlobCompositePreviewHtml(img, 'node-img', w, h);
     if(!cropped && view?.annotation?.url) return annotationPreviewHtml(view, 'node-img', w, h);
-    if(view?.mask?.url) return view.maskMode === 'color' && view?.maskColor?.url
-        ? maskColorPreviewHtml(view, 'node-img', w, h)
-        : maskOverlayPreviewHtml(view, 'node-img', w, h);
+    if(view?.mask?.url) return maskOverlayPreviewHtml(view, 'node-img', w, h);
     if(cropped) return cropPreviewHtml(view, 'node-img', w, h);
     return smartPreviewImgHtml(view, 768, `class="node-img" draggable="false" style="width:${w}px;height:${h}px"`);
+}
+function imageBlobCompositePreviewHtml(img, className='', w=0, h=0){
+    // 色块参与时的统一预览：烘焙底图（裁切>批注>原图）+ 色块层实时叠加，
+    // 与提交前合成（resolveTransferRefs）完全同源——预览怎么显示，下游就拿到什么。
+    const blob = imageBlobLayerFor(img);
+    if(!blob) return '';
+    const cropped = Boolean(img?.crop?.result?.url);
+    const annotated = Boolean(img?.annotation?.url);
+    const view = imageForDisplay(img);
+    const base = escapeAttr(view.url || '');
+    const size = w && h ? `width:${w}px;height:${h}px;` : '';
+    const parts = [];
+    if(cropped) parts.push(tr('canvas.cropLabel'));
+    if(annotated) parts.push(tr('canvas.annotationLabel'));
+    parts.push(tr('canvas.maskColorLabel'));
+    const dims = cropped ? imageResolutionLabel(img) : '';
+    const label = dims ? `${parts.join('+')} · ${dims}` : parts.join('+');
+    const overlayStyle = `position:absolute;inset:0;width:100%;height:100%;object-fit:contain;opacity:${(blob.opacity / 100).toFixed(3)}`;
+    return `<div class="${escapeAttr(className)} mask-overlay-preview mask-color-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${base}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><img src="${escapeAttr(blob.url)}" draggable="false" style="${overlayStyle}"><span class="mask-overlay-label">${escapeHtml(label)}</span></div>`;
 }
 function cropPreviewHtml(img, className='', w=0, h=0){
     // 裁切结果的预览：图已经是裁切后的真实像素，角标同时给出"已裁切"和裁切尺寸。
@@ -11169,12 +11186,6 @@ function annotationPreviewHtml(img, className='', w=0, h=0){
     const source = escapeAttr(displayMediaUrl(img.annotation));
     const size = w && h ? `width:${w}px;height:${h}px;` : '';
     return `<div class="${escapeAttr(className)} mask-overlay-preview annotation-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><span class="mask-overlay-label">${escapeHtml(tr('canvas.annotationLabel'))}</span></div>`;
-}
-function maskColorPreviewHtml(img, className='', w=0, h=0){
-    // 颜色叠加：节点上直接显示"原图 + 色块"的结果，和 ComfyUI 里那张输出一致
-    const source = escapeAttr(displayMediaUrl(img.maskColor));
-    const size = w && h ? `width:${w}px;height:${h}px;` : '';
-    return `<div class="${escapeAttr(className)} mask-overlay-preview mask-color-preview" style="${size}position:relative;overflow:hidden;background:#111827"><img src="${source}" draggable="false" style="width:100%;height:100%;object-fit:contain;display:block"><span class="mask-overlay-label">${escapeHtml(tr('canvas.maskColorLabel'))}</span></div>`;
 }
 function maskOverlayPreviewHtml(img, className='', w=0, h=0){
     const source = escapeAttr(displayMediaUrl(img));
@@ -23153,7 +23164,7 @@ function renderInputThumbsRow(node){
     // 参考图多时会让输入框打字明显卡顿。
     const thumbsSignature = JSON.stringify({
         node: node?.id || '',
-        items: dedup.map(img => `${inputRefKey(img)}@${mediaKindForItem(img)}@${img.url || ''}`),
+        items: dedup.map(img => `${inputRefKey(img)}@${mediaKindForItem(img)}@${img.url || ''}@${img.annotation?.url || ''}@${img.crop?.result?.url || ''}@${img.maskPaint?.url || img.maskColor?.url || ''}@${img.maskMode || ''}@${img.maskOpacity ?? ''}`),
         manual: [...manualRefKeys],
         add: addActive,
         mode: node ? smartImageMode(node) : ''
@@ -23183,7 +23194,9 @@ function renderInputThumbsRow(node){
             ? `<div class="input-thumb-audio"><i data-lucide="file-audio"></i></div>`
             : isVid
             ? smartVideoPreviewHtml(img, 256, 'draggable="false" alt=""')
-            : smartPreviewImgHtml(img, 256, 'draggable="false"');
+            : (imageBlobLayerFor(img)
+                ? imageBlobCompositePreviewHtml(img, 'input-thumb-stack')
+                : smartPreviewImgHtml(img, 256, 'draggable="false"'));
         const count = (mediaCounters[kind] = (mediaCounters[kind] || 0) + 1);
         const label = kind === 'audio' ? `音频${count}` : kind === 'video' ? `视频${count}` : `图${count}`;
         const sourceUrl = img.originalLocalUrl || img.url || '';

@@ -85,6 +85,20 @@ class CompositeTransferTests(unittest.TestCase):
             SMART_CANVAS_JS,
         )
 
+    def test_preview_uses_same_composite_layers_as_transfer(self):
+        # commit 2：预览与传递同源——色块参与时统一走叠层预览，
+        # 节点主图/翻页缩略图/Composer 输入缩略图三处都调用同一函数。
+        self.assertIn("function imageBlobCompositePreviewHtml(img, className='', w=0, h=0)", SMART_CANVAS_JS)
+        self.assertIn("if(imageBlobLayerFor(img)) return imageBlobCompositePreviewHtml(img, 'media-thumb');", SMART_CANVAS_JS)
+        self.assertIn("if(imageBlobLayerFor(img)) return imageBlobCompositePreviewHtml(img, 'node-img', w, h);", SMART_CANVAS_JS)
+        self.assertIn("imageBlobCompositePreviewHtml(img, 'input-thumb-stack')", SMART_CANVAS_JS)
+        # 旧的过期色块成品图预览函数已删除，预览不再吃可能过期的 maskColor 整图。
+        self.assertNotIn("function maskColorPreviewHtml", SMART_CANVAS_JS)
+        # Composer 缩略图签名必须包含层字段，否则只改色块不刷新。
+        self.assertIn("@${img.maskPaint?.url || img.maskColor?.url || ''}@${img.maskMode || ''}", SMART_CANVAS_JS)
+        css = (ROOT / "static" / "css" / "smart-canvas.css").read_text(encoding="utf-8")
+        self.assertIn(".input-thumb .input-thumb-stack { width:100%; height:100%; border-radius:inherit; }", css)
+
 
 if __name__ == "__main__":
     unittest.main()
