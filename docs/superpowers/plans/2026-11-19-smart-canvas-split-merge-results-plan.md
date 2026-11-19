@@ -103,3 +103,11 @@ git diff --check; git diff --cached --check
 - 宿主选择：按阅读顺序（先 y 后 x）——选中里有一个生成节点就并进它；多个生成节点以第一个为中心，其余生成节点的图全部并入；没有生成节点则在选区包围盒中心新建一个全新生成节点（`createMediaGenerationNode`，skipUndo/deferRender/deferSave），所有单图节点被吸收消失。
 - 图片顺序：宿主自己的图保持原顺序在前，并进来的按阅读顺序追加；新建宿主时全部按阅读顺序。
 - 混选图片+视频仍置灰；一步撤销、连线迁移去重、窄操作同步均不变；拆分侧不动。
+
+## 十、修订二（2026-11-19 验收后，用户 m00426/m00461）：拆分自带生成信息 + 全拆删空壳
+
+- 拆分时每张图按 `generationRunValuesFor(source, img)` 解析出真实那次运行的 prompt/settings/refs，写入拆出节点的 `runPrompt/runSettings/runInputRefs`（节点级），预览面板既有回退链即可显示来源、复制提示词、一键复刻，不再依赖台账与源节点存活。
+- 预览查找顺序改为：台账 log → 图片自带（image.runPrompt/runSettings/runInputRefs）→ 节点最后运行。图片级优先于节点级，因为节点级只反映最后一次运行。
+- 合并搬图用 `carryImage(node, img)`：先保留图自带的 run* 值，缺失时从来源节点级补 stamped 到图上，多源合并后每张图仍可逐图查来源与复刻。
+- 全部拆完（source.images 为空）时，空生成节点随拆分一并删除：连带其历史分组节点、连线、workflowGroupId 与 inputNodeIds 引用清理；复用拆分已有的 pushUndo/render/scheduleSave，撤销仍是一步。拆出节点的 splitFromNodeId 悬空无害（信息已自带）。
+- 已知边界（与现状一致，非本次新增）：台账 500 条上限只影响无自带信息的老图；跨画布复制粘贴不带走台账，但自带信息随节点 JSON 一起走。

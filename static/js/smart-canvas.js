@@ -3195,6 +3195,8 @@ function splitGenerationResults(nodeId, requestedIndexes){
     let rowHeight = 0;
     indexes.forEach((index, order) => {
         if(order && order % cols === 0){ x = startX; y += rowHeight + gap; rowHeight = 0; }
+        // 把这张图实际用过的生成信息随拆分带到新节点：查来源、复制提示词、一键复刻从此不依赖源节点与台账。
+        const runValues = generationRunValuesFor(source, images[index]);
         const child = {
             id:uid('upload'),
             type:uploadNodeTypeForMediaKind(mediaKind),
@@ -3206,6 +3208,9 @@ function splitGenerationResults(nodeId, requestedIndexes){
             splitIndex:index,
             created_at:Date.now()
         };
+        if(runValues.prompt) child.runPrompt = runValues.prompt;
+        if(runValues.settings) child.runSettings = cloneSmartSettings(runValues.settings);
+        if(runValues.refs.length) child.runInputRefs = runValues.refs.map(ref => ({...ref}));
         child.scale = mediaNodeDefaultScale(child);
         nodes.push(child);
         localUnsyncedNodeIds.add(child.id);
@@ -3218,6 +3223,21 @@ function splitGenerationResults(nodeId, requestedIndexes){
     source.images = images.filter((_, index) => !removed.has(index));
     const remaining = source.images.length;
     source.activeImageIndex = remaining ? Math.max(0, Math.min(remaining - 1, Number(source.activeImageIndex) || 0)) : 0;
+    if(!remaining){
+        // 全部拆完：空生成节点没有存在价值，随本次拆分一并删除（撤销仍是一步可还原）。
+        const deleteIds = new Set([source.id]);
+        nodes.forEach(node => { if(isHistoryGroupNode(node) && node.historyFor === source.id) deleteIds.add(node.id); });
+        deleteIds.forEach(nodeId => { localDeletedNodeIds.add(nodeId); localUnsyncedNodeIds.delete(nodeId); });
+        nodes = nodes.filter(node => !deleteIds.has(node.id));
+        canvas.connections = (canvas.connections || []).filter(conn => !deleteIds.has(conn.from) && !deleteIds.has(conn.to));
+        nodes.forEach(node => {
+            if(node.workflowGroupId && deleteIds.has(node.workflowGroupId)) delete node.workflowGroupId;
+            if(Array.isArray(node.inputNodeIds)) node.inputNodeIds = node.inputNodeIds.filter(inputId => !deleteIds.has(inputId));
+        });
+        if(deleteIds.has(selectedId)) selectedId = '';
+        selectedIds = (selectedIds || []).filter(id => !deleteIds.has(id));
+        if(deleteIds.has(selectedImage.nodeId)) selectedImage = {nodeId:'', index:-1};
+    }
     render();
     scheduleSave();
     toast(trf('smart.splitToastDone', {n:indexes.length}));
@@ -3259,7 +3279,19 @@ function mergeSelectedMediaNodes(){
     // 统一按位置从上到下、从左到右排序；选区里第一个合并节点即宿主，没有宿主就在选区中心新建。
     const ordered = items.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x));
     const existingHost = ordered.find(node => isSmartGenerationNode(node)) || null;
-    const copiedImage = img => stripImageGenerationMeta({...img});
+    // 搬图时保留每张图各自的生成信息（图自带的优先，其次源节点级的），合并后仍能逐图查来源与复刻。
+    const carryImage = (node, img) => {
+        const clean = stripImageGenerationMeta({...img});
+        const settings = (img.runSettings && Object.keys(img.runSettings).length) ? img.runSettings
+            : ((node.runSettings && Object.keys(node.runSettings).length) ? node.runSettings : null);
+        if(settings) clean.runSettings = cloneSmartSettings(settings);
+        const prompt = String(img.runPrompt || node.runPrompt || '').trim();
+        if(prompt) clean.runPrompt = prompt;
+        const refs = (Array.isArray(img.runInputRefs) && img.runInputRefs.length) ? img.runInputRefs
+            : (Array.isArray(node.runInputRefs) ? node.runInputRefs : []);
+        if(refs.length) clean.runInputRefs = refs.map(ref => ({...ref}));
+        return clean;
+    };
     let host;
     if(existingHost){
         // 宿主自己的图保持原顺序在前，并进来的按位置顺序追加；宿主留在原地不动。
@@ -3267,7 +3299,7 @@ function mergeSelectedMediaNodes(){
         const extras = [];
         ordered.forEach(node => {
             if(node === host) return;
-            (node.images || []).forEach(img => { if(img?.url) extras.push(copiedImage(img)); });
+            (node.images || []).forEach(img => { if(img?.url) extras.push(carryImage(node, img)); });
         });
         host.images = (host.images || []).concat(extras);
         host.activeImageIndex = Math.max(0, Math.min((host.images.length || 1) - 1, Number(host.activeImageIndex) || 0));
@@ -3277,7 +3309,7 @@ function mergeSelectedMediaNodes(){
         const centerX = (Math.min(...rects.map(rect => rect.x)) + Math.max(...rects.map(rect => rect.x + rect.width))) / 2;
         const centerY = (Math.min(...rects.map(rect => rect.y)) + Math.max(...rects.map(rect => rect.y + rect.height))) / 2;
         const mergedImages = [];
-        ordered.forEach(node => { (node.images || []).forEach(img => { if(img?.url) mergedImages.push(copiedImage(img)); }); });
+        ordered.forEach(node => { (node.images || []).forEach(img => { if(img?.url) mergedImages.push(carryImage(node, img)); }); });
         host = createMediaGenerationNode(kind, {x:centerX, y:centerY}, {skipUndo:true, select:false, deferRender:true, deferSave:true});
         host.images = mergedImages;
         host.activeImageIndex = 0;
@@ -18541,11 +18573,15 @@ function generationRunValuesFor(node, image){
     const logRefs = (Array.isArray(log?.refs) ? log.refs : []).filter(ref => ref?.url);
     const nodeSettings = (node?.runSettings && typeof node.runSettings === 'object' && Object.keys(node.runSettings).length) ? node.runSettings : null;
     const nodeRefs = Array.isArray(node?.runInputRefs) ? node.runInputRefs.filter(ref => ref?.url) : [];
+    // 拆分/合并搬动的图片自带生成信息，优先于节点级最后运行状态（后者可能属于别的图）。
+    const imageSettings = (image?.runSettings && typeof image.runSettings === 'object' && Object.keys(image.runSettings).length) ? image.runSettings : null;
+    const imagePrompt = String(image?.runPrompt || '').trim();
+    const imageRefs = Array.isArray(image?.runInputRefs) ? image.runInputRefs.filter(ref => ref?.url) : [];
     return {
         log,
-        prompt: logPrompt || String(node?.runPrompt || node?.promptDraftText || '').trim(),
-        settings: logSettings || nodeSettings,
-        refs: logRefs.length ? logRefs : nodeRefs
+        prompt: logPrompt || imagePrompt || String(node?.runPrompt || node?.promptDraftText || '').trim(),
+        settings: logSettings || imageSettings || nodeSettings,
+        refs: logRefs.length ? logRefs : (imageRefs.length ? imageRefs : nodeRefs)
     };
 }
 function updatePreviewGenerationPanel(){

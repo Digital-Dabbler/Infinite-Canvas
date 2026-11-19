@@ -590,6 +590,32 @@ class SmartCanvasSplitMergeTests(unittest.TestCase):
         self.assertIn("#mergeToolbar.open { display:flex; }", self.smart_canvas_css)
         self.assertIn(".merge-toolbar-floating { min-height:52px;", self.smart_canvas_css)
 
+    def test_split_children_carry_generation_info_and_empty_source_is_removed(self):
+        body = self.split_merge_section()
+        # 拆分时把这张图实际用过的生成信息带到新节点：来源/提示词/复刻不再依赖源节点与台账。
+        self.assertIn("const runValues = generationRunValuesFor(source, images[index]);", body)
+        self.assertIn("if(runValues.prompt) child.runPrompt = runValues.prompt;", body)
+        self.assertIn("if(runValues.settings) child.runSettings = cloneSmartSettings(runValues.settings);", body)
+        self.assertIn("if(runValues.refs.length) child.runInputRefs = runValues.refs.map(ref => ({...ref}));", body)
+        # 全部拆完：空源节点随拆分删除（含历史分组、连线与引用清理），不新增撤销步。
+        self.assertIn("if(!remaining){", body)
+        self.assertIn("const deleteIds = new Set([source.id]);", body)
+        self.assertIn("node.historyFor === source.id", body)
+        self.assertIn("nodes = nodes.filter(node => !deleteIds.has(node.id));", body)
+        self.assertIn("if(deleteIds.has(selectedImage.nodeId)) selectedImage = {nodeId:'', index:-1};", body)
+        # 合并搬图时逐图保留生成信息：图自带的优先，其次源节点级。
+        self.assertIn("const carryImage = (node, img) => {", body)
+        self.assertIn("if(settings) clean.runSettings = cloneSmartSettings(settings);", body)
+        self.assertIn("mergedImages.push(carryImage(node, img))", body)
+        self.assertNotIn("copiedImage", body)
+        # 预览面板查找顺序：台账 -> 图片自带 -> 节点最后运行。
+        start = self.smart_canvas_js.index("function generationRunValuesFor(node, image){")
+        end = self.smart_canvas_js.index("function updatePreviewGenerationPanel(){", start)
+        panel = self.smart_canvas_js[start:end]
+        self.assertIn("settings: logSettings || imageSettings || nodeSettings,", panel)
+        self.assertIn("prompt: logPrompt || imagePrompt || String(node?.runPrompt || node?.promptDraftText || '').trim(),", panel)
+        self.assertIn("refs: logRefs.length ? logRefs : (imageRefs.length ? imageRefs : nodeRefs)", panel)
+
     def test_split_from_reference_is_remapped_on_restore_and_paste(self):
         source = self.smart_canvas_js
         self.assertIn("['workflowGroupId','sourceNodeId','historyFor','splitFromNodeId'].forEach(field => {", source)
