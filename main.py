@@ -325,9 +325,11 @@ async def startup_event():
         recover_asset_ai_tasks_after_restart()
         await asyncio.to_thread(cleanup_expired_asset_trash)
         await asyncio.to_thread(cleanup_expired_workflow_trash)
+        await asyncio.to_thread(cleanup_canvas_temp_media)
         await asyncio.to_thread(clear_legacy_asset_library_workflows)
         asyncio.create_task(asset_ai_dispatch_loop())
         asyncio.create_task(asset_trash_cleanup_loop())
+        asyncio.create_task(canvas_temp_media_cleanup_loop())
     except Exception as exc:
         print(f"初始化资产库用户空间或 AI 队列失败: {exc}")
     sync_static_html_versions()
@@ -18737,7 +18739,7 @@ async def upload_image(request: Request, files: List[UploadFile] = File(...)):
     return {"files": uploaded_files}
 
 @app.post("/api/ai/upload")
-async def upload_ai_reference(files: List[UploadFile] = File(...)):
+async def upload_ai_reference(files: List[UploadFile] = File(...), temp: str = Form("")):
     uploaded = []
     image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
     video_exts = {".mp4", ".webm", ".mov", ".m4v", ".flv"}
@@ -18773,7 +18775,9 @@ async def upload_ai_reference(files: List[UploadFile] = File(...)):
             kind = "file"
             if not ext:
                 ext = ".bin"
-        filename = f"ai_ref_{uuid.uuid4().hex[:12]}{ext}"
+        # temp=1：画布多层合成等临时文件，前缀 tmp_ 便于到期清扫。
+        prefix = "tmp_ai_ref_" if str(temp or "").strip() == "1" else "ai_ref_"
+        filename = f"{prefix}{uuid.uuid4().hex[:12]}{ext}"
         path = output_path_for(filename, "input")
         with open(path, "wb") as f:
             f.write(content)
@@ -26646,6 +26650,42 @@ async def asset_trash_cleanup_loop():
             await asyncio.to_thread(cleanup_expired_asset_trash)
         except Exception as exc:
             print(f"资产回收站自动清理失败: {exc}")
+
+# 画布多层编辑合成图（tmp_ai_ref_*）只在提交生成的一瞬间被上游取用，
+# 超过时限不会再有任务引用它，定期删除避免 input 目录无限膨胀。
+CANVAS_TEMP_MEDIA_MAX_AGE_SECONDS = 24 * 60 * 60
+
+def cleanup_canvas_temp_media(max_age_seconds=CANVAS_TEMP_MEDIA_MAX_AGE_SECONDS):
+    folder, _ = output_storage("input")
+    removed = 0
+    now_ts = time.time()
+    try:
+        entries = os.listdir(folder)
+    except Exception:
+        return 0
+    for name in entries:
+        if not str(name).startswith("tmp_ai_ref_"):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            if not os.path.isfile(path):
+                continue
+            if now_ts - os.path.getmtime(path) > max_age_seconds:
+                os.remove(path)
+                removed += 1
+        except Exception:
+            continue
+    if removed:
+        print(f"已清理 {removed} 个画布临时合成图")
+    return removed
+
+async def canvas_temp_media_cleanup_loop():
+    while True:
+        await asyncio.sleep(6 * 60 * 60)
+        try:
+            await asyncio.to_thread(cleanup_canvas_temp_media)
+        except Exception as exc:
+            print(f"画布临时合成图自动清理失败: {exc}")
 
 @app.patch("/api/asset-library/items/{item_id}")
 async def rename_asset_library_item(item_id: str, payload: AssetLibraryRenameRequest, request: Request):

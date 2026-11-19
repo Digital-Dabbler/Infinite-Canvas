@@ -1196,7 +1196,7 @@ async function exportSelectedSmartWorkflow(includeResources=false){
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
                 ...payload,
-                nodes:payload.nodes.map(flattenCropForWorkflowExport),
+                nodes:await Promise.all(payload.nodes.map(flattenCropForWorkflowExport)),
                 include_resources:true,
                 filename
             })
@@ -13066,11 +13066,11 @@ function openPhotoshopContextMenu(nodeId, imageIndex, clientX, clientY){
         closePhotoshopContextMenu();
         copyImageToClipboard(nodeId, imageIndex);
     });
-    photoshopContextMenu.querySelector('[data-crop-save-as-node]')?.addEventListener('click', event => {
+    photoshopContextMenu.querySelector('[data-crop-save-as-node]')?.addEventListener('click', async event => {
         event.preventDefault();
         event.stopPropagation();
         closePhotoshopContextMenu();
-        saveCropAsNewNode(node, imageIndex);
+        await saveCropAsNewNode(node, imageIndex);
     });
     photoshopContextMenu.querySelector('[data-crop-clear]')?.addEventListener('click', event => {
         event.preventDefault();
@@ -15193,23 +15193,64 @@ function openWorkflowGroupContextMenu(id, clientX, clientY){
 function openWorkflowMemberContextMenu(id,x,y){const node=nodes.find(n=>n.id===id);if(!node?.workflowGroupId||!photoshopContextMenu)return;closeCreateMenu();closePortConnectMenu();closePhotoshopContextMenu();photoshopContextMenu.innerHTML=`<button type="button" data-remove-workflow-member><i data-lucide="log-out"></i><span>移出分组</span></button>`;photoshopContextMenu.classList.add('open');photoshopContextMenu.setAttribute('aria-hidden','false');positionPhotoshopContextMenu(x,y);refreshIcons();photoshopContextMenu.querySelector('[data-remove-workflow-member]')?.addEventListener('click',()=>{removeNodeFromWorkflowGroup(id);closePhotoshopContextMenu();});}
 // ZIP 导出是"换台机器也能导入"的自包含包：图片要换成裁切后的成品图，并去掉裁切框。
 // 否则包里带的是原图，而 crop.result 仍指向包外的 URL，导入后裁切就断了。
-function flattenCropForWorkflowExport(node){
+function clearImageEditLayerFields(item){
+    // 图已烘焙成成品时剥掉全部层状态，避免导入/新节点把旧笔迹再叠一遍。
+    delete item.crop;
+    delete item.annotation;
+    delete item.annotationPaint;
+    delete item.annotationEditedAt;
+    delete item.mask;
+    delete item.maskColor;
+    delete item.maskPaint;
+    delete item.maskMode;
+    delete item.maskOpacity;
+    delete item.maskEditedAt;
+    return item;
+}
+async function flattenCropForWorkflowExport(node){
     const copy = {...node};
     if(Array.isArray(copy.images)){
-        copy.images = copy.images.map(img => {
-            if(!img?.crop?.result?.url) return img;
-            const flat = {...imageForDisplay(img)};
-            delete flat.crop;
-            return flat;
-        });
+        const flatImages = [];
+        for(const img of copy.images){
+            const cropped = Boolean(img?.crop?.result?.url);
+            const annotated = Boolean(img?.annotation?.url);
+            const plan = imageEditPaintLayers(img);
+            // 色块与裁切/批注共存：导出前合成成品并上传正式文件（导出包与画布预览一致）。
+            if(plan && (cropped || annotated)){
+                const composed = await compositeImageEditLayers(plan);
+                if(composed){
+                    try {
+                        const baseName = safeExportFileName(img.name || 'image');
+                        const file = await uploadCroppedBlob(composed, `${baseName}_composite.png`);
+                        const flat = {...img};
+                        clearImageEditLayerFields(flat);
+                        flat.url = file.url;
+                        flat.name = file.name;
+                        flat.kind = 'image';
+                        flatImages.push(flat);
+                        continue;
+                    } catch(error){
+                        console.warn('导出工作流时多层合成失败，回退单层烘焙：', error);
+                    }
+                }
+            }
+            if(cropped){
+                const flat = {...imageForDisplay(img)};
+                delete flat.crop;
+                flatImages.push(flat);
+                continue;
+            }
+            flatImages.push(img);
+        }
+        copy.images = flatImages;
     }
     return copy;
 }
-function workflowGroupPayload(group){const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));return {nodes:members.map(n=>{const c=serializableSmartNode(n);delete c.workflowGroupId;if(Array.isArray(c.inputNodeIds))c.inputNodeIds=c.inputNodeIds.filter(id=>ids.has(id));return c;}).map(flattenCropForWorkflowExport),connections:(canvas?.connections||[]).filter(c=>ids.has(c.from)&&ids.has(c.to)),include_resources:true,filename:`${group.title||'workflow'}.zip`};}
+async function workflowGroupPayload(group){const members=workflowGroupOrderedMembers(group),ids=new Set(members.map(n=>n.id));return {nodes:await Promise.all(members.map(n=>{const c=serializableSmartNode(n);delete c.workflowGroupId;if(Array.isArray(c.inputNodeIds))c.inputNodeIds=c.inputNodeIds.filter(id=>ids.has(id));return c;}).map(flattenCropForWorkflowExport)),connections:(canvas?.connections||[]).filter(c=>ids.has(c.from)&&ids.has(c.to)),include_resources:true,filename:`${group.title||'workflow'}.zip`};}
 function workflowGroupCoverUrl(group){return workflowGroupOrderedMembers(group).flatMap(n=>n.images||[]).map(imageForDisplay).find(i=>i?.url&&mediaKindForItem(i)==='image')?.url||'';}
 function openWorkflowCreateDialog(id){const group=nodes.find(n=>n.id===id&&isWorkflowOrganizerNode(n)),modal=document.getElementById('workflowCreateModal');if(!group||!modal)return;pendingWorkflowCreateGroupId=id;const name=document.getElementById('workflowCreateName'),cover=document.getElementById('workflowCreateCover');if(name)name.value=String(group.title||'').slice(0,20);if(cover)cover.innerHTML=workflowGroupCoverUrl(group)?`<img src="${escapeAttr(workflowGroupCoverUrl(group))}" alt="">`:'<i data-lucide="workflow"></i>';document.getElementById('workflowCreateCount').textContent=`${Array.from(name?.value||'').length}/20`;modal.classList.add('open');refreshIcons();name?.focus();}
 function closeWorkflowCreateDialog(){document.getElementById('workflowCreateModal')?.classList.remove('open');pendingWorkflowCreateGroupId='';}
-async function confirmWorkflowCreate(){const group=nodes.find(n=>n.id===pendingWorkflowCreateGroupId&&isWorkflowOrganizerNode(n)),name=String(document.getElementById('workflowCreateName')?.value||'').trim();if(!group||!name){toast('请输入工作流名称');return;}const res=await fetch('/api/workflow-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...workflowGroupPayload(group),name,cover_url:workflowGroupCoverUrl(group)})});if(!res.ok)throw new Error(await responseErrorMessage(res,'创建工作流失败'));closeWorkflowCreateDialog();toast('工作流已创建');}
+async function confirmWorkflowCreate(){const group=nodes.find(n=>n.id===pendingWorkflowCreateGroupId&&isWorkflowOrganizerNode(n)),name=String(document.getElementById('workflowCreateName')?.value||'').trim();if(!group||!name){toast('请输入工作流名称');return;}const res=await fetch('/api/workflow-library',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...await workflowGroupPayload(group),name,cover_url:workflowGroupCoverUrl(group)})});if(!res.ok)throw new Error(await responseErrorMessage(res,'创建工作流失败'));closeWorkflowCreateDialog();toast('工作流已创建');}
 // 整组执行逐个成员决定跑什么：文本节点只有在“生成要求”里有内容时才调用 LLM
 // （空要求说明它只是下游节点的静态提示词载体，绝不能覆盖用户手写的文本），
 // 其它节点沿用 runGeneration 的提交与回收语义。
@@ -22400,7 +22441,7 @@ async function clearImageCrop(node, index){
 }
 // 右键"裁切结果另存为新节点"：导出的是一张独立成品图，
 // 不带 crop / mask / annotation —— 否则新节点会二次裁切、把批注再叠一遍。
-function saveCropAsNewNode(node, index){
+async function saveCropAsNewNode(node, index){
     const live = liveSmartNode(node) || node;
     const item = live?.images?.[index];
     if(!item?.crop?.result?.url){
@@ -22408,13 +22449,29 @@ function saveCropAsNewNode(node, index){
         return;
     }
     const view = imageForDisplay(item);
+    let url = view.url;
+    let name = item.crop.result.name || `${cropBaseName(item)}_crop.png`;
+    // 色块参与时另存的是综合结果（与向下传递一致），新节点不带层状态。
+    const plan = imageEditPaintLayers(item);
+    if(plan){
+        const composed = await compositeImageEditLayers(plan);
+        if(composed){
+            try {
+                const file = await uploadCroppedBlob(composed, `${safeExportFileName(item.name || 'image')}_composite.png`);
+                url = file.url;
+                name = file.name;
+            } catch(error){
+                console.warn('另存裁切合成图失败，使用单层裁切结果：', error);
+            }
+        }
+    }
     const rect = nodeRect(live);
     pushUndo();
     createImageNodeAt(
         {x:(Number(rect.x) || 0) + (Number(rect.width) || 260) + 180, y:Number(rect.y) || 0},
         [{
-            url:view.url,
-            name:item.crop.result.name || `${cropBaseName(item)}_crop.png`,
+            url,
+            name,
             kind:'image',
             natural_w:Number(item.crop.width) || Number(view.natural_w) || 0,
             natural_h:Number(item.crop.height) || Number(view.natural_h) || 0
