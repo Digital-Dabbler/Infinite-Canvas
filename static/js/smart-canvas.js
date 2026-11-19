@@ -3223,12 +3223,23 @@ function splitGenerationResults(nodeId, requestedIndexes){
     toast(trf('smart.splitToastDone', {n:indexes.length}));
     return true;
 }
+function mergeUnitKind(node){
+    if(isSmartGenerationNode(node)) return node.type === 'smart-video-generation' ? 'video' : 'image';
+    return uploadMediaKindForNode(node);
+}
 function mergeableMediaNodes(){
-    // 可合并 = 选中集里的单图上传节点（排除历史分组与组织框）；不限来源，任意素材都能合并。
+    // 可合并单元 = 单图上传节点 + 合并（生成）节点；正在生成的节点、历史分组与组织框不参与。
     const out = [];
     selectedNodeIds().forEach(id => {
         const node = nodes.find(item => item.id === id);
-        if(!node || !isSmartUploadNode(node) || isHistoryGroupNode(node) || isCanvasOrganizerNode(node)) return;
+        if(!node || isHistoryGroupNode(node) || isCanvasOrganizerNode(node)) return;
+        if(isSmartGenerationNode(node)){
+            if(smartNodeIsBusy(node)) return;
+            if(!(node.images || []).some(img => img?.url)) return;
+            out.push(node);
+            return;
+        }
+        if(!isSmartUploadNode(node)) return;
         if((node.images || []).length !== 1 || !node.images[0]?.url) return;
         out.push(node);
     });
@@ -3236,7 +3247,7 @@ function mergeableMediaNodes(){
 }
 function mergeSelectionKindInfo(){
     const items = mergeableMediaNodes();
-    const kinds = [...new Set(items.map(node => uploadMediaKindForNode(node)))];
+    const kinds = [...new Set(items.map(node => mergeUnitKind(node)))];
     return {items, kinds};
 }
 function mergeSelectedMediaNodes(){
@@ -3245,39 +3256,31 @@ function mergeSelectedMediaNodes(){
     if(kinds.length > 1){ toast(tr('smart.mergeMixedKinds')); return false; }
     pushUndo();
     const kind = kinds[0] === 'video' ? 'video' : 'image';
-    const sourceIds = [...new Set(items.map(node => node.splitFromNodeId).filter(Boolean))];
-    let host = sourceIds.length === 1 ? nodes.find(node => node.id === sourceIds[0] && isSmartGenerationNode(node)) : null;
-    const ordered = items.slice().sort((a, b) => host && Number.isInteger(a.splitIndex) && Number.isInteger(b.splitIndex)
-        ? a.splitIndex - b.splitIndex
-        : (a.y - b.y) || (a.x - b.x));
-    const singleImage = node => stripImageGenerationMeta({...((node.images || [])[0] || {})});
-    if(host){
-        // 同源且原节点仍在：按拆分序号插回原节点；没有序号的（复制/手工节点）按位置顺序追加。
-        const indexed = [];
-        const loose = [];
+    // 统一按位置从上到下、从左到右排序；选区里第一个合并节点即宿主，没有宿主就在选区中心新建。
+    const ordered = items.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x));
+    const existingHost = ordered.find(node => isSmartGenerationNode(node)) || null;
+    const copiedImage = img => stripImageGenerationMeta({...img});
+    let host;
+    if(existingHost){
+        // 宿主自己的图保持原顺序在前，并进来的按位置顺序追加；宿主留在原地不动。
+        host = existingHost;
+        const extras = [];
         ordered.forEach(node => {
-            (Number.isInteger(node.splitIndex) && node.splitIndex >= 0)
-                ? indexed.push({image:singleImage(node), index:node.splitIndex})
-                : loose.push(singleImage(node));
+            if(node === host) return;
+            (node.images || []).forEach(img => { if(img?.url) extras.push(copiedImage(img)); });
         });
-        indexed.sort((a, b) => a.index - b.index).forEach(entry => {
-            host.images.splice(Math.max(0, Math.min(host.images.length, entry.index)), 0, entry.image);
-        });
-        host.images.push(...loose);
+        host.images = (host.images || []).concat(extras);
         host.activeImageIndex = Math.max(0, Math.min((host.images.length || 1) - 1, Number(host.activeImageIndex) || 0));
     } else {
-        host = ordered[0];
+        // 没有现成宿主：在选区包围盒中心新建合并节点，所有选中单元都被它吸收。
         const rects = ordered.map(node => nodeRect(node));
         const centerX = (Math.min(...rects.map(rect => rect.x)) + Math.max(...rects.map(rect => rect.x + rect.width))) / 2;
         const centerY = (Math.min(...rects.map(rect => rect.y)) + Math.max(...rects.map(rect => rect.y + rect.height))) / 2;
-        host.type = kind === 'video' ? 'smart-video-generation' : 'smart-image-generation';
-        host.title = kind === 'video' ? '视频生成' : '图片生成';
-        host.images = ordered.map(singleImage);
+        const mergedImages = [];
+        ordered.forEach(node => { (node.images || []).forEach(img => { if(img?.url) mergedImages.push(copiedImage(img)); }); });
+        host = createMediaGenerationNode(kind, {x:centerX, y:centerY}, {skipUndo:true, select:false, deferRender:true, deferSave:true});
+        host.images = mergedImages;
         host.activeImageIndex = 0;
-        host.runSettings = {apiKind:kind};
-        host.promptPresets = Array.isArray(host.promptPresets) ? host.promptPresets : [];
-        delete host.splitFromNodeId;
-        delete host.splitIndex;
         const mergedRect = nodeRect(host);
         host.x = Math.round(centerX - mergedRect.width / 2);
         host.y = Math.round(centerY - mergedRect.height / 2);

@@ -512,13 +512,20 @@ class SmartCanvasSplitMergeTests(unittest.TestCase):
         self.assertIn("const startX = sourceRect.x + sourceRect.width + gap;", body)
         self.assertIn("if(!isSmartGenerationNode(node) || isHistoryGroupNode(node) || smartNodeIsBusy(node)) return null;", body)
         self.assertIn("if(node.loopRootId || Number.isFinite(Number(node.loopRoundIndex))) return null;", body)
-        # 拆出节点携带来源引用与序号，供合并插回原位。
+        # 拆出节点携带来源引用与序号（保留仅作记录；合并不再按它插回原节点）。
         self.assertIn("splitFromNodeId:source.id,", body)
         self.assertIn("splitIndex:index,", body)
-        # 合并：混合图片+视频拒绝；同源单宿主插回；无宿主时首个节点转生成节点并迁移连线去重。
+        # 合并新规则：混合图片+视频拒绝；宿主=阅读顺序第一个生成节点，原图在前、并进的追加；
+        # 无宿主时在选区包围盒中心新建生成节点；busy 生成节点不参与合并。
         self.assertIn("if(kinds.length > 1){ toast(tr('smart.mergeMixedKinds')); return false; }", body)
-        self.assertIn("host.images.splice(Math.max(0, Math.min(host.images.length, entry.index)), 0, entry.image);", body)
-        self.assertIn("host.type = kind === 'video' ? 'smart-video-generation' : 'smart-image-generation';", body)
+        self.assertIn("const ordered = items.slice().sort((a, b) => (a.y - b.y) || (a.x - b.x));", body)
+        self.assertIn("const existingHost = ordered.find(node => isSmartGenerationNode(node)) || null;", body)
+        self.assertIn("host.images = (host.images || []).concat(extras);", body)
+        self.assertIn("host = createMediaGenerationNode(kind, {x:centerX, y:centerY}, {skipUndo:true, select:false, deferRender:true, deferSave:true});", body)
+        self.assertIn("if(smartNodeIsBusy(node)) return;", body)
+        self.assertIn("return node.type === 'smart-video-generation' ? 'video' : 'image';", body)
+        self.assertNotIn("host.images.splice(", body)
+        self.assertNotIn("host.type =", body)
         self.assertIn("const key = canvasConnectionKey({from, to, kind:conn.kind});", body)
 
     def test_split_badge_is_clickable_entry_in_both_render_paths(self):
@@ -574,7 +581,7 @@ class SmartCanvasSplitMergeTests(unittest.TestCase):
         self.assertIn("updateMergeToolbar();\n    if(open) requestAnimationFrame(() => positionLayoutToolbar(units));", source)
         self.assertIn("positionMergeToolbar();\n}", source)
         self.assertIn("mergeToolbar?.classList.remove('open');", source)
-        # 混选置灰 + 悬停提示；≥2 个单图节点才显示。
+        # 混选置灰 + 悬停提示；可合并单元（单图或空闲生成节点）≥2 才显示。
         self.assertIn("const open = items.length >= 2 && !layoutToolbarHiddenDuringDrag && !dragState && !resizeState;", source)
         self.assertIn("button.disabled = mixed;", source)
         self.assertIn("const {items, kinds} = mergeSelectionKindInfo();", source)
