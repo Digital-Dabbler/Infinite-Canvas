@@ -3,7 +3,7 @@
     "inputs": {
       "filename_prefix": "ComfyUI",
       "images": [
-        "268",
+        "271",
         0
       ]
     },
@@ -14,7 +14,7 @@
   },
   "240": {
     "inputs": {
-      "image": "clipspace-painted-masked-1787939424791.png [input]"
+      "image": "clipspace-painted-masked-1795154629914.png [input]"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -58,7 +58,7 @@
   },
   "250": {
     "inputs": {
-      "seed": 540401160677063,
+      "seed": 942812897732791,
       "steps": 20,
       "cfg": 1,
       "sampler_name": "euler",
@@ -86,30 +86,6 @@
       "title": "K采样器"
     }
   },
-  "251": {
-    "inputs": {
-      "width": 1024,
-      "height": 1024,
-      "upscale_method": "bilinear",
-      "keep_proportion": "resize",
-      "pad_color": "black",
-      "crop_position": "center",
-      "divisible_by": 8,
-      "pad_mask_remove": true,
-      "image": [
-        "240",
-        0
-      ],
-      "mask": [
-        "252",
-        0
-      ]
-    },
-    "class_type": "Image_Resize_sum",
-    "_meta": {
-      "title": "Image_调整尺寸_总"
-    }
-  },
   "252": {
     "inputs": {
       "expand": 0,
@@ -128,24 +104,6 @@
     "class_type": "GrowMaskWithBlur",
     "_meta": {
       "title": "遮罩模糊生长"
-    }
-  },
-  "253": {
-    "inputs": {
-      "upscale_method": "bilinear",
-      "pad_crop_no_scale": false,
-      "resized_image": [
-        "249",
-        0
-      ],
-      "stitch": [
-        "251",
-        2
-      ]
-    },
-    "class_type": "Image_Resize_sum_restore",
-    "_meta": {
-      "title": "Image_调整尺寸恢复"
     }
   },
   "254": {
@@ -228,8 +186,8 @@
         0
       ],
       "mask": [
-        "251",
-        1
+        "270",
+        2
       ]
     },
     "class_type": "AILab_ReferenceLatentMask",
@@ -259,12 +217,12 @@
         0
       ],
       "image": [
-        "251",
-        0
+        "270",
+        1
       ],
       "mask": [
-        "251",
-        1
+        "270",
+        2
       ]
     },
     "class_type": "AILab_MaskOverlay",
@@ -282,47 +240,48 @@
       "title": "Color Input (RMBG) 🎨"
     }
   },
-  "268": {
+  "270": {
     "inputs": {
-      "x": 0,
-      "y": 0,
-      "resize_source": false,
-      "destination": [
+      "遮罩填充": true,
+      "扩展系数上": 1.4,
+      "扩展系数下": 1.4,
+      "扩展系数左": 1.4,
+      "扩展系数右": 1.4,
+      "输出尺寸": "原像素",
+      "自定义宽": 1024,
+      "自定义高": 1024,
+      "倍数取整": 8,
+      "图像": [
         "240",
         0
       ],
-      "source": [
-        "253",
-        0
-      ],
-      "mask": [
-        "269",
+      "遮罩": [
+        "252",
         0
       ]
     },
-    "class_type": "ImageCompositeMasked",
+    "class_type": "GH_MaskCropV2",
     "_meta": {
-      "title": "合成图像（遮罩）"
+      "title": "孤海-遮罩裁剪V2"
     }
   },
-  "269": {
+  "271": {
     "inputs": {
-      "expand": 20,
-      "incremental_expandrate": 0,
-      "tapered_corners": true,
-      "flip_input": false,
-      "blur_radius": 4,
-      "lerp_alpha": 1,
-      "decay_factor": 1,
-      "fill_holes": false,
-      "mask": [
-        "253",
-        1
+      "遮罩扩展百分比": 5,
+      "遮罩羽化百分比": 5,
+      "颜色还原强度": 1,
+      "接缝": [
+        "270",
+        0
+      ],
+      "裁剪图像": [
+        "249",
+        0
       ]
     },
-    "class_type": "GrowMaskWithBlur",
+    "class_type": "GH_CropRestore",
     "_meta": {
-      "title": "遮罩模糊生长"
+      "title": "孤海-裁剪恢复"
     }
   }
 }
